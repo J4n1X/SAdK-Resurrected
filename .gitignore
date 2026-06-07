@@ -1,0 +1,81 @@
+# ── Regeneratable Ghidra decompile dumps (huge, re-export from Ghidra) ──
+decomp/sadk/
+decomp/tincat/
+
+# ── Decrypted game/lobby UI XML (regeneratable from the game data) ──
+decomp/xmls/
+*.exe.c
+*.exe.h
+*_functions.tsv
+*_strings*.tsv
+*_strings*.txt
+tincat3.dll.xml
+
+# ── Converted assets / decryption output (huge) ──
+result/
+BatchConversion/
+
+# ── External reference repos (have their own .git) ──
+Settlers-AdK-lobby-emulator/
+Settlers-DNG-lobby-emulator/
+
+# ── Binaries / build artifacts ──
+*.exe
+*.zip
+*.7z
+
+# ── Captures, logs, runtime artifacts ──
+sadk_captures/
+*.pcapng
+*.log
+__pycache__/
+*.pyc
+
+# ── Python project build / test artifacts ──
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+tests/smoke.log
+tools/*.out
+
+# ── Local RE artifacts (large / regenerable, keep out of git) ──
+.claude/
+*.mp4
+flow_frames/
+
+# crash dumps + procdump (large/binary artifacts)
+*.dmp
+tools/procdump/
+
+# ── Live decrypted memory dumps (huge, copyrighted game memory — regen via tools/dump_module.py) ──
+*.bin
+
+# ── HARNESS mutation-gate local capability token (per-action, NOT project state) ──
+tools/.engagement_approved
+
+# transient scratch (s33+)
+tools/*.png
+tools/loader_out.txt
+tools/loader_err.txt
+tools/patch_out.txt
+Win7dumps/
+tools/relay_cmd.txt
+tools/relay_out.txt
+tools/input_server_out.txt
+tools/force_*.log
+tools/observer_probe.log
+tools/onenter_probe.log
+tools/appfsm_probe.log
+tools/glass_debug*.log
+tools/village_state.log
+tools/village_disasm.log
+tools/dump_module.log
+
+# root-level session logs
+loader_s34.log
+myeasylog.log
+sadk_lobby_capture.log
+stub_live.log
+tincat_server.log
