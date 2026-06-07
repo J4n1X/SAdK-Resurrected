@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sadk-lobby"
+version = "0.4.0"
+description = "SAdK-Resurrected: reverse-engineered stub of the Die Siedler: Aufbruch der Kulturen (The Settlers: Rise of Cultures) TinCat lobby server"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "J4n1X" }]
+dependencies = [
+    "cryptography>=3.0",
+    "twofish>=0.3.0",
+]
+
+[project.scripts]
+sadk-lobby = "sadk_lobby.server:main"
+
+[tool.setuptools]
+packages = ["sadk_lobby"]
+
+[tool.setuptools.package-data]
+sadk_lobby = ["data/*.ini"]
