@@ -13,10 +13,54 @@ import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, village
+from . import chat, codec, config, crypto, msgdefs, players, registry, village
 from .log import log
 
 HANDLERS = {}
+
+# Observer subscriptions for server-list push notifications (s39.5).
+# Maps server_type → list of live Conn objects that subscribed via 171 RegObserverServerList.
+# The stub pushes 170 GameServerData to all matching observers when a game is added/changed,
+# so the browser updates without the joiner having to re-request the list.
+# Cleaned up by unregister_observer() when a connection closes (connection.py finally block).
+_obs_lock = threading.Lock()
+_obs: dict = {}   # int server_type → list[Conn]
+
+
+def _reg_obs(conn, server_type):
+    with _obs_lock:
+        _obs.setdefault(server_type, [])
+        if conn not in _obs[server_type]:
+            _obs[server_type].append(conn)
+
+
+def unregister_observer(conn):
+    """Remove conn from all observer lists (call from connection.py on close)."""
+    with _obs_lock:
+        for lst in _obs.values():
+            try:
+                lst.remove(conn)
+            except ValueError:
+                pass
+
+
+def _push_to_obs(server_type, srv):
+    """Push a 170 GameServerData to all registered observers for server_type (and type-0 subscribers)."""
+    with _obs_lock:
+        targets = list(set(_obs.get(server_type, []) + _obs.get(0, [])))
+    if not targets:
+        return
+    body = codec.encode_body(170, server_to_170_values(srv, 0))
+    pushed = 0
+    for c in targets:
+        if getattr(c, "alive", False):
+            try:
+                c.send_app(170, body)
+                pushed += 1
+            except Exception:  # noqa: BLE001
+                pass
+    if pushed:
+        log(f"  [OBS] pushed 170 GameServerData id={srv.get('id')} to {pushed} observer(s)")
 
 
 def handler(*types):
@@ -43,6 +87,59 @@ def dispatch_lobby(conn, type_num, fields):
         conn.ok(ticket)
 
 
+# ── Identity + game-store helpers (multi-client, s39.5) ───────────────────────
+# These keep single-user / per-connection behaviour byte-identical when
+# config.MULTI_CLIENT_HOSTING is OFF, and switch to per-player identity + the
+# process-global game registry when it is ON.
+
+def _player(conn):
+    """The player identity this connection serves (default = test account)."""
+    return players.of(conn)
+
+
+def _register_game(conn, info):
+    """Store a hosted game (168); returns the assigned server_id."""
+    if config.MULTI_CLIENT_HOSTING:
+        return registry.games.add(conn.id, info)
+    sid = conn.alloc_server_id()
+    rec = dict(info); rec["id"] = sid
+    conn.servers[sid] = rec
+    return sid
+
+
+def _remove_game(conn, sid):
+    """Remove a hosted game (169) owned by this connection."""
+    if config.MULTI_CLIENT_HOSTING:
+        return registry.games.remove(conn.id, sid)
+    return conn.servers.pop(sid, None) is not None
+
+
+def _change_owned_game(conn, changes):
+    """Apply field changes (177) to the game this connection hosts; returns the record."""
+    if config.MULTI_CLIENT_HOSTING:
+        return registry.games.update_owned(conn.id, changes)
+    sid = next(iter(conn.servers), None)
+    if sid is None:
+        return None
+    conn.servers[sid].update(changes)
+    return conn.servers[sid]
+
+
+def _get_game(conn, sid):
+    """Look up a game by id (221) — cross-client when multi-hosting is on."""
+    if config.MULTI_CLIENT_HOSTING:
+        return registry.games.get(sid)
+    return conn.servers.get(sid)
+
+
+def _games_for_list(conn, server_type):
+    """Games to advertise for a server-list request (server_type 0 == any)."""
+    if config.MULTI_CLIENT_HOSTING:
+        return registry.games.list_by_type(server_type)
+    return [s for s in conn.servers.values()
+            if server_type == 0 or s.get("server_type") == server_type]
+
+
 # ── Auth flow ─────────────────────────────────────────────────────────────────
 @handler(201)  # StartAuthenticateSession
 def _h_auth_start(conn, fields, ticket):
@@ -65,6 +162,7 @@ def _h_auth_cipher(conn, fields, ticket):
         log("  !! No cipher in auth message"); return
     if not conn.shared:
         log("  !! No shared secret — StartAuthenticateSession must come first"); return
+    creds = {}
     try:
         blob = crypto.decrypt_cipher(cipher, conn.shared)
         creds = crypto.decode_login_blob(blob, has_cdkey=True)
@@ -75,6 +173,12 @@ def _h_auth_cipher(conn, fields, ticket):
     except Exception as e:  # noqa: BLE001
         log(f"  !! Decryption failed: {e}")
     conn.logged_in = True
+    # Multi-client: bind this lobby connection to the account it logged in as, so the
+    # SessionKey(207) perm_id and the char/user replies below serve that player. The
+    # perm_id then propagates to this client's UC + village conns via the token (213).
+    if config.MULTI_CLIENT_HOSTING:
+        conn.player = players.resolve_by_username(creds.get("username"))
+        log(f"  [PLAYER] lobby #{conn.id} → {conn.player.username!r} (perm_id={conn.player.perm_id})")
     session = None
     if crypto.TWOFISH_AVAILABLE and conn.shared:
         # KEEP the 32B session key (was discarded via os.urandom inline) — the token 213/214 crypto
@@ -85,14 +189,17 @@ def _h_auth_cipher(conn, fields, ticket):
 
 
 def _send_session_key(conn, ticket, session_cipher=None):
+    perm_id = _player(conn).perm_id
     conn.send_app(207, codec.encode_body(207, {
-        "perm_id": config.TEST_PERM_ID, "cipher": session_cipher, "ticket_id": ticket}))
-    log(f"  → SessionKey (207) perm_id={config.TEST_PERM_ID}")
+        "perm_id": perm_id, "cipher": session_cipher, "ticket_id": ticket}))
+    log(f"  → SessionKey (207) perm_id={perm_id}")
 
 
 @handler(4)  # RequestLogin (legacy plaintext path)
 def _h_request_login(conn, fields, ticket):
     log(f"  RequestLogin nick={fields.get('nick')!r}")
+    if config.MULTI_CLIENT_HOSTING:
+        conn.player = players.resolve_by_username(fields.get("nick"))
     conn.ok(ticket)
     _send_session_key(conn, ticket, None)
     conn.logged_in = True
@@ -124,42 +231,44 @@ def _h_property_get(conn, fields, ticket):
 # ── Account / character info ──────────────────────────────────────────────────
 @handler(53)  # RequestUsers -> UserData
 def _h_user_info(conn, fields, ticket):
+    p = _player(conn)
     conn.send_app(59, codec.encode_body(59, {
-        "user_id": config.TEST_PERM_ID, "name": config.TEST_USERNAME,
+        "user_id": p.perm_id, "name": p.username,
         "password": None, "mail": "test@test.test",
         "banned": False, "active": True, "status": 2,
-        "data": config.NICKNAME_DATA,
+        "data": p.data,
         "created": "2024-01-01 00:00:00+0:00",
         "last_login": "2024-01-01 00:00:00+0:00",
         "total_logins": 1, "ticket_id": ticket}))
     conn.ok(ticket)
 
 
-def _char_values(ticket):
+def _char_values(conn, ticket):
+    p = _player(conn)
     return {
-        "char_id": config.TEST_CHAR_ID, "name": config.TEST_CHAR_NAME,
-        "owner_id": config.TEST_PERM_ID, "owner_name": config.TEST_USERNAME,
+        "char_id": p.char_id, "name": p.char_name,
+        "owner_id": p.perm_id, "owner_name": p.username,
         "guild_id": 0, "guild_name": None, "guild_role": 0, "status": 1,
-        "server_id": 0, "server_name": None, "data": config.NICKNAME_DATA,
+        "server_id": 0, "server_name": None, "data": p.data,
         "ticket_id": ticket}
 
 
 @handler(55)  # RequestUserCharList -> UserCharConn
 def _h_player_info(conn, fields, ticket):
-    conn.send_app(60, codec.encode_body(60, _char_values(ticket)))
+    conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
     conn.ok(ticket)
 
 
 @handler(72)  # RequestCharacters -> CharacterData
 def _h_select_nickname(conn, fields, ticket):
-    conn.send_app(75, codec.encode_body(75, _char_values(ticket)))
+    conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
     conn.ok(ticket)
 
 
 @handler(77)  # CreateCharacterFromPreview
 def _h_register_nickname(conn, fields, ticket):
     log(f"  CreateCharacter name={fields.get('name')!r}")
-    conn.status_with_id(0, config.TEST_PERM_ID, ticket)
+    conn.status_with_id(0, _player(conn).perm_id, ticket)
 
 
 @handler(86, 88, 94)  # AddCharacter / ChangeUser(confirm) / RemoveCharacter
@@ -171,7 +280,7 @@ def _h_char_ack(conn, fields, ticket):
 @handler(158)  # RequestUserKeyList -> UserKeyConn
 def _h_cdkeys(conn, fields, ticket):
     conn.send_app(159, codec.encode_body(159, {
-        "user_id": config.TEST_PERM_ID, "cd_key": "0000000000000000",
+        "user_id": _player(conn).perm_id, "cd_key": "0000000000000000",
         "keypool": 1, "ticket_id": ticket}))
     conn.ok(ticket)
 
@@ -270,10 +379,9 @@ FAKE_GAME = {
 
 def _send_server_list(conn, server_type, ticket):
     sent = 0
-    for srv in conn.servers.values():
-        if server_type == 0 or srv.get("server_type") == server_type:
-            conn.send_app(170, codec.encode_body(170, server_to_170_values(srv, ticket)))
-            sent += 1
+    for srv in _games_for_list(conn, server_type):
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(srv, ticket)))
+        sent += 1
     if sent == 0 and server_type == 4:
         conn.send_app(170, codec.encode_body(170, server_to_170_values(FAKE_VILLAGE, ticket)))
         sent += 1
@@ -303,9 +411,11 @@ def _send_server_list(conn, server_type, ticket):
 
 @handler(171)  # RegObserverServerList
 def _h_reg_observer_servers(conn, fields, ticket):
+    server_type = fields.get("server_type", 0)
     room = fields.get("room_id")
-    log(f"  RegObserverServerList type={fields.get('server_type')} room_id={room} send_all={fields.get('send_all')}")
-    _send_server_list(conn, fields.get("server_type", 0), ticket)
+    log(f"  RegObserverServerList type={server_type} room_id={room} send_all={fields.get('send_all')}")
+    _reg_obs(conn, server_type)   # register for future push notifications (s39.5)
+    _send_server_list(conn, server_type, ticket)
 
 
 @handler(166)  # RequestServers (one-shot)
@@ -316,9 +426,8 @@ def _h_request_servers(conn, fields, ticket):
 
 @handler(168)  # AddGameServer
 def _h_add_game_server(conn, fields, ticket):
-    sid = conn.alloc_server_id()
-    conn.servers[sid] = {
-        "id": sid, "owner_id": config.TEST_PERM_ID,
+    info = {
+        "owner_id": _player(conn).perm_id,
         "name": fields.get("name", "TestGame"),
         "description": fields.get("description", ""),
         "ip": fields.get("ip") or conn.addr[0],
@@ -334,42 +443,59 @@ def _h_add_game_server(conn, fields, ticket):
         "map": fields.get("map", ""), "running": fields.get("running", False),
         "data": fields.get("data"),
     }
-    log(f"  AddGameServer: id={sid} name={conn.servers[sid]['name']!r} map={conn.servers[sid]['map']!r}")
+    sid = _register_game(conn, info)
+    log(f"  AddGameServer: id={sid} name={info['name']!r} map={info['map']!r} "
+        f"owner={info['owner_id']} subtype={info['server_subtype']} "
+        f"{'[registry]' if config.MULTI_CLIENT_HOSTING else '[per-conn]'}")
     conn.status_with_id(0, sid, ticket)
+    # Push 170 to all subscribed observers so their browser updates without a re-request (s39.5).
+    if config.MULTI_CLIENT_HOSTING:
+        _push_to_obs(info["server_type"], {**info, "id": sid})
 
 
 @handler(169)  # RemoveServer
 def _h_remove_server(conn, fields, ticket):
-    conn.servers.pop(fields.get("server_id", 0), None)
+    _remove_game(conn, fields.get("server_id", 0))
     conn.ok(ticket)
 
 
 @handler(177)  # ChangeGameServer
 def _h_change_server(conn, fields, ticket):
-    sid = next(iter(conn.servers), None)
-    if sid is not None:
-        s = conn.servers[sid]
-        s["name"] = fields.get("name", s["name"])
-        s["description"] = fields.get("description", s["description"])
-        s["max_players"] = fields.get("max_players", s["max_players"])
-        s["map"] = fields.get("map", s["map"])
-        s["running"] = fields.get("running", s["running"])
-        s["data"] = fields.get("data", s["data"])
-        log(f"  ChangeGameServer: id={sid} running={s['running']} map={s['map']!r}")
+    # Only overwrite fields the message actually carried a value for (a 177 may touch
+    # a subset; the stub ignores property_mask). Mirrors the prior per-conn semantics.
+    changes = {k: fields.get(k) for k in
+               ("name", "description", "max_players", "map", "running", "data")
+               if fields.get(k) is not None}
+    rec = _change_owned_game(conn, changes)
+    if rec is not None:
+        log(f"  ChangeGameServer: id={rec.get('id')} running={rec.get('running')} map={rec.get('map')!r}")
+        # Keep observers' browser current as host changes map/settings (s39.5).
+        if config.MULTI_CLIENT_HOSTING:
+            _push_to_obs(rec.get("server_type", 5), rec)
     conn.ok(ticket)
 
 
 @handler(221)  # RequestConnectionData -> ConnectionData
 def _h_connection_data(conn, fields, ticket):
     sid = fields.get("server_id", 0)
-    srv = conn.servers.get(sid)
+    srv = _get_game(conn, sid)
+    # GAME_CONN_VIA_STUB redirects to the stub's capture port ONLY for a join to a REAL
+    # hosted game (one actually in the registry → srv is not None). The lobby-WORLD entry
+    # request (server_id=50, the injected FAKE_VILLAGE, which is never registered → srv is
+    # None) MUST keep going to WORLD_PORT (:5479) — else the client dials the game port for
+    # the lobby world and never enters it. (s39.5 live bug: this redirected every 221.)
+    if config.MULTI_CLIENT_HOSTING and config.GAME_CONN_VIA_STUB and srv is not None:
+        ip, port = config.ADVERTISED_IP, config.GAME_PORT
+    else:
+        ip = srv["ip"] if srv else config.ADVERTISED_IP
+        port = srv["port"] if srv else config.WORLD_PORT
     conn.send_app(222, codec.encode_body(222, {
-        "perm_id": config.TEST_PERM_ID, "server_id": sid,
-        "ip": srv["ip"] if srv else config.ADVERTISED_IP,
-        "port": srv["port"] if srv else config.WORLD_PORT,
+        "perm_id": _player(conn).perm_id, "server_id": sid,
+        "ip": ip, "port": port,
         "nonce": os.urandom(128), "errorcode": 0, "errormsg": None,
         "ticket_id": ticket}))
-    log(f"  → ConnectionData(222) server={sid}")
+    log(f"  → ConnectionData(222) server={sid} → {ip}:{port}"
+        + ("" if srv else "  (unknown id — fell back to advertised world)"))
 
 
 # ── Token / chat-login validation ─────────────────────────────────────────────
@@ -390,6 +516,12 @@ def _h_send_token(conn, fields, ticket):
     # NOT a 214. This corrects the s22 213→214 regression. (The 214/Twofish-CTR path — crypto.build_token_*
     # — is consumed ONLY on the separate secured ROOM-server connection, kept for that case.)
     perm_id = fields.get("perm_id", config.TEST_PERM_ID)
+    # Multi-client: the UC + village connections carry the perm_id the lobby issued in
+    # 207, so bind this connection to that player (its chat user-info / world identity).
+    if config.MULTI_CLIENT_HOSTING and fields.get("perm_id"):
+        conn.player = players.resolve_by_perm(fields["perm_id"])
+        perm_id = conn.player.perm_id
+        log(f"  [PLAYER] token #{conn.id} → {conn.player.username!r} (perm_id={perm_id})")
     conn.status_with_id(0, perm_id, ticket)   # NETMSG 153 AddResult, errorcode=0 → the 0x99 ACK
     log("  → SendToken → AckResult(153) errorcode=0 [the 0x99 ACK → state 8 AUTHORIZED → LoggedIn]")
     # s31 (trace agent): NOW (post-login) push the chat ChannelInfo — deferred from the handshake so

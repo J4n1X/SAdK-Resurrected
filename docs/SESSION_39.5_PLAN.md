@@ -172,3 +172,67 @@ This is the largest RE task remaining but is **downstream** of getting the hosti
 
 - **Minimum viable:** Two clients can connect to the stub simultaneously, one hosts a game (`168`), the other sees it in BrowseGameDialog and can click Join → gets `ConnectionData(222)` with the host's IP.
 - **Full hosting:** The joiner connects to the host (or relay), the game-session handshake completes, and both clients enter the map-selection / game-setup screen together.
+
+---
+
+## Implementation Log — s39.5 build (2026-06-08)
+
+Built the **Phase 1 (global registry) + Phase 2 (multi-client identity)** scaffolding —
+pure Python, no RE needed, default-OFF and harness-compliant. This unblocks two
+clients connecting as distinct players and one hosting a game the other sees + joins.
+
+### What landed (all default-OFF; single-client wire output byte-identical)
+
+| File | Change |
+|---|---|
+| `sadk_lobby/players.py` (NEW) | `Player` + resolution: lobby conn by auth-blob `username`, UC/village by token `perm_id`; auto-registers unknown usernames. `PLAYERS[0]` == old hardcoded test identity. |
+| `sadk_lobby/registry.py` (NEW) | Process-global, thread-safe game store keyed by globally-unique `server_id`, tagged with the owning conn; cross-client list/lookup; owner cleanup on disconnect. |
+| `sadk_lobby/config.py` | `MULTI_CLIENT_HOSTING` (master gate), `PLAYERS` (test→perm 1, test2→perm 2), `GAME_CONN_VIA_STUB` (capture lever). |
+| `sadk_lobby/dispatch.py` | Handlers read `conn.player` + route 168/169/177/221/166/171 through the registry when the flag is on; resolve identity at 204 (lobby) / 213 (UC/village). |
+| `sadk_lobby/connection.py` | `conn.player` (defaults to test); drop owned games on disconnect. |
+| `sadk_lobby/chat.py` | Chat user-info reflects `conn.player`. |
+| `tests/test_multi_client.py` (NEW) | Proves resolution, cross-client visibility+join (221→222 with host address), owner cleanup, and flag-OFF isolation. All pass; golden stays byte-for-byte. |
+| `engagement_records/2026-06-08_multi-client-hosting.md` (NEW) | ER for flipping the flag live (matchmaking + join-handoff scope). |
+
+**Harness posture:** with the flags OFF the stub is byte-identical to before (golden +
+server-browser tests pass). Flipping `MULTI_CLIENT_HOSTING` is a wire-behaviour change
+→ covered by the ER above; flip it (with the user present) for the live 2-client test.
+
+### Two-client test recipe (host + joiner)
+
+1. In `sadk_lobby/config.py` set `MULTI_CLIENT_HOSTING = True` and `ADVERTISE_GAME_SERVERS = True`.
+   (Optional, to capture the join handshake at the stub: also `GAME_CONN_VIA_STUB = True`.)
+2. Run the stub: `python -m sadk_lobby`. Set `SADK_ADVERTISE_IP` to the stub's IP as seen
+   from the client VMs if they aren't on loopback.
+3. **Client A (host):** LobbySettings account `test`. Log in → SPIEL ERSTELLEN → pick a
+   map → Create.  Watch the stub log for `AddGameServer: id=… owner=1 … [registry]`.
+4. **Client B (joiner):** LobbySettings account `test2` (a 2nd machine/VM — two local
+   instances is a known dead end). Log in → SPIEL SUCHEN. Expect B's BrowseGameDialog to
+   **list A's game** (stub log: a `170` with A's name/map to conn #B). Select it → Beitreten.
+5. Stub log shows B's `RequestConnectionData(221)` → `ConnectionData(222) → <addr>`. With
+   `GAME_CONN_VIA_STUB`, `<addr>` is the stub, so the joiner's game connection lands on
+   `:5479` and is captured (`sadk_captures/world_*.bin` + log).
+
+**Success for THIS step** = two distinct identities, B sees A's game, B gets the join
+address (+ the captured game-connection frames). The pre-match ROOM (map/settings/6
+slots) opening populated is the **next layer** (see below) — not claimed by this step.
+
+### The next layer (the real unknown): the game-room/slot protocol
+
+The 6 player slots + room config are **not** any lobby NETMSG (verified across the whole
+`msgdefs.ini`: 166–177 server-list, 240–251 UC channels, 252–262 ranking — none carry
+slots). So the room/slot state rides the **direct host↔joiner game connection** (the
+2008-LAN P2P design), like the 1000-series world protocol over `SendGameData(74)`. The
+decisive next move is the **read-only join capture** above (what the joiner sends/receives
+on the game connection).
+
+A read-only Ghidra RE this session **confirmed the architecture** (verdict in
+`docs/MP_GAME_CONNECTION.md`): the lobby is a **pure matchmaker**; on Join the client opens a
+**new, distinct `LobbyComm::GameServerConnection`** (`.\LobbyGameServerConnection.cpp`) to the
+**ip:port + nonce** from `ConnectionData(222)`; the room/6-slot state then flows over **that
+game connection** as PropertySet messages (not any lobby NETMSG). The host's `SetupSession`
+(`0x4563c0`) builds its own match world locally + registers via `168`; tincat3 is fully
+server-capable but SADK calls it by ordinal, so whether the host opens a listener is the one
+thing only a **runtime capture** can settle. The `config.GAME_CONN_VIA_STUB` lever makes the
+stub the game endpoint the joiner dials, so that capture lands at the stub. Any room-push is a
+separate, ER-gated change.

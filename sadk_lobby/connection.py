@@ -12,7 +12,7 @@ import struct
 import threading
 from datetime import datetime
 
-from . import chat, codec, config, dispatch, msgdefs, village
+from . import chat, codec, config, dispatch, msgdefs, players, registry, village
 from .log import log
 from .tincat import (BinaryReader, app_payload, build_frame,
                      build_handshake_payload, crc32, parse_header)
@@ -29,13 +29,18 @@ def next_conn_id():
 
 
 class Conn:
-    def __init__(self, sock, addr, conn_id, bin_file, is_chat=False, is_village=False):
+    def __init__(self, sock, addr, conn_id, bin_file, is_chat=False, is_village=False,
+                 is_game=False):
         self._sock = sock
         self.addr = addr
         self.id = conn_id
         self._bin_file = bin_file
         self.is_chat = is_chat
         self.is_village = is_village
+        # Dedicated game-server connection (GAME_CONN_VIA_STUB capture endpoint, :5480).
+        # Framed/logged like a village conn, but is_village stays False so it does the
+        # login WITHOUT the EnterWorld(1000) push (which would crash a GameServerConnection).
+        self.is_game = is_game
         self._buf = b""
         self._state = "PREFIX"
         self._hdr = None
@@ -44,8 +49,12 @@ class Conn:
         self.logged_in = False
         self.alive = True
         self._lock = threading.Lock()
-        self.servers = {}           # ServerId -> info dict
+        self.servers = {}           # ServerId -> info dict (per-conn store; single-user path)
         self._next_server_id = 100
+        # Identity this connection serves. Defaults to the test account (byte-identical
+        # to the old hardcoded TEST_*); login resolves a distinct player only when
+        # config.MULTI_CLIENT_HOSTING is on (see players.py / dispatch._h_auth_cipher).
+        self.player = players.default_player()
 
     def alloc_server_id(self):
         sid = self._next_server_id
@@ -113,6 +122,11 @@ class Conn:
             self._sock.close()
             if self._bin_file:
                 self._bin_file.close()
+            if config.MULTI_CLIENT_HOSTING:
+                dead = registry.games.remove_owner(self.id)
+                if dead:
+                    log(f"  [REGISTRY] dropped {len(dead)} game(s) owned by #{self.id}: {dead}")
+            dispatch.unregister_observer(self)
             log(f"\n  DISCONNECTED #{self.id}")
 
     def _process(self):
@@ -150,7 +164,7 @@ class Conn:
             return
 
         # Application frame.
-        if self.is_village:
+        if self.is_village or self.is_game:
             # The village/world conn is a UserCommConnection on the SAME 0x26B6 comm layer:
             # VillageServerConnection::HandleMessage (@0x470890) handles only village types (1000-1006,
             # 3xxx) and TAIL-CALLS the base UserComm dispatch for everything else — so its LOGIN
@@ -223,6 +237,10 @@ class Conn:
             # null-derefs reading it → process death ~215 ms after the 153. Deferred to the 213
             # handler, right AFTER the 153 ACK (see dispatch._h_send_token).
             log("  [CHAT] connection opened — ChannelInfo DEFERRED until after login (post-153)")
+        if self.is_game:
+            log("  [GAME] game-server connection opened (:5480 capture endpoint) — framing/logging like a "
+                "village conn; login is answered (153 ACK) but NO EnterWorld push (would crash a "
+                "GameServerConnection). Capturing the un-reversed game-room handshake.")
         if self.is_village:
             # s33: the PATCHED client now reaches this REAL village-server connection (:5479) without
             # crashing (3 conns alive, pinging). HandleEnterWorld (@0x46f470, SetState VillageEntered=9)
