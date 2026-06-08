@@ -10,7 +10,7 @@ conn.send_chat). Frame handlers take the owning Conn and use conn.send_chat().
 """
 import struct
 
-from . import config
+from . import config, players
 from .log import log
 from .tincat import BinaryReader, str_field, bytes_field
 
@@ -115,6 +115,7 @@ def handle_join_channel(conn, fields, ticket):
     option = fields.get("option", fields.get("Option", 0))
     conn.send_chat(channel_joined(cell_id, ticket, option))
     conn.send_chat(status_reply(cell_id, ticket, 0))
-    inner = inner_user_info(config.TEST_PERM_ID, cell_id, config.TEST_CHAR_NAME)
+    p = players.of(conn)
+    inner = inner_user_info(p.perm_id, cell_id, p.char_name)
     conn.send_chat(reply(5, inner, cell_id, config.FROM_SERVER, ispropset=True))
     log(f"  → [CHAT] JoinChatChannel cell={cell_id}: Joined + StatusReply + ChatUserInfo")

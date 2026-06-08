@@ -20,12 +20,16 @@ BIN_DIR  = os.path.join(REPO_DIR, "sadk_captures")
 LOBBY_PORT = 7070   # main lobby connection
 UC_PORT    = 7071   # UC/chat second connection (MUST differ from lobby port)
 WORLD_PORT = 5479   # village/world third connection
+GAME_PORT  = 5480   # dedicated game-server connection (the joiner's LobbyComm::GameServerConnection
+#   endpoint when GAME_CONN_VIA_STUB routes joins to the stub). Kept SEPARATE from WORLD_PORT so a game
+#   connection is NEVER mistaken for a lobby-world village conn — it logs in (153 ACK) but is NOT pushed
+#   EnterWorld(1000) (which a GameServerConnection has no template for → would NULL-deref/crash). Capture-only.
 
 # IP the stub ADVERTISES to the client as the address to connect back to (chat/village/game servers).
 # Same machine -> 127.0.0.1. For the WinXP-VM test (game in the VM, stub on the host), set env
 # SADK_ADVERTISE_IP to the HOST's IP as seen FROM the VM, so the client dials the host, not the VM's
 # own loopback. Listeners still bind 0.0.0.0 either way.
-ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "127.0.0.1")
+ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.134")
 
 # ── Hardcoded test account ────────────────────────────────────────────────────
 TEST_USERNAME  = "test"
@@ -46,6 +50,52 @@ NICKNAME_DATA = bytes.fromhex(
     "ff819891094508668e438300886265604788beb8ce644b0c"
     "8d0d1c05004a9b0ff3"
 )
+
+# ── Multi-client hosting / multiple players (s39.5) ───────────────────────────
+# Lets MORE THAN ONE client log in as DISTINCT players (a host + a joiner) so game
+# hosting and joining can actually be tested, and makes a game hosted by client A
+# visible to client B (a process-global game registry instead of the old
+# per-connection server list). See sadk_lobby/players.py + sadk_lobby/registry.py.
+#
+# ⛔ OFF BY DEFAULT. With the flag OFF the stub is byte-identical to before:
+# every connection serves the single hardcoded test account (PLAYERS[0]) and game
+# servers stay per-connection. Turning it ON changes the stub's WIRE behaviour in
+# the MULTI-client case (it serves a second player's identity, and relays one
+# client's hosted game to another client) — per HARNESS.md that is a wire-behaviour
+# change requiring a USER-APPROVED Engagement Record before it is run against live
+# clients (engagement_records/2026-06-08_multi-client-hosting.md). SINGLE-client
+# output is unaffected either way (the default player == the old TEST_* identity).
+MULTI_CLIENT_HOSTING = True
+
+# Player accounts the stub can serve. PLAYERS[0] MUST stay the default/test player
+# (perm_id == TEST_PERM_ID): it is byte-identical to the old hardcoded identity and
+# is the fallback for unknown / single-user logins. Add a player by appending a
+# dict with a UNIQUE perm_id and the account `username` you put in THAT client's
+# data/lobby/config/LobbySettings.ini. Appearance is shared (NICKNAME_DATA) for now.
+#
+# Two-client test recipe: client A's LobbySettings account = "test"  (→ Testler,
+# perm 1); client B's = "test2" (→ Siedler, perm 2). With MULTI_CLIENT_HOSTING on,
+# any other username auto-registers as a fresh player on first login.
+PLAYERS = [
+    {"username": TEST_USERNAME, "perm_id": TEST_PERM_ID,
+     "char_id": TEST_CHAR_ID, "char_name": TEST_CHAR_NAME},   # PLAYERS[0] = default
+    {"username": "test2", "perm_id": 2, "char_id": 2, "char_name": "Siedler"},
+]
+
+# When a joiner clicks Join, the stub answers RequestConnectionData(221) with
+# ConnectionData(222) carrying the GAME server's address. By default that is the
+# HOST's own advertised address (from its 168) — the original P2P design, where the
+# joiner dials the host directly (and the stub never sees that connection).
+#
+# Flip this ON (with MULTI_CLIENT_HOSTING) to instead return the STUB's own DEDICATED
+# game address (ADVERTISED_IP:GAME_PORT, :5480 — NOT the lobby-world :5479), so the
+# joiner dials the STUB. That lets the stub LOG/CAPTURE the game-connection handshake
+# (the pre-match room/slot protocol we have NOT reversed yet — msgdefs has no slot
+# message; it rides this connection) and, later, act as the game server / relay. The
+# :5480 listener does the login (153 ACK) but does NOT push EnterWorld(1000) — that
+# lobby-world message would crash a GameServerConnection. Read-only capture lever for
+# the next layer; same Engagement Record as MULTI_CLIENT_HOSTING. OFF = faithful P2P.
+GAME_CONN_VIA_STUB = False
 
 # ── TinCat transport constants ────────────────────────────────────────────────
 MAGIC       = 0xDABAFBEF
@@ -149,7 +199,7 @@ VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick @0x46f42
 # trigger (the actual BETRETE WELT engagement) — find the exact moment with a live breakpoint on
 # tincat3!RegisterPropertySet (0x10013710), watching msgType 0x3E8-0x3EE. See WORLD_ENTRY_PLAN.md.
 VILLAGE_PAYLOAD_MAGIC = 0x26B6      # msg 1000 rides the single lobby comm-layer magic (NOT a separate layer)
-ARM_ENTER_WORLD       = False       # ⛔ default OFF — flipping True changes the stub's WIRE behavior (pushes
+ARM_ENTER_WORLD       = True       # ⛔ default OFF — flipping True changes the stub's WIRE behavior (pushes
 #   msg 1000 UNPROMPTED) → needs a USER-APPROVED Engagement Record (engagement_records/2026-06-07_push-
 #   enterworld.md) + the user present to observe. s39 LIVE-CONFIRMED the wait-state (probes/ +
 #   tincat_server.log): after the VILLAGE conn's 153 ACK the client parks at LobbyManager EnteringVillage(8)
@@ -198,4 +248,4 @@ LOBBY_PROTOCOL_VERSION = 1000
 # Record (engagement_records/2026-06-07_mp-server-browser.md) BEFORE it is run against the live game.
 # With the flag OFF the stub's wire output is byte-identical to today (village browsing, subtype 2,
 # is unaffected and always on). Flip True only when present to test, after approving the ER.
-ADVERTISE_GAME_SERVERS = False
+ADVERTISE_GAME_SERVERS = True
