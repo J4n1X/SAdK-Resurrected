@@ -150,7 +150,7 @@ This is the largest RE task remaining but is **downstream** of getting the hosti
 
 1. **P2P vs relay?** The original game was LAN — did hosts open a listener? (Strong yes based on the `ip`/`port` fields in 168.) Should we preserve that or build a relay for internet play?
 2. **Port allocation:** Does the host use a fixed port (5479? configurable?) or does it tell the lobby which port it's listening on via `AddGameServer(168).port`?
-3. **Do we have a second machine / VM available for 2-client testing?** Or can we use the `-localhostmode` (noted as a dead end for village but maybe works for game sessions)?
+3. **Do we have a second machine / VM available for 2-client testing?** (Note: `-localhostmode` is a known dead end per CLAUDE.md — two separate machines/VMs are needed.)
 4. **Priority within hosting:** Get the browser + join working first (Phase 1–3), or jump straight to the game-session capture (Phase 4)?
 
 ---
