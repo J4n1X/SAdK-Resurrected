@@ -1,0 +1,40 @@
+{
+  "functions": [
+    {
+      "address": "0x004FA540",
+      "new_name": "nMenu_Village_UpdateAndRender",
+      "plate_comment": "Per-frame update and render tick for the nMenu_Village app mode; drives stereo/overlay render passes via CGraphicDevice_BeginRendering, dispatches debug UI panels, and manages lobby-world screen host rendering. Sits at vtable slot 0x80 of App-mode vtable 0x7e69c8.",
+      "calling_convention": "__thiscall",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "this_ptr",
+          "type": "void *"
+        },
+        {
+          "name": "pTimestamps",
+          "type": "ulonglong *"
+        },
+        {
+          "name": "param_3",
+          "type": "undefined4"
+        }
+      ],
+      "locals": []
+    },
+    {
+      "address": "0x004E36B0",
+      "new_name": "LookupTextureEntry",
+      "plate_comment": "Appends \"_00.tga\" to a base name string, looks up a resource entry via an internal search helper, and stores the result through an output pointer.",
+      "calling_convention": "__cdecl",
+      "return_type": "void",
+      "params": [
+        {
+          "name": "baseName",
+          "type": "undefined4"
+        }
+      ],
+      "locals": []
+    }
+  ]
+}

@@ -13,7 +13,7 @@ import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, players, registry, village
+from . import chat, codec, config, crypto, msgdefs, players, referee, registry, village
 from .log import log
 
 HANDLERS = {}
@@ -303,14 +303,63 @@ def _h_motd(conn, fields, ticket):
         "txt": "Willkommen! SaDK Revival Server - WIP", "ticket_id": ticket}))
 
 
-# ── Assign UC/chat server ─────────────────────────────────────────────────────
-@handler(189)  # AssignServer -> UsercommServerData
-def _h_assign_server(conn, fields, ticket):
+# ── Assign server (AssignServer 189) ──────────────────────────────────────────
+def _send_uc_server_192(conn, server_type, ticket):
+    """UsercommServerData(192): point the client at the stub's UC/chat server (:7071).
+
+    The 192 is consumed by tincat3's generic CommLayer 0xc0 handler (FUN_10030420 @0x10030420):
+    it dials the advertised ip:port and stands up the UserComm-SERVER connection — which is the
+    connection our :7071 (is_chat) listener serves chat over. The handler does NOT validate the
+    ticket against an outstanding request (no category check), so a ticket_id of 0 (unsolicited
+    advertisement) is accepted just the same as a reply ticket.
+    """
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
-        "server_type": fields.get("server_type", 0),
+        "server_type": server_type,
         "version": None, "data": None, "ticket_id": ticket}))
-    log(f"  → UsercommServerData(192) -> {config.ADVERTISED_IP}:{config.UC_PORT}")
+    log(f"  → UsercommServerData(192) -> {config.ADVERTISED_IP}:{config.UC_PORT} "
+        f"(type={server_type}, ticket={ticket})")
+
+
+@handler(189)  # AssignServer
+def _h_assign_server(conn, fields, ticket):
+    server_type = fields.get("server_type", 0)
+    server_subtype = fields.get("server_subtype")
+
+    # ── CORRECTED REFEREE MODEL (re-RE'd s39.6, binary build 34688 + 2 live captures) ──────────────
+    # The PRIOR model ("UC = 1st type-4 189, referee = a 2nd type-4 189") is REFUTED:
+    #   * SADK has EXACTLY ONE type-4 AssignServer caller — the LobbyManager state-pump one-shot at
+    #     0x468f60→0x468f60 vtbl[0x2c](4,4), which registers the REFEREE-address callback FUN_004625d0
+    #     (writes LM+0x580) and is LATCHED (LM+0x5ac), so it fires at most ONCE per session. The two
+    #     live runs show EXACTLY ONE 189 per client (type=4, sub=4) — there is NO 2nd 189, ever.
+    #   * So the single login 189 IS the referee assign. tincat3 routes its reply by the ticket's
+    #     category 0x108: case 0xaa(170)+cat 0x108 → FUN_10021520, which fires the referee callback
+    #     IFF the reply carries server_type==4 && server_subtype==5. A 192 reply instead goes to the
+    #     generic UC-server handler (no cat check) → the client dialed :7071 (chat worked "by accident")
+    #     but LM+0x580 stayed 0 → RefereeServerConnection::Login no-op'd → match aborted after 5 retries.
+    # FIX: answer the (only) type-4 189 with GameServerData(170, type=4, subtype=5, SAME ticket_id,
+    # id=REF_SERVER_ID) so the cat-0x108 path sets LM+0x580 = REF id, which resolves to :5481 from the
+    # type-4 list we already advertise (FAKE_REFEREE). The id MUST be the FAKE_REFEREE id and the entry
+    # MUST have been advertised on the type-4 list first (it is — see _send_server_list) so pComm can
+    # resolve it. ⛔ Gated by ADVERTISE_REFEREE_SERVER; OFF → every assign falls through to 192 (today's
+    # byte-identical behavior).
+    if config.ADVERTISE_REFEREE_SERVER and server_type == 4:
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(dict(FAKE_REFEREE), ticket)))
+        log(f"  → [REFEREE] AssignServer(type=4, sub={server_subtype}, ticket={ticket}) → "
+            f"GameServerData(170, type=4, subtype=5, id={config.REF_SERVER_ID}) -> "
+            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT}  [sets LM+0x580 via tincat3 FUN_10021520]")
+        # Switching the 189's reply from 192→170 means the client no longer learns the UC-server
+        # address FROM THIS MESSAGE, which is how chat currently reaches :7071. To keep chat working,
+        # also (unsolicited) push the 192 so the client still dials the UC server. ticket_id=0 because
+        # this is an advertisement, not a reply to an outstanding request (the 170 already consumed the
+        # cat-0x108 ticket). If a live capture shows chat survives on the lobby transport WITHOUT this,
+        # set REFEREE_ALSO_PUSH_UC=False — the 192 push is the conservative chat-preservation default.
+        if config.REFEREE_ALSO_PUSH_UC:
+            _send_uc_server_192(conn, server_type, 0)
+        return
+
+    # Non-referee assign (or referee disabled): reply UsercommServerData(192) as before.
+    _send_uc_server_192(conn, server_type, ticket)
 
 
 # ── Game/village server list ──────────────────────────────────────────────────
@@ -366,14 +415,18 @@ FAKE_VILLAGE = {
     # The roomId must equal the client's ProtocolVersion (DAT_0087aed8) or Enter stays grey — see config.
     "data": server_data_block(config.LOBBY_PROTOCOL_VERSION),
 }
-FAKE_GAME = {
-    "id": 2, "owner_id": config.TEST_PERM_ID,
-    "name": "Revival Test Game", "description": "2 player test",
-    "ip": config.ADVERTISED_IP, "port": config.WORLD_PORT,
-    "max_players": 2, "cur_players": 1, "ai_players": 0,
-    "lobby_id": 9212, "version": "9212", "server_type": 5, "server_subtype": 0,
+# The referee/match-arbiter server (s39.5). server_type=4 + server_subtype=5 is the EXACT pair tincat3
+# FUN_10021520 gates the referee-assigned path on. Advertised on the type-4 server-list so the client caches
+# REF_SERVER_ID → ip:port (pComm FUN_100196b0 resolves the id when AssignServer hands it back). No
+# ServerDataBlock needed (that gate is village-Enter-button only; the referee is resolved by id, not joined).
+FAKE_REFEREE = {
+    "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
+    "name": "referee", "description": "SaDK Revival Referee",
+    "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
+    "max_players": 0, "cur_players": 0, "ai_players": 0,
+    "lobby_id": 0, "version": "", "server_type": 4, "server_subtype": 5,
     "level": 0, "game_mode": 0, "hardcore": False,
-    "map": "MP_2P_steinfjord", "running": False, "data": None,
+    "map": "", "running": True, "data": None,
 }
 
 
@@ -386,25 +439,19 @@ def _send_server_list(conn, server_type, ticket):
         conn.send_app(170, codec.encode_body(170, server_to_170_values(FAKE_VILLAGE, ticket)))
         sent += 1
         log("  → Injected fake village world (ServerType=4) w/ room-assign data blob")
-    elif sent == 0 and server_type == 5:
-        game = dict(FAKE_GAME)
-        if config.ADVERTISE_GAME_SERVERS:
-            # Make the demo entry appear in WorldScreen's BrowseGameDialog (the dead bottom-left BROWSE
-            # button): subtype 1 = game list (AddOrUpdateDescriptor @0x46a440 routes desc+0x29 == 1 →
-            # this+0x7c). The subtype-1 fill (FUN_0048da70) needs NO ServerDataBlock, so a plain 170 with
-            # subtype 1 populates it. OFF by default — flipping config.ADVERTISE_GAME_SERVERS is a
-            # wire-behavior change gated by an approved Engagement Record (see config.py / HARNESS.md).
-            game["server_subtype"] = 1
-            # Independent review (s39) verified: the BrowseGameDialog JOIN gate (FUN_004588e0 →
-            # FUN_00468480) needs only (selected row + the server-id present in the game vector +
-            # max_players > current). NO ProtocolVersion / ServerDataBlock / validity match (that gate
-            # is village-only). It DISABLES join with "!LOBBY_MATCHMAKING_GAMEISFULL" unless
-            # current < max. Guarantee headroom so the listed game is joinable:
-            game["cur_players"] = 0
-            game["max_players"] = max(int(game.get("max_players") or 2), 2)
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(game, ticket)))
+    # NO fake GAME entry. The game browser (server_type 5) shows ONLY real hosted games — registered
+    # via AddGameServer(168) and relayed cross-client from the registry in the loop above. The client
+    # sets server_subtype=1 itself when it hosts a browsable game (live-confirmed: 'Siedlerwill spielen'
+    # arrived with subtype=1), so a hosted game routes to BrowseGameDialog on its own with its REAL
+    # player count. An empty game list when nobody is hosting is the correct, honest state.
+    # Advertise the referee on the type-4 (and type-0/any) list so the client CACHES REF_SERVER_ID→ip:port
+    # BEFORE the AssignServer round-trip hands it that id (pComm FUN_100196b0 resolves the id from this cache;
+    # without it FUN_00462910 logs "Could not initialize RefereeServerConnection."). Gated by the ER flag.
+    if config.ADVERTISE_REFEREE_SERVER and server_type in (0, 4):
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(dict(FAKE_REFEREE), ticket)))
         sent += 1
-        log(f"  → Injected fake game server (ServerType=5, subtype={game['server_subtype']})")
+        log(f"  → [REFEREE] advertised referee (type=4, subtype=5, id={config.REF_SERVER_ID}) → resolves "
+            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT}")
     conn.ok(ticket)
     log(f"  → ServerList(type={server_type}): sent {sent} server(s) + OK")
 
@@ -552,6 +599,22 @@ def _h_send_token(conn, fields, ticket):
         else:
             log("  [ENTER] (VILLAGE) 153 ACK — client now parks at EnteringVillage(8) awaiting msg 1000; "
                 "push DISARMED (config.ARM_ENTER_WORLD=False, needs Engagement Record).")
+    elif getattr(conn, "is_referee", False):
+        # The referee conn has completed its base login (153 AUTHORIZED); the client now opens the referee
+        # data channel (RefereeServerConnection::Login) and WAITS for the server to push LoginSuccess(0xDCA).
+        # PUSH it (after a short settle so the channel-open lands first) — the genuine message the match-start
+        # gate awaits. GATED by config.ARM_REFEREE (wire change → Engagement Record; flip only after a live
+        # capture confirms the LoginSuccess framing — see referee.py / config.REF_LOGIN_SUCCESS_NAMES).
+        if config.ARM_REFEREE:
+            def _push_ref(c=conn):
+                time.sleep(config.ENTER_WORLD_DELAY)
+                referee.push_login_success(c)           # idempotent (_ref_login_pushed latch)
+            threading.Thread(target=_push_ref, daemon=True).start()
+            log(f"  [REFEREE] ARMED — pushing LoginSuccess(0xDCA) in {config.ENTER_WORLD_DELAY}s after the 153 "
+                "→ clears the 5x-retry match-start abort. Probe LM+0x362c (attempts) to confirm it never hits 5.")
+        else:
+            log("  [REFEREE] 153 login done — LoginSuccess push DISARMED (config.ARM_REFEREE=False, needs "
+                "Engagement Record). Capturing the referee channel framing (Part A) only.")
     else:
         log("  [ENTER] (lobby/UC) 153 ACK — no world push on this conn.")
 
@@ -598,3 +661,22 @@ def _h_chat_message(conn, fields, ticket):
     txt = fields.get("txt", "") or ""
     log(f"  CHAT: {txt!r}")
     conn.send_app(165, codec.encode_body(165, {"txt": f"[Server] {txt}", "from_id": 0}))
+
+
+# ── Quiet routing: keep routine 'default-implementation' chatter out of the main log ──────────────
+# These handlers do nothing protocol-significant for the work under study — bare acks + boilerplate
+# account/social login replies. connection.py routes their full per-message decode to
+# tincat_lobby_unhandled.log (FILE ONLY — not console, not the main log) so the main view stays focused
+# on auth, server-list, AssignServer, village/world, referee and chat. Genuinely UNKNOWN types (no
+# handler) STAY in the main log so new protocol is still discoverable. Add a handler here to silence its
+# message types; remove one to bring them back.
+QUIET_HANDLERS = frozenset({
+    _h_ack, _h_char_ack, _h_ignore_list, _h_user_info, _h_player_info,
+    _h_select_nickname, _h_cdkeys, _h_property_get, _h_motd,
+})
+
+
+def is_quiet(type_num):
+    """True if this lobby message is routine/boilerplate → route its log to tincat_lobby_unhandled.log
+    instead of the main view. False for unknown types (no handler), so new protocol stays visible."""
+    return HANDLERS.get(type_num) in QUIET_HANDLERS
