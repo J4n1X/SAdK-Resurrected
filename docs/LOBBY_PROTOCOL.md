@@ -1,148 +1,104 @@
-# SaDK Lobby System — Reverse Engineering Report
-**Game**: Die Siedler: Aufbruch der Kulturen (The Settlers: Rise of Cultures)  
-**Developer**: Funatics / Blue Byte / Ubisoft (2008)  
-**Status**: Lobby protocol substantially reversed (message-type catalogue complete). The village/world
-(`:5479`) sub-protocol is only **PARTIALLY** reversed — see §3.2 caveats and `sadk_lobby/village.py`.  
-**Last updated**: 2026-05-31
+# SaDK Lobby Protocol Reference
+
+**Game**: Die Siedler: Aufbruch der Kulturen (2008, Funatics / Blue Byte / Ubisoft).
+
+Source of truth for all message types/field layouts: `bin/msgdefs.ini` (= `msgdefs.ini`). [PROVEN]
+Lobby catalogue is complete. The in-world `:5479` sub-protocol (types 1000+) is only **partially**
+reversed — see §3.2.
 
 ---
 
-## 1. Server Endpoints
+## 1. Endpoints
 
-All connection data sourced from plaintext config files in the game install.
+> Official Funatics endpoints are dead (infra shut down ~2014); recorded for reference only.
 
-> **⚠️ HISTORICAL — these endpoints are DEAD.** The official Funatics lobby/ranking
-> infrastructure was shut down ~2014. The IPs/hostnames below (`84.17.180.120`,
-> `www.diesiedler2lobby.de:8777`, `sadk.funatics.de`) no longer resolve/respond and are
-> recorded here only for reference. The revival stub stands in for them locally.
-
-### 1.1 Lobby Server (`data/lobby/config/LobbySettings.ini`)
-```
-Host = 84.17.180.120   ← HISTORICAL, dead since ~2014
-Port = 7070            ← TCP, main lobby connection
-```
-
-### 1.2 Secondary Lobby URL (`data/game/settings/network.ini`)
-```
-url      = www.diesiedler2lobby.de:8777   ← HISTORICAL, dead since ~2014
-patchlevel = 9212       ← required client version, server rejects older clients
-```
-
-### 1.3 Ranking / Hall of Fame (HTTP, `LobbySettings.ini`) — HISTORICAL, dead since ~2014
-```
-GET http://sadk.funatics.de:7012/rankingMaster/ranking.php
-  ?ranking=weekly|monthly|yearly
-  &limit=20
-  &offset=0
-  &permID=<player_perm_id>   ← appended automatically (AppendPermID=1)
-```
-
-### 1.4 In-game Peer-to-Peer (`data/game/settings/network.ini`)
-```
-gamePort      = 5479   ← TCP/UDP, direct player-to-player game connection
-broadcastPort = 6582   ← LAN broadcast discovery
-broadcastTimeout = 10000 ms
-```
+| Source file | Key | Value | Note |
+|---|---|---|---|
+| `LobbySettings.ini` | Host / Port | `84.17.180.120` / `7070` | [PROVEN] TCP main lobby |
+| `network.ini` | url | `www.diesiedler2lobby.de:8777` | secondary lobby URL |
+| `network.ini` | patchlevel | `9212` | [PROVEN] required client version |
+| `LobbySettings.ini` | ranking | `http://sadk.funatics.de:7012/rankingMaster/ranking.php` | HTTP, `?ranking=weekly\|monthly\|yearly&limit&offset&permID` |
+| `network.ini` | gamePort | `5479` | [PROVEN] world / direct game connection (TCP/UDP) |
+| `network.ini` | broadcastPort | `6582` | LAN discovery, broadcastTimeout 10000 ms |
 
 ---
 
-## 2. Networking Middleware: `tincat3.dll`
+## 2. Networking Middleware
 
-The library `bin/tincat3.dll` is the proprietary Funatics networking layer ("TinCat 3").  
-It implements the entire lobby client protocol. The game links against it dynamically.  
-Reconstructing the lobby server requires implementing the same binary protocol.
-
-Other DLLs present: `expat.dll` (XML parser), `fmod.dll` (audio), `NxCharacter.dll` (PhysX).
+`bin/tincat3.dll` is the proprietary Funatics networking layer ("TinCat 3"). Reimplementing the
+server means matching this binary protocol.
 
 ---
 
 ## 3. Binary Protocol
 
-### 3.1 Wire Format
+### 3.1 Wire Format [PROVEN]
 
-All communication is over **TCP** to port 7070.  
-All messages are **binary**, little-endian.  
-Every message begins with a `type` field — a **UNSHORT** (unsigned 16-bit integer) identifying the message.
+- TCP, binary, **little-endian**.
+- TinCat frame header is **28 bytes**.
+- Lobby payload prefix magic **0x26B6**; chat payload prefix magic **0x0062**.
+- Every message begins with a `type` field — **UNSHORT** (uint16).
 
-#### Data Types
 | Token | C type | Size | Notes |
 |-------|--------|------|-------|
-| `UNBYTE` | uint8 | 1 B | |
-| `SIBYTE` | int8 | 1 B | signed |
-| `UNSHORT` | uint16 | 2 B | |
-| `SISHORT` | int16 | 2 B | signed |
-| `UNLONG` | uint32 | 4 B | |
-| `SILONG` | int32 | 4 B | signed |
-| `LBOOL` | uint32 | 4 B | 0 = false, non-zero = true |
-| `STRING N` | char[N] | N B | null-terminated, fixed-length buffer |
-| `MEMBLOCK 0` | blob | variable | length-prefixed binary block |
+| `UNBYTE` / `SIBYTE` | uint8 / int8 | 1 B | |
+| `UNSHORT` / `SISHORT` | uint16 / int16 | 2 B | |
+| `UNLONG` / `SILONG` | uint32 / int32 | 4 B | |
+| `LBOOL` | uint32 | 4 B | 0 = false |
+| `STRING N` | char[N] | N B | null-terminated fixed buffer |
+| `MEMBLOCK 0` | blob | variable | u32 length-prefix + bytes |
 
-`ticket_id` (UNLONG) is a client-generated nonce for matching async responses to requests.  
-`perm_id` (UNLONG) is the server-assigned persistent player identity (survives re-logins).
+- `ticket_id` (UNLONG): client-generated nonce matching async responses to requests.
+- `perm_id` (UNLONG): server-assigned persistent player identity (survives re-logins).
 
-### 3.2 Message Type Reference
+### 3.2 Village / world sub-protocol caveat
 
-Sourced verbatim from `bin/msgdefs.ini` / `msgdefs.ini` (identical files). The **catalogue of
-lobby message types below is complete** (it is the game's own NETMSG schema). Note, however, that the
-**in-world village/world sub-protocol (the `:5479` connection, message types 1000+) is only PARTIALLY
-reversed** — the EnterWorld(1000) handshake is understood and drives the client into the rendered world,
-but the full in-world message set (1001–1006, ticks, observer fan-out, entity overlays) is not yet a
-finished, reimplementable spec. See `sadk_lobby/village.py` for the current (partly hypothesis-tagged) model.
+EnterWorld(1000) is understood and drives the client into the rendered world. [PROVEN]
+**[TODO]** full in-world set (1001–1006, ticks, observer fan-out, entity overlays) — not yet a
+reimplementable spec. See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
-#### Authentication & Session
+### 3.3 Authentication & Session [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
 | 4 | **RequestLogin** | nick(256), password(32), cd_key(128), keypool(UNSHORT), patchlevel, ticket_id |
 | 71 | **RequestCreateAccount** | nick(256), password(32), cd_key(128), keypool, patchlevel, ticket_id |
-| 201 | **StartAuthenticateSession** | key(MEMBLOCK) — client sends its ECDH (secp521r1) public key |
-| 202 | **AckAuthenticateSession** | cipher(MEMBLOCK) — server's ECDH public key → shared secret |
+| 201 | **StartAuthenticateSession** | key(MEMBLOCK) — client ECDH (secp521r1) public key |
+| 202 | **AckAuthenticateSession** | cipher(MEMBLOCK) — server ECDH public key → shared secret |
 | 203 | **SelfRegistration** | cipher(MEMBLOCK) |
 | 204 | **AuthenticateUser** | cipher(MEMBLOCK) — client proves identity (Twofish-CTR credential blob) |
 | 205 | **AuthenticateSupport** | cipher(MEMBLOCK) |
 | 206 | **AuthenticateServer** | cipher(MEMBLOCK) — game server authenticates |
-| 207 | **SessionKey** | perm_id, cipher(MEMBLOCK) — server assigns permanent ID + session key |
+| 207 | **SessionKey** | perm_id, cipher(MEMBLOCK) — assigns permanent ID + session key |
 | 211 | **StartValidateTokenSession** | ticket_id |
 | 212 | **AckValidateTokenSession** | nonce(MEMBLOCK) |
 | 213 | **SendToken** | perm_id, cipher(MEMBLOCK) |
 | 214 | **ValidateToken** | perm_id, cipher(MEMBLOCK), nonce(MEMBLOCK) |
-| 183 | **CheckLevel** | level(UNBYTE) — probably access level check |
+| 183 | **CheckLevel** | level(UNBYTE) |
 | 188 | **CheckVersion** | version(SISHORT), subversion(SISHORT) |
 | 178 | **ChangePatchlevel** | patchlevel |
 
-**Login flow (the real, reversed scheme — ECDH, NOT RSA; see `sadk_lobby/crypto.py`):**
+**Login flow** [PROVEN] (implemented in `sadk_lobby/crypto.py`; **ECDH, not RSA**):
 ```
-Client → Server:  TYPE 201  StartAuthenticateSession (client ECDH secp521r1 public key)
-Server → Client:  TYPE 202  AckAuthenticateSession   (server ECDH public key)
-   → both sides derive a shared secret; the session key = SHA-512(shared) XOR-folded.
-Client → Server:  TYPE 204  AuthenticateUser         (credentials in a Twofish-CTR blob)
-Server → Client:  TYPE 207  SessionKey               (perm_id + session token)
-   → login COMPLETES on a TYPE 153 AddResult ACK (errorcode=0), not on 207 alone.
-```
-The key exchange is **ECDH over secp521r1**; the session key is derived via **SHA-512 + XOR**;
-credentials/tokens are sealed with **Twofish-CTR** (IV-prefixed, no MAC). There is **no RSA** anywhere
-in this flow — earlier notes calling it "RSA-based" were wrong.
-
-Or simpler/older flow:
-```
-Client → Server:  TYPE 4    RequestLogin (nick, password hash, cd_key)
-Server → Client:  TYPE 42   Result       (success/failure)
-Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
+C→S  201 StartAuthenticateSession  (client ECDH secp521r1 public key)
+S→C  202 AckAuthenticateSession    (server ECDH public key)
+     → both derive shared secret; session key = SHA-512(shared), XOR-folded
+C→S  204 AuthenticateUser          (credentials in Twofish-CTR blob, IV-prefixed, no MAC)
+S→C  207 SessionKey                (perm_id + session token)
+     → login COMPLETES on a 153 AddResult ACK (errorcode=0), NOT on 207, and NOT on 214.
 ```
 
----
+Plaintext fallback: `4 RequestLogin` → `42 Result` (OK) → `207 SessionKey`. [PROVEN]
 
-#### Generic Responses
+### 3.4 Generic Responses [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
-| 1 | **Simple** | data(UNLONG) — generic acknowledgement |
+| 1 | **Simple** | data(UNLONG) |
 | 42 | **Result** | errorcode(UNBYTE), errormsg(32), ticket_id |
 | 153 | **AddResult** | errorcode(UNBYTE), errormsg(32), id(UNLONG), ticket_id |
 
----
-
-#### Channel / Chat System
+### 3.5 Channel / Chat [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -158,13 +114,13 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 76 | **BeenKicked** | cell_id, perm_id |
 | 105 | **RequestMOTD** | ticket_id |
 | 106 | **MOTD** | txt(256), ticket_id |
-| 107 | **RegObserverGlobalChat** | ticket_id — subscribe to global chat |
+| 107 | **RegObserverGlobalChat** | ticket_id |
 | 108 | **DeregObserverGlobalChat** | ticket_id |
-| 165 | **Chat** | txt(256), from_id — simple broadcast chat |
+| 165 | **Chat** | txt(256), from_id |
 | 259 | **RequestLeaveChannel** | cell_id, ticket_id, from_id |
 | 262 | **GetChannelByName** | ticket_id, name(64) |
 
-**UC (User Communication) subsystem** — real-time voice/text channels:
+**UC (User Communication) subsystem** [PROVEN]:
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -181,9 +137,7 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 250 | **UCUserKicked** | perm_id, id |
 | 251 | **UCUserInfo** | perm_id, nick(256), user_access |
 
----
-
-#### User & Account Management
+### 3.6 User & Account Management [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -222,9 +176,7 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 186 | **ChangeGroupUser** | old_group_id, new_group_id, user_id |
 | 187 | **ChangeUserKey** | user_id, old_cd_key(128), old_keypool, new_cd_key(128), new_keypool |
 
----
-
-#### CD Key Management
+### 3.7 CD Key Management [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -235,9 +187,7 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 142 | **BanKey** | cd_key(128), keypool |
 | 143 | **UnbanKey** | cd_key(128), keypool |
 
----
-
-#### Group / Permission System
+### 3.8 Group / Permission System [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -267,9 +217,7 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 144 | **RequestPermID** | perm_id, name(128) |
 | 145 | **PermIDData** | perm_id, name(128), perm_id_type |
 
----
-
-#### Character System (Lobby Avatars)
+### 3.9 Character System (Lobby Avatars) [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -287,11 +235,10 @@ Server → Client:  TYPE 207  SessionKey   (perm_id assigned)
 | 128 | **CharRemoved** | char_id, ticket_id |
 | 137 | **RestoreChar** | char_id, filename(256) |
 
-The `data(MEMBLOCK)` blob in character messages contains avatar customization data (body parts, colors, equipped items, pets) serialized in a game-specific format — content defined in the encrypted `avatar_items.xml`, `bodyparts.xml`, `color_slots.xml`.
+`data(MEMBLOCK)` = avatar customization (body parts, colors, items, pets), game-specific format
+defined in encrypted `avatar_items.xml`, `bodyparts.xml`, `color_slots.xml`. **[TODO]** blob layout.
 
----
-
-#### Guild System
+### 3.10 Guild System [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -306,9 +253,7 @@ The `data(MEMBLOCK)` blob in character messages contains avatar customization da
 | 103 | **RemoveGuildChar** | perm_id, guild_id |
 | 152 | **ChangeGuildChar** | perm_id, guild_id, guild_role |
 
----
-
-#### Game Server Browser
+### 3.11 Game Server Browser [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -323,25 +268,32 @@ The `data(MEMBLOCK)` blob in character messages contains avatar customization da
 | 177 | **ChangeGameServer** | name(128), description(128), cipher(MEMBLOCK), max_players, max_spectators, ai_players, room_id, level, game_mode, hardcore, map(128), running, locked_config, data(MEMBLOCK), property_mask |
 | 189 | **AssignServer** | server_type, server_subtype |
 | 190 | **LeaveServer** | perm_id |
+| 192 | **UsercommServerData** | server_id, ip(128), port, server_type, version(32), data(MEMBLOCK) |
 
-**Host a game flow:**
+Notes:
+- `GameServerData(170)` must use the real-client-compatible format (per `msgdefs.ini`), **not**
+  emulator assumptions. The decoder uses `CreatePropertySet(0xAA)` (see SOURCEMAP §3b). [PROVEN]
+- **ServerDataBlock match-key**: a `170` descriptor is JOINABLE when its `room_id` equals the selected
+  village `room_id` (`g_dwSelectedVillageRoomId`, live = 1000), plus the `running`/`locked` flag pair.
+  The room/validity values come from the `data` blob path, **not** from the `170` scalar wire fields. [PROVEN]
+- `189 AssignServer` → server replies `192 UsercommServerData`. [PROVEN]
+
+**Host-a-game flow** [PROVEN]:
 ```
-Host → Lobby:   TYPE 168  AddGameServer   (name, ip, port 5479, map, player limits)
-Lobby → Clients: TYPE 170 GameServerData  (broadcast to observers)
+Host → Lobby:    168 AddGameServer   (name, ip, port 5479, map, player limits)
+Lobby → Clients: 170 GameServerData  (broadcast to observers)
 ```
 
-**Join a game flow:**
+**Join-a-game flow** [PROVEN]:
 ```
-Client → Lobby:  TYPE 221  RequestConnectionData (perm_id, server_id)
-Lobby → Client:  TYPE 222  ConnectionData        (ip, port, nonce, errorcode)
-Client → Host:   Direct TCP to ip:5479
-Host → Lobby:    TYPE 223  TANConnectionRequest  (ip, nonce, char info)
-Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-verified handshake
+Client → Lobby:  221 RequestConnectionData (perm_id, server_id)
+Lobby → Client:  222 ConnectionData        (ip, port, nonce, errorcode)
+Client → Host:   direct TCP to ip:5479
+Host → Lobby:    223 TANConnectionRequest  (ip, nonce, char info)
+Client → Host:   224 TANLogin              (perm_id, nonce) — nonce-verified handshake
 ```
 
----
-
-#### Connection Data & NAT Traversal
+### 3.12 Connection Data & NAT Traversal [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -350,9 +302,7 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 223 | **TANConnectionRequest** | ip(128), nonce(MEMBLOCK), char_id, name(128), owner_id, owner_name(128), guild_id, guild_name(128), guild_role, data(MEMBLOCK) |
 | 224 | **TANLogin** | perm_id, nonce(MEMBLOCK) |
 
----
-
-#### Machine Management (Dedicated Server Admin)
+### 3.13 Machine Management [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -362,13 +312,10 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 138 | **KickPermIDServer** | perm_id, ip(128), port |
 | 139 | **KickPermID** | perm_id |
 | 191 | **AddUsercomm** | ip(128), port, max_players |
-| 192 | **UsercommServerData** | server_id, ip(128), port, server_type, version(32), data(MEMBLOCK) |
 | 193 | **UsercommRequestUserdata** | perm_id |
 | 194 | **UsercommUserData** | perm_id, username(32), user_access |
 
----
-
-#### Mailbox / Private Messages
+### 3.14 Mailbox / Private Messages [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -380,9 +327,7 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 150 | **AddPrivateMessage** | delivery_target, creator, creation_time, title(128), message_text(MEMBLOCK), data(MEMBLOCK) |
 | 151 | **RemovePrivateMessage** | message_id |
 
----
-
-#### Admin Broadcast Messages (MOTD, Announcements)
+### 3.15 Admin Broadcast / MOTD [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -399,9 +344,7 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 179 | **ChangeMOTD** | txt(256) |
 | 185 | **DownloadLogs** | ticket_id |
 
----
-
-#### Server Statistics / Uptime
+### 3.16 Server Statistics / Uptime [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -418,9 +361,7 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 181 | **ServerInfoData** | starttime(32), starttimestamp, time, patchlevel, txt(256) |
 | 182 | **UptimeData** | uptime, registered_users, logins, registered_gameservers, started_gameservers |
 
----
-
-#### Player Properties (Stats/Inventory Stored Server-Side)
+### 3.17 Player Properties [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -429,11 +370,9 @@ Client → Host:   TYPE 224  TANLogin              (perm_id, nonce) — nonce-ve
 | 163 | **PropertySetAbsolute** | kategory(SILONG), index(SILONG), value(SILONG) |
 | 164 | **PropertySetRelative** | kategory(SILONG), index(SILONG), value(SILONG) — delta |
 
-Properties are keyed by (category, index) → signed integer value. Used for game-specific persistent data (resources, XP, unlock flags, etc.).
+Keyed by (category, index) → signed int. Used for persistent game data (resources, XP, unlock flags).
 
----
-
-#### Item Broker (In-Lobby Marketplace)
+### 3.18 Item Broker [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -450,9 +389,7 @@ Properties are keyed by (category, index) → signed integer value. Used for gam
 | 46 | **BrokerSoldNotification** | item_id, buyer, item_type, item_name(128), item_prize, item_values(1024), item_data(MEMBLOCK) |
 | 47 | **BrokerItemListFinished** | items_found |
 
----
-
-#### Ranking System
+### 3.19 Ranking System [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -464,18 +401,11 @@ Properties are keyed by (category, index) → signed integer value. Used for gam
 | 257 | **ReceiveRankRange** | ranktable, rangestart, rangeend, count, rankdata(MEMBLOCK) |
 | 258 | **AddRankingServer** | ip(128), port |
 
-**Match result submission:**
-```
-Game ends → TYPE 252: GameResultSubmit (perm_id_a, perm_id_b, result: 0=tie/1=A wins/2=B wins, map_id)
-Lobby    → TYPE 253: GameResultSubmitResult (echoes ids + result_id for confirmation)
-```
+- `252 GameResultSubmit` result field: 0=tie / 1=A wins / 2=B wins. Server echoes `253` with result_id.
+- `ranktable` distinguishes weekly/monthly/yearly leaderboards.
+- **[TODO]** `rankdata` (257) packed rank-entry array layout.
 
-`ranktable` distinguishes weekly/monthly/yearly leaderboards.  
-`rankdata` in TYPE 257 contains packed array of rank entries (format TBD from binary analysis).
-
----
-
-#### Player Status Monitoring
+### 3.20 Player Status Monitoring [PROVEN]
 
 | Type | Name | Key Fields |
 |------|------|-----------|
@@ -485,138 +415,68 @@ Lobby    → TYPE 253: GameResultSubmitResult (echoes ids + result_id for confir
 | 260 | **CheckPlayerOnServerAndGetInfos** | connection_pid, user_pid |
 | 261 | **CheckPlayerOnServerAndGetInfosReply** | perm_id, username(32), user_access, result_id |
 
----
+### 3.21 World entry (`:5479`) — partial
 
-## 4. Lobby Structure & Content
-
-Discovered from the file listing under `data/lobby/` (all content files are KEX-encrypted but the file names reveal the full feature set).
-
-### 4.1 Lobby Scenes / Areas
-- `scene1.xml` / `scene2.xml` — main lobby rooms
-- `scene_taverne02.xml`, `scene_taverne03.xml` — tavern areas
-- `scene_townhall.xml` — town hall area  
-- `scene_gasthaus2.xml` — inn/guesthouse
-- `lobby_castle01.xml`, `lobby_castle02.xml` — castle areas
-- `scene_customizeavatar.xml` — avatar customization screen
-- `scene_ad.xml` — advertisement/announcement area
-- `scene_ambient_sounds.xml` — ambient audio config
-- `world1.xml`, `world2.xml` — world map views
-
-### 4.2 Avatar System
-Files: `bodyparts.xml`, `color_slots.xml`, `avatar_items.xml`, `npc_bodyparts.xml`, `materials.xml`  
-Animations per gender: `male_animation_graph.xml`, `female_animation_graph.xml`  
-NPC characters: `MacDoyleJr_animation_graph.xml`, `MacGabhan_animation_graph.xml`  
-Animation selector: `anim_selector.xml`
-
-### 4.3 Pet System
-Available pets (each with own animation graph):
-- Bear, Cat, Dog, Falcon, Goat, Goop (fantasy creature), Marmot, Rabbit, Sheep
-
-File: `pets.xml` + `pet_<animal>_animation_graph.xml` for each
-
-### 4.4 Lobby UI Dialogs
-All XML-defined, encrypted, under `data/lobby/ui/layout/`:
-- `lobbyLoginDialog.xml` — username/password
-- `lobbyCreateAccountDialog.xml` — registration
-- `lobbyAvatarScreen.xml`, `lobbyCustomizeAvatarDialog.xml` — avatar editor
-- `lobbyBrowseGameDialog.xml` — game server browser
-- `lobbyHallOfFameDialog.xml` — rankings
-- `lobbyMailboxDialog.xml`, `lobbyMailDialog.xml` — in-lobby mail
-- `lobbyMotDDialog.xml` — Message of the Day
-- `lobbyFriendIgnoreListDialog.xml` — social lists
-- `lobbyAccountScreen.xml` — account management
-- `lobbyEnterPasswordDialog.xml`, `lobbyGetPasswordDialog.xml`
-- `lobbyConfirmTaylorDialog.xml` — tailor/customization confirmation
-- `lobbyMessageBoxDialog.xml` — generic alerts
-- `lobbyMiniGameManualDialog.xml`, `lobbyMiniGameMatchMakingDialog.xml`
-
-### 4.5 Mini-Games (in lobby)
-- `lobbyMinigameDialog_Dice.xml`
-- `lobbyMinigameDialog_Poker.xml`
-- `lobbyMinigameDialog_PawnChess.xml`
-- `lobbyMinigameDialog_Observer.xml`
+- `1000 EnterWorld` is the world-entry handshake that drives the client into the rendered world. [PROVEN]
+  Receiver and field reads: see SOURCEMAP §2b (`HandleEnterWorld`).
+- **[TODO]** full in-world message set (1001–1006, ticks, observer fan-out). Tracked in
+  `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
 ---
 
-## 5. Patchlevel / Version Validation
+## 4. Lobby Content (from `data/lobby/` file listing; files KEX-encrypted)
 
-`network.ini`: `patchlevel = 9212`
-
-The server enforces this via TYPE 183 (CheckLevel) and TYPE 188 (CheckVersion).  
-A reimplemented server should either accept any patchlevel, or patch the binary to skip validation.
-
----
-
-## 6. Reconnection Logic (`network.ini`)
-```
-timeHostWaitForClients  = 30.0 s   (host waits this long for players to reconnect)
-timeClientWaits         = 3.0 s    (client retry interval)
-timesClientRetries      = 5        (max reconnect attempts)
-timeClientWaitsFailed   = 4.0 s    (wait after failed attempt)
-```
-
-LAN ping rates:
-- In menu: every 10.0 s
-- In game:  every 2.5 s
+- **Scenes**: `scene1/2.xml`, `scene_taverne02/03.xml`, `scene_townhall.xml`, `scene_gasthaus2.xml`,
+  `lobby_castle01/02.xml`, `scene_customizeavatar.xml`, `scene_ad.xml`, `world1/2.xml`.
+- **Avatar**: `bodyparts.xml`, `color_slots.xml`, `avatar_items.xml`, `npc_bodyparts.xml`,
+  `materials.xml`, `*_animation_graph.xml`, `anim_selector.xml`.
+- **Pets** (`pets.xml` + per-animal graph): Bear, Cat, Dog, Falcon, Goat, Goop, Marmot, Rabbit, Sheep.
+- **UI dialogs** (`data/lobby/ui/layout/`): login, create-account, avatar/customize, browse-game,
+  hall-of-fame, mailbox/mail, MOTD, friend/ignore, account, password dialogs, message box,
+  mini-game manual/matchmaking.
+- **Mini-games**: Dice, Poker, PawnChess, Observer.
 
 ---
 
-## 7. Reimplementation Roadmap
+## 5. Config / Version
 
-To bring the lobby back online, a server must be implemented that:
-
-1. **Listens TCP on any port** (originally 7070). Clients need `LobbySettings.ini` patched to point at the new server.
-
-2. **Implements the binary protocol** from Section 3. All messages are little-endian with UNSHORT type prefix.
-
-3. **Authentication**: The real flow (TYPEs 201–207) is **ECDH (secp521r1) + SHA-512/XOR session key + Twofish-CTR credentials**, completing on a TYPE 153 AddResult ACK — fully reversed and implemented in `sadk_lobby/crypto.py` (it is NOT RSA). A server may instead downgrade to plaintext login (TYPE 4) if it sends back TYPE 42 (Result OK) + TYPE 207 (SessionKey with perm_id).
-
-4. **Minimum viable feature set for multiplayer:**
-   - Login / account creation (TYPE 4 or 201–207)
-   - Game server browser (TYPEs 168, 170, 171)
-   - ConnectionData relay (TYPEs 221–222)
-   - TAN handshake (TYPEs 223–224)
-   - MOTD + basic chat (TYPEs 105, 106, 165)
-   - Result response (TYPE 42)
-
-5. **Patchlevel check**: Either serve patchlevel 9212, or patch `SADK.exe` / `tincat3.dll` to skip the check.
-
-6. **CD key check**: Original server validated CD keys. A reimplemented server should accept any key (or no key), requiring either a binary patch or a permissive server-side check.
-
-7. **`LobbySettings.ini` patching**: Change `Host` from the dead `84.17.180.120` (see §1) to the new server IP.
-
-> **Scope note:** items 1–7 above bring the **lobby** back online (login, browser, chat, server list).
-> Full in-world play additionally requires the village/world `:5479` sub-protocol, which is only
-> **partially** reversed (§3.2) — the EnterWorld handshake works, but the complete in-world spec does not
-> yet exist. This document is therefore *not* a finished "drop-in" reimplementation guide for the whole game.
+- `network.ini`: `patchlevel = 9212`, enforced via `183 CheckLevel` / `188 CheckVersion`. Serve 9212. [PROVEN]
+- Reconnection (`network.ini`): `timeHostWaitForClients=30s`, `timeClientWaits=3s`,
+  `timesClientRetries=5`, `timeClientWaitsFailed=4s`. LAN ping: 10s menu, 2.5s in game.
 
 ---
 
-## 8. Outstanding Unknowns
+## 6. Reimplementation Notes
 
-- **Exact TCP framing**: Is each message length-prefixed, or does the protocol use fixed packet boundaries? The `MEMBLOCK 0` type implies length prefixing exists, but overall message framing needs `tincat3.dll` disassembly to confirm.
-- **Authentication cipher**: RESOLVED — ECDH (secp521r1) key exchange + SHA-512/XOR session key + Twofish-CTR credentials (reversed and implemented in `sadk_lobby/crypto.py`). Not RSA.
-- **CD key format**: The `keypool` field suggests multiple key pools (different regions/editions). Format unknown.
-- **`rankdata` MEMBLOCK format**: The packed rank array structure in TYPE 257.
-- **Character `data` MEMBLOCK**: The avatar blob structure (requires decrypting `avatar_items.xml`).
-- **`lobbyobj.xml` content**: Encrypted, defines lobby objects/entities — needed for full scene reconstruction.
+Minimum viable lobby (login → browser → chat → server list):
+1. TCP listener (orig 7070); point `LobbySettings.ini` Host at the stub.
+2. Auth: real flow (201–207, ECDH + SHA-512/XOR + Twofish-CTR, completes on `153`), implemented in
+   `sadk_lobby/crypto.py`. Plaintext fallback: `4` → `42` OK → `207`.
+3. Server browser (168, 170, 171); ConnectionData relay (221–222); TAN handshake (223–224).
+4. MOTD + chat (105, 106, 165); Result (42).
+5. Serve patchlevel 9212; accept any CD key.
+
+> **Scope**: the above restores the **lobby** only. Full in-world play needs the `:5479` sub-protocol,
+> which is only partially reversed (§3.2, §3.21). This is **not** a drop-in full-game guide.
 
 ---
 
-## 9. File Inventory Summary
+## 7. Outstanding [TODO]
+
+- `rankdata` MEMBLOCK (257) packed-array layout.
+- Character `data` MEMBLOCK (avatar blob) layout — needs `avatar_items.xml` decrypt.
+- CD key / `keypool` format (multiple key pools, unknown structure).
+- Full in-world `:5479` sub-protocol spec.
+
+---
+
+## 8. File Inventory
 
 | File | Type | Content |
 |------|------|---------|
-| `data/lobby/config/LobbySettings.ini` | plaintext | Server IP, port, ranking URLs |
-| `data/game/settings/network.ini` | plaintext | Game port, broadcast, reconnect timing |
-| `bin/msgdefs.ini` = `msgdefs.ini` | plaintext | **Complete binary protocol definition** |
-| `bin/tincat3.dll` | PE DLL | Networking middleware — needs disassembly |
-| `bin/SADK.exe` | PE EXE | Game binary |
-| `data/lobby/config/*.xml` | KEX-encrypted | Avatar, pet, object definitions |
-| `data/lobby/ui/layout/*.xml` | KEX-encrypted | UI dialog layouts |
-| `data/lobby/scene/*.xml` | KEX-encrypted | 3D scene definitions |
-| `data/lobby/physic/*.xml` | KEX-encrypted | Physics collision for lobby |
-
----
-
-*Generated by reverse engineering. All information extracted from the game's own plaintext config files and file structure.*
+| `LobbySettings.ini` | plaintext | server IP, port, ranking URLs |
+| `network.ini` | plaintext | game port, broadcast, reconnect timing |
+| `bin/msgdefs.ini` = `msgdefs.ini` | plaintext | **complete binary protocol definition** |
+| `bin/tincat3.dll` | PE DLL | networking middleware |
+| `bin/SADK.exe` | PE EXE | game binary |
+| `data/lobby/**/*.xml` | KEX-encrypted | avatar/pet/object/UI/scene/physics definitions |

@@ -1,325 +1,182 @@
 # CLAUDE.md — authoritative instructions for every agent in this repo
 
-> This file is loaded into **every** session and is the **authoritative agent brief**
-> for this repository.
->
-> **Every agent MUST read `CLAUDE.md` in full before starting any work.**
-> Do not begin investigation, editing, debugging, protocol analysis, live-game interaction,
-> or planning until you have read this file.
->
-> After reading this file, read **`HARNESS.md`** before touching the live game.
+> Loaded into **every** session. Read it in full before starting any work, then read
+> **`HARNESS.md`** (the binding rules of engagement) before any RE, debugging, or
+> stub change.
 
 ---
 
-## ⛔ MANDATORY: read `HARNESS.md` (rules of engagement) before touching the live game
+## The three rules that matter most (see `HARNESS.md` for the full text)
 
-**`HARNESS.md`** (repo root) is the **binding** harness that governs all work here. It
-exists to prevent a repeated, costly failure: **jumping the gun** — taking state-mutating
-actions against the live game "just to see a result" before the model is verified, and
-sometimes while the game is legitimately *waiting* for something we should instead provide
-through its real mechanism (the canonical case: force-calling `ActivateScreenById` while
-the game was parked in **LobbyManager state 8** waiting for inbound **msg 1000**).
-
-You MUST follow `HARNESS.md` in full. The essentials, inlined so you cannot miss them:
-
-### The non-negotiables
-
-1. **READ-ONLY BY DEFAULT.** Diagnose only with Ghidra (reads) and elevated
-   `ReadProcessMemory` probes (`tools/probe_appfsm.py`, `tools/read_village_state.py`, the
-   `*_probe.py` tools). Never mutate the game/binary/wire-protocol merely to observe. When
-   you want a new live fact, reach for a **read-only probe**, not an injector.
-2. **MODEL BEFORE MUTATION.** No state-changing action until a written, binary-grounded
-   model exists with every claim tagged **`[PROVEN]`** (binary address + live read-only
-   evidence) or **`[HYPOTHESIS]`**, and independently reviewed (mandatory for any wire
-   format change — see `memory/independent-review-protocol-changes.md`).
-3. **HARD MUTATION GATE.** Any *state-mutating* action — process injection / remote-thread
-   / force-call, **any** `WriteProcessMemory`, live or rebuilt **binary patches**, or any
-   change to the **network stub's wire behavior** — requires a completed
-   **Engagement Record** (`templates/ENGAGEMENT_RECORD.md`) that the **USER explicitly
-   approves** *before* the action is even proposed as runnable. The record must answer,
-   with evidence: the verified model; read-only precondition checks; **"is the game
-   legitimately WAITING for something we should instead provide through its real
-   mechanism?"** (the exact past trap — rule it out with evidence); why this is the
-   genuine mechanism not a shortcut; the expected observable + read-only post-check;
-   rollback/blast-radius.
-4. **FORCED RESULTS ARE NOT SOLUTIONS.** Forcing/injecting/patching to bypass the game's
-   own logic is **forbidden as a "fix."** It is allowed only as a labelled, gated,
-   approved **diagnostic**, and only after ruling out a wait-state. A visibly "working"
-   forced result is **never** reported as success.
-5. **HONEST STATUS.** "PROVEN" needs binary + live evidence; everything else is
-   `[HYPOTHESIS]` and is labelled so. No over-claiming.
-
-### TRIPWIRES — stop-and-run-the-gate phrases
-
-If you catch **yourself or the user** saying any of these about a mutating action — **"fire
-it", "let's just see", "let's see what happens", "hit it", "send it", "force-call it",
-"just force it", "inject it", "quick experiment", "blind experiment", "patch it and see",
-"nop it and see", "just this once", "it can't hurt to try"** — or you feel the urge to run
-a `tools/force_*.py` (anything other than a read-only `*_probe.py`) before an approved
-Engagement Record exists: **STOP.** Do not act. Instead run a **read-only probe** to settle
-the question, or fill an Engagement Record and ask the user to approve. *The pull to "just
-try it" is itself the signal to go read-only.*
-
-### Technical enforcement (the gate bites)
-
-The state-mutating injectors **refuse to run** without an approved Engagement Record. They
-call `require_approval(...)` from **`tools/harness_gate.py`** at startup and abort (exit
-90) unless `tools/.engagement_approved` authorizes that exact tool. Gated:
-`force_activate_world.py`, `force_send2002.py`, `force_onenter.py`, `force_tick_patch.py`.
-Read-only `*_probe.py` tools are ungated. To open the gate (only after the user approves):
-
-```bash
-python tools/harness_gate.py approve <tool> engagement_records/<your-record>.md
-python tools/harness_gate.py status      # inspect what's approved
-python tools/harness_gate.py revoke      # close the gate
-```
-
-Never self-approve to satisfy your own urge to try something — the `approve` step records
-the **user's** decision, run only on their explicit in-session go-ahead.
+1. **MCP-first.** Do all reverse-engineering and debugging through the **Ghidra
+   MCP**. Running scripts *inside* Ghidra via the MCP is fine. Writing standalone
+   Python/PowerShell to do RE, read process memory, trace, inject, or patch is
+   **forbidden** — that's circumventing the harness. If a debugging capability is
+   missing, add a debugger MCP; do not write a script.
+2. **No faking results, and new tools need a stated reason.** Never force/patch/inject
+   to fake a "working" result; if the game waits for something, provide it via the
+   real mechanism. Before writing **any** new tool, state in detail what capability
+   it needs and why neither the Ghidra MCP nor a debugger MCP can provide it. The only
+   thing that has cleared that bar so far is **network capture/decode**.
+3. **Honest status + no flag-gating.** `[PROVEN]` = binary address + live evidence;
+   everything else is labelled `[TODO]`. In the stub, working behaviour is the
+   **default** — never gate a working feature behind a flag, and never add a hack or
+   bypass without explicit user permission.
 
 ---
 
 ## Project orientation
 
-This repository revives the dead online lobby of **Die Siedler: Aufbruch der Kulturen**
-("The Settlers: Rise of Cultures", Funatics / Blue Byte / Ubisoft, 2008), abbreviated
-**SAdK**. It is the German standalone built on the *Settlers II: 10th Anniversary*
-(DNG) engine. The official servers died around 2014.
+This repo revives the dead online lobby of **Die Siedler: Aufbruch der Kulturen**
+("The Settlers: Rise of Cultures", Funatics / Blue Byte / Ubisoft, 2008) — **SAdK**,
+the German standalone on the *Settlers II: 10th Anniversary* (DNG) engine. The
+official servers died ~2014.
 
-The main working method is to reverse-engineer the original client (`SADK.exe` +
-`tincat3.dll`) and stand up a Python **stub lobby server** that the real, unmodified
-client connects to. The project goal is to speak the protocol correctly, not to treat
-forced client-side bypasses as fixes.
+The method: reverse-engineer the original client (`SADK.exe` + `tincat3.dll`) and run
+a Python **stub lobby server** (`sadk_lobby/`) that the real, unmodified client
+connects to. The goal is to **speak the protocol correctly**, not to force
+client-side bypasses.
 
-There are two project tracks to keep straight:
-
-- **Online lobby revival** — the active frontier centered on `sadk_lobby/`.
-- **Game asset decoding and modding** — working with encrypted `.KEX` / `sadk` data files
-  via the bundled tools.
-
-Be careful with historical docs that refer to Track A/Track B by letter only; some older
-documents use those labels differently. Read the content, not just the letter.
+Two tracks:
+- **Online lobby revival** — the active frontier, centred on `sadk_lobby/`.
+- **Game asset decoding / modding** — encrypted `.KEX` / `sadk` files via `AdKEd.exe`
+  (see `docs/REVERSE_ENGINEERING_GUIDE.md`).
 
 ---
 
-## Mandatory reading order after this file
+## Mandatory reading order
 
-After reading `CLAUDE.md`, consult the following as needed:
-
-1. **`HARNESS.md`** — binding rules for any live-game work.
-2. **`MEMORY.md`** — persistent cross-session context. Start there.
-3. **`memory/msgdefs-ini-authoritative.md`** — first stop for any lobby message work.
-4. **`docs/ROADMAP.md`** — active plan and remaining frontier.
-5. **`docs/archive/SESSION_STATUS.md`** — archived session log.
-6. **`README.md`** — quick-start and package overview.
+1. **`HARNESS.md`** — binding rules (MCP-first, no faking, honest status, no flags).
+2. **`MEMORY.md`** — compact persistent context: proven facts + current TODOs.
+3. **`docs/LOBBY_PROTOCOL.md`** — the NETMSG protocol reference (msgdefs-grounded).
+4. **`docs/SOURCEMAP.md`** — named functions / structs / offsets (Ghidra map).
+5. **`README.md`** — quick-start, what works / what doesn't.
 
 ---
 
-## Current high-level status
-
-Use this as a working orientation, but keep status claims honest and update them when they
-change.
+## Current status (keep honest; update when it changes)
 
 | Piece | State |
 |---|---|
 | Lobby login (ECDH + Twofish), chat, server list | ✅ working |
-| Room-assign → "Suche Server" button lit + clickable | ✅ working |
-| Village-enter → 3D lobby world renders | ✅ reached |
-| Runs on Windows 11 x64 | ✅ fixed via `tools/debugger_loader.py` |
-| Runs on Windows 7 natively | ✅ working |
-| Final world entry over the world server (`:5479`) | ⏳ blocked by post-`214 ValidateToken` / world-entry grant work |
+| Room-assign → village entry joinable in the browser | ✅ working |
+| Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
+| Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
+| In-world content (NPCs, entities, populated browsers) | ❌ not implemented |
+| Hosting / pre-game room (slot/tribe/team/ready protocol) | ❌ unreversed — `[TODO]` |
+| Entering matches | ❌ broken — `[TODO]` (see `MEMORY.md`) |
 
-The previously long-running blockers around server-list population, room-assign, and the
-Win11 SecuROM crash are solved. The current frontier is completing the world-entry grant,
-proper `214` handling, and the `:5479` world protocol.
+The referee/match-arbiter subsystem was **removed** from the stub: entering matches
+is broken and the referee's exact role is unclear. Some referee functions are already
+named (`docs/REFEREE_FUNCTIONS_TO_NAME.md`) as a starting point if/when that work
+restarts. See the TODO in `MEMORY.md`.
 
 ---
 
 ## Repository architecture quick map
 
-The active stub server lives in **`sadk_lobby/`** and is run with:
-
-```powershell
+Run the stub:
+```bash
 pip install -r requirements.txt
 python -m sadk_lobby
 ```
 
-High-level file roles:
-
-- `sadk_lobby/__main__.py` — package entry point
-- `sadk_lobby/config.py` — constants, ports, test account, wire toggles
-- `sadk_lobby/tincat.py` — frame parsing/building and wire primitives
-- `sadk_lobby/msgdefs.py` — parses the game's `msgdefs.ini`
-- `sadk_lobby/codec.py` — generic encoder/decoder for message bodies
-- `sadk_lobby/crypto.py` — login crypto
-- `sadk_lobby/chat.py` — chat / UC second connection handling
-- `sadk_lobby/village.py` — village / world third connection handling
-- `sadk_lobby/connection.py` — per-socket state machine
-- `sadk_lobby/dispatch.py` — lobby handler table
-- `sadk_lobby/server.py` — listener setup and main loop
-- `sadk_lobby/data/msgdefs.ini` — authoritative NETMSG schema copy
+`sadk_lobby/` file roles:
+- `__main__.py` — entry point · `config.py` — constants/ports/players (no flags)
+- `tincat.py` — frame parsing/building · `msgdefs.py` — parses the game's `msgdefs.ini`
+- `codec.py` — generic message-body encode/decode · `crypto.py` — login crypto
+- `chat.py` — chat/UC second connection · `village.py` — village/world third connection
+- `players.py` — multi-user identities · `registry.py` — process-global hosted-game store
+- `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
+- `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
+- `data/msgdefs.ini` — authoritative NETMSG schema copy
 
 ---
 
-## Protocol and wire-format rules
+## Protocol & wire-format rules
 
-- **`msgdefs.ini` is authoritative. Consult it first.** The game's own NETMSG schema
-  overrides reverse-engineering guesses and emulator field layouts.
-- The stub’s wire behavior is **byte-exact** territory. Do not change wire-format behavior
-  casually. Re-validate against the real client.
-- Preserve important edge cases such as the distinction between `None` and `""` string
-  encoding.
-- For any lobby message task, consult **`memory/msgdefs-ini-authoritative.md`** first.
-
-Important protocol reminders:
-
-- TinCat frame header size is **28 bytes**.
-- Lobby payload prefix uses **magic `0x26B6`**.
-- Chat payload prefix uses **magic `0x0062`**.
-- Auth flow uses **ECDH secp521r1** and **Twofish-CTR**.
-- `GameServerData(170)` should follow the real-client-compatible format, not emulator
-  assumptions contradicted by `msgdefs.ini`.
+- **`msgdefs.ini` is authoritative. Consult it first.** It overrides RE guesses and
+  emulator field layouts where they disagree.
+- Wire behaviour is **byte-exact**. Don't change it casually; re-validate against the
+  real client. Preserve `None` vs `""` string-encoding distinctions.
+- Key constants `[PROVEN]`: TinCat header = **28 bytes**; lobby payload magic
+  **0x26B6**; chat payload magic **0x0062**; auth = **ECDH secp521r1** + **Twofish-CTR**,
+  completing on **153 AddResult** (the client has no 214 handler on the UC path);
+  `GameServerData(170)` = the ServerInfoOld layout.
 
 ---
 
-## Running and environment notes
+## Running & environment notes
 
-- The three primary listener ports are:
-  - `7070` — lobby
-  - `7071` — UC/chat
-  - `5479` — world
-- The server binds to `0.0.0.0`.
-- The advertised IP can be changed with `SADK_ADVERTISE_IP`.
-- **Both** client config files must point at the stub:
-  - `data/lobby/config/LobbySettings.ini`
-  - `data/game/settings/network.ini`
-- AdK patchlevel is **9212**.
-- Test credentials are:
-  - username: `test`
-  - password: `test`
-  - serial: `test`
+- Ports: `7070` lobby · `7071` UC/chat · `5479` world. Binds `0.0.0.0`. Advertised IP
+  via `SADK_ADVERTISE_IP`.
+- Point **both** client configs at the stub: `data/lobby/config/LobbySettings.ini`
+  and `data/game/settings/network.ini`. AdK patchlevel **9212**.
+- Test credentials: `test` / `test` / `test`.
+- **Git uses `master`, not `main`.** The game runs as admin; any live debugging (via
+  the MCP) must be elevated too. Ghidra static addresses for `SADK.exe` (base
+  `0x400000`) and `tincat3.dll` (`0x10000000`) line up with runtime.
 
 ---
 
-## Reverse-engineering and live-debugging setup
+## Reverse-engineering setup
 
-- **Ghidra addresses match runtime addresses 1:1** for `SADK.exe` at image base
-  `0x400000`; `tincat3.dll` is at `0x10000000`.
-- Renames, structs, and enums applied to the project are tracked in
-  `decomp/RENAME_LIST.md`.
-- Offline decompile exports and indexes exist under `decomp/`.
+- Connect the **Ghidra MCP** per `decomp/GHIDRA_MCP_SETUP.md`. Applied labels/structs
+  live in `decomp/RENAME_LIST.md`.
+- All RE and debugging goes through the MCP (HARNESS §1). Scripting *inside* Ghidra
+  via the MCP is allowed; standalone RE/memory/patch scripts are not.
 
-Dynamic work notes:
+## Windows 10/11 launch note
 
-- The live debugger setup must run **elevated** because the game runs as admin.
-- Static and dynamic addresses are intended to line up.
-- Breakpoint planning and debugger setup details live under `decomp/`.
+The Win10/11 village-enter crash is a **SecuROM-vs-modern-OS** protector issue, not
+proof the protocol is wrong. The two runtime patches that get the genuine exe to boot
+on Win10/11 are documented in `docs/BINARY_PATCHES.md`. Win7 runs natively. (The boot
+itself is done by launching/attaching the game under a debugger — via the MCP — not a
+standalone loader script.)
 
-Always prefer read-only observation first, per the harness.
+## Asset decryption / modding
 
----
-
-## Windows 11 / SecuROM note
-
-A key proven project fact: the Win10/11 village-enter crash is a **protector-versus-modern-OS**
-issue, not evidence that the stub protocol is necessarily wrong.
-
-Use **`tools/debugger_loader.py`** for Win10/11 sessions. It provides the working launch path
-without treating binary patching as the fix.
-
-Operational reminders:
-
-- Run it **elevated**.
-- Keep the loader window open for the whole session.
-- Win7 works natively without this loader.
+The game's XML/Lua data files are encrypted. Prefer **`AdKEd.exe`** (the known-good
+two-way converter); work on copies. See `docs/REVERSE_ENGINEERING_GUIDE.md` and
+`docs/UI_FINDINGS.md`. Python decrypt tooling exists only for analysis/automation.
 
 ---
 
-## Asset decryption / modding guidance
+## Tooling (deliberately minimal — see `tools/`)
 
-The game’s XML/Lua data files are encrypted. For routine round-trips:
+Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive here:
+- `tools/lobby_proxy.py` — passive MITM proxy/logger of the live wire
+- `tools/analyze_capture.py`, `tools/decode_lobby_capture.py`, `tools/decode_game_join.py`
+  — offline decoders for captured traffic
 
-- **Prefer `AdKEd.exe`**.
-- It is the game’s known-good **two-way** converter.
-- Work on **copies**, because conversion is in-place.
-- Avoid reinventing the data-file crypto unless you specifically need the Python tooling for
-  analysis or automation.
-
-Relevant docs/tools:
-
-- `docs/Readme.txt`
-- `docs/REVERSE_ENGINEERING_GUIDE.md`
-- `tools/sadk_ui_decrypt.py`
-- `tools/sadk_ui_decrypt_all.py`
+Adding anything else requires the stated-reason gate in `HARNESS.md §3`. Treat
+captures/logs as valuable RE artifacts — don't delete or casually rewrite them.
 
 ---
 
-## Tooling pointers
+## Conventions & known dead ends
 
-Useful repository tools include:
-
-- `tools/debugger_loader.py` — Win11/Win10 compatibility path
-- `tools/lobby_proxy.py` — passive MITM proxy/logger
-- `tools/analyze_capture.py` — offline capture analysis
-- `tools/decode_lobby_capture.py` — decode raw TinCat captures
-- `tools/suspended_launch.py` — suspended-process tracing harness
-- `tools/pe_exports.py` and `tools/dump_rva.py` — PE inspection helpers
-- `tools/sadk_ui_decrypt.py` and friends — Python UI-container decryption tooling
-
-Treat captured data and logs as valuable RE artifacts; do not delete or casually rewrite them.
-
----
-
-## Reference material and documentation map
-
-Important references:
-
-- `README.md` — quick-start and architecture
-- `docs/ROADMAP.md` — prioritized plan
-- `docs/IN_WORLD_PROTOCOL.md` — world-entry RE spec
-- `docs/LOBBY_PROTOCOL.md` — broader protocol reference
-- `docs/SOURCEMAP.md` — named functions/structs/globals
-- `docs/UI_FINDINGS.md` — UI findings and decrypt workflow
-- `docs/BINARY_PATCHES.md` — binary patch history/strategy
-- `decomp/README.md` — navigating offline decompiles
-- `decomp/GHIDRA_MCP_SETUP.md` — live Ghidra link
-- `decomp/DEBUGGER_PLAN.md` — debugger breakpoint plan
-- `decomp/RENAME_LIST.md` — applied labels and structs
-- `sadk_lobby/data/msgdefs.ini` — authoritative NETMSG schema
-
-External emulator repos can be useful as flow references, but **not** as authoritative field
-definitions where they disagree with the game’s own schema.
-
----
-
-## Conventions and gotchas
-
-- **Git uses `master`, not `main`.**
-- The game runs as admin; attached debugging must also run elevated.
-- On Win10/11, launch through `tools/debugger_loader.py`.
-- File tools cannot read raw `.bin` captures directly; decode them to text first.
-- Some scripts contain hardcoded absolute paths and may need machine-local adjustment.
-- Known dead ends should stay dead ends unless new evidence appears:
-  - `-localhostmode`
-  - trying to run two local client instances on one machine
-  - treating the `170` wire layout as the source of room/validity when those values actually
-    come from the `data` blob path
+- `master`, not `main`. File tools can't read raw `.bin` captures — decode to text first.
+- Dead ends (keep dead unless new evidence): `-localhostmode`; two local client
+  instances on one machine; treating the `170` wire layout as the source of
+  room/validity (those values come from the `data` blob path).
 
 ---
 
 ## Testing
 
-```powershell
-python tests\test_codec_golden.py
-python tests\test_server_smoke.py
-# or: pytest tests\
+```bash
+python tests/test_codec_golden.py     # 170 reproduced byte-for-byte vs the frozen legacy monolith
+python tests/test_server_smoke.py     # end-to-end vs a fake socket
+python tests/test_server_browser.py   # server-browser wire
+python tests/test_multi_client.py     # multi-player + global game registry
+# or: pytest tests/
 ```
 
 ---
 
-## Maintainer-context note
+## Maintainer context
 
-The maintainer is a game-domain expert. Pay attention to their in-game instincts,
-especially questions like: **is the game actually waiting for something earlier in the real
-flow?** That exact instinct was previously correct and is now codified in the harness’s
-wait-state checks.
+The maintainer is a game-domain expert; weight their in-game instincts, especially:
+**is the game actually waiting for something earlier in the real flow?** That instinct
+was previously correct and is codified in `HARNESS.md §2`.

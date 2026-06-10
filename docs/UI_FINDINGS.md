@@ -159,15 +159,14 @@ inert layout that the C++ instantiates on demand.
    connection (which is exactly the parked state), the list is empty and Join/Create are no-ops.
 3. The transition AvatarScreen → worldScreen is driven purely by `LobbyManager::SetState(…)` in
    compiled code, reacting to the network handshake (msg 1000 / `HandleEnterWorld`). There is no
-   data hook to advance it. (As archived `SESSION_STATUS.md` line 559-561 already concluded: the server
-   browser / host / join is *downstream* of world entry.)
+   data hook to advance it. The server browser / host / join is *downstream* of world entry.
 
 **The actual gate is the protocol, not the UI.** To reach the server browser the stub lobby must
 drive the client to state 9: advertise a `ServerType=4` village entry (msg 170, "adk" byte format),
 accept the 3rd TinCat connection to that entry's Ip/Port, and on the village handshake send
 village-message **1000** with the property bag (`Worldname`, `ServerPerm`, chat channels) →
 `HandleEnterWorld` → `SetState(9)` → 3D world + working `MainMenu` Host/Join. That is the
-documented in `IN_WORLD_PROTOCOL.md` and is the correct path — not a UI edit.
+correct path — not a UI edit. See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
 ### The one UI edit that *is* possible (and its limit)
 Because `lobbyAvatarScreen.xml` is just layout, you *can* add a real, clickable widget to the

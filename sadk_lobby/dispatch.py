@@ -7,18 +7,22 @@ everything else falls through to a default Result-OK ack so no message type is
 left unhandled.
 
 Handler signature:  fn(conn, fields: dict, ticket: int)
+
+Multiple clients can be logged in as distinct players at once; hosted games live
+in a process-global registry (players.py / registry.py) so one client's game is
+visible to another.
 """
 import os
 import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, players, referee, registry, village
+from . import chat, codec, config, crypto, msgdefs, players, registry, village
 from .log import log
 
 HANDLERS = {}
 
-# Observer subscriptions for server-list push notifications (s39.5).
+# Observer subscriptions for server-list push notifications.
 # Maps server_type → list of live Conn objects that subscribed via 171 RegObserverServerList.
 # The stub pushes 170 GameServerData to all matching observers when a game is added/changed,
 # so the browser updates without the joiner having to re-request the list.
@@ -77,20 +81,17 @@ def dispatch_lobby(conn, type_num, fields):
     if fn is not None:
         fn(conn, fields, ticket)
     elif type_num >= 1000:
-        # Village/world property-bag message (e.g. 0xED6 SendWorldReadyAck, 1001-1006) that arrives
-        # AFTER a successful EnterWorld. We don't model the in-world protocol yet — just LOG it; do NOT
-        # send a lobby Result(42) ack (wrong layer/semantics; acking could destabilize the world session).
-        # This is the capture we need to build the next (in-world) stage. (s30)
+        # Village/world property-bag message (1001-1006, 0xED6 …) that arrives AFTER a successful
+        # EnterWorld. We don't model the in-world protocol yet — just LOG it; do NOT send a lobby
+        # Result(42) ack (wrong layer; acking could destabilize the world session). This capture is
+        # what we need to build the next (in-world) stage.
         log(f"  [VILLAGE-MSG] type {type_num} (0x{type_num:x}) received post-entry — logged, NOT acked")
     else:
         log(f"  (default-ack: {msgdefs.name_of(type_num)} [{type_num}])")
         conn.ok(ticket)
 
 
-# ── Identity + game-store helpers (multi-client, s39.5) ───────────────────────
-# These keep single-user / per-connection behaviour byte-identical when
-# config.MULTI_CLIENT_HOSTING is OFF, and switch to per-player identity + the
-# process-global game registry when it is ON.
+# ── Identity + game-store helpers ─────────────────────────────────────────────
 
 def _player(conn):
     """The player identity this connection serves (default = test account)."""
@@ -98,46 +99,28 @@ def _player(conn):
 
 
 def _register_game(conn, info):
-    """Store a hosted game (168); returns the assigned server_id."""
-    if config.MULTI_CLIENT_HOSTING:
-        return registry.games.add(conn.id, info)
-    sid = conn.alloc_server_id()
-    rec = dict(info); rec["id"] = sid
-    conn.servers[sid] = rec
-    return sid
+    """Store a hosted game (168) in the process-global registry; returns the server_id."""
+    return registry.games.add(conn.id, info)
 
 
 def _remove_game(conn, sid):
     """Remove a hosted game (169) owned by this connection."""
-    if config.MULTI_CLIENT_HOSTING:
-        return registry.games.remove(conn.id, sid)
-    return conn.servers.pop(sid, None) is not None
+    return registry.games.remove(conn.id, sid)
 
 
 def _change_owned_game(conn, changes):
     """Apply field changes (177) to the game this connection hosts; returns the record."""
-    if config.MULTI_CLIENT_HOSTING:
-        return registry.games.update_owned(conn.id, changes)
-    sid = next(iter(conn.servers), None)
-    if sid is None:
-        return None
-    conn.servers[sid].update(changes)
-    return conn.servers[sid]
+    return registry.games.update_owned(conn.id, changes)
 
 
 def _get_game(conn, sid):
-    """Look up a game by id (221) — cross-client when multi-hosting is on."""
-    if config.MULTI_CLIENT_HOSTING:
-        return registry.games.get(sid)
-    return conn.servers.get(sid)
+    """Look up a game by id (221), cross-client."""
+    return registry.games.get(sid)
 
 
 def _games_for_list(conn, server_type):
     """Games to advertise for a server-list request (server_type 0 == any)."""
-    if config.MULTI_CLIENT_HOSTING:
-        return registry.games.list_by_type(server_type)
-    return [s for s in conn.servers.values()
-            if server_type == 0 or s.get("server_type") == server_type]
+    return registry.games.list_by_type(server_type)
 
 
 # ── Auth flow ─────────────────────────────────────────────────────────────────
@@ -173,16 +156,15 @@ def _h_auth_cipher(conn, fields, ticket):
     except Exception as e:  # noqa: BLE001
         log(f"  !! Decryption failed: {e}")
     conn.logged_in = True
-    # Multi-client: bind this lobby connection to the account it logged in as, so the
-    # SessionKey(207) perm_id and the char/user replies below serve that player. The
-    # perm_id then propagates to this client's UC + village conns via the token (213).
-    if config.MULTI_CLIENT_HOSTING:
-        conn.player = players.resolve_by_username(creds.get("username"))
-        log(f"  [PLAYER] lobby #{conn.id} → {conn.player.username!r} (perm_id={conn.player.perm_id})")
+    # Bind this lobby connection to the account it logged in as, so the SessionKey(207) perm_id
+    # and the char/user replies serve that player. The perm_id propagates to this client's UC +
+    # village conns via the token (213).
+    conn.player = players.resolve_by_username(creds.get("username"))
+    log(f"  [PLAYER] lobby #{conn.id} → {conn.player.username!r} (perm_id={conn.player.perm_id})")
     session = None
     if crypto.TWOFISH_AVAILABLE and conn.shared:
-        # KEEP the 32B session key (was discarded via os.urandom inline) — the token 213/214 crypto
-        # almost certainly uses it as the key, and the stub must know it to build a valid 214 (s31).
+        # KEEP the 32B session key (the token 213/214 crypto almost certainly uses it as the key,
+        # and the stub must know it to build a valid 214; s31).
         conn.session_key = os.urandom(32)
         session = crypto.encrypt_session_key(conn.session_key, conn.shared)
     _send_session_key(conn, ticket, session)
@@ -198,8 +180,7 @@ def _send_session_key(conn, ticket, session_cipher=None):
 @handler(4)  # RequestLogin (legacy plaintext path)
 def _h_request_login(conn, fields, ticket):
     log(f"  RequestLogin nick={fields.get('nick')!r}")
-    if config.MULTI_CLIENT_HOSTING:
-        conn.player = players.resolve_by_username(fields.get("nick"))
+    conn.player = players.resolve_by_username(fields.get("nick"))
     conn.ok(ticket)
     _send_session_key(conn, ticket, None)
     conn.logged_in = True
@@ -304,62 +285,22 @@ def _h_motd(conn, fields, ticket):
 
 
 # ── Assign server (AssignServer 189) ──────────────────────────────────────────
-def _send_uc_server_192(conn, server_type, ticket):
-    """UsercommServerData(192): point the client at the stub's UC/chat server (:7071).
+@handler(189)  # AssignServer -> UsercommServerData(192)
+def _h_assign_server(conn, fields, ticket):
+    """Point the client at the stub's UC/chat server (:7071).
 
-    The 192 is consumed by tincat3's generic CommLayer 0xc0 handler (FUN_10030420 @0x10030420):
-    it dials the advertised ip:port and stands up the UserComm-SERVER connection — which is the
-    connection our :7071 (is_chat) listener serves chat over. The handler does NOT validate the
-    ticket against an outstanding request (no category check), so a ticket_id of 0 (unsolicited
-    advertisement) is accepted just the same as a reply ticket.
+    The 192 is consumed by tincat3's generic CommLayer 0xc0 handler (FUN_10030420): it dials
+    the advertised ip:port and stands up the UserComm-SERVER connection that our :7071 listener
+    serves chat over. The handler does NOT validate the ticket category, so an unsolicited
+    ticket_id is accepted the same as a reply ticket.
     """
+    server_type = fields.get("server_type", 0)
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
         "server_type": server_type,
         "version": None, "data": None, "ticket_id": ticket}))
     log(f"  → UsercommServerData(192) -> {config.ADVERTISED_IP}:{config.UC_PORT} "
         f"(type={server_type}, ticket={ticket})")
-
-
-@handler(189)  # AssignServer
-def _h_assign_server(conn, fields, ticket):
-    server_type = fields.get("server_type", 0)
-    server_subtype = fields.get("server_subtype")
-
-    # ── CORRECTED REFEREE MODEL (re-RE'd s39.6, binary build 34688 + 2 live captures) ──────────────
-    # The PRIOR model ("UC = 1st type-4 189, referee = a 2nd type-4 189") is REFUTED:
-    #   * SADK has EXACTLY ONE type-4 AssignServer caller — the LobbyManager state-pump one-shot at
-    #     0x468f60→0x468f60 vtbl[0x2c](4,4), which registers the REFEREE-address callback FUN_004625d0
-    #     (writes LM+0x580) and is LATCHED (LM+0x5ac), so it fires at most ONCE per session. The two
-    #     live runs show EXACTLY ONE 189 per client (type=4, sub=4) — there is NO 2nd 189, ever.
-    #   * So the single login 189 IS the referee assign. tincat3 routes its reply by the ticket's
-    #     category 0x108: case 0xaa(170)+cat 0x108 → FUN_10021520, which fires the referee callback
-    #     IFF the reply carries server_type==4 && server_subtype==5. A 192 reply instead goes to the
-    #     generic UC-server handler (no cat check) → the client dialed :7071 (chat worked "by accident")
-    #     but LM+0x580 stayed 0 → RefereeServerConnection::Login no-op'd → match aborted after 5 retries.
-    # FIX: answer the (only) type-4 189 with GameServerData(170, type=4, subtype=5, SAME ticket_id,
-    # id=REF_SERVER_ID) so the cat-0x108 path sets LM+0x580 = REF id, which resolves to :5481 from the
-    # type-4 list we already advertise (FAKE_REFEREE). The id MUST be the FAKE_REFEREE id and the entry
-    # MUST have been advertised on the type-4 list first (it is — see _send_server_list) so pComm can
-    # resolve it. ⛔ Gated by ADVERTISE_REFEREE_SERVER; OFF → every assign falls through to 192 (today's
-    # byte-identical behavior).
-    if config.ADVERTISE_REFEREE_SERVER and server_type == 4:
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(dict(FAKE_REFEREE), ticket)))
-        log(f"  → [REFEREE] AssignServer(type=4, sub={server_subtype}, ticket={ticket}) → "
-            f"GameServerData(170, type=4, subtype=5, id={config.REF_SERVER_ID}) -> "
-            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT}  [sets LM+0x580 via tincat3 FUN_10021520]")
-        # Switching the 189's reply from 192→170 means the client no longer learns the UC-server
-        # address FROM THIS MESSAGE, which is how chat currently reaches :7071. To keep chat working,
-        # also (unsolicited) push the 192 so the client still dials the UC server. ticket_id=0 because
-        # this is an advertisement, not a reply to an outstanding request (the 170 already consumed the
-        # cat-0x108 ticket). If a live capture shows chat survives on the lobby transport WITHOUT this,
-        # set REFEREE_ALSO_PUSH_UC=False — the 192 push is the conservative chat-preservation default.
-        if config.REFEREE_ALSO_PUSH_UC:
-            _send_uc_server_192(conn, server_type, 0)
-        return
-
-    # Non-referee assign (or referee disabled): reply UsercommServerData(192) as before.
-    _send_uc_server_192(conn, server_type, ticket)
 
 
 # ── Game/village server list ──────────────────────────────────────────────────
@@ -381,23 +322,22 @@ def server_to_170_values(srv, ticket):
 
 
 def server_data_block(room_id):
-    """Build the village 'ServerDataBlock' that makes a list entry JOINABLE.
+    """Build the village 'ServerDataBlock' that makes a list entry JOINABLE. [PROVEN, s15 live]
 
-    FillFromDescriptor @0x481640 sets entry.roomId(+0x30) from the FIRST field of this block (the 170
-    `data` MEMBLOCK), read BIG-ENDIAN, then a 1-byte pending flag. Without the block the client logs
-    "Invalid Server Data Block" and FORCES entry.validity(+0x35)=0 → the Enter button greys out.
-    s15 live-confirmed layout: 4-byte BIG-ENDIAN roomId + 1 pending byte (=0). The roomId MUST equal
-    the client's match key DAT_0087aed8 (= LobbyClient/ProtocolVersion); see config.LOBBY_PROTOCOL_VERSION.
-    server_data_block(1000) == b"\\x00\\x00\\x03\\xe8\\x00" (byte-identical to the long-standing literal).
+    FillFromDescriptor @0x481640 sets entry.roomId(+0x30) from the FIRST field of this block (the
+    170 `data` MEMBLOCK), read BIG-ENDIAN, then a 1-byte pending flag. Without the block the client
+    logs "Invalid Server Data Block" and forces entry.validity(+0x35)=0 → the Enter button greys
+    out. Layout: 4-byte BIG-ENDIAN roomId + 1 pending byte (=0). roomId MUST equal the client's
+    match key DAT_0087aed8 (= ProtocolVersion); see config.LOBBY_PROTOCOL_VERSION.
+    server_data_block(1000) == b"\\x00\\x00\\x03\\xe8\\x00".
     """
     return struct.pack(">I", int(room_id)) + b"\x00"
 
 
-# The ServerType=4 village world that currently gets us INTO the list (s12/s13).
-# s28: id MUST NOT be 1 — AssignServer/UsercommServerData(192) advertises the UC server as
-# server_id=1, so a village with id=1 makes the client's CommLayer_ResolveServer find the
-# already-connected UC connection (vtbl[+0x5c](1)!=0 → 0xcd) and reuse it instead of dialing
-# 5479. CreateVillageServerConnection then skips (conn+0x34 already set). Unique id → real dial.
+# The ServerType=4 village world that gets us INTO the list (s12/s13). [PROVEN]
+# id MUST NOT be 1 — AssignServer/UsercommServerData(192) advertises the UC server as server_id=1,
+# so a village with id=1 makes CommLayer_ResolveServer reuse the already-connected UC conn instead
+# of dialing :5479. A unique id forces a real dial.
 FAKE_VILLAGE = {
     "id": 50, "owner_id": config.TEST_PERM_ID,
     "name": "world1", "description": "SaDK Revival Lobby World",
@@ -406,27 +346,10 @@ FAKE_VILLAGE = {
     "lobby_id": 1000, "version": "", "server_type": 4, "server_subtype": 2,
     "level": 0, "game_mode": 0, "hardcore": False,
     "map": "world1", "running": True,
-    # s15 LIVE-CONFIRMED: the village entry's roomId/validity come from the 170's `data` MEMBLOCK,
-    # NOT the room_id field. Client update @0x130a080 -> commit branch @0x130a1b4 parses `data` to
-    # set entry.roomId(+0x30) + entry.pending(+0x34); validity(+0x35)=(listAction!=0)=1. Live trace:
-    # ECX=0xE8030000 from data E8 03 00 00 => roomId is read BIG-ENDIAN. Format (gate [0x12f283c]=5):
-    # 5 bytes = roomId as BIG-ENDIAN u32 + 1 pending byte. roomId=1000=0x3E8 BE, pending=0.
-    # Derived from config.LOBBY_PROTOCOL_VERSION (default 1000 → b"\x00\x00\x03\xe8\x00", unchanged).
-    # The roomId must equal the client's ProtocolVersion (DAT_0087aed8) or Enter stays grey — see config.
+    # The village entry's roomId/validity come from this 170 `data` MEMBLOCK, NOT the room_id field
+    # (s15 live-confirmed). 5 bytes = roomId as BIG-ENDIAN u32 + 1 pending byte; roomId must equal
+    # the client's ProtocolVersion (DAT_0087aed8) or Enter stays grey — see config.
     "data": server_data_block(config.LOBBY_PROTOCOL_VERSION),
-}
-# The referee/match-arbiter server (s39.5). server_type=4 + server_subtype=5 is the EXACT pair tincat3
-# FUN_10021520 gates the referee-assigned path on. Advertised on the type-4 server-list so the client caches
-# REF_SERVER_ID → ip:port (pComm FUN_100196b0 resolves the id when AssignServer hands it back). No
-# ServerDataBlock needed (that gate is village-Enter-button only; the referee is resolved by id, not joined).
-FAKE_REFEREE = {
-    "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
-    "name": "referee", "description": "SaDK Revival Referee",
-    "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
-    "max_players": 0, "cur_players": 0, "ai_players": 0,
-    "lobby_id": 0, "version": "", "server_type": 4, "server_subtype": 5,
-    "level": 0, "game_mode": 0, "hardcore": False,
-    "map": "", "running": True, "data": None,
 }
 
 
@@ -439,19 +362,11 @@ def _send_server_list(conn, server_type, ticket):
         conn.send_app(170, codec.encode_body(170, server_to_170_values(FAKE_VILLAGE, ticket)))
         sent += 1
         log("  → Injected fake village world (ServerType=4) w/ room-assign data blob")
-    # NO fake GAME entry. The game browser (server_type 5) shows ONLY real hosted games — registered
-    # via AddGameServer(168) and relayed cross-client from the registry in the loop above. The client
-    # sets server_subtype=1 itself when it hosts a browsable game (live-confirmed: 'Siedlerwill spielen'
-    # arrived with subtype=1), so a hosted game routes to BrowseGameDialog on its own with its REAL
-    # player count. An empty game list when nobody is hosting is the correct, honest state.
-    # Advertise the referee on the type-4 (and type-0/any) list so the client CACHES REF_SERVER_ID→ip:port
-    # BEFORE the AssignServer round-trip hands it that id (pComm FUN_100196b0 resolves the id from this cache;
-    # without it FUN_00462910 logs "Could not initialize RefereeServerConnection."). Gated by the ER flag.
-    if config.ADVERTISE_REFEREE_SERVER and server_type in (0, 4):
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(dict(FAKE_REFEREE), ticket)))
-        sent += 1
-        log(f"  → [REFEREE] advertised referee (type=4, subtype=5, id={config.REF_SERVER_ID}) → resolves "
-            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT}")
+    # NO synthetic GAME entry. The game browser (server_type 5) shows ONLY real hosted games,
+    # registered via AddGameServer(168) and relayed cross-client from the registry in the loop above.
+    # The client sets server_subtype=1 itself when it hosts a browsable game, so a hosted game routes
+    # to BrowseGameDialog on its own with its real player count. An empty list when nobody hosts is
+    # the correct, honest state.
     conn.ok(ticket)
     log(f"  → ServerList(type={server_type}): sent {sent} server(s) + OK")
 
@@ -461,7 +376,7 @@ def _h_reg_observer_servers(conn, fields, ticket):
     server_type = fields.get("server_type", 0)
     room = fields.get("room_id")
     log(f"  RegObserverServerList type={server_type} room_id={room} send_all={fields.get('send_all')}")
-    _reg_obs(conn, server_type)   # register for future push notifications (s39.5)
+    _reg_obs(conn, server_type)   # register for future push notifications
     _send_server_list(conn, server_type, ticket)
 
 
@@ -492,12 +407,10 @@ def _h_add_game_server(conn, fields, ticket):
     }
     sid = _register_game(conn, info)
     log(f"  AddGameServer: id={sid} name={info['name']!r} map={info['map']!r} "
-        f"owner={info['owner_id']} subtype={info['server_subtype']} "
-        f"{'[registry]' if config.MULTI_CLIENT_HOSTING else '[per-conn]'}")
+        f"owner={info['owner_id']} subtype={info['server_subtype']}")
     conn.status_with_id(0, sid, ticket)
-    # Push 170 to all subscribed observers so their browser updates without a re-request (s39.5).
-    if config.MULTI_CLIENT_HOSTING:
-        _push_to_obs(info["server_type"], {**info, "id": sid})
+    # Push 170 to all subscribed observers so their browser updates without a re-request.
+    _push_to_obs(info["server_type"], {**info, "id": sid})
 
 
 @handler(169)  # RemoveServer
@@ -508,17 +421,16 @@ def _h_remove_server(conn, fields, ticket):
 
 @handler(177)  # ChangeGameServer
 def _h_change_server(conn, fields, ticket):
-    # Only overwrite fields the message actually carried a value for (a 177 may touch
-    # a subset; the stub ignores property_mask). Mirrors the prior per-conn semantics.
+    # Only overwrite fields the message actually carried a value for (a 177 may touch a subset;
+    # the stub ignores property_mask).
     changes = {k: fields.get(k) for k in
                ("name", "description", "max_players", "map", "running", "data")
                if fields.get(k) is not None}
     rec = _change_owned_game(conn, changes)
     if rec is not None:
         log(f"  ChangeGameServer: id={rec.get('id')} running={rec.get('running')} map={rec.get('map')!r}")
-        # Keep observers' browser current as host changes map/settings (s39.5).
-        if config.MULTI_CLIENT_HOSTING:
-            _push_to_obs(rec.get("server_type", 5), rec)
+        # Keep observers' browser current as the host changes map/settings.
+        _push_to_obs(rec.get("server_type", 5), rec)
     conn.ok(ticket)
 
 
@@ -526,16 +438,11 @@ def _h_change_server(conn, fields, ticket):
 def _h_connection_data(conn, fields, ticket):
     sid = fields.get("server_id", 0)
     srv = _get_game(conn, sid)
-    # GAME_CONN_VIA_STUB redirects to the stub's capture port ONLY for a join to a REAL
-    # hosted game (one actually in the registry → srv is not None). The lobby-WORLD entry
-    # request (server_id=50, the injected FAKE_VILLAGE, which is never registered → srv is
-    # None) MUST keep going to WORLD_PORT (:5479) — else the client dials the game port for
-    # the lobby world and never enters it. (s39.5 live bug: this redirected every 221.)
-    if config.MULTI_CLIENT_HOSTING and config.GAME_CONN_VIA_STUB and srv is not None:
-        ip, port = config.ADVERTISED_IP, config.GAME_PORT
-    else:
-        ip = srv["ip"] if srv else config.ADVERTISED_IP
-        port = srv["port"] if srv else config.WORLD_PORT
+    # P2P handoff: a join to a real hosted game returns that host's advertised address (the joiner
+    # dials the host directly). The lobby-WORLD entry request (server_id=50, the injected
+    # FAKE_VILLAGE, never registered → srv is None) falls back to WORLD_PORT (:5479).
+    ip = srv["ip"] if srv else config.ADVERTISED_IP
+    port = srv["port"] if srv else config.WORLD_PORT
     conn.send_app(222, codec.encode_body(222, {
         "perm_id": _player(conn).perm_id, "server_id": sid,
         "ip": ip, "port": port,
@@ -553,68 +460,39 @@ def _h_token_start(conn, fields, ticket):
     log("  → AckValidateTokenSession (212) sent")
 
 
-@handler(213)  # SendToken -> AckResult(153)  [the 0x99 ACK the client awaits; NOT a 214 — see below]
+@handler(213)  # SendToken -> AddResult(153)  [the 0x99 ACK the client awaits; NOT a 214]
 def _h_send_token(conn, fields, ticket):
-    # ★★★ s31 LIVE-RE VERDICT (slot-lifecycle agent) — THE FIX. The game's UC-login client state machine
-    # (tincat3 ClientRecvHandler @0x10023460) has NO case for 214 (0xd6): its jump-table bound is 0xAA,
-    # so a 214 (index 0xAC) is DROPPED as "Invalid message-type". After sending 213 SendToken the client
-    # waits for the **0x99 ACK = NETMSG 153 (AddResult)** with errorcode==0 → connection state→8
-    # (AUTHORIZED) → fires the LoggedIn callback (the thing that's been missing). So we ACK with 153,
-    # NOT a 214. This corrects the s22 213→214 regression. (The 214/Twofish-CTR path — crypto.build_token_*
-    # — is consumed ONLY on the separate secured ROOM-server connection, kept for that case.)
+    # [PROVEN, s31] The UC-login client state machine (tincat3 ClientRecvHandler) has NO case for 214
+    # (jump-table bound 0xAA, so a 214 is dropped as "Invalid message-type"). After 213 SendToken the
+    # client waits for the 0x99 ACK = NETMSG 153 (AddResult) with errorcode==0 → connState→8 AUTHORIZED
+    # → fires the LoggedIn callback. So we ACK with 153, not a 214. (The 214/Twofish-CTR path is only
+    # consumed on the separate secured ROOM-server connection.)
     perm_id = fields.get("perm_id", config.TEST_PERM_ID)
-    # Multi-client: the UC + village connections carry the perm_id the lobby issued in
-    # 207, so bind this connection to that player (its chat user-info / world identity).
-    if config.MULTI_CLIENT_HOSTING and fields.get("perm_id"):
+    # The UC + village connections carry the perm_id the lobby issued in 207; bind this connection
+    # to that player (its chat user-info / world identity).
+    if fields.get("perm_id"):
         conn.player = players.resolve_by_perm(fields["perm_id"])
         perm_id = conn.player.perm_id
         log(f"  [PLAYER] token #{conn.id} → {conn.player.username!r} (perm_id={perm_id})")
     conn.status_with_id(0, perm_id, ticket)   # NETMSG 153 AddResult, errorcode=0 → the 0x99 ACK
     log("  → SendToken → AckResult(153) errorcode=0 [the 0x99 ACK → state 8 AUTHORIZED → LoggedIn]")
-    # s31 (trace agent): NOW (post-login) push the chat ChannelInfo — deferred from the handshake so
-    # it lands in a fully-constructed channel container instead of corrupting a half-built one. The 153
-    # above fires the client's LoggedIn observer fan-out (NotifyObservers @0x48d7e0); a UC observer
-    # null-derefs if the container was poisoned by a pre-login push. (Candidate-B fix; if the crash
-    # persists it's a never-constructed m_ChatChannelManager — confirm via live BP @ SADK 0x48d845.)
+    # Post-login: push the chat ChannelInfo (deferred from the handshake so it lands in a
+    # fully-constructed channel container instead of corrupting a half-built one; s31).
     if getattr(conn, "is_chat", False):
         chat.send_initial_reply(conn)
-    # WORLD ENTRY — s39 LIVE-CONFIRMED (probes/ + tincat_server.log). On the VILLAGE conn (:5479), after this
-    # 153 ACK the client parks at LobbyManager EnteringVillage(8) and WAITS for the server to push EnterWorld
-    # (msg 1000). Its own world-login request (SendGameData(74){0x27D2}, Village_SendEnterWorld_2002 @0x46b990)
-    # never fires — that path is dormant — so waiting for it deadlocks (the long-standing hang). The genuine,
-    # harness-endorsed fix for this wait-state is to PROVIDE msg 1000 via the real mechanism: the server pushes
-    # it. village.send_enter_world wraps it in the SendGameData(74) envelope → HandleMessage → HandleEnterWorld
-    # @0x46f670 → SetState(VillageEntered=9). (NOT on the lobby/UC conn — those lack the 1000-series templates
-    # and would NULL-deref; only the village conn.) GATED OFF by config.ARM_ENTER_WORLD (wire change → needs an
-    # approved Engagement Record + user present to observe; see engagement_records/2026-06-07_push-enterworld.md).
+    # WORLD ENTRY [PROVEN, s39 live]: on the VILLAGE conn (:5479) after this 153 ACK the client parks
+    # at LobbyManager EnteringVillage(8) and waits for the server to push EnterWorld (msg 1000). Its
+    # own world-login request is dormant, so the genuine fix is for the server to PROVIDE msg 1000:
+    # village.send_enter_world wraps it in the SendGameData(74) envelope → HandleEnterWorld →
+    # SetState(VillageEntered=9) → the 3D world renders. Only on the village conn (lobby/UC lack the
+    # 1000-series templates and would NULL-deref).
     if getattr(conn, "is_village", False):
-        if config.ARM_ENTER_WORLD:
-            def _push_enter_world(c=conn):
-                time.sleep(config.ENTER_WORLD_DELAY)
-                village.send_enter_world(c)             # idempotent (_enter_world_sent latch)
-            threading.Thread(target=_push_enter_world, daemon=True).start()
-            log(f"  [ENTER] (VILLAGE) ARMED — pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
-                "→ HandleEnterWorld → SetState(VillageEntered=9). Re-run probe_lobby_world_entry.py to confirm "
-                "state 9 + whether the world renders.")
-        else:
-            log("  [ENTER] (VILLAGE) 153 ACK — client now parks at EnteringVillage(8) awaiting msg 1000; "
-                "push DISARMED (config.ARM_ENTER_WORLD=False, needs Engagement Record).")
-    elif getattr(conn, "is_referee", False):
-        # The referee conn has completed its base login (153 AUTHORIZED); the client now opens the referee
-        # data channel (RefereeServerConnection::Login) and WAITS for the server to push LoginSuccess(0xDCA).
-        # PUSH it (after a short settle so the channel-open lands first) — the genuine message the match-start
-        # gate awaits. GATED by config.ARM_REFEREE (wire change → Engagement Record; flip only after a live
-        # capture confirms the LoginSuccess framing — see referee.py / config.REF_LOGIN_SUCCESS_NAMES).
-        if config.ARM_REFEREE:
-            def _push_ref(c=conn):
-                time.sleep(config.ENTER_WORLD_DELAY)
-                referee.push_login_success(c)           # idempotent (_ref_login_pushed latch)
-            threading.Thread(target=_push_ref, daemon=True).start()
-            log(f"  [REFEREE] ARMED — pushing LoginSuccess(0xDCA) in {config.ENTER_WORLD_DELAY}s after the 153 "
-                "→ clears the 5x-retry match-start abort. Probe LM+0x362c (attempts) to confirm it never hits 5.")
-        else:
-            log("  [REFEREE] 153 login done — LoginSuccess push DISARMED (config.ARM_REFEREE=False, needs "
-                "Engagement Record). Capturing the referee channel framing (Part A) only.")
+        def _push_enter_world(c=conn):
+            time.sleep(config.ENTER_WORLD_DELAY)
+            village.send_enter_world(c)             # idempotent (_enter_world_sent latch)
+        threading.Thread(target=_push_enter_world, daemon=True).start()
+        log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
+            "→ HandleEnterWorld → SetState(VillageEntered=9).")
     else:
         log("  [ENTER] (lobby/UC) 153 ACK — no world push on this conn.")
 
@@ -622,30 +500,26 @@ def _h_send_token(conn, fields, ticket):
 # ── Village / world game-data envelope (SendGameData 74) ───────────────────────
 @handler(74)  # SendGameData — the NETMSG envelope that carries every village/world message (1000+)
 def _h_send_game_data(conn, fields, ticket):
-    """Village/world envelope handler. The genuine world-entry mechanism is the SERVER pushing EnterWorld
-    (msg 1000) once the transport is AUTHORIZED (see _h_send_token / village.send_enter_world); the client's
-    own SendGameData(74){0x27D2} world-login request is dormant/dead, so we don't depend on it. msg 1000 must
-    ride a SendGameData(74) envelope — the only framing the inbound bridge routes to HandleMessage →
-    HandleEnterWorld → SetState(VillageEntered=9). This handler also answers in-world PingCodes."""
+    """Village/world envelope handler. The genuine world-entry mechanism is the SERVER pushing
+    EnterWorld (msg 1000) once the transport is AUTHORIZED (see _h_send_token / village.send_enter_world);
+    the client's own SendGameData(74){0x27D2} world-login request is dormant, so we don't depend on it.
+    This handler also answers in-world PingCodes."""
     msg_type = fields.get("msg_type", 0)
     data = fields.get("data", b"") or b""
     if not getattr(conn, "is_village", False):
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on non-village conn #{conn.id} — logged)")
         return
-    if msg_type == config.WORLD_LOGIN_REQUEST_MSGTYPE:        # 0x27D2 — the world-login request
+    if msg_type == config.WORLD_LOGIN_REQUEST_MSGTYPE:        # 0x27D2 — the (dormant) world-login request
         log(f"  [VILLAGE] *** WORLD-LOGIN REQUEST — SendGameData(74){{msg_type=0x{msg_type:x}, "
             f"code=0x{data[:4][::-1].hex()}}} → EnterWorld(1000) ***")
         village.send_enter_world(conn)
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)
-        village.send_world_login_ack(conn)                  # …and (once) THE loading-screen gate (1006, 0xDEADBEEF)
+        village.send_world_login_ack(conn)                  # …and (once) the best-effort 1006 WorldLoginAck
         if first_ack:
-            log("  [VILLAGE] *** 1006 WorldLoginAck sent on first PingCode — watch for loading-screen dismiss "
-                "(or an observer-AV crash, which still means the gate FIRED) ***")
-        # OPTIONAL world clock (msg 1005) — held OFF for the first isolated 1006-gate drive so a render-gate
-        # failure isn't conflated with a missing sim clock. Enable once 1006 is confirmed to dismiss loading:
-        # village.send_world_tick(conn)
+            log("  [VILLAGE] 1006 WorldLoginAck sent on first PingCode "
+                "([TODO] its in-world effect is unverified on the clean build)")
     else:
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on conn #{conn.id} — logged, no in-world handler)")
 
@@ -666,10 +540,8 @@ def _h_chat_message(conn, fields, ticket):
 # ── Quiet routing: keep routine 'default-implementation' chatter out of the main log ──────────────
 # These handlers do nothing protocol-significant for the work under study — bare acks + boilerplate
 # account/social login replies. connection.py routes their full per-message decode to
-# tincat_lobby_unhandled.log (FILE ONLY — not console, not the main log) so the main view stays focused
-# on auth, server-list, AssignServer, village/world, referee and chat. Genuinely UNKNOWN types (no
-# handler) STAY in the main log so new protocol is still discoverable. Add a handler here to silence its
-# message types; remove one to bring them back.
+# tincat_lobby_unhandled.log (file only) so the main view stays focused on auth, server-list,
+# AssignServer, village/world and chat. Genuinely UNKNOWN types (no handler) STAY in the main log.
 QUIET_HANDLERS = frozenset({
     _h_ack, _h_char_ack, _h_ignore_list, _h_user_info, _h_player_info,
     _h_select_nickname, _h_cdkeys, _h_property_get, _h_motd,
