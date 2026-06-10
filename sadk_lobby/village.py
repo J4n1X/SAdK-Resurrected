@@ -13,8 +13,8 @@ stub does (dispatch._h_send_game_data / send_enter_world).
 
   1. [UNVERIFIED / DORMANT] An older model had the client itself send a world-login request as a NETMSG
      SendGameData(74){msg_type=0x27D2, "code"=0xAFFEDEAD} (Village_SendEnterWorld_2002 @0x46b990) which a
-     server would answer. In practice that client path is **dormant/dead** (no analyzed caller fires it;
-     force_send2002.py was a HACK to poke it) — so the stub does NOT wait for it; it pushes 1000 instead.
+     server would answer. In practice that client path is **dormant/dead** (no analyzed caller fires it),
+     so the stub does NOT wait for it; it pushes 1000 instead.
   2. msg 1000 MUST be wrapped in a SendGameData(74) envelope: the client's inbound bridge (tincat3
      TinCat_DispatchInboundToSADK) only routes NETMSG 73/74 to VillageServerConnection::HandleMessage,
      using the inner `msg_type` as the dispatch key. A bare 1000 frame is dropped.

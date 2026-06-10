@@ -1,9 +1,9 @@
 """
-Multi-user player support (s39.5).
+Multi-user player support.
 
-Lazily lets MORE THAN ONE client log in as DISTINCT players (a host + a joiner) so
-game hosting and joining can be tested. A "player" is one account identity served
-across that client's three connections (lobby / UC-chat / village), resolved by:
+Lets MORE THAN ONE client log in as DISTINCT players (a host + a joiner) so game
+hosting and joining can be tested. A "player" is one account identity served across
+that client's three connections (lobby / UC-chat / village), resolved by:
 
   * lobby connection    -> the `username` in the ECDH auth blob (203/204/206)
   * UC + village conns  -> the `perm_id` carried in the token (213 SendToken)
@@ -12,11 +12,8 @@ The lobby login completes first and issues the perm_id in SessionKey(207); the
 client then presents that perm_id on its UC and village connections, so resolving
 those by perm_id maps all three sockets back to the same player.
 
-DEFAULT-SAFE: PLAYERS[0] is byte-identical to the long-standing hardcoded test
-identity (config.TEST_*). With one client on the default account the wire output is
-unchanged. Per-login resolution and auto-registration only happen when
-config.MULTI_CLIENT_HOSTING is True (see config.py / HARNESS.md); otherwise every
-connection keeps serving the default player.
+PLAYERS[0] is the default identity (config.TEST_*) and the fallback for an empty or
+unknown login. An unknown username auto-registers a fresh player on first login.
 """
 import threading
 from dataclasses import dataclass
@@ -69,23 +66,21 @@ def of(conn):
 
 
 def resolve_by_username(username):
-    """Lobby-connection resolution. Returns the matching player; with multi-user on,
-    auto-registers a fresh player for an unknown username (lazy). Empty/unknown with
-    multi-user off falls back to the default player (so the wire is unchanged)."""
+    """Lobby-connection resolution. Returns the matching predefined player, or auto-registers a
+    fresh player for an unknown username (lazy). An empty username falls back to the default."""
     with _lock:
         _seed()
         if username:
             p = _by_user.get(username.lower())
             if p is not None:
                 return p
-            if config.MULTI_CLIENT_HOSTING:
-                global _next_auto_perm
-                perm = _next_auto_perm
-                _next_auto_perm += 1
-                return _register(Player(
-                    perm_id=perm, char_id=perm, username=username,
-                    char_name=(username[:31] or f"Player{perm}"),
-                    data=config.NICKNAME_DATA))
+            global _next_auto_perm
+            perm = _next_auto_perm
+            _next_auto_perm += 1
+            return _register(Player(
+                perm_id=perm, char_id=perm, username=username,
+                char_name=(username[:31] or f"Player{perm}"),
+                data=config.NICKNAME_DATA))
         return default_player()
 
 
