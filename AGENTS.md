@@ -11,8 +11,8 @@
 ## Required startup order for every agent
 
 1. **Read `CLAUDE.md` first. Do not start work before reading it.**
-2. Read **`HARNESS.md`** and follow its rules for any live-game investigation.
-3. Use **`MEMORY.md`** and the `memory/` notes for persistent project context.
+2. Read **`HARNESS.md`** and follow its rules for any RE, debugging, or stub change.
+3. Use **`MEMORY.md`** for persistent project context (proven facts + TODOs).
 4. Then consult the project docs relevant to the task.
 
 ---
@@ -32,10 +32,9 @@ The detailed project guidance that used to live here has been consolidated into
 ## Key project pointers
 
 - **Primary agent instructions:** `CLAUDE.md`
-- **Binding live-game engagement rules:** `HARNESS.md`
-- **Persistent cross-session memory:** `MEMORY.md`
-- **Active plan:** `docs/ROADMAP.md`
-- **Archived session log:** `docs/archive/SESSION_STATUS.md`
+- **Binding rules of engagement:** `HARNESS.md`
+- **Persistent context (proven facts + TODOs):** `MEMORY.md`
+- **Protocol reference:** `docs/LOBBY_PROTOCOL.md`, `docs/SOURCEMAP.md`
 - **Quick-start / package overview:** `README.md`
 
 ---

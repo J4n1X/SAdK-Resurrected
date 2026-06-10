@@ -104,7 +104,7 @@ applied in the project.
 | `0x4626c0` | `LobbyManager::GetChatServerHandle` (returns +0x548) | H |
 
 vtables: UserComm `0x7dded8`, GameServer `0x7dfafc`, Village `0x7dc8e0`. `LobbyManager+0x548`
-= chat-server handle (set at login). Full flow + debugger plan in `SESSION_STATUS.md` (s9).
+= chat-server handle (set at login).
 
 ## Notes / next in Ghidra
 
