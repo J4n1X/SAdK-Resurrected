@@ -1,17 +1,12 @@
 """
-Global game-server registry (s39.5).
+Global game-server registry.
 
-The lobby's AddGameServer(168) store used to be per-connection (Conn.servers), so a
-game hosted by client A was invisible to client B's RequestServers(166) /
-RegObserverServerList(171), and B could never join it. This is a process-global,
-thread-safe registry keyed by a globally-unique server_id, tagging each game with
-the owning connection id so it can be:
+A process-global, thread-safe store for hosted games (AddGameServer 168), keyed by a
+globally-unique server_id and tagging each game with the owning connection id, so a game
+hosted by client A is:
   * listed cross-client (any client's 166/171 sees every hosted game),
   * resolved by RequestConnectionData(221) regardless of which client owns it,
   * cleaned up when the owning connection drops.
-
-Used only when config.MULTI_CLIENT_HOSTING is on. With the flag off, dispatch.py
-keeps the old per-connection path, so single-client wire output is unchanged.
 """
 import threading
 

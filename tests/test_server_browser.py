@@ -52,10 +52,6 @@ def test_village_data_block_default_byte_identical():
     assert dispatch.FAKE_VILLAGE["data"] == legacy_literal, "FAKE_VILLAGE wire data changed!"
 
 
-def test_gameserverdata_format_unchanged():
-    assert config.GAMESERVERDATA_FORMAT == "old"  # sanity: 170 format unchanged
-
-
 # ── 2. server_data_block encoding ──────────────────────────────────────────────
 def test_server_data_block_encoding():
     assert dispatch.server_data_block(1000) == b"\x00\x00\x03\xe8\x00"  # 0x3E8 BE + pending 0
@@ -92,8 +88,7 @@ def test_no_fake_game_injected():
     from sadk_lobby import registry
     registry.games.clear()                       # isolate from any game a prior test registered
     emitted = _emit_game_servers()
-    # No game-list (server_type==5) 170 should be emitted when nothing is hosted. (A referee entry is
-    # type 4, not 5, and is only added for server_type in (0,4), so a pure type-5 call emits nothing.)
+    # No game-list (server_type==5) 170 should be emitted when nothing is hosted.
     game_entries = [f for f in emitted if f.get("server_type") == 5]
     assert game_entries == [], f"expected no synthetic game entry, got {game_entries}"
 

@@ -34,9 +34,8 @@ walk one unmodified game client through:
 The wire format is **data-driven from the game's own `msgdefs.ini`** (the NETMSG schema that
 `tincat3.dll` itself loads — 221 message types), so a single generic codec encodes/decodes
 messages instead of hand-rolled structs. Alongside the stub, the repo contains the RE
-artifacts: a Ghidra source map, protocol notes, read-only memory probes, a Win10/11 launch
-workaround for the game's SecuROM DRM, and an "engagement record" discipline (see `HARNESS.md`)
-for how live-game experiments were gated.
+artifacts: a Ghidra source map, protocol notes, the Win10/11 SecuROM boot fix, and the
+binding rules of engagement (`HARNESS.md`) — all RE/debugging goes through the Ghidra MCP.
 
 ## What it is **not**
 
@@ -65,30 +64,30 @@ for how live-game experiments were gated.
 - **3D lobby-world entry** — after the village-connection login the client parks awaiting an
   inbound `EnterWorld` msg `1000`; the stub pushes it via the real mechanism →
   `SetState(VillageEntered)` → the town-square world **renders** (avatar, minimap, UI).
-  Screenshot-confirmed once, on the clean game build. This is **gated behind a config flag**
-  and an approved engagement record, and needs the elevated launch workaround on Win10/11.
+  Screenshot-confirmed once, on the clean game build. Needs the elevated launch workaround on
+  Win10/11.
+- **Multi-client** — two+ clients log in as distinct players (host + joiner); hosted games live
+  in a process-global registry so one client's game is visible/joinable to another.
 
 **⚠️ Partial / experimental / unverified:**
 - **214 ValidateToken** is a best-effort echo; the `207` session key is generated then discarded,
   so a cryptographically-real `214` is not built (only the separate secured-room path needs it).
-- **Game browser (`subtype=1`)** is implemented but **default-OFF** with live preconditions still owed.
 - **Disc-free single-player launch** via the publisher's SecuROM-free 2014 magazine build is
   *documented* (and is how the RE harness runs) but the exe is **not shipped** and its hash is
   unverified here. The community no-CD crack is **faulty** (crashes on Win11) — don't use it.
-- **Win10/11 launch of the genuine exe** via `tools/debugger_loader.py` (a transparent debug loop
-  that lets SecuROM's exception handler run) — works but must be edited per-machine and run elevated.
+- **Win10/11 launch of the genuine exe** — the two SecuROM runtime patches (`docs/BINARY_PATCHES.md`)
+  are applied to the running process under the Ghidra MCP debugger; works but is finicky and elevated.
 - **Everything after world entry** (WorldLoginAck `1006`, ping/pong, world tick) exists in code but
   is only reached if a real client drives it, and was largely derived on the faulty no-CD build —
-  treat as **unproven**.
+  treat as **unproven** (`[TODO]`).
 
 **❌ Doesn't work / not implemented:**
 - **Hosting / pre-game room** — the SetupGame dialog opens but all player slots are empty; the
-  per-slot room protocol (occupant/tribe/team/color/ready) is **unidentified**. "We are not
-  transmitting that data yet."
+  per-slot room protocol (occupant/tribe/team/color/ready) is **unidentified** (`[TODO]`).
+- **Entering matches** — broken; the referee/match-arbiter role is unclear, so that subsystem was
+  removed from the stub (`[TODO]`; named referee functions kept in `docs/REFEREE_FUNCTIONS_TO_NAME.md`).
 - **In-world content** — the rendered world is **empty**: no NPCs, no entities, dead in-world
   browser, in-world chat loops, avatar shows `<UNNAMED>` / default appearance.
-- **Real play-together** — single hardcoded test account; multi-user is a TODO; two clients need
-  two machines/VMs. **Not playable.**
 
 ---
 
@@ -99,10 +98,11 @@ dumps, and decrypted assets. To use or extend this you need your **own legal cop
 and must produce the following yourself:
 
 - [ ] **A legal install of *Die Siedler: Aufbruch der Kulturen* (2008).** Everything below is derived from it.
-- [ ] **A runnable game exe.** Either the genuine retail exe (CD inserted, or via
-      `tools/debugger_loader.py` elevated on Win10/11), or the publisher's SecuROM-free **2014
-      magazine build** for disc-free single-player (community "SAdK 2014 Patch"; verify its hash
-      yourself). Plus **NVIDIA PhysX Legacy 9.13.0604** and "Disable fullscreen optimizations".
+- [ ] **A runnable game exe.** Either the genuine retail exe (CD inserted, or run under the Ghidra
+      MCP debugger elevated on Win10/11 with the SecuROM patches in `docs/BINARY_PATCHES.md`), or the
+      publisher's SecuROM-free **2014 magazine build** for disc-free single-player (community "SAdK
+      2014 Patch"; verify its hash yourself). Plus **NVIDIA PhysX Legacy 9.13.0604** and "Disable
+      fullscreen optimizations".
 - [ ] **`bin/msgdefs.ini` from your install.** A bundled copy lives at `sadk_lobby/data/msgdefs.ini`,
       but if your build differs, replace it with yours or the wire format may desync.
 - [ ] **Point both client configs at the stub:** `data/lobby/config/LobbySettings.ini` →
@@ -135,9 +135,10 @@ The server opens three listeners:
 | 5479 | village / world (3rd conn) |
 
 Then point your game install at the stub (see the checklist above) and log in with
-`test` / `test` / `test`. Binding `7070` may require running elevated. Reaching the 3D world
-additionally requires opting into the gated `ARM_ENTER_WORLD` behavior and launching the game
-via the elevated loader on Win10/11. **It is fragile and environment-dependent.**
+`test` / `test` / `test`. Binding `7070` may require running elevated. The stub pushes
+`EnterWorld(1000)` automatically once the village connection logs in (no flags). Reaching the 3D
+world still requires launching the game elevated on Win10/11 (SecuROM). **It is fragile and
+environment-dependent.**
 
 ### Wire encoding (from `msgdefs.ini` type tokens)
 
@@ -165,18 +166,17 @@ python tests/test_server_browser.py   # default wire unchanged + flag gating
 These exercise the wire codec/flow only — **not** the live game. There is no automated coverage
 for crypto/auth, chat, or the world-entry push.
 
-## Repo map (post-cleanup)
+## Repo map
 
 ```
 sadk_lobby/         the stub server package (the actual deliverable)
-tools/              read-only RE probes + the Win10/11 debugger_loader + asset/decode helpers
-docs/               protocol + RE reference (SOURCEMAP, LOBBY_PROTOCOL, …); some addresses are stale
-decomp/             Ghidra workflow: MCP bridge, index extractor, rename list (dumps are gitignored)
-tests/              offline codec / smoke / browser tests
-templates/          the Engagement Record template (pre-mutation discipline)
-engagement_records/ append-only ledger of approved live-game experiments
-HARNESS.md          binding rules-of-engagement for touching the live game (read-only by default)
-AGENTS.md           technical onboarding: protocol facts, ports, crypto, Win11 fix, tooling
+tools/              only what the Ghidra MCP + a debugger can't do: a passive wire proxy + capture decoders
+docs/               protocol + RE reference (SOURCEMAP, LOBBY_PROTOCOL, …); addresses may be from an older build
+decomp/             Ghidra MCP link: setup runbook, bridge, rename list (offline dumps are gitignored)
+tests/              offline codec / smoke / browser / multi-client tests
+CLAUDE.md           authoritative agent instructions
+HARNESS.md          binding rules of engagement (MCP-first RE/debug; no faking; honest status; no flags)
+MEMORY.md           compact persistent context: proven facts + open TODOs
 legacy_tincat_server.py   frozen reference-only monolith (kept for the golden test)
 ```
 
@@ -196,8 +196,8 @@ Kulturen* and all its assets are **© their respective owners** (Funatics / Blue
 
 By **[J4n1X](https://github.com/J4n1X)** — community reverse-engineering of SAdK / TinCat, conducted
 as a heavily AI-assisted research project. Protocol facts are grounded in the game's own `msgdefs.ini`
-and live read-only memory probes; the Win10/11 SecuROM launch insight and the lobby/world handshake
-were derived through that work.
+and live analysis through the Ghidra MCP; the Win10/11 SecuROM launch insight and the lobby/world
+handshake were derived through that work.
 
 ## License
 

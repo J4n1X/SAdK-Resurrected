@@ -1,15 +1,15 @@
 # docs/ — Documentation index
 
-> ⚠️ These are reverse-engineering notes, heavily AI-assisted. Addresses often refer to an older
-> game build — `SOURCEMAP.md` is the firmest reference. Superseded / refuted notes live in
-> [`STALE/`](STALE/). Treat everything here as research notes, not authoritative documentation.
+> Reverse-engineering notes, heavily AI-assisted. `[PROVEN]` = binary address + live
+> evidence; `[TODO]` = unverified. Addresses may refer to an older game build — see the
+> base caveat in `SOURCEMAP.md`. `MEMORY.md` (repo root) is the compact current state.
 
 | File | Contents |
 |------|----------|
-| `SOURCEMAP.md` | Named functions, structs, globals, vtable slots in the Ghidra project (firmest reference). |
-| `LOBBY_PROTOCOL.md` | Reversed TinCat / NETMSG protocol reference (endpoints + message types). |
-| `REVERSE_ENGINEERING_GUIDE.md` | Asset decoding: the KEX/sadk file decrypt workflow using AdKEd.exe. |
-| `BINARY_PATCHES.md` | Why the Win10/11 SecuROM crash happened; now handled operationally by `tools/debugger_loader.py`. |
+| `SOURCEMAP.md` | Named functions, structs, globals, vtable slots (the firmest RE reference). |
+| `LOBBY_PROTOCOL.md` | TinCat / NETMSG protocol reference (endpoints + message types, msgdefs-grounded). |
+| `BINARY_PATCHES.md` | The two runtime patches that boot the genuine exe past SecuROM on Win10/11. |
+| `REVERSE_ENGINEERING_GUIDE.md` | Asset decoding: the KEX/sadk decrypt workflow using AdKEd.exe. |
 | `UI_FINDINGS.md` | UI screen-system verdict (no file-edit shortcut) + the AdKEd decrypt workflow. |
-| `Readme.txt` | Original short note. |
-| `STALE/` | Superseded / refuted RE notes, kept for the historical record (world-entry theories, glass-build notes, session logs). |
+| `GAME_JOIN_CAPTURE_decoded.txt` | Decoded P2P game-join session capture (room/slot protocol is unreversed — `[TODO]`). |
+| `REFEREE_FUNCTIONS_TO_NAME.md` | Already-named referee functions — the starting point if the (removed) referee/match work is ever restarted. |
