@@ -7,9 +7,9 @@ logic only, to prove:
      produces BYTE-IDENTICAL wire output to the long-standing literal b"\\x00\\x00\\x03\\xe8\\x00".
   2. server_data_block() encodes roomId BIG-ENDIAN + 1 pending byte, and decodes back.
   3. The village 170 still carries subtype 2 + the data block (joinable entry).
-  4. The game-browser change is correctly GATED: with config.ADVERTISE_GAME_SERVERS
-     OFF (default) the emitted game 170 keeps server_subtype 0 (byte-identical to today);
-     only with the flag ON does it become subtype 1 (the BrowseGameDialog entry).
+  4. The game browser injects NO synthetic entry: with no real games hosted, a
+     server_type=5 list is empty (no phantom "0/2" FAKE_GAME). Real hosted games
+     flow through the registry loop with their own client-set subtype + real counts.
 
 Run directly:   python tests/test_server_browser.py
 Or with pytest: pytest tests/test_server_browser.py
@@ -52,9 +52,7 @@ def test_village_data_block_default_byte_identical():
     assert dispatch.FAKE_VILLAGE["data"] == legacy_literal, "FAKE_VILLAGE wire data changed!"
 
 
-def test_advertise_game_servers_off_by_default():
-    # Harness: the new game-browser behavior must be opt-in, not on by default.
-    assert config.ADVERTISE_GAME_SERVERS is False
+def test_gameserverdata_format_unchanged():
     assert config.GAMESERVERDATA_FORMAT == "old"  # sanity: 170 format unchanged
 
 
@@ -81,38 +79,29 @@ def test_village_170_roundtrip():
     assert struct.unpack(">I", back["data"][:4])[0] == 1000  # roomId == ProtocolVersion match key
 
 
-# ── 4. The game-browser change is correctly gated ──────────────────────────────
-def _emit_game_server():
-    """Run the real _send_server_list type-5 fallback through a FakeConn; return decoded 170s."""
-    conn = FakeConn()
+# ── 4. The game browser injects NO synthetic entry ─────────────────────────────
+def _emit_game_servers(conn=None):
+    """Run the real _send_server_list type-5 path through a FakeConn; return decoded 170s."""
+    conn = conn or FakeConn()
     dispatch._send_server_list(conn, 5, TICKET)
     return [f for (t, f) in conn.sent if t == 170]
 
 
-def test_game_server_subtype_gated(monkeypatch=None):
-    saved = config.ADVERTISE_GAME_SERVERS
-    try:
-        # OFF (default): emitted game 170 keeps subtype 0 — byte-identical to today's behavior.
-        config.ADVERTISE_GAME_SERVERS = False
-        off = _emit_game_server()
-        assert len(off) == 1 and off[0]["server_type"] == 5
-        assert off[0]["server_subtype"] == 0, "default must stay inert subtype 0"
-
-        # ON: emitted game 170 becomes subtype 1 → routed to the game list → BrowseGameDialog entry.
-        config.ADVERTISE_GAME_SERVERS = True
-        on = _emit_game_server()
-        assert len(on) == 1 and on[0]["server_type"] == 5
-        assert on[0]["server_subtype"] == 1, "flag ON must advertise subtype 1 (game list)"
-        # Independent-review capacity gate: BrowseGameDialog disables join unless current < max
-        # ("!LOBBY_MATCHMAKING_GAMEISFULL"). The advertised entry must have join headroom.
-        assert on[0]["cur_players"] < on[0]["max_players"], "game entry must not be full (current < max)"
-    finally:
-        config.ADVERTISE_GAME_SERVERS = saved
+def test_no_fake_game_injected():
+    # With no real games hosted, a server_type=5 list is EMPTY — no phantom "0/2" placeholder.
+    from sadk_lobby import registry
+    registry.games.clear()                       # isolate from any game a prior test registered
+    emitted = _emit_game_servers()
+    # No game-list (server_type==5) 170 should be emitted when nothing is hosted. (A referee entry is
+    # type 4, not 5, and is only added for server_type in (0,4), so a pure type-5 call emits nothing.)
+    game_entries = [f for f in emitted if f.get("server_type") == 5]
+    assert game_entries == [], f"expected no synthetic game entry, got {game_entries}"
 
 
-def test_fake_game_default_subtype_unchanged():
-    # The source-of-truth dict is untouched; only the per-send copy is upgraded under the flag.
-    assert dispatch.FAKE_GAME["server_subtype"] == 0
+def test_fake_game_removed_from_source():
+    # The wretched fake game is gone from the module entirely.
+    assert not hasattr(dispatch, "FAKE_GAME"), "FAKE_GAME must be removed from dispatch.py"
+    assert not hasattr(config, "ADVERTISE_GAME_SERVERS"), "vestigial flag must be removed from config.py"
 
 
 def _run():

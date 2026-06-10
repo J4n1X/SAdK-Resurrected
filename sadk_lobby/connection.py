@@ -12,8 +12,8 @@ import struct
 import threading
 from datetime import datetime
 
-from . import chat, codec, config, dispatch, msgdefs, players, registry, village
-from .log import log
+from . import chat, codec, config, dispatch, msgdefs, players, referee, registry, village
+from .log import log, routed_to_unhandled
 from .tincat import (BinaryReader, app_payload, build_frame,
                      build_handshake_payload, crc32, parse_header)
 
@@ -30,7 +30,7 @@ def next_conn_id():
 
 class Conn:
     def __init__(self, sock, addr, conn_id, bin_file, is_chat=False, is_village=False,
-                 is_game=False):
+                 is_game=False, is_referee=False):
         self._sock = sock
         self.addr = addr
         self.id = conn_id
@@ -41,6 +41,10 @@ class Conn:
         # Framed/logged like a village conn, but is_village stays False so it does the
         # login WITHOUT the EnterWorld(1000) push (which would crash a GameServerConnection).
         self.is_game = is_game
+        # Referee / match-arbiter connection (:5481). Does the SAME base login as UC/village
+        # (188/211/213 → 153), then its cat=3 LobbyMessage data frames route to referee.handle_frame.
+        # The match-start gate is cleared by the stub pushing LoginSuccess(0xDCA) (gated by ARM_REFEREE).
+        self.is_referee = is_referee
         self._buf = b""
         self._state = "PREFIX"
         self._hdr = None
@@ -150,65 +154,105 @@ class Conn:
         h = self._hdr
         calc = crc32(payload)
         ok_str = "OK" if calc == h["Checksum"] else f"BAD(calc={calc:08X})"
-        log(f"\n{'-' * 60}")
-        log(f"  [#{self.id}] <- CLIENT  TYPE={h['Type']}  {len(payload) + config.PREFIX_SIZE}B  CRC:{ok_str}")
+        # The client floods the lobby with CONSTANT keepalive spam — TinCat pings + village/world
+        # SendGameData(74) polls (~3/s while idling in the 3D lobby world). _is_quiet_frame classifies it,
+        # and routed_to_unhandled() diverts the WHOLE message (frame header + village hex + decode +
+        # dispatch) to tincat_lobby_unhandled.log (file only) in one shot, so the main view keeps only the
+        # protocol under study (auth, server-list, AssignServer, referee, the real world-entry events, chat).
+        with routed_to_unhandled(self._is_quiet_frame(h, payload)):
+            log(f"\n{'-' * 60}")
+            log(f"  [#{self.id}] <- CLIENT  TYPE={h['Type']}  {len(payload) + config.PREFIX_SIZE}B  CRC:{ok_str}")
 
+            if h["Type"] == config.MSG_PING:
+                log("  PING received (ignored)")
+                return
+            if h["Type"] == config.MSG_HANDSHAKE_CONNECT:
+                self._handle_handshake(payload)
+                return
+            if h["Type"] != config.MSG_APPLICATION:
+                log(f"  Unknown frame type {h['Type']}")
+                return
+
+            # Application frame.
+            if self.is_referee:
+                # The referee conn runs the SAME base login as UC/village (CheckVersion 188 → token 211/213 →
+                # AddResult 153) — those are msgdef types and must decode+dispatch normally. Its DATA frames are
+                # bare referee LobbyMessages whose type word carries category 3 in bits 14-12 (e.g. 0x3DCA /
+                # RegisterGame 0x?B6); those are NOT msgdef types → route them to referee.handle_frame and stop.
+                if len(payload) >= 4:
+                    t1 = struct.unpack_from("<H", payload, 2)[0]
+                    if ((t1 >> 12) & 7) == config.REF_CATEGORY:
+                        referee.handle_frame(self, payload)
+                        return
+                # else a base-login frame (188/211/213/…) → fall through to the lobby decode+dispatch below.
+            elif self.is_village or self.is_game:
+                # The village/world conn is a UserCommConnection on the SAME 0x26B6 comm layer:
+                # VillageServerConnection::HandleMessage (@0x470890) handles only village types (1000-1006,
+                # 3xxx) and TAIL-CALLS the base UserComm dispatch for everything else — so its LOGIN
+                # (CheckVersion 188 → token 211/213 → Result/153) is the SAME flow the lobby/UC handlers
+                # already answer. Firewalling it into a log-only path stalled the login at CheckVersion, so
+                # the 1000-series PropertySet templates never registered and the server-pushed EnterWorld
+                # crashed in tincat3!DeserializeProperty. Fix: capture the frame (hex log) THEN fall through
+                # to the normal decode+dispatch so the village login actually completes. (s34)
+                village.handle_frame(self, payload)
+                # (no return — fall through to the lobby decode+dispatch below)
+            elif len(payload) >= 2 and struct.unpack_from("<H", payload, 0)[0] == config.CHAT_PAYLOAD_MAGIC:
+                chat.handle_frame(self, payload)
+                return
+
+            # Lobby frame: Magic + Type1 (+ Type2 if it mirrors Type1) + body.
+            r = BinaryReader(payload)
+            _magic = r.u16()
+            if _magic != config.PAYLOAD_MAGIC:
+                # Not the lobby layer (0x26B6); chat (0x0062) was already handled+returned above. RE (s30)
+                # found SADK uses a SINGLE comm layer (0x26B6), so an unexpected magic here would be news —
+                # flag it loudly (and don't mis-parse it as a lobby frame) rather than silently dropping.
+                log(f"  ⚠ APP-FRAME MAGIC 0x{_magic:04x} != lobby 0x{config.PAYLOAD_MAGIC:04x} "
+                    f"— UNEXPECTED comm-layer magic (SADK should only use 0x26B6). Flagging for analysis.")
+                log(f"    frame[:64]={payload[:64].hex()}")
+                return
+            t1 = r.u16()
+            if r.remaining() >= 2 and r.peek_u16() == t1:
+                r.u16()
+            if msgdefs.get(t1) is None:
+                # >=1000 village/world PropertySet message (no msgdefs schema; codec.decode_body would
+                # KeyError). The raw frame is already hex-logged (village.handle_frame). Route to dispatch
+                # with empty fields so the >=1000 branch logs it; never crash the conn on an unknown type.
+                log(f"  TYPE {t1} (0x{t1:x}) — no msgdefs schema (village/world PropertySet); not decoded")
+                dispatch.dispatch_lobby(self, t1, {})
+                return
+            fields = codec.decode_body(t1, payload, r.pos)
+            name = msgdefs.name_of(t1)
+            log(f"  TYPE {t1} = {name}")
+            for k, v in fields.items():
+                if isinstance(v, bytes):
+                    log(f"    {k}: [{len(v)}B] {v[:32].hex()}{'...' if len(v) > 32 else ''}")
+                else:
+                    log(f"    {k}: {v!r}")
+            dispatch.dispatch_lobby(self, t1, fields)
+
+    def _is_quiet_frame(self, h, payload):
+        """True if this is the client's CONSTANT in-lobby keepalive spam → divert its whole log block to
+        tincat_lobby_unhandled.log. Quiet = TinCat pings + village/world SendGameData(74) polls whose inner
+        msg_type has NO in-world handler (e.g. 0x27D0, ~3/s). The INTERESTING village events STAY in the main
+        log: world-login (0x27D2), PingCode (0x2ED6), the server-pushed 1000/1006, and the base login (t1!=74).
+        On a pure-lobby conn, routine account/social boilerplate (dispatch.is_quiet) is also diverted."""
         if h["Type"] == config.MSG_PING:
-            log("  PING received (ignored)")
-            return
-        if h["Type"] == config.MSG_HANDSHAKE_CONNECT:
-            self._handle_handshake(payload)
-            return
-        if h["Type"] != config.MSG_APPLICATION:
-            log(f"  Unknown frame type {h['Type']}")
-            return
-
-        # Application frame.
+            return True
+        if h["Type"] != config.MSG_APPLICATION or len(payload) < 4:
+            return False
+        t1 = struct.unpack_from("<H", payload, 2)[0]                       # app Type1
         if self.is_village or self.is_game:
-            # The village/world conn is a UserCommConnection on the SAME 0x26B6 comm layer:
-            # VillageServerConnection::HandleMessage (@0x470890) handles only village types (1000-1006,
-            # 3xxx) and TAIL-CALLS the base UserComm dispatch for everything else — so its LOGIN
-            # (CheckVersion 188 → token 211/213 → Result/153) is the SAME flow the lobby/UC handlers
-            # already answer. Firewalling it into a log-only path stalled the login at CheckVersion, so
-            # the 1000-series PropertySet templates never registered and the server-pushed EnterWorld
-            # crashed in tincat3!DeserializeProperty. Fix: capture the frame (hex log) THEN fall through
-            # to the normal decode+dispatch so the village login actually completes. (s34)
-            village.handle_frame(self, payload)
-            # (no return — fall through to the lobby decode+dispatch below)
-        elif len(payload) >= 2 and struct.unpack_from("<H", payload, 0)[0] == config.CHAT_PAYLOAD_MAGIC:
-            chat.handle_frame(self, payload)
-            return
-
-        # Lobby frame: Magic + Type1 (+ Type2 if it mirrors Type1) + body.
-        r = BinaryReader(payload)
-        _magic = r.u16()
-        if _magic != config.PAYLOAD_MAGIC:
-            # Not the lobby layer (0x26B6); chat (0x0062) was already handled+returned above. RE (s30)
-            # found SADK uses a SINGLE comm layer (0x26B6), so an unexpected magic here would be news —
-            # flag it loudly (and don't mis-parse it as a lobby frame) rather than silently dropping.
-            log(f"  ⚠ APP-FRAME MAGIC 0x{_magic:04x} != lobby 0x{config.PAYLOAD_MAGIC:04x} "
-                f"— UNEXPECTED comm-layer magic (SADK should only use 0x26B6). Flagging for analysis.")
-            log(f"    frame[:64]={payload[:64].hex()}")
-            return
-        t1 = r.u16()
-        if r.remaining() >= 2 and r.peek_u16() == t1:
-            r.u16()
-        if msgdefs.get(t1) is None:
-            # >=1000 village/world PropertySet message (no msgdefs schema; codec.decode_body would
-            # KeyError). The raw frame is already hex-logged (village.handle_frame). Route to dispatch
-            # with empty fields so the >=1000 branch logs it; never crash the conn on an unknown type.
-            log(f"  TYPE {t1} (0x{t1:x}) — no msgdefs schema (village/world PropertySet); not decoded")
-            dispatch.dispatch_lobby(self, t1, {})
-            return
-        fields = codec.decode_body(t1, payload, r.pos)
-        name = msgdefs.name_of(t1)
-        log(f"  TYPE {t1} = {name}")
-        for k, v in fields.items():
-            if isinstance(v, bytes):
-                log(f"    {k}: [{len(v)}B] {v[:32].hex()}{'...' if len(v) > 32 else ''}")
-            else:
-                log(f"    {k}: {v!r}")
-        dispatch.dispatch_lobby(self, t1, fields)
+            if t1 == config.VILLAGE_SENDGAMEDATA:                          # SendGameData(74) → peek inner msg_type
+                off = 6 if (len(payload) >= 6 and struct.unpack_from("<H", payload, 4)[0] == t1) else 4
+                if len(payload) >= off + 4:
+                    msg_type = struct.unpack_from("<I", payload, off)[0]
+                    return msg_type not in (config.WORLD_LOGIN_REQUEST_MSGTYPE,
+                                            config.VILLAGE_PINGCODE_MSGTYPE)
+            return False                                                   # base login / other village frames stay
+        if self.is_referee:
+            return False
+        return dispatch.is_quiet(t1)
 
     # ── Handshake ─────────────────────────────────────────────────────────────
     def _handle_handshake(self, payload):
@@ -241,6 +285,11 @@ class Conn:
             log("  [GAME] game-server connection opened (:5480 capture endpoint) — framing/logging like a "
                 "village conn; login is answered (153 ACK) but NO EnterWorld push (would crash a "
                 "GameServerConnection). Capturing the un-reversed game-room handshake.")
+        if self.is_referee:
+            log("  [REFEREE] referee connection opened (:5481) — answering the base login (188/211/213 → 153); "
+                "cat=3 LobbyMessage frames route to referee.handle_frame. After login the stub "
+                f"{'PUSHES' if config.ARM_REFEREE else 'will NOT push (ARM_REFEREE off)'} LoginSuccess(0xDCA) "
+                "to clear the match-start gate.")
         if self.is_village:
             # s33: the PATCHED client now reaches this REAL village-server connection (:5479) without
             # crashing (3 conns alive, pinging). HandleEnterWorld (@0x46f470, SetState VillageEntered=9)

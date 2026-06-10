@@ -82,8 +82,9 @@ def test_flag_off_games_stay_per_connection():
         dispatch._send_server_list(b, 5, TICKET)
         names = [f["name"] for f in b.sent_of(170)]
         assert "A-only" not in names, names
-        # B sees only the injected demo fallback (flag off → subtype 0 inert).
-        assert names == ["Revival Test Game"], names
+        # B sees an EMPTY game list: A's game is per-connection (flag off) and there is no
+        # synthetic fallback entry anymore (the FAKE_GAME "0/2" placeholder was removed).
+        assert names == [], names
     finally:
         config.MULTI_CLIENT_HOSTING = saved
         registry.games.clear()

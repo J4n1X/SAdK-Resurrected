@@ -12,9 +12,38 @@ import sys
 import threading
 from datetime import datetime
 
-from . import config
+from . import config, crypto
 from .connection import Conn, next_conn_id
 from .log import log, set_log_path
+
+
+def _check_crypto_deps():
+    """Fail LOUDLY if the login-crypto deps are missing.
+
+    The login handshake (ECDH 201/202 + Twofish session key 207 + token 213) cannot be done
+    without `cryptography` and `twofish`. If they're absent the stub used to start anyway, send a
+    blank/unencrypted 207, and CRASH the real client at login — with a misleading "twofish not
+    installed" log buried mid-session. `twofish` is a build-from-source C extension with no Linux
+    wheel, so a bare box silently fails to compile it. Surface that at startup instead. (s39.5)
+    """
+    missing = []
+    if not crypto.ECDH_AVAILABLE:
+        missing.append("cryptography  (pip install cryptography)")
+    if not crypto.TWOFISH_AVAILABLE:
+        missing.append("twofish       (pip install twofish  -- needs a C compiler: "
+                       "apt install build-essential python3-dev)")
+    if missing:
+        bar = "!" * 70
+        print(f"\n{bar}")
+        print("  FATAL: login-crypto dependency missing -- the client WILL crash at login.")
+        for m in missing:
+            print(f"    - {m}")
+        print(f"  Python: {sys.executable}")
+        print("  Install the dep for THIS interpreter (venv mismatch is the usual cause),")
+        print("  then verify:  python -c \"import twofish, cryptography; print('crypto OK')\"")
+        print(f"{bar}\n")
+        return False
+    return True
 
 
 def _make_listener(port, label):
@@ -44,7 +73,7 @@ def _accept_loop(server_sock, label):
         bf = open(os.path.join(config.BIN_DIR, f"{label}_{cid}_{ts}.bin"), "wb")
         c = Conn(client_sock, addr, cid, bf,
                  is_chat=(label == "uc"), is_village=(label == "world"),
-                 is_game=(label == "game"))
+                 is_game=(label == "game"), is_referee=(label == "referee"))
         threading.Thread(target=c.run, daemon=True).start()
 
 
@@ -74,6 +103,11 @@ def main(argv=None):
         f.write(f"SaDK TinCat stub server (sadk_lobby)\nStarted: {datetime.now()}\n\n")
     os.makedirs(config.BIN_DIR, exist_ok=True)
 
+    # Refuse to start without the login-crypto deps — a missing twofish silently crashes the
+    # real client at login (the exact Linux-third-machine trap). Better a clear abort than that.
+    if not _check_crypto_deps():
+        sys.exit(2)
+
     lobby = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     lobby.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -89,6 +123,8 @@ def main(argv=None):
     world = _make_listener(config.WORLD_PORT, "Lobby world stub")
     # Dedicated game-server endpoint for joiners (only when we route joins to the stub).
     game = _make_listener(config.GAME_PORT, "Game-server stub") if config.GAME_CONN_VIA_STUB else None
+    # Referee / match-arbiter endpoint (only when we advertise a referee — the match-start gate).
+    referee = _make_listener(config.REFEREE_PORT, "Referee stub") if config.ADVERTISE_REFEREE_SERVER else None
     print()
 
     try:
@@ -98,6 +134,8 @@ def main(argv=None):
             threading.Thread(target=_accept_loop, args=(world, "world"), daemon=True).start()
         if game:
             threading.Thread(target=_accept_loop, args=(game, "game"), daemon=True).start()
+        if referee:
+            threading.Thread(target=_accept_loop, args=(referee, "referee"), daemon=True).start()
         _accept_loop(lobby, "lobby")
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -109,6 +147,8 @@ def main(argv=None):
             world.close()
         if game:
             game.close()
+        if referee:
+            referee.close()
 
 
 if __name__ == "__main__":

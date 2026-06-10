@@ -24,6 +24,9 @@ GAME_PORT  = 5480   # dedicated game-server connection (the joiner's LobbyComm::
 #   endpoint when GAME_CONN_VIA_STUB routes joins to the stub). Kept SEPARATE from WORLD_PORT so a game
 #   connection is NEVER mistaken for a lobby-world village conn — it logs in (153 ACK) but is NOT pushed
 #   EnterWorld(1000) (which a GameServerConnection has no template for → would NULL-deref/crash). Capture-only.
+REFEREE_PORT = 5481  # referee/match-arbiter server (LobbyComm::RefereeServerConnection). The match-START
+#   gate: on NE_StartLoading the client logs into a referee (LM+0x580) and ABORTS the match after 5 failed
+#   retries if it can't (s39.5, mp-match-start-needs-referee-server.md). Distinct from WORLD/GAME ports.
 
 # IP the stub ADVERTISES to the client as the address to connect back to (chat/village/game servers).
 # Same machine -> 127.0.0.1. For the WinXP-VM test (game in the VM, stub on the host), set env
@@ -236,16 +239,81 @@ RESEND_VILLAGE_DESCRIPTOR = False
 # sends will ever match (the #1 silent-fail cause of a populated-but-greyed browser).
 LOBBY_PROTOCOL_VERSION = 1000
 
-# GAME browser (WorldScreen → BrowseGameDialog, the bottom-left BROWSE button — dead in -localhostmode).
-# It lists GAME servers = NETMSG 170 with server_subtype=1 (AddOrUpdateDescriptor @0x46a440 routes
-# desc+0x29: 1=game list this+0x7c, 2=village list this+0x68). Our stub only ever sends subtype 2
-# (village) + subtype 0 (inert, routed to neither list) → the game browser gets no descriptors → empty.
-# The subtype-1 game fill (FUN_0048da70) copies plain fields and needs NO ServerDataBlock (unlike the
-# village fill), so a subtype-1 170 is enough to populate it.
+# GAME browser (WorldScreen → BrowseGameDialog, the bottom-left BROWSE button). It lists GAME servers =
+# NETMSG 170 with server_subtype=1 (AddOrUpdateDescriptor @0x46a440 routes desc+0x29: 1=game list
+# this+0x7c, 2=village list this+0x68; the subtype-1 fill FUN_0048da70 needs NO ServerDataBlock). A client
+# that hosts a browsable game sends its AddGameServer(168) with server_subtype=1 ITSELF (live-confirmed:
+# 'Siedlerwill spielen' arrived subtype=1), so real hosted games route to the game browser on their own —
+# the stub relays them as-is from the registry with their real player counts. No synthetic game entry is
+# injected (the old FAKE_GAME placeholder, which showed a phantom "0/2", was removed).
+
+# ── Referee / match-arbiter server (s39.5) ────────────────────────────────────────────────────────────
+# The match-START wall (memory/mp-match-start-needs-referee-server.md, binary-PROVEN build 34688): on every
+# NE_StartLoading the client arms a referee login (LM+0x3625=1) and the per-frame loop calls
+# RefereeServerConnection::Login (FUN_004793f0) up to 5x ([Reconnector] timesClientRetries) then ABORTS the
+# match. The referee is the ranked-match arbiter (a trusted 3rd connection that watches the P2P game so a
+# rage-quitting host can't dodge a loss). Our stub ran lobby/UC/world but NO referee → every match aborted.
 #
-# ⛔ OFF BY DEFAULT. Turning this ON makes the stub emit a subtype-1 GameServerData it does not emit
-# today — a change to the stub's WIRE BEHAVIOR, which per HARNESS.md requires a USER-APPROVED Engagement
-# Record (engagement_records/2026-06-07_mp-server-browser.md) BEFORE it is run against the live game.
-# With the flag OFF the stub's wire output is byte-identical to today (village browsing, subtype 2,
-# is unaffected and always on). Flip True only when present to test, after approving the ER.
-ADVERTISE_GAME_SERVERS = True
+# RE'd flow (referee-server-re workflow, docs/REFEREE_RE_findings.json):
+#   1. ASSIGN: client sends AssignServer(189, server_type=4) on the lobby conn with a ticket (category 0x108);
+#      stub must reply GameServerData(170) server_type=4 + server_subtype=5 + SAME ticket_id + server_id/ip/port.
+#      tincat3 FUN_10021520 gates the referee-assigned path EXACTLY on desc.server_type==4 && desc.server_subtype==5.
+#      ⚠ The UC server is ALSO assigned via AssignServer(189, type=4, subtype=4)→UsercommServerData(192); the
+#      referee is the SECOND type-4 assign on a lobby conn (UC is assigned once at login, referee later at
+#      state>5). We branch on that order (and log the wire subtype to confirm the cleaner discriminator live).
+#   2. RESOLVE: the referee server_id must resolve to ip:port → also advertise it on the type-4 server-list.
+#   3. CONNECT + LOGIN: client dials REFEREE_PORT, runs the SAME base login as UC/village (CheckVersion 188 →
+#      token 211/213 → AddResult 153), then opens the referee data channel.
+#   4. LOGIN VERDICT: the stub PUSHES one inbound bare LobbyMessage (category 3) id=0xDCA LoginSuccess carrying
+#      a PermID. The verdict is the MESSAGE ID (0xDCA=ok clears the gate; 0xDCB=fail). Neither validates PermID.
+#      LoginSuccess alone clears the 5x-retry abort; RegisterGame ack/result is second-tier (only if the host emits it).
+REF_CATEGORY        = 3
+REF_LOGIN_OK        = 0xDCA   # LoginSuccessReceived  (FUN_0047ac20) — clears the match-start gate
+REF_LOGIN_FAIL      = 0xDCB   # LoginFailedReceived   (FUN_0047ad50) — NEVER send this
+REF_REGISTER_GAME   = 0xDB6   # RegisterGame (client→referee): GameID, MapGUID(16B), MapName, MapSettings, ...
+REF_REGISTER_ACK    = 0xDB7   # RegisterGameAck (referee→client): GameID, Result(0=ok)
+REF_REGISTER_RESULT = 0xDB8   # RegisterGameResult: GameID, Result(0=ok)+GameSeed(u32)
+REF_FINISH_GAME     = 0xDC0
+REF_GIVEUP_GAME     = 0xDD4
+REF_CLAIM_CHEST     = 0xDAC
+REF_SERVER_ID       = 60      # the referee's server_id (distinct from the FAKE_VILLAGE id=50)
+REF_GAME_SEED       = 0x5EED  # fixed GameSeed echoed in RegisterGameResult (value never validated by the client)
+
+# ⛔ ADVERTISE_REFEREE_SERVER (default OFF): when ON, the stub stands up the REFEREE_PORT listener, advertises
+# the referee on the type-4 server-list, and replies to the 2nd type-4 AssignServer(189) with 170(subtype=5)
+# instead of 192. This is a stub WIRE-BEHAVIOR change → per HARNESS.md requires a USER-APPROVED Engagement
+# Record (engagement_records/2026-06-09_referee-server.md, pre-approved by J4n1X) BEFORE running live. With it
+# OFF the stub is byte-identical to today (every AssignServer → 192, no referee port). This step alone is the
+# READ-ONLY-in-effect Part A: it lets the client CONNECT to our referee + reveal its login framing in the log;
+# it does NOT push anything that drives match state.
+ADVERTISE_REFEREE_SERVER = True
+# ⛔ ARM_REFEREE (default OFF): when ON, after the referee conn's 153 login the stub PUSHES LoginSuccess(0xDCA)
+# — the genuine message the client's match-start gate waits for (NOT a forced bypass). Separate flag so Part A
+# (capture the framing) precedes Part B (push) — flip only after a live capture confirms the LoginSuccess bytes.
+ARM_REFEREE = True
+# The LoginSuccess names-flag is the ONE byte-level unknown (bit15 of the 0xDCA type word). False = names-off
+# (type word 0x3DCA + a bare u32 PermID — the primary guess, matching the client's own send-side); True =
+# names-on (0xBDCA + name-keyed 'PermID' + 0xFFF end-marker). Flip if names-off doesn't clear the gate.
+REF_LOGIN_SUCCESS_NAMES = False
+
+# ⛔ REFEREE_ALSO_PUSH_UC (default ON): the CORRECTED referee fix answers the single type-4 AssignServer(189)
+# with GameServerData(170, subtype=5) instead of UsercommServerData(192) — that single 189 is the REFEREE
+# one-shot (re-RE'd s39.6: SADK has exactly ONE type-4 189 caller, latched; the 2 live runs show exactly ONE
+# 189 per client). But chat currently reaches the UC server (:7071) ONLY because the client acted on that 192.
+# So when we send the 170, we ALSO push a 192 (unsolicited, ticket_id=0 — tincat3's 0xc0 handler FUN_10030420
+# does not validate the ticket category, so it dials :7071 regardless) to PRESERVE chat. Set False ONLY if a
+# live capture proves chat survives on the lobby transport without it (the client's UserComm channel opens on
+# nChatServerHandle = the lobby handle, independent of the 192 — so chat MAY work either way; the push is the
+# conservative default). Only meaningful when ADVERTISE_REFEREE_SERVER is on.
+REFEREE_ALSO_PUSH_UC = True
+
+# REF_USE_GAMEDATA_ENVELOPE (default ON): wrap the referee LobbyMessages (LoginSuccess 0xDCA, RegisterGame
+# acks) in a SendGameData(74) envelope, exactly like the sibling cat-2 village LobbyMessages (world-login
+# 0x27d2, PingCode 0x2ed6, …, all built by the same LobbyMessage builder FUN_0048fb00). s39.6 LIVE CRASH
+# (crashdump.dmp, tools/minidump_exc.py): a BARE referee frame (Magic|0x3dca|0x3dca|body) made tincat3
+# PropertyDataConverter::Deserialize call CreatePropertySet(0x3dca) → NULL (no registered template) → NULL
+# deref → client crash (the EnterWorld(1000) crash class). The 74 NETMSG HAS a template, so tincat3
+# deserializes the OUTER 74 and the referee conn's handler reads the INNER LobbyMessage MANUALLY (no
+# CreatePropertySet) → no crash. Wire: Magic|74|74|msg_type=type_word(u32)|data=MEMBLOCK(field body).
+# Set False to send the (crashing) bare form only for diagnostics.
+REF_USE_GAMEDATA_ENVELOPE = True

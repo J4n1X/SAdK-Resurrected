@@ -23,6 +23,13 @@ mcp = FastMCP("ghidra-mcp")
 # Initialize ghidra_server_url with default value
 ghidra_server_url = DEFAULT_GHIDRA_SERVER
 
+# NOTE (endpoint naming): the Ghidra plugin actually installed in this project is the
+# xebyte/bethington GhidraMCP fork (v5.x), NOT LaurieWired 1.4. Its HTTP routes are the
+# tool name verbatim (e.g. "list_methods", "get_xrefs_to", "search_functions"). Earlier
+# this bridge used LaurieWired route names ("methods", "xrefs_to", "searchFunctions", ...)
+# which 404 against the installed plugin. Routes below match the xebyte plugin's @McpTool
+# paths. The plugin source of truth lives at C:\Users\user\Downloads\ghidra-mcp\src.
+
 def safe_get(endpoint: str, params: dict = None) -> list:
     """
     Perform a GET request with optional query parameters.
@@ -46,7 +53,8 @@ def safe_post(endpoint: str, data: dict | str) -> str:
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
-            response = requests.post(url, data=data, timeout=5)
+            # Ghidra HTTP plugin requires JSON body, not form-encoded
+            response = requests.post(url, json=data, timeout=5)
         else:
             response = requests.post(url, data=data.encode("utf-8"), timeout=5)
         response.encoding = 'utf-8'
@@ -57,102 +65,145 @@ def safe_post(endpoint: str, data: dict | str) -> str:
     except Exception as e:
         return f"Request failed: {str(e)}"
 
+def _with_program(params: dict, program: str) -> dict:
+    """
+    Add the optional `program` selector when set. The xebyte plugin accepts a `program`
+    param on most endpoints to target a specific OPEN program (e.g. "/SADK.exe",
+    "/sadk_noav.exe", "/tincat3.dll") instead of whichever program is currently active in
+    the Ghidra UI. Omit it (pass "") to use the active program.
+    """
+    if program:
+        params["program"] = program
+    return params
+
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
     """
     List all function names in the program with pagination.
     """
-    return safe_get("methods", {"offset": offset, "limit": limit})
+    return safe_get("list_methods", {"offset": offset, "limit": limit})
 
 @mcp.tool()
 def list_classes(offset: int = 0, limit: int = 100) -> list:
     """
     List all namespace/class names in the program with pagination.
     """
-    return safe_get("classes", {"offset": offset, "limit": limit})
+    return safe_get("list_classes", {"offset": offset, "limit": limit})
 
 @mcp.tool()
-def decompile_function(name: str) -> str:
+def decompile_function(name: str, program: str = "") -> str:
     """
     Decompile a specific function by name and return the decompiled C code.
+
+    The installed plugin decompiles by address only, so this resolves the name to its
+    entry-point address first (via search_functions) and then decompiles that address.
+
+    Args:
+        name: Exact function name to decompile
+        program: Optional target program (e.g. "/tincat3.dll"); omit for the active program
     """
-    return safe_post("decompile", name)
+    # Resolve name -> address. search_functions returns lines like "<name> @ <address>".
+    matches = safe_get("search_functions",
+                       _with_program({"name_pattern": name, "limit": 1000}, program))
+    addr = None
+    for line in matches:
+        if " @ " in line:
+            fn, _, a = line.rpartition(" @ ")
+            if fn.strip() == name:
+                addr = a.strip()
+                break
+    if addr is None:
+        candidates = "; ".join(m for m in matches[:10] if m.strip())
+        return (f"Error: no function named exactly '{name}' found."
+                + (f" Did you mean: {candidates}" if candidates else ""))
+    return "\n".join(safe_get("decompile_function", _with_program({"address": addr}, program)))
 
 @mcp.tool()
 def rename_function(old_name: str, new_name: str) -> str:
     """
     Rename a function by its current name to a new user-defined name.
     """
-    return safe_post("renameFunction", {"oldName": old_name, "newName": new_name})
+    return safe_post("rename_function", {"oldName": old_name, "newName": new_name})
 
 @mcp.tool()
 def rename_data(address: str, new_name: str) -> str:
     """
     Rename a data label at the specified address.
     """
-    return safe_post("renameData", {"address": address, "newName": new_name})
+    return safe_post("rename_data", {"address": address, "newName": new_name})
 
 @mcp.tool()
 def list_segments(offset: int = 0, limit: int = 100) -> list:
     """
     List all memory segments in the program with pagination.
     """
-    return safe_get("segments", {"offset": offset, "limit": limit})
+    return safe_get("list_segments", {"offset": offset, "limit": limit})
 
 @mcp.tool()
 def list_imports(offset: int = 0, limit: int = 100) -> list:
     """
     List imported symbols in the program with pagination.
     """
-    return safe_get("imports", {"offset": offset, "limit": limit})
+    return safe_get("list_imports", {"offset": offset, "limit": limit})
 
 @mcp.tool()
 def list_exports(offset: int = 0, limit: int = 100) -> list:
     """
     List exported functions/symbols with pagination.
     """
-    return safe_get("exports", {"offset": offset, "limit": limit})
+    return safe_get("list_exports", {"offset": offset, "limit": limit})
 
 @mcp.tool()
 def list_namespaces(offset: int = 0, limit: int = 100) -> list:
     """
     List all non-global namespaces in the program with pagination.
     """
-    return safe_get("namespaces", {"offset": offset, "limit": limit})
+    return safe_get("list_namespaces", {"offset": offset, "limit": limit})
 
 @mcp.tool()
 def list_data_items(offset: int = 0, limit: int = 100) -> list:
     """
     List defined data labels and their values with pagination.
     """
-    return safe_get("data", {"offset": offset, "limit": limit})
+    return safe_get("list_data_items", {"offset": offset, "limit": limit})
 
 @mcp.tool()
-def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> list:
+def search_functions_by_name(query: str, offset: int = 0, limit: int = 100, program: str = "") -> list:
     """
     Search for functions whose name contains the given substring.
+
+    Args:
+        query: Substring to match against function names
+        offset: Pagination offset (default: 0)
+        limit: Maximum number of results (default: 100)
+        program: Optional target program; omit for the active program
     """
     if not query:
         return ["Error: query string is required"]
-    return safe_get("searchFunctions", {"query": query, "offset": offset, "limit": limit})
+    return safe_get("search_functions",
+                   _with_program({"name_pattern": query, "offset": offset, "limit": limit}, program))
 
 @mcp.tool()
 def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
     """
     Rename a local variable within a function.
     """
-    return safe_post("renameVariable", {
+    return safe_post("rename_variable", {
         "functionName": function_name,
         "oldName": old_name,
         "newName": new_name
     })
 
 @mcp.tool()
-def get_function_by_address(address: str) -> str:
+def get_function_by_address(address: str, program: str = "") -> str:
     """
     Get a function by its address.
+
+    Args:
+        address: Function entry-point address in hex (e.g. "0x401000")
+        program: Optional target program; omit for the active program
     """
-    return "\n".join(safe_get("get_function_by_address", {"address": address}))
+    return "\n".join(safe_get("get_function_by_address", _with_program({"address": address}, program)))
 
 @mcp.tool()
 def get_current_address() -> str:
@@ -176,18 +227,26 @@ def list_functions() -> list:
     return safe_get("list_functions")
 
 @mcp.tool()
-def decompile_function_by_address(address: str) -> str:
+def decompile_function_by_address(address: str, program: str = "") -> str:
     """
     Decompile a function at the given address.
+
+    Args:
+        address: Function entry-point address in hex (e.g. "0x401000")
+        program: Optional target program; omit for the active program
     """
-    return "\n".join(safe_get("decompile_function", {"address": address}))
+    return "\n".join(safe_get("decompile_function", _with_program({"address": address}, program)))
 
 @mcp.tool()
-def disassemble_function(address: str) -> list:
+def disassemble_function(address: str, program: str = "") -> list:
     """
     Get assembly code (address: instruction; comment) for a function.
+
+    Args:
+        address: Function entry-point address in hex (e.g. "0x401000")
+        program: Optional target program; omit for the active program
     """
-    return safe_get("disassemble_function", {"address": address})
+    return safe_get("disassemble_function", _with_program({"address": address}, program))
 
 @mcp.tool()
 def set_decompiler_comment(address: str, comment: str) -> str:
@@ -225,67 +284,73 @@ def set_local_variable_type(function_address: str, variable_name: str, new_type:
     return safe_post("set_local_variable_type", {"function_address": function_address, "variable_name": variable_name, "new_type": new_type})
 
 @mcp.tool()
-def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
+def get_xrefs_to(address: str, offset: int = 0, limit: int = 100, program: str = "") -> list:
     """
     Get all references to the specified address (xref to).
-    
+
     Args:
-        address: Target address in hex format (e.g. "0x1400010a0")
+        address: Target address in hex format (e.g. "0x401000")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+        program: Optional target program (e.g. "/tincat3.dll"); omit for the active program
+
     Returns:
         List of references to the specified address
     """
-    return safe_get("xrefs_to", {"address": address, "offset": offset, "limit": limit})
+    return safe_get("get_xrefs_to",
+                   _with_program({"address": address, "offset": offset, "limit": limit}, program))
 
 @mcp.tool()
-def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
+def get_xrefs_from(address: str, offset: int = 0, limit: int = 100, program: str = "") -> list:
     """
     Get all references from the specified address (xref from).
-    
+
     Args:
-        address: Source address in hex format (e.g. "0x1400010a0")
+        address: Source address in hex format (e.g. "0x401000")
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+        program: Optional target program (e.g. "/tincat3.dll"); omit for the active program
+
     Returns:
         List of references from the specified address
     """
-    return safe_get("xrefs_from", {"address": address, "offset": offset, "limit": limit})
+    return safe_get("get_xrefs_from",
+                   _with_program({"address": address, "offset": offset, "limit": limit}, program))
 
 @mcp.tool()
-def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
+def get_function_xrefs(name: str, offset: int = 0, limit: int = 100, program: str = "") -> list:
     """
     Get all references to the specified function by name.
-    
+
     Args:
         name: Function name to search for
         offset: Pagination offset (default: 0)
         limit: Maximum number of references to return (default: 100)
-        
+        program: Optional target program (e.g. "/tincat3.dll"); omit for the active program
+
     Returns:
         List of references to the specified function
     """
-    return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
+    return safe_get("get_function_xrefs",
+                   _with_program({"name": name, "offset": offset, "limit": limit}, program))
 
 @mcp.tool()
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.
-    
+
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum number of strings to return (default: 2000)
         filter: Optional filter to match within string content
-        
+
     Returns:
         List of strings with their addresses
     """
     params = {"offset": offset, "limit": limit}
     if filter:
         params["filter"] = filter
-    return safe_get("strings", params)
+    return safe_get("list_strings", params)
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
@@ -298,12 +363,12 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"],
                         help="Transport protocol for MCP, default: stdio")
     args = parser.parse_args()
-    
+
     # Use the global variable to ensure it's properly updated
     global ghidra_server_url
     if args.ghidra_server:
         ghidra_server_url = args.ghidra_server
-    
+
     if args.transport == "sse":
         try:
             # Set up logging
@@ -332,7 +397,6 @@ def main():
             logger.info("Server stopped by user")
     else:
         mcp.run()
-        
+
 if __name__ == "__main__":
     main()
-

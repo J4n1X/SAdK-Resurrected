@@ -26,10 +26,14 @@ Settlers-DNG-lobby-emulator/
 
 # ── Captures, logs, runtime artifacts ──
 sadk_captures/
+capture_scoped.json
 *.pcapng
 *.log
 __pycache__/
 *.pyc
+
+# ── Ghidra MCP scripting plugin package (regeneratable tooling) ──
+/com/
 
 # ── Python project build / test artifacts ──
 *.egg-info/

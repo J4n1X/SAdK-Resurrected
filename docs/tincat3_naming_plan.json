@@ -1,0 +1,20 @@
+{"functions": [
+ {"address":"0x10021830","new_name":"GameServerManager_AssignServer",
+  "calling_convention":"__thiscall","return_type":"int",
+  "params":[{"name":"this","type":"void *"},{"name":"server_type","type":"uint"},{"name":"server_subtype","type":"byte"}],
+  "locals":[{"old":"puVar1","new":"ticketData"},{"old":"piVar3","new":"msg189"},{"old":"uVar7","new":"ticketId"},
+            {"old":"cVar6","new":"serverTypeCh"},{"old":"pvVar4","new":"ticketTable"},{"old":"piVar5","new":"commSink"}],
+  "plate_comment":"GameServerManager::AssignServer: builds NETMSG 0xbd(189) with server_type/server_subtype, allocates a cat-0x108 ticket (CommLayer_AllocTicketId holding an AssignServerTicketData) -> ticket_id, then sends; registers the ticket on success. The stub's 189->170/192 assign replies key off this."},
+
+ {"address":"0x10021520","new_name":"GameServerManager_OnGameServerAssigned",
+  "calling_convention":"__thiscall","return_type":"void",
+  "params":[{"name":"this","type":"void *"},{"name":"serverDesc","type":"void *"}],
+  "locals":[{"old":"piVar1","new":"assignHandler"},{"old":"local_4","new":"descField20"},{"old":"local_8","new":"descFieldsPtr"}],
+  "plate_comment":"GameServerManager::OnGameServerAssigned (cat 0x108): if the descriptor is the REFEREE server (type@+0x28==4 && subtype@+0x29==5), fires the assigned callback (server id) via handler vtbl[0x20]; else forwards to the default handler (this+4 vtbl[0x28]). The type4/subtype5 gate is why the stub's referee 170 must echo those and sets LM+0x580."},
+
+ {"address":"0x10030420","new_name":"CommLayer_OnUsercommServerData",
+  "calling_convention":"__thiscall","return_type":"void",
+  "params":[{"name":"this","type":"void *"},{"name":"data","type":"void *"},{"name":"dataLen","type":"ushort"},{"name":"addrInfo","type":"void *"}],
+  "locals":[{"old":"_Dst","new":"dataCopy"},{"old":"iVar1","new":"connHandle"}],
+  "plate_comment":"Handles UserComm server data (NETMSG 192/0xc0): caches the server blob at this+0x40 (len +0x44), sets state(+8)=2, dials the advertised address (this+0x24 vtbl[0xc] vtbl[0x80]) -> conn handle at +0x28; on failure(-1) resets state=0 and fires the error callback. Driven by the stub's 192 advertisement."}
+]}
