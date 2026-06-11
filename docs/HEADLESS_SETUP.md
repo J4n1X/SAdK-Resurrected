@@ -159,32 +159,32 @@ ss -tlnp | grep ':13100'   # Ghidra Server (systemd) — should be UP
 ss -tlnp | grep ':8089'    # MCP backend — UP only while in use (on-demand)
 ```
 
-## 7. MCP on Windows (the live-debug host)
+## 7. MCP on Windows (the live-debug host) — GUI + plugin, NOT headless
 
-The Linux box does **static** RE. **Live debugging the game must run on Windows** (the game is a
-Win32 process; the Ghidra Debugger has to attach locally). The bridge is portable, but the
-Linux-specific **config** is not — change these on the Windows checkout:
+The headless backend in §1–§6 is the **Linux static-RE** setup. On **Windows** you do *not* run it.
+You run **Ghidra GUI with the GhidraMCP plugin** (the stock GhidraMCP architecture, as it was at the
+start): the plugin serves the HTTP API on `:8089` and the bridge simply connects to it. No headless
+backend, no `.bat` launcher.
 
-1. **`.mcp.json` `command`.** The committed value is the Linux venv (`.venv/bin/python`). On Windows
-   it must be `.venv\Scripts\python.exe` (or just `python` on PATH). This is the hard blocker —
-   without it the MCP server itself won't launch.
-2. **Backend auto-start.** The bridge spawn is now platform-aware: on Windows `GHIDRA_MCP_AUTOSTART=1`
-   resolves to `~/ghidra-mcp/run-headless-sadk.bat` and is run via `cmd /c` (no bash). You must
-   **author that `.bat`** — the Windows analogue of `run-headless-sadk.sh`: set `JAVA_HOME` to the
-   Windows JDK21, point at the Windows Ghidra install + the patched `GhidraMCP-5.13.1.jar`, and set
-   `GHIDRA_SERVER_HOST` to the **Linux box's LAN IP (192.168.1.130), not 127.0.0.1**, user `mcp`,
-   password from the cred file. Then `connect_instance` registers the tools as on Linux.
-   - If you don't want auto-start, **unset `GHIDRA_MCP_AUTOSTART`** and start the backend by hand;
-     the bridge then just connects to the running `:8089` (fully portable, unchanged upstream path).
-3. **Patched jar.** The checkout/checkin write-back patch (§5) must be built/copied on Windows **only
-   if you need write-back**. For read-only live tracing you can skip it.
-4. **The Debugger.** GhidraMCP's `debugger_*` tools need Ghidra's **Debugger module + a working
-   Windows connector** (attach to the local game process) — that is the part that fundamentally must
-   live on Windows. Loading `sadk_noav.exe` from the shared repo (same as Linux) gives the live
-   session all our annotations; the debugger then maps breakpoints onto it. See
-   `docs/MATCH_START.md` → *Live debug plan* for the exact breakpoints/targets.
+This works out of the box because every backend-lifecycle mod is **gated** behind
+`GHIDRA_MCP_AUTOSTART`/`GHIDRA_MCP_BACKEND_CMD`. With those unset the bridge is the upstream
+connect-to-a-running-instance path verbatim — nothing spawns, nothing is torn down.
 
-> TL;DR on "will the modded bridge run on Windows?" — **yes, the Python is portable now** (the only
-> Windows-hostile bit, a hardcoded `bash` spawn, is fixed and gated). What is *not* portable is the
-> committed `.mcp.json` venv path and the absence of a Windows `.bat` launcher — both are config you
-> set up once on the Windows host per the steps above.
+Two config deltas on the Windows checkout:
+
+1. **`.mcp.json` `command`** → `.venv\Scripts\python.exe` (the committed Linux value `.venv/bin/python`
+   won't resolve on Windows). This is the only hard blocker.
+2. **Drop the `GHIDRA_MCP_AUTOSTART` env** from `.mcp.json`. (If left set it merely no-ops on Windows:
+   if the GUI already serves `:8089` the bridge skips spawning; if not, the missing default launcher
+   just logs a warning — either way it then connects. Removing it is cleaner.)
+
+Then: launch Ghidra GUI → open `sadk_noav.exe` from the shared repo
+(`ghidra://192.168.1.130:13100/sadk`) so the live session inherits all our annotations → start the
+GhidraMCP plugin → in the Claude session `connect_instance` registers the tools. Live debugging uses
+the GUI's own Ghidra Debugger, with breakpoints mapping onto the annotated program. See
+`docs/MATCH_START.md` → *Live debug plan*.
+
+> TL;DR on "will the modded bridge run on Windows?" — **yes, unchanged from stock.** The mods are all
+> opt-in; with `AUTOSTART` unset the bridge just connects to the Ghidra GUI plugin on `:8089` exactly
+> as before. Only `.mcp.json` (the venv python path) needs a Windows value. (A `bash`-hardcode in the
+> never-used-on-Windows auto-start path was also fixed, for completeness.)
