@@ -29,7 +29,7 @@ WORLD_PORT = 5479   # village/world third connection
 # IP the stub ADVERTISES to the client as the address to dial back (chat/village servers).
 # Same machine -> 127.0.0.1. For a VM test (game in the VM, stub on the host) set
 # SADK_ADVERTISE_IP to the host's IP as seen FROM the VM. Listeners always bind 0.0.0.0.
-ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.134")
+ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.130")
 
 # ── Player accounts ───────────────────────────────────────────────────────────
 # Multiple clients can log in as DISTINCT players (host + joiner). PLAYERS[0] is the

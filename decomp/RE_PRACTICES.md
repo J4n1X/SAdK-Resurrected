@@ -7,6 +7,15 @@ binding short form is `HARNESS.md §6`; this file is the detailed how.
 All of it runs **through the Ghidra MCP** (HARNESS §1). Scripting *inside* Ghidra via the
 MCP is fine; standalone RE/memory/patch scripts are not.
 
+> ## ⚠️ Which binary — work on `sadk_noav.exe`
+> The **active RE target is `sadk_noav.exe`** (the DRM-free unpacked "Gold" build, RTTI intact).
+> `SADK.exe` is a **different build** — different code addresses *and* different struct layouts
+> (e.g. `LobbyManager::SetState` is `0x462540` in `sadk_noav.exe` vs `0x462700` in `SADK.exe`;
+> `VillageServerConnection` is 584 vs 600 bytes). Do not mix them up: apply renames/types/structs to
+> **`sadk_noav.exe`**, and always pass the `program="sadk_noav.exe"` parameter on MCP calls (both
+> programs are open in the backend). `SADK.exe` is kept only as a cross-reference; addresses in the
+> older docs/`SOURCEMAP.md` are from that dump-base build and must be re-derived against `sadk_noav.exe`.
+
 ---
 
 ## Why this exists
@@ -79,6 +88,99 @@ caveat in `MEMORY.md`). These are the indirections that have historically caused
   `LobbyManager` state pump / `SetState` — the connection objects are polymorphic.
 - **Connection vtables** (from `RENAME_LIST.md`): UserComm `0x7dded8`, GameServer
   `0x7dfafc`, Village `0x7dc8e0`. Bind these as typed vftable structs.
+
+## Class hygiene — make a class look like one uniform C++ class
+
+`set_function_this_type` is great for typing `this`, but it has a trap: if your struct's
+name doesn't match the RTTI-recovered class, it **creates a duplicate bare-Global
+`GhidraClass`** instead of using the proper `Ns::Class`. Combined with `__thiscall`
+methods that were typed but never scoped, you end up with the classic mess: **two
+class nodes** for one C++ class, plus members loose in `Global`, so calls render
+double-scoped or unscoped. This is cosmetic-looking but it actively hides which methods
+belong to the class. Fix it whenever you finish typing a class.
+
+**The canonical layout (what "uniform C++" means here):** one `GhidraClass` named for
+the RTTI class (`LobbyComm::X`), the struct living in the **matching category**
+(`/LobbyComm/X`) so the data-type name lines up with the class, and **every** member
+function parented to that one class namespace. Then the decompiler shows
+`void __thiscall LobbyComm::X::Method(X *this, ...)` and sibling calls resolve by name.
+
+### Rules (read before running the script)
+
+1. **RTTI is the source of the canonical name.** Confirm it via the type-descriptor
+   string: search memory for `.?AVX@Ns@@` (e.g. `.?AVUserCommConnection@LobbyComm@@` →
+   the class is `LobbyComm::UserCommConnection`). Use that exact namespace.
+2. **No RTTI descriptor?** You do **not** have a proven namespace. Either (a) derive one
+   from hard structural evidence — e.g. a base class whose methods are called by several
+   known `Ns::*` subclasses belongs in `Ns` (that's how `LobbyComm::LobbyBaseConnection`
+   was placed) — and **mark it inferred, not `[PROVEN]`** in the checkin/`MEMORY.md`; or
+   (b) **defer it** and flag the open question. Never invent a namespace from a guess.
+3. **Same simple name ≠ duplicate.** `NMap::AStar` vs `NNavy::AStar`, the 16 `*::System`,
+   `Logger` (`.?AVLogger@@`, real engine logger) vs `LobbyComm::Logger` (different
+   vftables) — these are **distinct C++ classes**. Only a *bare-`Global` twin of a
+   namespaced class*, or *loose `Global` `__thiscall` members*, is the artifact to fix.
+   Check vftable addresses before merging anything that shares a name.
+4. **`this`-types survive the move** — they live on the function's params, not its
+   namespace; moving the struct's category doesn't change its identity. So this pass is
+   safe and reversible (you're checked into the repo). Verify anyway by decompiling one
+   method afterward.
+5. **Second-order mangle:** loose members often already carry an embedded `X::` in their
+   *simple* name. After moving them into `Ns::X` that becomes `Ns::X::X::Method` — strip
+   the redundant `X::`/`X_` prefix (the script does this).
+
+### The template (run via `run_script_inline` — scripting inside Ghidra is HARNESS-OK)
+
+Set `CLASS`/`PARENT`/`TARGET_CAT` at the top. If the `PARENT::CLASS` GhidraClass already
+exists (RTTI made it) it's reused; otherwise it's created (rule 2 must hold first).
+
+```java
+import ghidra.program.model.symbol.*;
+import ghidra.program.model.listing.*;
+import ghidra.program.model.data.*;
+
+String CLASS="UserCommConnection", PARENT="LobbyComm", TARGET_CAT="/LobbyComm";
+SymbolTable st=currentProgram.getSymbolTable();
+DataTypeManager dtm=currentProgram.getDataTypeManager();
+FunctionManager fm=currentProgram.getFunctionManager();
+
+Namespace parent=st.getNamespace(PARENT, currentProgram.getGlobalNamespace());
+GhidraClass cls=null; Namespace dup=null;            // dup = bare-Global twin, if any
+for (Symbol s: st.getSymbols(CLASS)) if (s.getObject() instanceof GhidraClass) {
+  if (s.getParentNamespace().getName().equals(PARENT)) cls=(GhidraClass)s.getObject();
+  else if (s.getParentNamespace().isGlobal())          dup=(Namespace)s.getObject();
+}
+if (cls==null) cls=st.createClass(parent, CLASS, SourceType.USER_DEFINED);   // rule 2!
+
+DataType s0=dtm.getDataType("/"+CLASS);               // align struct category
+if (s0!=null) s0.setCategoryPath(new CategoryPath(TARGET_CAT));
+
+java.util.LinkedHashSet<Function> mem=new java.util.LinkedHashSet<>();        // collect members
+for (Function f: fm.getFunctions(true)) {
+  if (!"__thiscall".equals(f.getCallingConventionName()) || f.getParameterCount()==0) continue;
+  DataType p0=f.getParameter(0).getDataType();
+  if (p0 instanceof Pointer) { DataType b=((Pointer)p0).getDataType();
+    if (b!=null && b.getName().equals(CLASS)) mem.add(f); }
+}
+if (dup!=null){ SymbolIterator it=st.getSymbols(dup); while(it.hasNext()){
+  Symbol s=it.next(); if(s.getSymbolType()==SymbolType.FUNCTION){Function f=fm.getFunctionAt(s.getAddress()); if(f!=null) mem.add(f);} } }
+
+for (Function f: mem) if (f.getParentNamespace()!=cls) f.getSymbol().setNamespace(cls);  // setNamespace(Namespace) — ONE arg
+
+String[] pref={CLASS+"::", CLASS+"_"};                // strip redundant prefixes
+SymbolIterator it=st.getSymbols(cls);
+while (it.hasNext()){ Symbol s=it.next(); if(s.getSymbolType()!=SymbolType.FUNCTION) continue;
+  Function f=fm.getFunctionAt(s.getAddress()); String n=f.getName(),nn=n;
+  for(String p:pref) if(n.startsWith(p)){nn=n.substring(p.length());break;}
+  if(!nn.equals(n)&&nn.length()>0) f.setName(nn, SourceType.USER_DEFINED); }
+
+if (dup!=null && !st.getSymbols(dup).hasNext()) dup.getSymbol().delete();     // drop empty twin
+```
+
+Then **verify** (decompile a member — confirm `Ns::Class::Method(Class *this, …)` and
+that the struct fields / virtual calls still resolve) and **`checkin_program`** with a
+comment that states whether the namespace was RTTI-proven or inferred. Gotchas that bit
+us: `Symbol.setNamespace` takes the namespace **only** (no `SourceType` overload);
+`FlatProgramAPI.find(String)` is the single-arg string search (not `find(null, str)`).
 
 ## Map maintenance
 

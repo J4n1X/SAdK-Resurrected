@@ -22,7 +22,7 @@ as `*(this+0xN)`. Fix per-function: right-click `this` → **Retype Variable** �
 ### `VillageServerConnection` (SADK.exe, 0x258 bytes) — `this` for all Handle* below
 | Off | Type | Field | Note |
 |----:|------|-------|------|
-| 0x000 | void* | pVtable | object vtable @ `0x7dc8e0` |
+| 0x000 | VillageServerConnection_vtable* | pVtable | vtable @ `0x7dc8d4` (17 slots; RTTI COL ptr @ `0x7dc8d0`). **NOTE: real base is 0x7dc8d4, not 0x7dc8e0** — verified by Trigger's `vtbl[0x3c]`=OpenUserComm(0x470b50)@0x7dc910 and the RTTI ptr at base-4. |
 | 0x158 | LobbyManager* | pLobbyManager | |
 | 0x160 | void* | pWorldActiveCtx | |
 | 0x164 | — | pChatChannelList_alloc | std::list head (alloc/myHead/mySize @ +0x164/+0x168/+0x16c) |
@@ -51,6 +51,7 @@ as `*(this+0xN)`. Fix per-function: right-click `this` → **Retype Variable** �
 ### `LobbyManager` (SADK.exe, class `LobbyComm::System`; singleton ptr @ `DAT_0088cef0`)
 | Off | Type | Field | Note |
 |----:|------|-------|------|
+| 0x000 | void* | pVtable | object vtable — **polymorphic**; `FUN_004625c0` does `(**(code**)*singleton)(1)` (vtable[0] deleting dtor) |
 | 0x04c | void* | pCommLayer | the ONE TinCat comm layer (magic 0x26B6) |
 | 0x050 | void* | pServerMgr | room/server-list manager (ConnectionManager; factory @ +0x20) |
 | 0x054 | void* | pVillageServerList | `LobbyComm::ServerList` (embedded) |
@@ -66,6 +67,7 @@ as `*(this+0xN)`. Fix per-function: right-click `this` → **Retype Variable** �
 ### `LobbyVillageScreen` (SADK.exe, 541 bytes) — char-select / enter screen
 | Off | Type | Field | Note |
 |----:|------|-------|------|
+| 0x000 | void* | pVtable | object vtable — **polymorphic**; methods are vtable-referenced (`OnLeaveVillage`@0x7d7ed0, `UpdateEnterButton`@0x7d831c) |
 | 0x0c0 | — | (enterAction) | `LobbyVillageEnterAction*` (per RequestEnterVillage) |
 | 0x1e8 | int | nViewMode | ==1 required for enter |
 | 0x1ec | void* | pField98Owner | sub-object; +0x98 must be !=0 (server selected) |
@@ -126,7 +128,7 @@ as `*(this+0xN)`. Fix per-function: right-click `this` → **Retype Variable** �
 |------|------|------------------|
 | 0x503da0 | `LobbyVillageEnterAction_Trigger` | `void __thiscall(this, bool bImmediate)` — CreateVillageServerConnection then tail-jmp conn->vtbl[0x3C] |
 | 0x503e10 | `LobbyVillageEnterAction_Tick` | per-frame retry/heartbeat; pumps state machine (FUN_00464c00) |
-| 0x4f4ef0 | `VillageScreen_RequestEnterVillage` | click-side forwarder → Trigger(screen->enterAction@+0xC0) |
+| 0x4f4ef0 | `CLobby_RequestEnterVillage` | click-side forwarder → Trigger(screen->enterAction@+0xC0) |
 | 0x463750 | `LobbyManager_CreateVillageServerConnection` | `void* __thiscall(LobbyManager*, int dwVillageServerId)` — resolve/validate only; **no socket I/O**; returns mgr+0x540 |
 | 0x470b50 | `VillageServerConnection_OpenUserComm` | `bool __thiscall(this, int serverHandle)` — **the dial** (vtbl+0x3C); opens UC transport to GetChatServerHandle |
 | 0x526ba0 | `VillageConn_GetTransport` | returns `conn+0x34` (transport; the connect gate) |
@@ -139,15 +141,20 @@ Read-only context: `0x462700 SetState`, `0x4626f0 GetState`, `0x4625e0 LobbyMana
 `0x4AD750 IsListReady_impl`, `0x4640f0 LobbyComm::System::Initialize`
 (sole `CreateCommLayer(0,0x26B6,5,name)` @0x46434b).
 
-### 2b. Village / world message receiver (vtable @ 0x7dc8e0) [PROVEN]
+### 2b. Village / world message receiver (vtable @ `0x7dc8d4`, 17 slots) [PROVEN]
+
+> Typed as struct `VillageServerConnection_vtable` in the project. Key slots (base 0x7dc8d4):
+> `+0x0c` Connect · `+0x14` HandleLoggedIn · `+0x18` HandleLoginFailed · `+0x1c` HandleLoggedOut ·
+> `+0x20` HandleDisconnected · `+0x24` HandleMessage · `+0x28` TickInWorld · `+0x3c` OpenUserComm ·
+> `+0x40` SendWorldLoginReq_2002.
 | Addr | Name | Msg / role |
 |------|------|------------|
 | 0x470890 | `VillageServerConnection::HandleMessage` | dispatcher; type via FUN_005025e0 (msg+0x28) |
 | 0x46f470 | `VillageServerConnection::HandleEnterWorld` | **msg 1000** `(this, NetMsgReader*)` — SetState(9); reads Worldname/ServerPerm/ChatChannelsCount/N×{Zone,ID}; JoinChannel; connState=3; SendWorldReadyAck. **[TODO]** clean-build addr 0x46f670 |
-| 0x46d820 | `VillageServerConnection::HandleLoggedIn` | vtbl+0x08; own-login OK |
-| 0x46d910 | `VillageServerConnection::HandleLoginFailed` | vtbl+0x0C `(this,int)` |
-| 0x470c20 | `VillageServerConnection::HandleLoggedOut` | vtbl+0x10 → state VillageLeft(11) |
-| 0x470d90 | `VillageServerConnection::HandleDisconnected` | vtbl+0x14 `(this,int)` |
+| 0x46d820 | `VillageServerConnection::HandleLoggedIn` | vtbl+0x14; own-login OK |
+| 0x46d910 | `VillageServerConnection::HandleLoginFailed` | vtbl+0x18 `(this,int)` |
+| 0x470c20 | `VillageServerConnection::HandleLoggedOut` | vtbl+0x1c → state VillageLeft(11) |
+| 0x470d90 | `VillageServerConnection::HandleDisconnected` | vtbl+0x20 `(this,int)` |
 | 0x46ddf0 | `VillageServerConnection::HandleEntityCreate` | msg 1001 |
 | 0x46dfb0 | `VillageServerConnection::HandleEntityUpdate` | msg 1002 |
 | 0x46e190 | `VillageServerConnection::HandleEntityRemove` | msg 1003 |
@@ -160,13 +167,13 @@ Read-only context: `0x462700 SetState`, `0x4626f0 GetState`, `0x4625e0 LobbyMana
 ### 2c. Token / UserComm login (LobbyUserCommConnection.cpp) [PROVEN]
 | Addr | Name | Role |
 |------|------|------|
-| 0x47ed90 | `UserCommConnection__Initialize` | `(this, int* commSystem)`; base-inits BaseConnection@+0x38 |
-| 0x47fb40 | `UserCommConnection__OpenCommunication` | `(this, int serverHandle)` — dial via transport(+0x34) vtbl+0x10 |
-| 0x47ef50 | `UserCommConnection__OnLoggedIn` | |
-| 0x47f040 | `UserCommConnection__OnLoginFailed` | `(this, int errCode)` |
-| 0x47f310 | `UserCommConnection__OnReceivedData` | → no-op stub `FUN_004A0050` (token 211-214 handled inside tincat3) |
-| 0x47f400 | `UserCommConnection__OnChatChannelListReceived` | `(this, int count, void* list, int err)` — post-login server push |
-| 0x47fca0 | `UserCommConnection__JoinChannel` | `(this, uint channelId)` |
+| 0x47ed90 | `UserCommConnection::Initialize` | `(this, int* commSystem)`; base-inits BaseConnection@+0x38 |
+| 0x47fb40 | `UserCommConnection::OpenCommunication` | `(this, int serverHandle)` — dial via transport(+0x34) vtbl+0x10 |
+| 0x47ef50 | `UserCommConnection::OnLoggedIn` | |
+| 0x47f040 | `UserCommConnection::OnLoginFailed` | `(this, int errCode)` |
+| 0x47f310 | `UserCommConnection::OnReceivedData` | → no-op stub `FUN_004A0050` (token 211-214 handled inside tincat3) |
+| 0x47f400 | `UserCommConnection::OnChatChannelListReceived` | `(this, int count, void* list, int err)` — post-login server push |
+| 0x47fca0 | `UserCommConnection::JoinChannel` | `(this, uint channelId)` |
 | 0x463910 | `LobbyManager::OnLoggedIn` | login-success router; sets `pChatServerHandle@+0x548`, `state=3` (SetState(3) @ 0x4639d1) |
 | 0x4625e0 | `LobbyManager_GetInstance` | singleton @ DAT_0088cef0 |
 | 0x4626c0 | `LobbyManager_GetChatServerHandle` | returns mgr+0x548 |
@@ -242,7 +249,7 @@ factory vtable @ **0x1004DE84**: `+0x04 Register · +0x08 Unregister · +0x0C Cr
 - `g_dwInvalidVillageServerId` @ `0x007dc51c` (= 0xFFFFFFFF); pending sentinel 0xFFFFFFFE
 - Property-name strings (read by HandleEnterWorld): `Worldname/ServerPerm/ChatChannelsCount/`
   `ChatChannelZone/ChatChannelID/PingCode/PongCode/id/code/tick` @ ~`0x7dc918`–`0x7dc964`
-- `VillageServerConnection` object vtable @ `0x7dc8e0` (+0x3C = OpenUserComm)
+- `VillageServerConnection` object vtable @ `0x7dc8d4` (17 slots, RTTI COL @ `0x7dc8d0`; +0x3c = OpenUserComm, +0x14 = HandleLoggedIn) — struct `VillageServerConnection_vtable`
 - `ServerList` secondary callback vtable @ `0x7dbf8c`; `GameServerInfo` vtable @ `0x7df8b8`
 
 **tincat3.dll:**

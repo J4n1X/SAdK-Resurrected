@@ -40,26 +40,101 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   empty. The per-slot room protocol (occupant/tribe/team/color/ready) is unreversed —
   it rides the game connection, not a NETMSG. The game-join session uses its own
   framing (capture in `docs/GAME_JOIN_CAPTURE_decoded.txt`).
-- **Entering matches / referee `[TODO]`.** Entering matches is **broken**, and what
-  the referee/match-arbiter actually does is **unclear**. The referee subsystem was
-  **removed from the stub source** (it was flag-gated, unproven, and never cleared the
-  match-start abort in testing). If restarting this work: some referee functions are
-  **already named** in `docs/REFEREE_FUNCTIONS_TO_NAME.md` — use that as the starting
-  point. Do the RE through the Ghidra MCP (HARNESS §1).
+- **Entering matches / referee `[TODO]` — MODEL RECOVERED 2026-06-11; see `docs/MATCH_START.md`.**
+  Match start is **referee-gated** (that's *why* it's broken — referee removed from the stub). The
+  full transition is now reverse-engineered on `sadk_noav.exe` and documented: host
+  `Lobby_HostRegisterGameWithReferee@0x432240` sends **`RegisterGame(0xDB6)`** (GameID/MapGUID/MapName/
+  MapSettings/Ranked/Wager/AIPlayer/6×AvatarID) → referee **`RegisterGameResult(0xDB8)`** carries the
+  **`GameSeed`** (the lockstep determinism seed — no seed, no match). All clients: `NE_StartLoading`
+  (NComm 0x30012) → `LobbyGameScreen_OnStartLoading@0x4316c0` **arms referee login** for MP games;
+  per-frame `LobbyGameScreen_Update@0x435980` pumps `RefereeServerConnection_Login@0x4793f0` (5 retries
+  then loads anyway); `LoginSuccess(0xDCA)`/`LoginFailed(0xDCB)` fan out to game-screen observers
+  (`refConn+0x80`/`+0x8c`; seed on `+0x50`). The **load kick** = `Game_SetRunMode(game,2)` (game+0xc=2)
+  + `Game_PropagateModeToChildren@0x42a640` (walks game+0x3b0 children → each vtbl[0x10]). Full referee
+  cat-3 message table + observer-list map in `docs/MATCH_START.md`. **`[TODO]` to finish:** the observer
+  *callback bodies* (template-indirected — needs a live breakpoint on fan-outs `FUN_00479ef0`/`FUN_00464300`),
+  the GameSeed→sim consumer, identify `FUN_004624d0`. **Stub path to unblock:** referee must accept
+  `Login`→`LoginSuccess` and `RegisterGame`→`RegisterGameAck(0xDB7)`+`RegisterGameResult(0xDB8)` with a
+  shared `GameSeed`. Named/typed functions also in `docs/REFEREE_FUNCTIONS_TO_NAME.md`.
 - **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
   shows `<UNNAMED>`). Not implemented.
 
 ### RE-quality / tooling TODOs (per `HARNESS.md §6` / `decomp/RE_PRACTICES.md`)
 
-- **Retro-typing sweep `[TODO]`.** Every function/struct we have *ever* named still
-  carries tons of untyped locals/params. Do a pass to type them properly (and set the
-  right calling convention), per the RE practices. Large; do it incrementally + as a
-  dedicated sweep.
+- **Typed vtable structs — STARTED 2026-06-11.** Built `VillageServerConnection_vtable` (17 slots,
+  named via the binary) and retyped `pVtable`; checked in (SADK.exe v3). **Important finding:** the doc's
+  vtable **base `0x7dc8e0` was WRONG — real base `0x7dc8d4`** (RTTI COL ptr at base-4 `0x7dc8d0`; verified
+  by Trigger's `vtbl[0x3c]`=OpenUserComm). All section-2b slot offsets were `0xc` too low; SOURCEMAP fixed.
+  `[TODO]` audit the OTHER documented vtables the same way — they may share the off-by-0xc error:
+  ServerList `0x7dbf8c`, GameServerInfo `0x7df8b8`, UserComm `0x7dded8`, GameServer `0x7dfafc`. Method:
+  read base-4 (RTTI ptr = data, not code) to find the true start; slots are `void*` (upgrade to fn-ptr types later).
+- **⚠️ ACTIVE BINARY = `sadk_noav.exe`, not `SADK.exe`.** They are DIFFERENT builds — different
+  addresses (SetState @0x462540 in noav vs 0x462700 in SADK) and different struct layouts. Do RE on
+  **`sadk_noav.exe`**. `SADK.exe` is a separate (dump-base) build kept for reference. Both are open in
+  the backend; always pass the `program` param.
+- **Retro-typing sweep — STARTED 2026-06-11 (on `sadk_noav.exe`).** Technique that makes pseudocode
+  readable: `set_function_this_type(addr, "Class *")` (moves the fn into the class namespace so the
+  __thiscall `this` auto-types — no manual custom-storage needed), then `rename_function_by_address`
+  to drop the redundant `Class_`/`Class__` prefix. In noav the **namespaced** method families
+  (`VillageServerConnection::*`, `UserCommConnection::*`) were ALREADY this-typed; only the **flat
+  `Class_X` helpers** needed it — typed 10 `LobbyManager` + 5 `VillageServerConnection` flat methods.
+  **`LobbyManager` struct fleshed out** (deepen, via a parallel read-only agent): resized 1408→**2896**
+  (was undersized — methods read to 0xb48), key fields named — notably `pCommLayer@0x4c` (was MISSING)
+  and `pConnectionManager@0x50` (was mis-named `pComm`); embedded `userCommConnection@0x3d8`. `StatePump_Tick`
+  FSM now fully field-resolved. The **6 embedded sub-objects are now mapped + embedded** (structs
+  `LobbyComm_ServerList`@0x54, `LobbyGlobalDataLoader`@0x100, `LobbyServerListLoader`@0x140,
+  `LobbyWorldStreamHandler`@0x2f8, `LobbyPostOffice`@0x3bc, `RefereeServerConnection`@0x490) — StatePump
+  now reads `&this->postOffice`/`&this->globalDataLoader`/etc. and their vtable calls resolve.
+  `[TODO]` remaining: the notifier/observer-list region @0x10–0x4c; scalars @0x584/0x58c/0x5a0; sub-object
+  internals are partial (filler-padded). More families: LobbyServerList callbacks, GameServerConnection.
+  Naming validator wants PascalCase/verb-first (rejected "SetState" weak-noun → `strict_mode=false`).
+- **C++-uniform class consolidation — DONE for the lobby connections 2026-06-11 (`sadk_noav.exe`).**
+  `set_function_this_type` had spawned **duplicate Global GhidraClasses** beside the RTTI-proper
+  `LobbyComm::*` ones, with members loose in `Global` → two mangled nodes per class. **Procedure +
+  reusable script now live in `decomp/RE_PRACTICES.md` → "Class hygiene — make a class look like one
+  uniform C++ class"** (consult/run that, don't re-derive). State: checked in —
+  **`LobbyComm::VillageServerConnection`** (19 members), **`LobbyComm::UserCommConnection`** (8, RTTI-proven
+  `.?AVUserCommConnection@LobbyComm@@`), **`LobbyComm::LobbyBaseConnection`** (4 — *no RTTI descriptor*;
+  namespace **inferred** from inheritance: `OnLoggedIn@0x48e050`/`OnLoginFailed@0x48e170` called by both
+  LobbyComm connections → shared base. Inference, not `[PROVEN]`). **`Logger` left on purpose:**
+  `Logger::vftable@0x7d5028` (`.?AVLogger@@`, real engine logger) vs `LobbyComm::Logger::vftable@0x7daf14`
+  are **two distinct classes**, not a dup. (Most same-simple-name classes are legitimate — `NMap::AStar`
+  vs `NNavy::AStar`, the 16 `*::System` — only a bare-Global twin / loose Global members is the artifact.)
+  `[TODO]` deferred (no RTTI, ambiguous namespace — left in Global, flagged): **`LobbyVillageScreen`** — its
+  struct is the `this` type for BOTH `LobbyVillageScreen_*` and `AvatarScreen_*` fns → open RE question
+  *are the village screen and avatar screen the same class?*; **`GameLoadDescriptor`** — 1 member
+  (`GameConfig_CopyToLoadParams`), name mismatch, no namespace evidence.
+- **⚠️ LESSON: do NOT give multiple workflow agents concurrent WRITE access to the SAME struct.**
+  `remove_struct_field`/field-adds COLLAPSE a packed (alignment-1) struct, shifting all later offsets —
+  so "disjoint span" agents are NOT independent; one agent's remove corrupts another's absolute-offset
+  embed. (Hit this 2026-06-11 mapping the sub-objects — caught pre-checkin, rebuilt atomically with
+  `recreate_struct` + full field list; this-types SURVIVED because they're namespace-derived.) SAFE pattern:
+  fan out **read-only analysis** agents (return field maps), then the orchestrator applies struct edits
+  **serially** (prefer `recreate_struct` for a whole-struct rebuild). Per-function `this`-typing across
+  *different* functions is fine to parallelize; same-struct field surgery is not.
 - **On-demand C-export script `[TODO]`.** Stand up a Ghidra script (run **via the MCP**)
   that re-exports the decompiled C source dumps on request, so an agent can refresh them
   instead of relying on stale offline copies.
-- **Symbol-map audit `[TODO]`.** Verify `decomp/RENAME_LIST.md` + `docs/SOURCEMAP.md`
-  actually match the current Ghidra project. The map must be kept current at all times.
+- **Symbol-map audit — function layer DONE 2026-06-11; struct layer `[TODO]`.** All 42
+  function entries in `docs/SOURCEMAP.md` were reconciled against the live project (via the
+  MCP): **every address matched**, 8 had stale *names* (now fixed: `UserCommConnection__X`→`::X`,
+  `VillageScreen_RequestEnterVillage`→`CLobby_RequestEnterVillage`; RENAME_LIST `GetChatServerHandle`
+  `::`→`_`). The loaded SADK.exe is the **dump-base build** (HandleEnterVillage logic at the
+  dump addresses, e.g. `HandleEnterWorld`@0x46f470 — *not* the clean-build 0x46f670). The
+  **struct sweep DONE 2026-06-11**: all 9 documented structs (6 SADK.exe + 3 tincat3.dll) **exist and
+  are field-exact** against the project. Two SADK class structs were missing their vtable@0 field —
+  proven polymorphic and **added + checked in (SADK.exe v2)** (`LobbyManager` pVtable@0 — `FUN_004625c0` calls
+  `(**(code**)*singleton)(1)`; `LobbyVillageScreen` pVtable@0 — methods vtable-referenced @0x7d7ed0/
+  0x7d831c). `TinCatPropDataConverter` is correctly non-polymorphic (pBuffer@0, no vtable). SOURCEMAP
+  updated with both pVtable rows. Still `[TODO]`: reconcile the clean-build address skew.
+- **Headless MCP write-back — FIXED 2026-06-11.** The headless server was patched (local clone
+  `~/ghidra-mcp`, rebuilt jar) so edits persist to the shared repo: `load_program_from_project` now
+  **checks the file out read-write** (non-exclusive) before opening (was read-only → save failed), and a
+  new **`checkin_program`** MCP tool saves + `DomainFile.checkin()`s a new repo version. Proven: the two
+  `pVtable` fields above were checked in as **SADK.exe version 2** (`mcp@127.0.0.1`). Workflow now:
+  load → edit → `checkin_program(comment=...)` → canonical on the repo (Windows GUI sees it on update).
+  Patch lives in `HeadlessProgramProvider.java` (+checkout, +checkinProgram) and `HeadlessManagementService.java`
+  (+`/checkin_program` endpoint) — see `docs/HEADLESS_SETUP.md`. A fresh clone must re-apply + rebuild.
 - **Doc-sufficiency review `[TODO]`.** We purged a lot of stale/referee/narrative docs.
   Review what remains to confirm it provides *sufficient* information — and validate it
   live against Ghidra in the next session rather than assuming the survivors are correct.
