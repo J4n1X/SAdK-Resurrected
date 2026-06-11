@@ -49,6 +49,21 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
 - **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
   shows `<UNNAMED>`). Not implemented.
 
+### RE-quality / tooling TODOs (per `HARNESS.md §6` / `decomp/RE_PRACTICES.md`)
+
+- **Retro-typing sweep `[TODO]`.** Every function/struct we have *ever* named still
+  carries tons of untyped locals/params. Do a pass to type them properly (and set the
+  right calling convention), per the RE practices. Large; do it incrementally + as a
+  dedicated sweep.
+- **On-demand C-export script `[TODO]`.** Stand up a Ghidra script (run **via the MCP**)
+  that re-exports the decompiled C source dumps on request, so an agent can refresh them
+  instead of relying on stale offline copies.
+- **Symbol-map audit `[TODO]`.** Verify `decomp/RENAME_LIST.md` + `docs/SOURCEMAP.md`
+  actually match the current Ghidra project. The map must be kept current at all times.
+- **Doc-sufficiency review `[TODO]`.** We purged a lot of stale/referee/narrative docs.
+  Review what remains to confirm it provides *sufficient* information — and validate it
+  live against Ghidra in the next session rather than assuming the survivors are correct.
+
 ## Address-base caveat
 
 Function addresses in the docs come from a pre-magazine (no-CD/dump) build base and
