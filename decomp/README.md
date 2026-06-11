@@ -9,6 +9,7 @@ the MCP — not standalone scripts (HARNESS §1).
 | File | What |
 |------|------|
 | `GHIDRA_MCP_SETUP.md` | Runbook to connect Claude to Ghidra over the MCP (bethington/ghidra-mcp, ~245 tools incl. `debugger_*`). |
+| `RE_PRACTICES.md` | **Mandatory** RE standard: typing, vtable structs, RTTI-first, one-layer rule, runtime-virtual escalation, map upkeep. |
 | `DEBUGGER_PLAN.md` | How to drive the Ghidra MCP debugger (launch/attach, breakpoints, read regs/mem). |
 | `RENAME_LIST.md` | Applied labels, structs (`LobbyManager`, `VillageServerConnection`, …), and the `LobbyManagerState` enum. |
 | `bridge_mcp_ghidra.py` | The MCP bridge `.mcp.json` points at. Infrastructure, not an RE script. |

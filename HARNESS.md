@@ -80,6 +80,37 @@ functionality will be rejected.
   authoritative; any wire-format change must be grounded in it + binary evidence and
   re-validated against the real client. Preserve edge cases (e.g. `None` vs `""`).
 
+## 6. RE PRACTICES — mandatory
+
+Reverse-engineering *is* the deliverable (`CLAUDE.md`), so it is done to a standard,
+through the Ghidra MCP. Full runbook: `decomp/RE_PRACTICES.md`. The binding rules:
+
+- **Type everything you touch** — variables, parameters, returns — and set the correct
+  MSVC calling convention (`__thiscall` / `__stdcall` / `__cdecl`). Model each class as
+  a struct whose `this+0` points to a **typed vftable struct** of function pointers, so
+  the decompiler resolves virtual calls to *named* functions.
+- **RTTI first.** Before reversing any vtables, verify the program's RTTI has been
+  analyzed/demangled. If it has not, **STOP and ask the user** to run it (or for
+  permission to trigger it via the MCP) — do not reverse vtables on un-demangled output.
+- **One layer deep, then stop.** Infer a type from its declaration + usage; if still
+  unknown, look at most **one** callee/caller deeper. If it is *still* unknown after
+  that single hop, mark it `[TODO]` and move on. **Never recurse further.**
+- **Never fabricate structure.** Unknown bytes stay `undefined`/padding — you do not
+  invent fields or types to look complete. A type backed by RTTI, a known API/import, or
+  clear usage is `[PROVEN]`; an inferred one is allowed but must be **marked**, never
+  laundered into `[PROVEN]`.
+- **Resolve ambiguous indirect calls with P-code emulation** where the target is
+  statically computable.
+- **Purely runtime-virtual → escalate to the user.** When a call target is genuinely
+  chosen at runtime (a factory returning a base pointer, a config-selected subclass),
+  static analysis *cannot* resolve it — and guessing is how false conclusions happen.
+  Set up the breakpoint(s) via the MCP debugger and hand the user **one batched**
+  "navigate the game to X, do Y, then Z" script so they fire every needed breakpoint in
+  a single play session; read the live targets, then label them.
+- **Keep the map current — always.** Every rename / retype / new struct lands in
+  `decomp/RENAME_LIST.md` and `docs/SOURCEMAP.md` **in the same session**. A stale map
+  is how false conclusions creep back in.
+
 ---
 
 ### TL;DR
@@ -89,4 +120,6 @@ writing external RE/memory/patch scripts is not. Don't fake results; provide wha
 the game waits for through its real mechanism. New tools need a stated, detailed
 reason and must be outside MCP/debugger reach. Proven = binary + live evidence;
 everything else is labelled TODO. In the stub, working = default — no flags, no
-unsanctioned hacks.**
+unsanctioned hacks. Type everything, build typed vtable structs, stay one layer deep,
+never fabricate, escalate runtime-virtual calls to the user, keep the map current.
+Understanding is the deliverable — build it brick by brick, don't sprint.**

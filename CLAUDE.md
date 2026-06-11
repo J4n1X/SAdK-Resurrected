@@ -6,6 +6,30 @@
 
 ---
 
+## The goal — understanding first, working second (read this before anything)
+
+The purpose of this project is to **comprehensively reverse-engineer the code the
+client uses to connect to the server, and to write detailed, correct documentation of
+that protocol.** That faithful model of the systems at play **is the deliverable.** A
+working stub lobby is how we *demonstrate* the understanding — it is not the point.
+
+Therefore:
+- **Build understanding brick by brick. Do not sprint to a milestone.** A change that
+  makes something "work" without an understood, evidence-backed reason is a regression,
+  not progress — it buries the very knowledge we exist to capture.
+- **Prefer a correct, documented model over a quick result.** Knowledge is power; a
+  green checkmark bought with a guess or a hack is worthless to us.
+- This is *why* `HARNESS.md` forbids faking results and demands honest
+  `[PROVEN]`/`[TODO]` status, and why RE is done to a standard (`HARNESS.md §6`): those
+  rules all serve understanding.
+
+**Milestones** — each a *demonstration* of understanding, subordinate to the goal above:
+1. ✅ Load into the 3D lobby world at all (even with nothing working inside it).
+2. ◀ **current** — Host and Join matches.
+3. Finalize the lobby system.
+
+---
+
 ## The three rules that matter most (see `HARNESS.md` for the full text)
 
 1. **MCP-first.** Do all reverse-engineering and debugging through the **Ghidra
@@ -125,6 +149,10 @@ python -m sadk_lobby
   live in `decomp/RENAME_LIST.md`.
 - All RE and debugging goes through the MCP (HARNESS §1). Scripting *inside* Ghidra
   via the MCP is allowed; standalone RE/memory/patch scripts are not.
+- **Follow the mandatory RE practices** in `HARNESS.md §6` / `decomp/RE_PRACTICES.md`:
+  type everything, build typed vtable structs, one-layer-then-`[TODO]`, never fabricate
+  structure, escalate purely-runtime-virtual calls to the user, keep the symbol map
+  current.
 
 ## Windows 10/11 launch note
 
