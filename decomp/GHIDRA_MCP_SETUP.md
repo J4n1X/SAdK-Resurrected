@@ -1,5 +1,9 @@
 # Connect Claude to Ghidra — runbook (bethington/ghidra-mcp)
 
+> **This doc is the Windows-GUI path.** For the **Linux headless server** setup
+> (Ghidra Server + headless GhidraMCP backend on the minisrv, started on-demand,
+> connected to the shared `sadk` repo), see [`docs/HEADLESS_SETUP.md`](../docs/HEADLESS_SETUP.md).
+
 Live link so Claude can read/rename/comment **and create structs/classes/enums + apply
 types** in your Ghidra project. Using <https://github.com/bethington/ghidra-mcp> — a
 rewritten GhidraMCP with ~245 tools that **targets Ghidra 12.1** natively (build against

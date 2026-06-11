@@ -101,7 +101,7 @@ applied in the project.
 | `0x462fe0` | `LobbyManager::Login` | H |
 | `0x463910` | `LobbyManager::OnLoggedIn` (sets chatServerHandle +0x548 = login param_2) | H |
 | `0x464740` | `LobbyManager::OnLoginFailed` | H |
-| `0x4626c0` | `LobbyManager::GetChatServerHandle` (returns +0x548) | H |
+| `0x4626c0` | `LobbyManager_GetChatServerHandle` (returns +0x548) | H |
 
 vtables: UserComm `0x7dded8`, GameServer `0x7dfafc`, Village `0x7dc8e0`. `LobbyManager+0x548`
 = chat-server handle (set at login).

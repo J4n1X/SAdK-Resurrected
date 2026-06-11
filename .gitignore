@@ -83,3 +83,9 @@ myeasylog.log
 sadk_lobby_capture.log
 stub_live.log
 tincat_server.log
+
+# Python venv (created by setup_venv.sh)
+.venv/
+
+# Ghidra project (SFTP'd in; embeds the copyrighted game binary)
+sadk/

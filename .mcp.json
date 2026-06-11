@@ -1,12 +1,13 @@
 {
   "mcpServers": {
     "ghidra": {
-      "command": "python",
+      "command": ".venv/bin/python",
       "args": [
-        "decomp/bridge_mcp_ghidra.py",
-        "--ghidra-server",
-        "http://127.0.0.1:8089/"
-      ]
+        "decomp/bridge_mcp_ghidra.py"
+      ],
+      "env": {
+        "GHIDRA_MCP_AUTOSTART": "1"
+      }
     }
   }
 }
