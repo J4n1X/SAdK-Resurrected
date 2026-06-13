@@ -43,6 +43,8 @@ pip install -r requirements.txt      # or: pip install mcp requests
 ```
 
 ## 4. Register with Claude Code
+On a fresh checkout run **`python setup_mcp.py`** first — it writes the OS-correct `.mcp.json`
+(Windows vs POSIX interpreter path) and builds the `.venv` with the bridge deps (`mcp`, `requests`).
 `.mcp.json` at the project root now points at the in-repo bridge
 `decomp/bridge_mcp_ghidra.py` over stdio, so no per-machine path edit is needed there.
 (If you instead want to run the bridge from your own `<your-tools-dir>\ghidra-mcp`

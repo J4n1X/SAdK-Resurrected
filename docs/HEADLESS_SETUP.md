@@ -170,7 +170,9 @@ This works out of the box because every backend-lifecycle mod is **gated** behin
 `GHIDRA_MCP_AUTOSTART`/`GHIDRA_MCP_BACKEND_CMD`. With those unset the bridge is the upstream
 connect-to-a-running-instance path verbatim — nothing spawns, nothing is torn down.
 
-Two config deltas on the Windows checkout:
+Two config deltas on the Windows checkout (or just run **`python setup_mcp.py`** from the
+repo root — it applies both automatically, builds the `.venv`, and skip-worktrees the local
+`.mcp.json` so your Windows path is never committed over the Linux value; works on either OS):
 
 1. **`.mcp.json` `command`** → `.venv\Scripts\python.exe` (the committed Linux value `.venv/bin/python`
    won't resolve on Windows). This is the only hard blocker.
