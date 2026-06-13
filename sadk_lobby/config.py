@@ -155,6 +155,10 @@ VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim hea
 # never nailed by the prior (removed) attempt without live captures — re-confirm against the real client.
 REFEREE_PORT = 5481           # the RefereeServerConnection dials here (distinct from WORLD_PORT 5479)
 REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on the type-4 server list)
+# [LIVE TEST 2026-06-13 · ER engagement_records/2026-06-13_referee-assign-170.md] Reply a GameServerData(170)
+# type4/sub5 to the referee AssignServer(189, type=4, subtype=4) so its cat-0x108 ticket routes into
+# tincat3 GameServerManager_OnGameServerAssigned → SetRefereeServerAddress → LM+0x580. Set False to revert.
+REPLY_REFEREE_ASSIGN = True
 REF_GAME_SEED = 0x5EED1234    # fixed lockstep determinism seed (client never validates the value)
 
 REF_CATEGORY        = 3       # all referee LobbyMessages are category 3 (type word = names<<15|cat<<12|id)

@@ -38,6 +38,10 @@ class Conn:
         self.is_chat = is_chat
         self.is_village = is_village
         self.is_referee = is_referee
+        # Which listener accepted this socket — surfaced in the connect/disconnect
+        # log so we can tell lobby(7070)/uc(7071)/world(5479)/referee(5481) apart.
+        self.role = ("uc" if is_chat else "world" if is_village
+                     else "referee" if is_referee else "lobby")
         self._buf = b""
         self._state = "PREFIX"
         self._hdr = None
@@ -89,8 +93,13 @@ class Conn:
 
     # ── Receive loop ──────────────────────────────────────────────────────────
     def run(self):
+        try:
+            local_port = self._sock.getsockname()[1]
+        except Exception:  # noqa: BLE001 — best-effort log field, never fatal
+            local_port = "?"
         log(f"\n{'#' * 60}")
-        log(f"  CONNECTION #{self.id}  {self.addr[0]}:{self.addr[1]}")
+        log(f"  CONNECTION #{self.id}  {self.addr[0]}:{self.addr[1]}"
+            f"  ->  listener :{local_port} [{self.role}]")
         log(f"{'#' * 60}")
         try:
             self._sock.settimeout(60.0)
@@ -115,7 +124,7 @@ class Conn:
             if dead:
                 log(f"  [REGISTRY] dropped {len(dead)} game(s) owned by #{self.id}: {dead}")
             dispatch.unregister_observer(self)
-            log(f"\n  DISCONNECTED #{self.id}")
+            log(f"\n  DISCONNECTED #{self.id} [{self.role} :{local_port}]")
 
     def _process(self):
         while True:

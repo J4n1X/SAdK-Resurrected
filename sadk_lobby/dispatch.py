@@ -296,22 +296,25 @@ def _h_assign_server(conn, fields, ticket):
     """
     server_type = fields.get("server_type", 0)
     server_subtype = fields.get("server_subtype", 0)
+
+    # ── Referee assign (type=4, subtype=4) ── [flag-gated · ER 2026-06-13_referee-assign-170] ──────────
+    # RequestRefereeServer@0x468f60 sends AssignServer(4,4); a debugger trace of AssignServer (2026-06-13,
+    # live) confirmed the discriminator is server_subtype=4 (village-entry uses the 221→222 path, not 189).
+    # Reply a GameServerData(170) for the REFEREE_SERVER (type4/sub5) so its cat-0x108 ticket routes into
+    # tincat3 GameServerManager_OnGameServerAssigned@0x10021520 → SetRefereeServerAddress@0x4625d0 →
+    # LM+0x580. The 192 below still goes out (different message type → tincat3's UsercommServerData dial
+    # handler, independent of the 170) so UC/chat stays up.
+    if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
+        log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} type4/sub5 "
+            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket})")
+
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
         "server_type": server_type,
         "version": None, "data": None, "ticket_id": ticket}))
     log(f"  → UsercommServerData(192) -> {config.ADVERTISED_IP}:{config.UC_PORT} "
         f"(type={server_type}, subtype={server_subtype}, ticket={ticket})")
-
-    # ── Referee assign — DEFERRED (do NOT send a 170 here) ────────────────────────────────────────────
-    # The referee is requested via AssignServer(189, server_type=4, server_subtype=4) at lobby state>=6
-    # (RequestRefereeServer@0x468f60 → callback SetRefereeServerAddress@0x4625d0 → LM+0x580 →
-    # InitRefereeServerConnection@0x462910 dials it). BUT the VILLAGE-entry assign is ALSO type=4, and
-    # injecting a referee GameServerData(170) on every type-4 assign BROKE world entry ("Login attempt
-    # failed" at char-select → Entering World, 2026-06-13). UC/village/referee 189s are not distinguishable
-    # here yet (all type-4); the real discriminator (server_subtype, order, or lobby state) needs a live
-    # capture — the per-assign log above (now incl. server_subtype) is exactly that capture. Re-enable a
-    # GUARDED referee 170 only once the wire shows which 189 is the referee. See task #8 / MATCH_START.md.
 
 
 # ── Game/village server list ──────────────────────────────────────────────────
