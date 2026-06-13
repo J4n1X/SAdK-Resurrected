@@ -99,11 +99,14 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   **REFEREE STUB RE-IMPLEMENTED 2026-06-13 (offline-tested; `[VERIFY LIVE]`):** new `sadk_lobby/referee.py`
   (LoginSuccess 0xDCA / RegisterGameAck 0xDB7 / RegisterGameResult 0xDB8{GameSeed} builders + 74-envelope
   framing + channel `handle_frame`), referee listener on `config.REFEREE_PORT=5481`, `is_referee` routing in
-  `connection.py`, and the referee `AssignServer(189,type=4)`→`GameServerData(170,subtype=5,REF_SERVER_ID,
-  :5481)` trigger in `dispatch._h_assign_server` (per RE: `RequestRefereeServer@0x468f60` sends `(4,4)` at
-  state>=6, callback `SetRefereeServerAddress@0x4625d0`→`LM+0x580`→`InitRefereeServerConnection@0x462910` dials).
-  `tests/test_referee.py` green. **Still needs a live drive** to nail the 189 UC-vs-referee discrimination, the
-  channel framing, the exact LoginSuccess trigger, and whether the match actually loads (task #8).
+  `connection.py`. The referee `AssignServer(189)`→`GameServerData(170,subtype=5,REF_SERVER_ID,:5481)` trigger
+  (per RE: `RequestRefereeServer@0x468f60` sends `(4,4)` at state>=6, callback `SetRefereeServerAddress@0x4625d0`
+  →`LM+0x580`→`InitRefereeServerConnection@0x462910` dials) is **DEFERRED in `dispatch._h_assign_server` — NOT
+  sent**: a 170 on every type-4 assign BROKE world-entry (UC/village/referee 189s are ALL type-4, indistinguishable
+  here). `dispatch` now logs `server_subtype` to capture the real discriminator live; `REFEREE_SERVER` dict is the
+  ready definition to re-enable a GUARDED 170. `tests/test_referee.py` + full suite green; the deferred state is
+  wire-inert (only a cosmetic log change vs baseline). **Still needs a live drive (task #8)** for the 189
+  discriminator, channel framing, LoginSuccess trigger, and whether the match loads.
 - **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
   shows `<UNNAMED>`). Not implemented.
 
