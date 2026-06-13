@@ -1,0 +1,146 @@
+"""
+Referee / match-arbiter sub-protocol — LobbyComm::RefereeServerConnection.
+
+The match-START gate. Reverse-engineered fresh this session on sadk_noav.exe (docs/MATCH_START.md):
+
+  * The referee is a separate TinCat connection (the client dials config.REFEREE_PORT) on the SAME
+    single 0x26B6 comm layer as lobby/UC/village. It does the SAME base login as the others
+    (CheckVersion 188 → token 211/213 → AddResult 153), answered by the existing dispatch handlers.
+  * Inbound is routed by LobbyManager::DispatchInboundToConnection@0x462760 to the referee conn's
+    vtbl[0x24] = RefereeServerConnection_OnReceive@0x47b090, which builds a LobbyMessage
+    (LobbyMessage_InitFromWire), reads its msg id, and switches — EXACTLY like the village
+    HandleMessage@0x470a90. So referee bodies are LobbyMessages, category 3.
+  * type word = (names<<15) | (category<<12) | id ; category 3, names off → e.g. LoginSuccess
+    0xDCA → 0x3DCA. Fields are positional u32s (no names/tags); MEMBLOCK/STRING get a u32 length prefix.
+
+The two things the stub must do to start a match:
+  1. LoginSuccess(0xDCA) — clears the client's 5-retry match-start abort. The verdict is the MESSAGE
+     ID, not the PermID value (RefereeServerConnection_OnLoginSuccess reads PermID but never validates
+     it). NEVER send LoginFailed(0xDCB).
+  2. For the host's RegisterGame(0xDB6): RegisterGameAck(0xDB7, Result=0) then
+     RegisterGameResult(0xDB8, Result=0, GameSeed). OnRegisterGameResult reads GameSeed only when
+     Result==0 (else it reads a FailReason and aborts). The GameSeed is the lockstep determinism seed —
+     without it the sim cannot start; all clients in a match must get the SAME seed (fixed is fine).
+
+FRAMING [VERIFY LIVE]: like the village conn, the referee LobbyMessage rides a SendGameData(74)
+envelope, with the LobbyMessage ([type word(u16) | fields]) carried INSIDE the 74's data MEMBLOCK
+(the inbound BitStream reads the type word from there first, then the fields). This is the model the
+prior (removed) attempt converged on after live tests; re-confirm it against the real client.
+"""
+import struct
+
+from . import config
+from .log import hex_dump, log
+from .tincat import app_payload, bytes_field, build_frame
+
+
+def type_word(msg_id, names=False, category=None):
+    """16-bit referee LobbyMessage type word = names<<15 | category<<12 | id."""
+    cat = config.REF_CATEGORY if category is None else category
+    return ((1 if names else 0) << 15) | ((cat & 7) << 12) | (msg_id & 0xFFF)
+
+
+def _u32(v):
+    return struct.pack("<I", v & 0xFFFFFFFF)
+
+
+def referee_payload(msg_id, fields=b""):
+    """App-payload for a referee LobbyMessage: wrap [type word(u16) | fields] in a SendGameData(74)
+    envelope (Magic | 74 | 74 | msg_type(u32) | MEMBLOCK([type word | fields])). See module docstring."""
+    tw = type_word(msg_id)
+    lobbymsg = struct.pack("<H", tw & 0xFFFF) + fields
+    body = _u32(tw) + bytes_field(lobbymsg)
+    return app_payload(config.VILLAGE_SENDGAMEDATA, body)
+
+
+# ── Builders (referee → client) ────────────────────────────────────────────────
+def build_login_success(perm_id):
+    """LoginSuccess (0xDCA) — one field PermID(u32). The client clears the match-start gate on the
+    message ID, not the value."""
+    return referee_payload(config.REF_LOGIN_OK, _u32(perm_id))
+
+
+def build_register_game_ack(game_id, result=0):
+    """RegisterGameAck (0xDB7): GameID(u32), Result(u32; 0=ok)."""
+    return referee_payload(config.REF_REGISTER_ACK, _u32(game_id) + _u32(result))
+
+
+def build_register_game_result(game_id, result=0, game_seed=None):
+    """RegisterGameResult (0xDB8): GameID(u32), Result(u32; 0=ok), GameSeed(u32). Always Result=0 so the
+    client takes the success path and reads the seed."""
+    game_seed = config.REF_GAME_SEED if game_seed is None else game_seed
+    return referee_payload(config.REF_REGISTER_RESULT, _u32(game_id) + _u32(result) + _u32(game_seed))
+
+
+# ── Send helpers ────────────────────────────────────────────────────────────────
+def _send(conn, payload, tag):
+    conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))
+    log(f"  → [REFEREE] {tag} on conn #{conn.id} ({len(payload)}B)")
+
+
+def send_login_success(conn):
+    """Push LoginSuccess(0xDCA) once — the message the match-start gate waits for."""
+    if not conn.alive or getattr(conn, "_ref_login_sent", False):
+        return
+    conn._ref_login_sent = True
+    perm_id = getattr(getattr(conn, "player", None), "perm_id", config.TEST_PERM_ID)
+    _send(conn, build_login_success(perm_id),
+          f"LoginSuccess(0xDCA, perm_id={perm_id}) — should clear the 5-retry match-start abort")
+
+
+# ── Receive (client → referee) ───────────────────────────────────────────────────
+def _inner_msg_id(payload):
+    """Best-effort extract the referee LobbyMessage id from an inbound app frame. The referee channel
+    rides SendGameData(74) (Magic|74|74|msg_type|MEMBLOCK([type word|fields])); we read the type word
+    from inside the MEMBLOCK. Returns (msg_id, game_id) or (None, None) if it isn't a referee frame
+    (e.g. a base-login NETMSG, which the lobby dispatch handles). [VERIFY LIVE] confirm this shape."""
+    if len(payload) < 6:
+        return None, None
+    magic, t1, t2 = struct.unpack_from("<HHH", payload, 0)
+    if magic != config.PAYLOAD_MAGIC or t1 != config.VILLAGE_SENDGAMEDATA or t2 != t1:
+        return None, None                                   # not a 74 envelope → base-login/other
+    # 74 body: msg_type(u32) at off 6, then MEMBLOCK (u32 len + bytes) = [type word(u16) | fields]
+    if len(payload) < 14:
+        return None, None
+    blen = struct.unpack_from("<I", payload, 10)[0]
+    inner = payload[14:14 + blen]
+    if len(inner) < 2:
+        return None, None
+    tw = struct.unpack_from("<H", inner, 0)[0]
+    msg_id = tw & 0xFFF
+    game_id = struct.unpack_from("<I", inner, 2)[0] if len(inner) >= 6 else 0
+    return msg_id, game_id
+
+
+def handle_frame(conn, payload):
+    """Capture + answer referee-channel frames (client → referee). Base-login NETMSGs fall through to
+    the lobby dispatch (they return (None,...) here). On the first referee-channel frame the client
+    sends after login (the channel open), push LoginSuccess; on RegisterGame(0xDB6) push Ack + Result.
+
+    Returns True if it consumed a referee-channel frame (caller must NOT fall through to the lobby/village
+    dispatch), False for a base-login NETMSG (caller falls through so the existing handlers do the login).
+
+    [VERIFY LIVE] The LoginSuccess trigger (when exactly the client opens the referee channel) and the
+    inbound framing are not yet live-confirmed on this build — the verbatim hex log below is the capture
+    that will show the real sequence on the first hosted-match drive."""
+    msg_id, game_id = _inner_msg_id(payload)
+    if msg_id is None:
+        return False                                        # base login / non-referee frame → dispatch
+
+    log(f"  [REFEREE] ← channel frame msg=0x{msg_id:x} game_id={game_id} ({len(payload)}B)")
+    log(hex_dump(payload))
+
+    # The client opening the referee channel is the cue for the verdict. Send LoginSuccess on the first
+    # channel frame (idempotent), then handle the specific message.
+    send_login_success(conn)
+
+    if msg_id == config.REF_REGISTER_GAME:
+        log(f"  [REFEREE] RegisterGame(0xDB6) GameID={game_id} → Ack(0xDB7,0) + Result(0xDB8,0,"
+            f"GameSeed=0x{config.REF_GAME_SEED:x})")
+        _send(conn, build_register_game_ack(game_id), "RegisterGameAck(0xDB7, Result=0)")
+        _send(conn, build_register_game_result(game_id), "RegisterGameResult(0xDB8, Result=0, GameSeed)")
+    elif msg_id in (config.REF_FINISH_GAME, config.REF_GIVEUP_GAME, config.REF_CLAIM_CHEST):
+        log(f"  [REFEREE] end-of-match msg 0x{msg_id:x} — logged (ack deferred; not on the start path)")
+    else:
+        log(f"  [REFEREE] msg 0x{msg_id:x} — logged, no handler yet")
+    return True

@@ -136,3 +136,33 @@ WORLD_LOGIN_ACK_CODE = 0xDEADBEEF         # the value the client compares in msg
 VILLAGE_MSG_PONG = 0xED7                   # 3799 — HandlePongCode; our reply to the client's in-world PingCode
 VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world keepalive PingCode (SendGameData 74)
 VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
+
+# ── Referee / match-arbiter server ────────────────────────────────────────────
+# The match-START gate. RE'd fresh this session (docs/MATCH_START.md, sadk_noav.exe):
+#   * StatePump_Tick@0x464ee0: at state>=6 calls LobbyServerList_RequestRefereeServer@0x468f60 ONCE,
+#     which sends AssignServer(189, server_type=4, server_subtype=4) and registers
+#     LobbyManager_SetRefereeServerAddress@0x4625d0 as the assigned-callback.
+#   * The stub's assign RESPONSE must deliver a server_id to that callback → latched at LM+0x580 →
+#     LobbyManager_InitRefereeServerConnection@0x462910 (pumped per-frame) resolves it via the
+#     ConnectionManager (LM+0x50) and DIALS it. So the referee server_id must ALSO resolve to ip:port,
+#     i.e. be advertised on the type-4 server list (same mechanism as the village server).
+#   * On NE_StartLoading the client opens the referee data channel; RefereeServerConnection_OnReceive
+#     @0x47b090 routes cat-3 LobbyMessages by id. The stub answers LoginSuccess(0xDCA) (clears the
+#     5-retry abort — the verdict is the message ID, not the PermID value) and, for RegisterGame(0xDB6),
+#     RegisterGameAck(0xDB7) + RegisterGameResult(0xDB8){GameSeed}. Without the GameSeed the lockstep
+#     sim cannot start; all clients in a match must receive the SAME seed (a fixed value is fine).
+# [VERIFY LIVE] The exact assign discrimination (UC vs referee 189) and the referee-channel framing were
+# never nailed by the prior (removed) attempt without live captures — re-confirm against the real client.
+REFEREE_PORT = 5481           # the RefereeServerConnection dials here (distinct from WORLD_PORT 5479)
+REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on the type-4 server list)
+REF_GAME_SEED = 0x5EED1234    # fixed lockstep determinism seed (client never validates the value)
+
+REF_CATEGORY        = 3       # all referee LobbyMessages are category 3 (type word = names<<15|cat<<12|id)
+REF_LOGIN_OK        = 0xDCA   # LoginSuccess  (RefereeServerConnection_OnLoginSuccess) — clears the gate
+REF_LOGIN_FAIL      = 0xDCB   # LoginFailed   (…_OnLoginFailed) — NEVER send this
+REF_REGISTER_GAME   = 0xDB6   # RegisterGame (client→referee): GameID, MapGUID[16], MapName, MapSettings, …
+REF_REGISTER_ACK    = 0xDB7   # RegisterGameAck (referee→client): GameID, Result(0=ok)
+REF_REGISTER_RESULT = 0xDB8   # RegisterGameResult: GameID, Result(0=ok) + GameSeed(u32)
+REF_FINISH_GAME     = 0xDC0   # end-of-match (logged, not on the start path)
+REF_GIVEUP_GAME     = 0xDD4
+REF_CLAIM_CHEST     = 0xDAC

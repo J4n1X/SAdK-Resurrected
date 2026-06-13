@@ -72,7 +72,8 @@ def _accept_loop(server_sock, label):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         bf = open(os.path.join(config.BIN_DIR, f"{label}_{cid}_{ts}.bin"), "wb")
         c = Conn(client_sock, addr, cid, bf,
-                 is_chat=(label == "uc"), is_village=(label == "world"))
+                 is_chat=(label == "uc"), is_village=(label == "world"),
+                 is_referee=(label == "referee"))
         threading.Thread(target=c.run, daemon=True).start()
 
 
@@ -120,6 +121,7 @@ def main(argv=None):
     _banner(args.port)
     uc = _make_listener(config.UC_PORT, "UC/chat server")
     world = _make_listener(config.WORLD_PORT, "Lobby world stub")
+    referee_srv = _make_listener(config.REFEREE_PORT, "Referee server")
     print()
 
     try:
@@ -127,6 +129,8 @@ def main(argv=None):
             threading.Thread(target=_accept_loop, args=(uc, "uc"), daemon=True).start()
         if world:
             threading.Thread(target=_accept_loop, args=(world, "world"), daemon=True).start()
+        if referee_srv:
+            threading.Thread(target=_accept_loop, args=(referee_srv, "referee"), daemon=True).start()
         _accept_loop(lobby, "lobby")
     except KeyboardInterrupt:
         print("\nStopped.")
@@ -136,6 +140,8 @@ def main(argv=None):
             uc.close()
         if world:
             world.close()
+        if referee_srv:
+            referee_srv.close()
 
 
 if __name__ == "__main__":

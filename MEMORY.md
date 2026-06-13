@@ -25,6 +25,16 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   (screenshot-confirmed once on the clean build). 1000 MUST ride a **SendGameData(74)**
   envelope — the only framing the inbound bridge routes to
   `VillageServerConnection::HandleMessage`; a bare 1000 frame is dropped.
+  **World-entry DIAL `[PROVEN 2026-06-13]`:** "Betrete Welt" → `LobbyVillageEnterAction_Trigger` →
+  `CreateVillageServerConnection@0x463850` (resolve the selected village desc via the ConnectionManager) →
+  `VillageServerConnection::OpenUserComm@0x470d50` (vtbl+0x3c). OpenUserComm **reuses the single
+  `UserCommConnection`** (`LobbyManager_GetUserCommConnection`, `LM+0x3d8`) and calls
+  `UserCommConnection::OpenCommunication(serverHandle)` — it does NOT spin up an independent socket class.
+  On failure it fires connection-event `0x91` and logs **`"Can't login to UserComm!"`** → base
+  `LobbyBaseConnection::OnLoginFailed@0x48e170` → screen shows **`!LOGIN_FAILED_TEXT`** ("Loginversuch
+  fehlgeschlagen"). So a world-entry login failure means the UC-conn re-open to the village server handle
+  failed — check the village server-handle resolution + UC-conn state. (Diagnose live on Windows w/ the real
+  `tincat_server.log`; the actual login success/fail verdict is decided inside tincat3, not the exe.)
 - **Multi-client.** Two+ clients log in as distinct players (lobby resolves by auth
   username, UC/village by the token perm_id); hosted games live in a process-global
   registry so one client's game is visible/joinable to another. This is the default.
@@ -39,7 +49,32 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
 - **Hosting / pre-game room `[TODO]`.** The SetupGame dialog opens but slots are
   empty. The per-slot room protocol (occupant/tribe/team/color/ready) is unreversed —
   it rides the game connection, not a NETMSG. The game-join session uses its own
-  framing (capture in `docs/GAME_JOIN_CAPTURE_decoded.txt`).
+  framing (capture in `docs/GAME_JOIN_CAPTURE_decoded.txt`). **Progress (2026-06-13):** the third LobbyManager
+  connection `pGameSlotConnection@LM+0x544` is now **identified `[PROVEN]` = `LobbyComm::GameServerConnection`**
+  (0x38B, vtbl `0x7deaf0`, ctor `GameServerConnection::ctor@0x48ed50`, from `LobbyGameServerConnection.cpp`).
+  But its connection-dispatch handler `vtbl[0x24]` is the **shared no-op stub** (`Stub_NoOpReturnVoid@0x472360`),
+  so the room protocol is **NOT** on `GameServerConnection::HandleMessage` — unlike the village conn whose
+  `vtbl[0x24]`=`HandleMessage` carries the world protocol. The 3 peer conns (village/gameslot/referee) are
+  routed by `LobbyManager::DispatchInboundToConnection@0x462760`. **Redirect `[PROVEN 2026-06-13]`:** the room layer is the
+  **village/world conn's** observer+message system (`LM+0x540`), not the game-slot conn — its join-failure
+  events are `!MINIGAME_NOTABLELEFT`/`_NOPLAYERSLOTLEFT` (a game is a *table* with *player slots*). All 10
+  game-screen observer callbacks are now recovered+named (see `docs/MATCH_START.md`). **Slot DATA model
+  mapped `[PROVEN]`:** the SetupGame room is a **6-slot array in the NComm game-session object**
+  (`NComm_GetSlotDataPtr(obj,i)=obj+0x10+i*0x4c@0x413100`; `NCommGameSlot`=0x4c B with ownerGuid@+0xd,
+  name@+0x1e, kind@+0x3b {0 empty/1 human/2 AI/3 closed}, aiLevel@+0x3c, tribe/color/team bytes @+0x3d-0x3f).
+  Match-start reader `…FillMpDescriptor@0x4562d0`; slot accessors named `NComm_Slot_Get*/Set*`. **WIRE PROTOCOL
+  MAPPED `[PROVEN]` 2026-06-13 → full ref `docs/NCOMM_GAME_PROTOCOL.md`:** the room/game protocol is the **NComm
+  P2P event system**, dispatched by `Manager_HandleNCommEvent@0x40e560`: `0x30001` join (host validates
+  version/checksum/pw/MD5→assign slot→broadcast) · `0x30002` slot-config (tribe@+0x3d / color@+0x3e *unique-swap* /
+  team@+0x3f / index@+0x3a, staged from `Mgr+0x24/2c/28/30`) · `0x3000a` leave · `0x3000b` host room-broadcast
+  (clients apply) · `0x30011` ready · `0x30012` start-loading (sets `Mgr+0x3cc=1` → arms referee). NComm
+  Manager=`DAT_00885754`, game object embedded @`Mgr+0xdc` (6 slots + GameSeed). **Transport `[PROVEN]`:** NComm
+  rides **TinCat** via `NComm::TinCatNetwork` (`TinCatNetwork.cpp`) @`Mgr+0x340`, created by
+  `NComm_Manager_StartUpNetwork@0x40a9a0` (mode @`Mgr+0x3c8`), join sent by `NComm_Manager_ConnectAndJoin@0x40ad60`;
+  spun up by `GameServerConnection::OnLoggedIn` — so the stub (TinCat) can sit in this path. **Tribe `[PROVEN]`**
+  = 0/1/2 → Bavarian/Scots/Egyptian (`NComm_GetNationIdForTribe@0x4538b0`); color `[PROVEN]` (unique-swap); team
+  `[INFERRED]`. `NCommGameSlot` struct (0x4c) created. **Remaining minor `[TODO]`:** hard-prove team, slot tail
+  fields `+0x40..0x4b`, host-vs-P2P topology, rest of `0x2002x` events.
 - **Entering matches / referee `[TODO]` — MODEL RECOVERED 2026-06-11; see `docs/MATCH_START.md`.**
   Match start is **referee-gated** (that's *why* it's broken — referee removed from the stub). The
   full transition is now reverse-engineered on `sadk_noav.exe` and documented: host
@@ -51,11 +86,24 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   then loads anyway); `LoginSuccess(0xDCA)`/`LoginFailed(0xDCB)` fan out to game-screen observers
   (`refConn+0x80`/`+0x8c`; seed on `+0x50`). The **load kick** = `Game_SetRunMode(game,2)` (game+0xc=2)
   + `Game_PropagateModeToChildren@0x42a640` (walks game+0x3b0 children → each vtbl[0x10]). Full referee
-  cat-3 message table + observer-list map in `docs/MATCH_START.md`. **`[TODO]` to finish:** the observer
-  *callback bodies* (template-indirected — needs a live breakpoint on fan-outs `FUN_00479ef0`/`FUN_00464300`),
-  the GameSeed→sim consumer, identify `FUN_004624d0`. **Stub path to unblock:** referee must accept
+  cat-3 message table + observer-list map in `docs/MATCH_START.md`. **Observer callback bodies + GameSeed
+  consumer — DONE 2026-06-13 (statically, no live trace needed — the subscribe side stores the fn-ptrs as
+  immediates):** all 10 game-screen observer handlers recovered+named; `LoginSuccess(0x80)→`
+  `Lobby_HostRegisterGameWithReferee` (host registers), `RegisterGameResult-success(0x50)→`
+  `LobbyGameScreen_OnRefereeRegisterGameResult@0x431800` stores the **GameSeed** into game-session singleton
+  **`DAT_00885754+0xdc`**; `LoginFailed(0x8c)→`retry+backoff. `FUN_004624d0`→`LobbyManager_GetVillageServerConnection`.
+  `[TODO]` left: confirm the sim RNG reads `DAT_00885754+0xdc`; reverse the granular slot/tribe/team/ready msgs.
+  **Stub path to unblock:** referee must accept
   `Login`→`LoginSuccess` and `RegisterGame`→`RegisterGameAck(0xDB7)`+`RegisterGameResult(0xDB8)` with a
   shared `GameSeed`. Named/typed functions also in `docs/REFEREE_FUNCTIONS_TO_NAME.md`.
+  **REFEREE STUB RE-IMPLEMENTED 2026-06-13 (offline-tested; `[VERIFY LIVE]`):** new `sadk_lobby/referee.py`
+  (LoginSuccess 0xDCA / RegisterGameAck 0xDB7 / RegisterGameResult 0xDB8{GameSeed} builders + 74-envelope
+  framing + channel `handle_frame`), referee listener on `config.REFEREE_PORT=5481`, `is_referee` routing in
+  `connection.py`, and the referee `AssignServer(189,type=4)`→`GameServerData(170,subtype=5,REF_SERVER_ID,
+  :5481)` trigger in `dispatch._h_assign_server` (per RE: `RequestRefereeServer@0x468f60` sends `(4,4)` at
+  state>=6, callback `SetRefereeServerAddress@0x4625d0`→`LM+0x580`→`InitRefereeServerConnection@0x462910` dials).
+  `tests/test_referee.py` green. **Still needs a live drive** to nail the 189 UC-vs-referee discrimination, the
+  channel framing, the exact LoginSuccess trigger, and whether the match actually loads (task #8).
 - **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
   shows `<UNNAMED>`). Not implemented.
 
