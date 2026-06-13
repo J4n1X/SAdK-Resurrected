@@ -295,12 +295,23 @@ def _h_assign_server(conn, fields, ticket):
     ticket_id is accepted the same as a reply ticket.
     """
     server_type = fields.get("server_type", 0)
+    server_subtype = fields.get("server_subtype", 0)
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
         "server_type": server_type,
         "version": None, "data": None, "ticket_id": ticket}))
     log(f"  → UsercommServerData(192) -> {config.ADVERTISED_IP}:{config.UC_PORT} "
-        f"(type={server_type}, ticket={ticket})")
+        f"(type={server_type}, subtype={server_subtype}, ticket={ticket})")
+
+    # ── Referee assign — DEFERRED (do NOT send a 170 here) ────────────────────────────────────────────
+    # The referee is requested via AssignServer(189, server_type=4, server_subtype=4) at lobby state>=6
+    # (RequestRefereeServer@0x468f60 → callback SetRefereeServerAddress@0x4625d0 → LM+0x580 →
+    # InitRefereeServerConnection@0x462910 dials it). BUT the VILLAGE-entry assign is ALSO type=4, and
+    # injecting a referee GameServerData(170) on every type-4 assign BROKE world entry ("Login attempt
+    # failed" at char-select → Entering World, 2026-06-13). UC/village/referee 189s are not distinguishable
+    # here yet (all type-4); the real discriminator (server_subtype, order, or lobby state) needs a live
+    # capture — the per-assign log above (now incl. server_subtype) is exactly that capture. Re-enable a
+    # GUARDED referee 170 only once the wire shows which 189 is the referee. See task #8 / MATCH_START.md.
 
 
 # ── Game/village server list ──────────────────────────────────────────────────
@@ -350,6 +361,21 @@ FAKE_VILLAGE = {
     # (s15 live-confirmed). 5 bytes = roomId as BIG-ENDIAN u32 + 1 pending byte; roomId must equal
     # the client's ProtocolVersion (DAT_0087aed8) or Enter stays grey — see config.
     "data": server_data_block(config.LOBBY_PROTOCOL_VERSION),
+}
+
+# The referee/match-arbiter server (server_type=4, server_subtype=5). Advertised so its server_id resolves
+# to ip:port via the ConnectionManager when LobbyManager_InitRefereeServerConnection dials it. A unique id
+# (REF_SERVER_ID, not 1/50) forces a real dial to REFEREE_PORT rather than reusing the UC/village conn.
+# No data block (not a joinable village); not on the browsable game list (subtype 5 ≠ village 2 / game 1).
+REFEREE_SERVER = {
+    "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
+    "name": "referee", "description": "SaDK Referee",
+    "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
+    "max_players": 0, "cur_players": 0, "ai_players": 0,
+    "lobby_id": config.LOBBY_PROTOCOL_VERSION, "version": "",
+    "server_type": 4, "server_subtype": 5,
+    "level": 0, "game_mode": 0, "hardcore": False,
+    "map": "", "running": False, "data": None,
 }
 
 

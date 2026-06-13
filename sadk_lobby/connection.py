@@ -12,7 +12,7 @@ import struct
 import threading
 from datetime import datetime
 
-from . import chat, codec, config, dispatch, msgdefs, players, registry, village
+from . import chat, codec, config, dispatch, msgdefs, players, referee, registry, village
 from .log import log, routed_to_unhandled
 from .tincat import (BinaryReader, app_payload, build_frame,
                      build_handshake_payload, crc32, parse_header)
@@ -29,13 +29,15 @@ def next_conn_id():
 
 
 class Conn:
-    def __init__(self, sock, addr, conn_id, bin_file, is_chat=False, is_village=False):
+    def __init__(self, sock, addr, conn_id, bin_file, is_chat=False, is_village=False,
+                 is_referee=False):
         self._sock = sock
         self.addr = addr
         self.id = conn_id
         self._bin_file = bin_file
         self.is_chat = is_chat
         self.is_village = is_village
+        self.is_referee = is_referee
         self._buf = b""
         self._state = "PREFIX"
         self._hdr = None
@@ -167,6 +169,14 @@ class Conn:
                 # normal decode+dispatch so the village login actually completes. (s34)
                 village.handle_frame(self, payload)
                 # (no return — fall through to the lobby decode+dispatch below)
+            elif self.is_referee:
+                # The referee conn does the SAME base login as UC/village (CheckVersion 188 → token →
+                # 153), handled by the lobby dispatch below. At match-start it opens the referee data
+                # channel; referee.handle_frame answers those channel frames (LoginSuccess, RegisterGame →
+                # Ack+Result) and returns True so they aren't mis-routed to the village SendGameData(74)
+                # handler. Base-login NETMSGs return False and fall through to decode+dispatch.
+                if referee.handle_frame(self, payload):
+                    return
             elif len(payload) >= 2 and struct.unpack_from("<H", payload, 0)[0] == config.CHAT_PAYLOAD_MAGIC:
                 chat.handle_frame(self, payload)
                 return
