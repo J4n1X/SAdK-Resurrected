@@ -118,6 +118,11 @@ def _get_game(conn, sid):
     return registry.games.get(sid)
 
 
+def _owned_game(conn):
+    """The game this connection hosts (for its own AssignServer 189), or None."""
+    return registry.games.get_owned(conn.id)
+
+
 def _games_for_list(conn, server_type):
     """Games to advertise for a server-list request (server_type 0 == any)."""
     return registry.games.list_by_type(server_type)
@@ -308,6 +313,25 @@ def _h_assign_server(conn, fields, ticket):
         conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
         log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} type4/sub5 "
             f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket})")
+
+    # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
+    # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
+    # sends AssignServer(189 type5/sub1) and parks villageList+0x9c=-2 ("Connecting to Game Server").
+    # tincat3 GameServerManager_OnGameServerAssigned@0x10021520 special-cases ONLY type4/sub5 (referee);
+    # any other descriptor → the default sink LobbyVillageServerList.vtbl[0x28] =
+    # LobbyServerList_GameServerAssigned@0x469ad0, which fires the pending-assign callback with
+    # serverDesc->server_id and CLEARS villageList+0x9c → the dialog completes. So reply a
+    # GameServerData(170) echoing the host's OWN hosted game (type/sub stays 5/x, never 4/5). A game
+    # assign must NOT also get the UC 192 (that is the chat server) → return after the 170.
+    if config.REPLY_GAME_SERVER_ASSIGN and server_type == 5 and server_subtype == 1:
+        game = _owned_game(conn)
+        if game is not None:
+            conn.send_app(170, codec.encode_body(170, server_to_170_values(game, ticket)))
+            log(f"  → [GAME] GameServerData(170) id={game['id']} "
+                f"type{game.get('server_type', 5)}/sub{game.get('server_subtype', 0)} "
+                f"-> {game['ip']}:{game['port']} (ticket={ticket}) — clears villageList+0x9c")
+            return
+        log("  ! AssignServer(type5/sub1) but this conn hosts no game — no 170 to echo; sending 192")
 
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
@@ -530,18 +554,27 @@ def _h_send_token(conn, fields, ticket):
 @handler(74)  # SendGameData — the NETMSG envelope that carries every village/world message (1000+)
 def _h_send_game_data(conn, fields, ticket):
     """Village/world envelope handler. The genuine world-entry mechanism is the SERVER pushing
-    EnterWorld (msg 1000) once the transport is AUTHORIZED (see _h_send_token / village.send_enter_world);
-    the client's own SendGameData(74){0x27D2} world-login request is dormant, so we don't depend on it.
-    This handler also answers in-world PingCodes."""
+    EnterWorld (msg 1000) once the transport is AUTHORIZED (see _h_send_token / village.send_enter_world).
+    The client's own SendGameData(74){0x27D2} world-login request is dormant at lobby-entry but LIVE at
+    MATCH-START — the client re-sends it, and we MUST answer each one with a fresh 1000 (see the 0x27D2
+    branch; one-shot latch bypassed via force=True). This handler also answers in-world PingCodes."""
     msg_type = fields.get("msg_type", 0)
     data = fields.get("data", b"") or b""
     if not getattr(conn, "is_village", False):
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on non-village conn #{conn.id} — logged)")
         return
-    if msg_type == config.WORLD_LOGIN_REQUEST_MSGTYPE:        # 0x27D2 — the (dormant) world-login request
-        log(f"  [VILLAGE] *** WORLD-LOGIN REQUEST — SendGameData(74){{msg_type=0x{msg_type:x}, "
-            f"code=0x{data[:4][::-1].hex()}}} → EnterWorld(1000) ***")
-        village.send_enter_world(conn)
+    if msg_type == config.WORLD_LOGIN_REQUEST_MSGTYPE:        # 0x27D2 — world-login request (LIVE at match-start)
+        conn._world_login_answers = getattr(conn, "_world_login_answers", 0) + 1
+        if config.ANSWER_WORLD_LOGIN_REQUEST and conn._world_login_answers <= config.WORLD_LOGIN_MAX_ANSWERS:
+            log(f"  [VILLAGE] *** WORLD-LOGIN REQUEST #{conn._world_login_answers} — SendGameData(74)"
+                f"{{msg_type=0x{msg_type:x}, code=0x{data[:4][::-1].hex()}}} → EnterWorld(1000) ***")
+            village.send_enter_world(conn, force=True)   # bypass the one-shot latch for the explicit request
+        elif config.ANSWER_WORLD_LOGIN_REQUEST:
+            log(f"  [VILLAGE] WARNING: 0x27D2 resend #{conn._world_login_answers} past cap "
+                f"{config.WORLD_LOGIN_MAX_ANSWERS} — not answering (resend-loop guard)")
+        else:
+            log("  [VILLAGE] 0x27D2 world-login request — ANSWER_WORLD_LOGIN_REQUEST off (RE 2026-06-14: a "
+                "1000 re-enters the LOBBY village = the clone; masks the freeze, no match) — no-op")
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)

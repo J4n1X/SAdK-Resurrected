@@ -135,6 +135,15 @@ VILLAGE_MSG_WORLD_LOGIN_ACK = 1006        # 0x3EE — HandleWorldLoginAck; sends
 WORLD_LOGIN_ACK_CODE = 0xDEADBEEF         # the value the client compares in msg 1006
 VILLAGE_MSG_PONG = 0xED7                   # 3799 — HandlePongCode; our reply to the client's in-world PingCode
 VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world keepalive PingCode (SendGameData 74)
+
+# Match-start world-login resend (s42, ER engagement_records/2026-06-10_match-world-login.md): at MATCH
+# start the client re-sends SendGameData(74){0x27D2}; answering each with a fresh EnterWorld(1000) (forced
+# past the one-shot latch) unfroze the ~80s timeout. BUT RE 2026-06-14 (docs/MP_P2P_TRANSITION.md) showed
+# EnterWorld(1000) re-enters the LOBBY village (the "clone") — it MASKS the freeze, it does not start the
+# match. So it is OFF by default (honest: an unproven/disproven wire-change is not the default), and capped
+# so it can never flood if re-enabled for investigation.
+ANSWER_WORLD_LOGIN_REQUEST = False
+WORLD_LOGIN_MAX_ANSWERS = 3
 VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
 
 # ── Referee / match-arbiter server ────────────────────────────────────────────
@@ -159,6 +168,13 @@ REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on
 # type4/sub5 to the referee AssignServer(189, type=4, subtype=4) so its cat-0x108 ticket routes into
 # tincat3 GameServerManager_OnGameServerAssigned → SetRefereeServerAddress → LM+0x580. Set False to revert.
 REPLY_REFEREE_ASSIGN = True
+# [LIVE TEST 2026-06-14 · ER engagement_records/2026-06-14_game-server-assign-170.md] The host's match-
+# server bring-up FUN_0046aaa0 sends AssignServer(189, type=5, subtype=1) after StartUpNetwork(4) and parks
+# villageList+0x9c=-2 ("Connecting to Game Server"). Reply a GameServerData(170) for the host's OWN hosted
+# game (type/sub ≠ 4/5) so tincat3 GameServerManager_OnGameServerAssigned@0x10021520 routes it non-referee
+# → the default sink LobbyServerList_GameServerAssigned@0x469ad0 → fires the pending callback + clears
+# villageList+0x9c. Set False to revert to the plain-192 behavior.
+REPLY_GAME_SERVER_ASSIGN = True
 REF_GAME_SEED = 0x5EED1234    # fixed lockstep determinism seed (client never validates the value)
 
 REF_CATEGORY        = 3       # all referee LobbyMessages are category 3 (type word = names<<15|cat<<12|id)

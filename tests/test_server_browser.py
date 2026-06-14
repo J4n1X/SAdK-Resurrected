@@ -99,6 +99,61 @@ def test_fake_game_removed_from_source():
     assert not hasattr(config, "ADVERTISE_GAME_SERVERS"), "vestigial flag must be removed from config.py"
 
 
+# ── 5. Game-server assign (host match-server registration) ─────────────────────
+# [ER 2026-06-14_game-server-assign-170] The host's FUN_0046aaa0 sends AssignServer(189 type5/sub1)
+# and parks villageList+0x9c=-2; the stub must reply GameServerData(170) for the host's OWN game
+# (→ tincat3 GameServerAssigned clears +0x9c), NOT the UC UsercommServerData(192).
+def test_game_assign_replies_170_not_192():
+    from sadk_lobby import registry
+    saved = config.REPLY_GAME_SERVER_ASSIGN
+    registry.games.clear()
+    try:
+        config.REPLY_GAME_SERVER_ASSIGN = True
+        conn = FakeConn()
+        conn.id = 4242
+        sid = registry.games.add(conn.id, {
+            "name": "HostGame", "owner_id": 7, "ip": "192.168.1.143", "port": config.WORLD_PORT,
+            "server_type": 5, "server_subtype": 1, "map": "m", "running": True,
+        })
+        dispatch._h_assign_server(conn, {"server_type": 5, "server_subtype": 1}, TICKET)
+        types = [t for t, _ in conn.sent]
+        assert 170 in types, "game assign must be answered with GameServerData(170)"
+        assert 192 not in types, "game assign must NOT also send the UC server (192)"
+        f170 = dict(conn.sent)[170]
+        assert f170["server_id"] == sid, "the 170 must echo the host's own hosted-game id"
+        assert f170["ticket_id"] == TICKET
+        assert f170["server_subtype"] != 5 or f170["server_type"] != 4  # never the referee 4/5
+    finally:
+        config.REPLY_GAME_SERVER_ASSIGN = saved
+        registry.games.clear()
+
+
+def test_game_assign_no_hosted_game_falls_back_to_192():
+    # Defensive: type5/sub1 with no game owned by this conn → the prior 192 behaviour (+ a warning).
+    from sadk_lobby import registry
+    registry.games.clear()
+    conn = FakeConn()
+    conn.id = 999
+    dispatch._h_assign_server(conn, {"server_type": 5, "server_subtype": 1}, TICKET)
+    types = [t for t, _ in conn.sent]
+    assert 170 not in types and 192 in types
+
+
+def test_referee_assign_unaffected():
+    # The referee path (type4/sub4) still emits its 170 type4/sub5 AND the 192 (chat stays up).
+    saved = config.REPLY_REFEREE_ASSIGN
+    try:
+        config.REPLY_REFEREE_ASSIGN = True
+        conn = FakeConn()
+        conn.id = 1
+        dispatch._h_assign_server(conn, {"server_type": 4, "server_subtype": 4}, TICKET)
+        types = [t for t, _ in conn.sent]
+        assert 170 in types and 192 in types
+        assert dict(conn.sent)[170]["server_subtype"] == 5      # referee descriptor type4/sub5
+    finally:
+        config.REPLY_REFEREE_ASSIGN = saved
+
+
 def _run():
     failures = 0
     for name, fn in sorted(globals().items()):
