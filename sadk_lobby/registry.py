@@ -43,6 +43,15 @@ class GameRegistry:
             rec = self._games.get(sid)
             return dict(rec) if rec else None
 
+    def get_owned(self, owner_conn_id):
+        """A copy of the (first) game hosted by this connection, or None.
+        A connection hosts at most one game (the ChangeGameServer model)."""
+        with self._lock:
+            for rec in self._games.values():
+                if rec.get("_owner") == owner_conn_id:
+                    return dict(rec)
+            return None
+
     def update_owned(self, owner_conn_id, changes):
         """Apply `changes` to the (first) game owned by this connection — the model
         ChangeGameServer(177) follows (a connection hosts one game). Returns the

@@ -110,12 +110,19 @@ def _send_village(conn, msg_type, body, magic, tag):
     log(f"  → [VILLAGE] {tag} (msg {msg_type}/0x{msg_type:x}) in SendGameData(74) on conn #{conn.id} ({len(payload)}B)")
 
 
-def send_enter_world(conn, magic=None):
-    """Send EnterWorld (msg 1000) wrapped in a SendGameData(74) envelope on the village conn — exactly
-    once. Drives HandleEnterWorld → SetState(VillageEntered=9) → JoinChannel → connState=3; on the clean
-    build this alone renders the 3D world (s39, screenshot-confirmed). The client then emits its first
-    PingCode (we follow with a best-effort WorldLoginAck(1006); its render role is UNVERIFIED — see above)."""
-    if not conn.alive or getattr(conn, "_enter_world_sent", False):
+def send_enter_world(conn, magic=None, force=False):
+    """Send EnterWorld (msg 1000) wrapped in a SendGameData(74) envelope on the village conn.
+
+    The lobby-entry timer push is one-shot (force=False): it proactively enters the 3D lobby world once
+    (s39, screenshot-confirmed) → HandleEnterWorld → SetState(VillageEntered=9) → JoinChannel → connState=3.
+    But the client ALSO explicitly re-sends its world-login request (SendGameData(74){0x27D2}) at
+    MATCH-START, and that request must ALWAYS be answered with a fresh 1000 (force=True) — otherwise the
+    one-shot latch (already tripped by the lobby-entry push) swallows the reply and BOTH clients freeze
+    waiting to enter the match world (live-proven match-start wall, s42 MATCH_WORLD_LOGIN; the client then
+    spins re-sending 0x27D0/0x27D2). The client emits PingCodes once in-world (best-effort 1006 follows)."""
+    if not conn.alive:
+        return
+    if not force and getattr(conn, "_enter_world_sent", False):
         return
     conn._enter_world_sent = True
     _send_village(conn, config.VILLAGE_MSG_ENTER_WORLD, enter_world_body(), magic,
