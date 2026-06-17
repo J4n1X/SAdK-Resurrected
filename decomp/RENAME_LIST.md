@@ -180,3 +180,41 @@ WorldScreen/SetupGameDialog override targets.
 **Known follow-ups (see doc):** (1) slots 25–35 targets are shared base-widget helpers (~30 vtables) —
 reattribute to `ComponentBase`/`DialogBase`; (2) unify legacy `LobbyGameScreen_*` → `LobbyMenu_WorldScreen_*`;
 (3) `set_function_this_type` hygiene pass per class (deferred to avoid duplicate-GhidraClass trap).
+
+## NComm network layer (2026-06-17) — applied + saved in Ghidra
+
+Static RE on `sadk_noav.exe`. Full map: `docs/NCOMM_LAYER.md`. RTTI namespace `NComm`. `[PROVEN static]`.
+~120 functions named across Manager + transports + events (all plate-commented in the project).
+
+**Enums:** `EManagerState` {None=0,NetworkStarted=1,Connected=2} · `NE_EventType`
+{UserInformation=0x30001, PlayerInformation=0x30002, GameInformation=0x30003, GameLoaded=0x30004,
+StartGame=0x30005, UserChecksum=0x30009, UserLeave=0x3000a, UserReJoinGame=0x3000e, PlayerReady=0x30011,
+StartLoading=0x30012}.
+**Structs:** `NComm_Manager` (973B; +0x1c eManagerState, +0x340 pNetwork, +0x3c8 nMode, +0x3cc fStartLoading,
++0xdc 6-slot player table) · `NComm_INetworkHandler` + `NComm_INetworkHandler_vftable` (44 slots) ·
+`NComm_Event` (+0 vtable, +4 nTypeId:NE_EventType, +8 nSourceNetId, +0xc nPlayerId).
+
+**Manager (Manager.cpp):** `0x408290` GetManager · `0x408430` GetState · `0x4890b0` GetMode ·
+`0x40a9a0` StartUpNetwork · `0x40ad60` ConnectAndJoin · `0x40b410` Shutdown · `0x408b60` SendEvent ·
+`0x40fd50` DispatchEventLocal · `0x408d80` SendPlayerReadyEvent · `0x40e560` Manager_HandleNCommEvent.
+
+**Transport vtable (NComm_INetworkHandler, impl = TinCatNetwork @vftable 0x7d58f4, 44 slots):**
+slot0 dtor · 1 StartUp · 2 ShutDown · 3 Process · 4 ConnectToServer · 5 Disconnect · 6 Broadcast ·
+7 SendToHost · 8 SendTo · 9 SendToAllExcept · 10 CloseSession · 11 KickPlayer · 12 GetLocalNetId ·
+13 GetUserCount · 14 IsHost · 15 IsConnected · 16 GetBroadcastNetId · 18 GetUserNetIdByIndex ·
+19 HasUser · 20 SetUserData · 21 GetUserName · 22 GetUserGUID · 23 GetUserLevel · 24 GetMinUserLevel ·
+25 RemoveUser · 26 IsActive · 27-31 BC_Start/Update/Stop/IsActive/GetGameInfo (LAN "S2TNG_BC") ·
+38 StartReconnector · 40 GetNetworkName · 41 LoadNetworkConfig · 42 ProcessReceive
+(prefix `NComm_TinCatNetwork_`). TinCatNetwork 2nd vtable = `NComm::ITinCatCallback` @0x7d58ac (16 slots,
+`NComm_TinCatNetwork_cb_*`; `cb_Received_Data@0x41d720` = inbound dispatcher, TinCat type 0x27d9).
+DummyNetwork (loopback) @0x7d5a6c: ctor `NComm_DummyNetwork_ctor@0x41ed20` + StartUp/SendStub/GetNetId.
+TinCatReconnector @0x7d5290 (host migration). Net-id magics: 0xEFFFFFCC bcast / 0xEFFFFFDD host /
+0xEFFFFFEE none.
+
+**Events (NComm::*; ctors + Serialize/Deserialize/GetClassSignature/dtor each):** factory
+`NComm_Event_CreateFromStream@0x420540` switches on the per-class wire signature (vftable[5]); the inner
+NE_ opcode is `Event+4` (`NComm_Event_GetType@0x4901e0`). Full class→signature→ctor table in the doc.
+Primitives: `NComm_MemoryStream_{Write,Read,WriteString}`, `NComm_EventBase_Serialize@0x4085a0`,
+`NComm_{MD5Digest,NetGUID,PlayerInfo}_{Serialize,Deserialize}`.
+
+Follow-ups: this-typing pass per NComm class; model the Manager+0xdc 6-slot player table (room model).
