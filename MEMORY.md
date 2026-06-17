@@ -107,6 +107,19 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   ready definition to re-enable a GUARDED 170. `tests/test_referee.py` + full suite green; the deferred state is
   wire-inert (only a cosmetic log change vs baseline). **Still needs a live drive (task #8)** for the 189
   discriminator, channel framing, LoginSuccess trigger, and whether the match loads.
+  **STATIC RECONCILIATION 2026-06-17 (`docs/MATCH_START_STATIC_RECONCILIATION.md`, `[PROVEN static]`).**
+  The host's "Connecting to Game Server" modal lives in **`LobbyMenu_SetupGameDialog_Update@0x457a00`**
+  (gate: `NComm_IsHost && villageList+0x9c ∈ {-1,-2}`). The escape (`AssignServer`→`+0x9c=0`) is driven by
+  **`WorldScreen` (NOT the same screen)** — note `0x435980` is **`LobbyMenu_WorldScreen_Update`**, mislabelled
+  "LobbyGameScreen_Update" in older docs. The AssignServer auto-trigger is **button-free** (arm
+  `WorldScreen_ArmGameServerRequest@0x433f60` sets slot-action=8 + deferred flag `[0xd8e]` → `OnLeaveVillage`
+  deferred branch → `DispatchSlotAction@0x434230` case6 → `AssignServer`); its **sole precondition is
+  `EManagerState==0`** (`NComm_Manager_GetState@0x408430`). The NComm never reaches 0 at match-start (capture:
+  `NComm_Manager_Shutdown@0x40b410` 0 hits), so the arm never fires. **The only button-free route to
+  `EManagerState 0` is the slot-36 virtual wrapper `0x452d90` (vtbl+0x90) — its dispatcher is unresolved
+  statically.** `LeaveButton`(`SetupGameDialog this[0x2de]`) is a player ABORT, not the start. ~17 funcs
+  renamed + plate-commented in Ghidra (`decomp/RENAME_LIST.md`). **Next: live test — does EManagerState ever
+  leave 2 at all-ready?** (trace `0x40b410`+`0x433f60`, read `0x408430`).
 - **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
   shows `<UNNAMED>`). Not implemented.
 

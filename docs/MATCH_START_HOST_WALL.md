@@ -1,5 +1,13 @@
 # Match-start host wall — the host never obtains a game-server assignment
 
+> **⚠️ PARTIALLY CORRECTED 2026-06-17 — read `docs/MATCH_START_STATIC_RECONCILIATION.md` first.**
+> Two fixes from a fresh static pass: (1) the screen here called "LobbyGameScreen::Update" is actually
+> **two** screens — `0x457a00`=`SetupGameDialog::Update` (owns the modal), `0x435980`=`WorldScreen::Update`
+> (owns the arm); (2) `FUN_004ac170(...,4,1)` is a screen-stack enable-bit setter, **not** a world build.
+> The AssignServer trigger is now fully mapped and is **button-free** (deferred-flag path); its sole
+> precondition is `EManagerState==0`, which the NComm never reaches at match-start. The core finding
+> here (the host never sends `AssignServer`) stands.
+
 Status: **2026-06-14, live-debugged on the real binary** (dbgeng MCP on host PID 37676, magazine
 build `sadk_noav.exe`, image base 0x400000, all addrs 1:1). The 2026-06-14 binary question
 ("does `FUN_0046aaa0` fire on Start?") is **ANSWERED: it never fires.** Every claim below is
