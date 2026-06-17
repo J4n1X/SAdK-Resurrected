@@ -109,3 +109,32 @@ Serialization primitives: `NComm_MemoryStream_{Write,Read,WriteString}` (`0x4122
 - Model the 6-entry player-slot table at `Manager+0xdc` (the room slot/tribe/team/colour model) — needs
   the per-slot struct mapped; it ties directly to `SetupGameDialog`'s 6 Player{Type,Tribe,Team,HQ,Color}
   slot widgets.
+
+## Inbound event router & the load sequence (2026-06-17, added) [PROVEN static]
+
+`Manager_HandleNCommEvent@0x40e560` is the per-frame inbound P2P event router; it switches on
+`event->GetType()` (the `NE_*` id at `event+4`). The match-start load sequence it implements:
+
+1. **`NE_PlayerReady 0x30011`** → `SetPlayerConnectionState(ready)`; host → `UpdateReadyUI` + `BroadcastGameInfo`.
+2. Host **`NComm_Manager_BroadcastStartLoading@0x40fe50`** (gated host-mode + `EManagerState==Connected`)
+   emits **`NE_StartLoading 0x30012`** → every client sets `manager+0x3cc = 1` (the StartLoading flag
+   the screens wait on).
+3. **`NE_GameInformation 0x30003` = the load gate:** when `IsAllConnected() && !IsInGame()`, reconciles
+   slots, then if `IsAllConnected()` runs **`SP_CheckMapExists`** → map present begins the load
+   (`FUN_004141f0`/`FUN_00414700`); **map MISSING → `EventKickUser 0x30010` `"!MAP NOT EXISTING"`**.
+4. Other arms: `0x30001` UserInformation (join; kick on Version/Checksum/static-data MD5 mismatch),
+   `0x30002` PlayerInformation (slot tribe/team/colour/index), `0x30004` GameLoaded, `0x30005` StartGame,
+   `0x3000a/b` UserLeave/Left, `0x3000e` UserReJoinGame (kick `"!COULD NOT RECONNECT"`), `0x30010` Kick
+   (`"!You were kicked!"`; if `!IsInGame` → `NComm_Manager_Shutdown` state→0).
+
+**Bearing on the match-start wall:** the router has **no "all-ready → tear down NComm" case** — nothing
+here drives `EManagerState→0` (only the *kick* path shuts down). So the teardown that arms the
+game-server request is external (the screen/UI path), confirming `MATCH_START_STATIC_RECONCILIATION.md`.
+And because `SetupGameDialog::Update` early-returns on the `+0x9c` "Connecting to Game Server" modal
+*above* its `BroadcastStartLoading` call, while parked on that modal the host never emits StartLoading →
+steps 2-3 never run. **Live tests:** (1) does `0x40fe50` fire at all-ready? (fires → past the modal, stall
+is downstream; never → modal is the hard blocker). (2) `SP_CheckMapExists` is a second independent gate —
+both peers must have the selected map locally or 0x30003 kicks `"!MAP NOT EXISTING"`.
+
+Named: `NComm_Manager_BroadcastStartLoading@0x40fe50`; corrected the speculative plate on `0x40e560`
+(its real switch is `0x30001..0x30012`, not the `0x2002x` list a prior note guessed).
