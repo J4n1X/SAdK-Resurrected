@@ -114,3 +114,30 @@ vtables: UserComm `0x7dded8`, GameServer `0x7dfafc`, Village `0x7dc8e0`. `LobbyM
   text gate.
 - The actual button **click → enter** wiring (button widget → `CreateVillageServerConnection`)
   wasn't traced; start from the widget at `LobbyVillageScreen+0x254` / the input handler.
+
+## Match-start screens & game-server-request chain (2026-06-17) — applied + saved in Ghidra
+
+Static RE on `sadk_noav.exe` via the Ghidra MCP. Full write-up + corrections:
+`docs/MATCH_START_STATIC_RECONCILIATION.md`. All `[PROVEN static]`.
+
+| Address | Name | Note |
+|---------|------|------|
+| `0x408290` | `NComm_GetManager` | returns the NComm manager singleton (`DAT_00885754`). |
+| `0x408430` | `NComm_Manager_GetState` | returns `mgr+0x1c` = EManagerState (0 None / 1 Started / 2 Connected). |
+| `0x4890b0` | `NComm_Manager_GetMode` | returns `mgr+0x3c8` = transport mode (compared to 4 = match host). |
+| `0x46b610` | `LobbyManager_GetVillageServerList` | returns `LM+0x54` (the `LobbyVillageServerList`). |
+| `0x408d80` | `NComm_SendPlayerReadyEvent` | sends NComm `Event1Integer 0x30011`; requires EManagerState==2. ReadyButton target. |
+| `0x457a00` | `LobbyMenu_SetupGameDialog_Update` | vtable `0x7d931c` slot 8. Owns the "Connecting to Game Server" modal early-return (gate = `+0x9c ∈ {-1,-2}`). |
+| `0x457f00` | `LobbyMenu_SetupGameDialog_HandleButtonClicks` | slot 9 (vtbl+0x24). Minimize/Ready/Leave click latches. |
+| `0x456c70` | `LobbyMenu_SetupGameDialog_BuildWidgets` | slot 1. Buttons: `[0x2dd]`=MinimizeButton, `[0x2de]`=LeaveButton, `[0x2df]`=ReadyButton. |
+| `0x460850` | `LobbyMenu_SetupGameDialog_IsConnectingPhaseActive` | slot 13 (vtbl+0x34). `panel->vtbl[0x2c]() && this+0x1d9`(ctor default). |
+| `0x460800` | `LobbyMenu_ScreenBase_SetConnectingVisible` | sets `this+0x1d9` + panel `vtbl+0x24`. |
+| `0x45f420` | `LobbyMenu_ScreenBase_ctor` | sets `*this=ScreenBase::vftable`, `+0x1d9=1` default. |
+| `0x45f520` | `LobbyMenu_ScreenBase_ctor_variant` | variant ctor (same field init). |
+| `0x435980` | `LobbyMenu_WorldScreen_Update` | vtable `0x7d6eac` slot 8 (WAS mislabelled `LobbyGameScreen_Update`). Referee pump + arm + world-screen activate. |
+| `0x433f60` | `LobbyMenu_WorldScreen_ArmGameServerRequest` | iff EManagerState==0 → slot-action=8 + deferred flag `[0xd8e]`. |
+| `0x434230` | `LobbyMenu_WorldScreen_DispatchSlotAction` | `switch(this+0x356c[slot]-2)`; case6 (code==8) → AssignServer `FUN_0046aaa0`. |
+| `0x468410` | `LobbyVillageServerList_ShutdownNCommIfNotMatchHost` | gate `EManagerState!=0 && mode!=4` → Shutdown + `+0x9c=-1`. Reached only via LeaveButton or slot-36 wrapper. |
+| `0x452d90` | `LobbyVillageServerList_ShutdownNComm_Wrapper` | SetupGameDialog vtbl slot 36 (vtbl+0x90); pure virtual dispatch (no static caller). |
+
+Plate comments added in Ghidra for `0x457a00 0x457f00 0x460850 0x433f60 0x434230 0x468410`.
