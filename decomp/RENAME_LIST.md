@@ -141,3 +141,42 @@ Static RE on `sadk_noav.exe` via the Ghidra MCP. Full write-up + corrections:
 | `0x452d90` | `LobbyVillageServerList_ShutdownNComm_Wrapper` | SetupGameDialog vtbl slot 36 (vtbl+0x90); pure virtual dispatch (no static caller). |
 
 Plate comments added in Ghidra for `0x457a00 0x457f00 0x460850 0x433f60 0x434230 0x468410`.
+
+## ScreenBase screen/dialog vtable family (2026-06-17) — applied + saved in Ghidra
+
+Static RE on `sadk_noav.exe`. Full slot tables + structs: `docs/LOBBY_SCREEN_VTABLES.md`.
+RTTI-confirmed classes `LobbyMenu::{ScreenBase,WorldScreen,SetupGameDialog}`. `[PROVEN static]`.
+
+**Structs created:** `LobbyMenu_ScreenBase_vftable` (25 fn-ptr slots, role-named) ·
+`LobbyMenu_ScreenBase` (object; proven fields only).
+**Struct corrected (mislabels fixed, layout byte-preserved):** `LobbyComm_ServerList`
+`+0x9c` `nPendingCreateGameServerId`→`nGameServerAssignState` (int; modal gate −1/−2/0);
+`+0xa0` `fVillageLoginPending`(bool)→`pAssignCompleteCallback`(void*, the fn-ptr GameServerAssigned fires).
+
+**ScreenBase base methods (vftable 0x7da504):**
+`0x45f360` Destructor · `0x45f180` RouteInputToContainer · `0x45f270` IsVisibleAndEnabled ·
+`0x45f170` SetFlag1e0 · `0x45f6f0` OnHide · `0x45f380` OnShow · `0x45f710` OnLeave ·
+`0x45f2e0` GetFlag1e1 · `0x45f2d0` GetFlag1d8AsBool · `0x45f1e0` SetConnectingOverlayEnabled ·
+`0x45f200` ClearConnectingOverlayEnabled · `0x45f220` GetConnectingOverlayEnabled ·
+`0x45f230` SetFlag1d8 · `0x45f240` ClearFlag1d8 · `0x45f250` GetFlag1d8 · `0x45f260` GetFlag1e0 ·
+`0x45f2a0` GetField1dc · `0x45f2b0` SetField1dc · `0x45f2c0` GetField3c · `0x48cfa0` GetScreenContainer
+(all prefixed `LobbyMenu_ScreenBase_`). `0x5657b0` `Stub_EmptyVoid_5657b0` (shared no-op).
+`0x46a160` `LobbyComm_ServerList_ctor`.
+
+**WorldScreen overrides:** `0x435180` ScalarDeletingDestructor · `0x438050` RouteInputAndBindWidgets ·
+`0x4389d0` OnShow · `0x439410` OnLeave · `0x4319f0` Slot24_ForwardTo3588 (prefix `LobbyMenu_WorldScreen_`).
+
+**SetupGameDialog overrides/extended (prefix `LobbyMenu_SetupGameDialog_`):** `0x453890` Destructor ·
+`0x455f20` OnShow · `0x455e70` OnLeave · `0x43bf40` OnHide · `0x452dd0` SetConnectingOverlayEnabled
+(creates/destroys the "Connecting…" overlay @this+0xBB8) · `0x452e20` HideConnectingOverlay ·
+`0x4608a0` GetScreenContainer · `0x455e60` DetachSlotWidgetCallbacks (the 6 Player{Type,Tribe,Team,HQ,Color}
+slot widgets) · `0x460960` DisableContainer · `0x460980` IsInteractive · plus geometry/flag accessors
+`0x460be0/0x460e90/0x460ad0/0x460ed0/0x4607f0/0x460b00` (SetChildPosition/Bounds/Rect/Layout) and
+`0x460790/0x4607b0/0x4607c0/0x4607d0/0x4607e0` (init flag +0xb40, flag +0xb42).
+
+**Plate comments** added on `0x457a00 0x457f00 0x460850 0x433f60 0x434230 0x468410 0x46a160` + the
+WorldScreen/SetupGameDialog override targets.
+
+**Known follow-ups (see doc):** (1) slots 25–35 targets are shared base-widget helpers (~30 vtables) —
+reattribute to `ComponentBase`/`DialogBase`; (2) unify legacy `LobbyGameScreen_*` → `LobbyMenu_WorldScreen_*`;
+(3) `set_function_this_type` hygiene pass per class (deferred to avoid duplicate-GhidraClass trap).
