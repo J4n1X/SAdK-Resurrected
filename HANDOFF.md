@@ -1,91 +1,104 @@
-# HANDOFF — pick-up note for the next agent (2026-06-17, evening)
+# HANDOFF — pick-up note for the next agent (2026-07-26, night)
 
-Branch `claude/match-start-re-and-referee-stub` is merged to `master`. Treat this as a fresh start.
+Branch `master`, clean tree. Today was a **correction + elimination** session: no stub wire changes,
+three commits (`610408f`, `d0e869f`, `572fa8b`), all docs/RE. Several long-standing "facts" turned out
+to be wrong — including ones stated confidently in the previous version of this file. Read the
+corrections before trusting anything older than this.
 
 ## Read first
-1. CLAUDE.md  2. HARNESS.md (binding rules)  3. MEMORY.md (index)
-4. **`docs/MATCH_START_HOST_WALL.md`** — the wall + the §"2026-06-17" narrowing.
-5. `docs/MATCH_START_STATIC_RECONCILIATION.md`, `docs/NCOMM_LAYER.md`, `docs/LOBBY_SCREEN_VTABLES.md`
-   — the named/typed map of the screens + NComm (this session named ~210 funcs, 6 structs, 2 enums).
+1. `CLAUDE.md`  2. `HARNESS.md` (binding rules)  3. `MEMORY.md` (index)
+4. **`decomp/RENAME_LIST.md`, the four `2026-07-26` sections** — the whole derivation, in order.
+5. `docs/LIVE_DEBUG_RUNBOOK.md` **§8** — ServerList field map, the `this+8` trap, trace sets.
+6. `docs/LOBBY_SCREEN_VTABLES.md` — corrected `LobbyComm::ServerList` field table.
 
-## Milestone: Host + Join matches. Stuck at: host parks on the "Connecting to Game Server" modal.
+## Milestone: Host + Join matches. Status: **the lobby half is now cleared end to end.**
 
-## ⭐ THE PLAN — chase this, in order ⭐
+---
 
-**The one decisive question: what writes `villageList+0x9c = -1` at match-start?**
-That write is what raises/keeps the "Connecting to Game Server" modal, and static RE **cannot** find it
-(reasons below). It must be caught live.
+## ⭐ The one thing to internalise: `LobbyComm::ServerList` has TWO vtables
 
-### Step 1 — write-watchpoint on `+0x9c` (the whole ballgame)
-- Absolute address: `villageList = LobbyManager+0x54`; `+0x9c` ⇒ **`LM + 0xF0`**. Resolve `LM` live:
-  `LM = *(0x00885890)` (`g_pLobbyManager`). (Capture #1 had `LM=0x0E5E98E8` → watch `0x0E5E99D8`, but LM
-  varies per run — recompute.)
-- **Arm a hardware WRITE watchpoint on that dword**, then drive: log in → host a game → both ready.
-  The instruction that writes `-1` (and earlier the room value `101`) is the unidentified writer — it is
-  **not** any of the 5 known `MOV`-store writers, so it's a struct-copy/`memcpy` an instruction search
-  can't see. Catching it names the 6th writer and explains the modal.
-- **Tooling note:** the wall doc previously said "heap data watchpoints aren't exposed by the debugger
-  MCP." That may be **stale** — the MCP lists `debugger_watch_memory` / `debugger_watch_log` /
-  `debugger_watch_stop`. **First action: confirm `debugger_watch_memory` can arm a write watch on an
-  absolute heap address.** If yes, this is solved in one session. If genuinely unavailable, fall back to
-  trace-and-narrow (arm non-breaking traces on the candidate copy sites around the room→start window).
+`LobbyComm_ServerList_ctor@0x0046a160`:
+```
+0046a1a6  MOV [ESI],       0x7dafcc   ; primary                        -> this = ServerList+0
+0046a1ac  MOV [ESI + 0x8], 0x7daf8c   ; CommLayer::IGameServerObserver -> this = ServerList+8
+```
+**Every** callback in the `0x7daf8c` table runs on `this = ServerList + 8`, so all offsets quoted inside
+them are +8 shifted. **LIVE-CONFIRMED 2026-07-26**: observer `this = 0x0E6A45CC` while the base was
+`0x0E6A45C4`. Misreading this produced two wrong "facts" and a multi-session hunt for an "unidentified
+sixth writer" of `+0x9c` that does not exist.
 
-### Step 2 — once the writer is known
-Decide whether `-1` at match-start is correct ("host genuinely needs a game-server assignment, must ASK")
-or a bug (something clobbers a previously-valid `+0x9c`). Then either make the host ASK (drive the
-teardown→arm→AssignServer chain — but see "no auto trigger" below) or feed the value the real flow expects.
+| field | type | meaning |
+|---|---|---|
+| `+0x9c` | u32 | hosting latch: `0xFFFFFFFF` INVALID · `0xFFFFFFFE` PENDING · else the real assigned id |
+| `+0xa0` | **bool** | a byte flag — **not** a callback pointer |
+| `+0xa4`/`+0xa8` | ptr/fptr | pending **referee** callback, armed only by `RequestRefereeServer@0x00468f80` |
 
-### Step 3 — two independent live probes (cheap, do alongside)
-- **Trace `NComm_Manager_BroadcastStartLoading@0x40fe50` at all-ready.** Fires → host got *past* the modal,
-  stall is downstream (AllConnected / map). Never fires → the `+0x9c` modal is the hard blocker (the
-  broadcasting screen's `Update` is short-circuited). Both WorldScreen::Update and SetupGameDialog::Update
-  call it, so it also shows which screen is pumping.
-- **Confirm the selected map exists on BOTH peers (.134 and .143).** `NE_GameInformation(0x30003)` runs
-  `SP_CheckMapExists` and kicks `"!MAP NOT EXISTING"` (EventKickUser 0x30010) otherwise — a second,
-  independent gate that bites *after* the modal clears.
+Writers of `+0x9c` — **five, all named**: ctor→INVALID · `CreateGameServer@0x0046aaa0`→PENDING ·
+`CreateResultReceived@0x0046a6a0`→real id / INVALID+Shutdown · `DeleteResultReceived@0x00469990`→INVALID ·
+`DestroyGameServerAndShutdown@0x00468410`→INVALID.
 
-## Why the modal won't clear — the proven chain (static)
-Modal clears only when `villageList+0x9c → 0`, written **solely** by `LobbyServerList_GameServerAssigned
-@0x469ad0` (the reply to the host's `AssignServer`). Host sends `AssignServer` (`FUN_0046aaa0`) only via
-`WorldScreen_DispatchSlotAction@0x434230` case6 (slot action==8), set by `WorldScreen_ArmGameServerRequest
-@0x433f60` — **gated on `EManagerState==0`**. NComm reaches 0 only via `NComm_Manager_Shutdown@0x40b410`.
+## What actually happens at match-start — traced live, end to end
 
-## New proven facts THIS session (sharpen the gap)
-- **No automatic NComm teardown exists.** `ShutdownNCommIfNotMatchHost@0x468410` (→ Shutdown → `+0x9c=-1`)
-  has two callers: the **LeaveButton** handler, and slot-36 `ShutdownNComm_Wrapper@0x452d90` (`vtbl+0x90`).
-  A program-wide search found **one** `call [reg+0x90]` and it is **not** in the lobby (`0x7450fe`,
-  `FUN_00741360`). So slot-36 is effectively never dispatched → the teardown is reachable only by the Leave
-  button. ⇒ the `+0x9c`/AssignServer "Connecting to Game Server" mechanism has **no auto-start trigger** —
-  strong hint it is **not** the intended match-start path (or the host is in an unexpected state).
-- **The village list is constructed once** (`LobbyComm_ServerList_ctor@0x46a160`, sole caller
-  `LobbyManager::ctor@0x46408f`). Not rebuilt at match-start ⇒ the `-1` is a *write*, not a re-ctor.
-- **`Manager_HandleNCommEvent@0x40e560` has no all-ready→teardown case** (only the kick path shuts NComm
-  down) ⇒ the teardown trigger is external (screen/UI), confirming the reconciliation doc.
-- Corrected: `villageList+0x9c` = assign state (NOT "pending create id"); `+0xa0` = a callback fn-ptr
-  (NOT a bool). `LobbyComm_ServerList` struct relabelled accordingly.
+```
+[21] CreateResultReceived(id=100, errorCode=0)     hosting latches. WORKS.
+[17] DestroyGameServer(ServerList)                 client self-delists -> 169. Its own doing.
+[19] CLobby_RequestExitVillage@0x004f5090          the exit hatch. FIRES.
+[22] SetState(0x0A LeavingVillage)                 via the 2002 sender
+[22] SetState(0x0B VillageLeft)                    via HandleLoggedOut, 110 ms. CLEAN.
+[18] DeleteResultReceived(errorCode=0)             +0x9c -> INVALID  <-- 360 ms AFTER the leave
+```
+Stub side, same moment: **both** clients sent 2002, dropped **both** world (:5479) and UC (:7071)
+connections, then re-subscribed to the server-list observers — i.e. back to *browsing*.
 
-## Key named addresses (sadk_noav.exe, base 0x400000) — all applied + saved in Ghidra
-- Modal: `LobbyMenu_SetupGameDialog_Update@0x457a00` (gate `NComm_IsHost && +0x9c∈{-1,-2}`),
-  `..._IsConnectingPhaseActive@0x460850`.
-- Assign chain: `..._GameServerAssigned@0x469ad0` (+0x9c→0) · `FUN_0046aaa0` (AssignServer, +0x9c→-2) ·
-  `WorldScreen_DispatchSlotAction@0x434230` (case6) · `WorldScreen_ArmGameServerRequest@0x433f60`
-  (needs EManagerState==0) · `ShutdownNCommIfNotMatchHost@0x468410` · `ShutdownNComm_Wrapper@0x452d90`.
-- NComm: `NComm_GetManager@0x408290` (`*0x885890`-style singleton `DAT_00885754`) ·
-  `NComm_Manager_GetState@0x408430` (mgr+0x1c, EManagerState) · `_Shutdown@0x40b410` ·
-  `_StartUpNetwork@0x40a9a0` · `_ConnectAndJoin@0x40ad60` · `_BroadcastStartLoading@0x40fe50` ·
-  `Manager_HandleNCommEvent@0x40e560`. Enums `EManagerState`, `NE_EventType`. Struct `NComm_Manager`
-  (+0x1c state, +0x3c8 mode, +0x3cc StartLoading, +0xdc 6-slot player table).
+**The "Verbindung zu Spieleserver" modal is a stuck SCREEN, not a stuck protocol.** `+0x9c` only goes
+INVALID *after* the leave already completed; from that frame the still-visible `SetupGameDialog`
+(`Update@0x00457a00`, host-only via `NComm_IsHost()`) shows the modal and early-returns every frame.
 
-## Environment
-- RE: Ghidra MCP, program **sadk_noav.exe**, project SaDK, addrs 1:1 (SADK@0x400000, tincat3@0x10000000).
-- Live debug: dbgeng `python -m debugger` from C:\Users\user\Downloads\ghidra-mcp, ELEVATED (:8099).
-  Break-in POST /debugger/interrupt; reads need target stopped; sync modules after attach; DETACH before
-  killing the game. `debugger_watch_memory`/`_trace_function` are the tools for Step 1/Step 3.
-- Stub: minisrv `user@linux-server` (.130, **this repo lives here**; `SADK_ADVERTISE_IP=.130`,
-  `python3 -m sadk_lobby`). Host = local .134, joiner = .143. master already current here (no pull needed).
-- Harness (binding): MCP-first (no standalone RE scripts), no faking, ER-gated stub wire-changes.
+## Killed this session — do not re-run these
 
-## Maintainer ground truth
-All players ready → "Connecting to Game Server" modal opens; **no button to press after**; unknown what
-should follow. ⇒ supports: the host is waiting on an earlier trigger it never gets, and the `+0x9c` write
-that raises the modal is the thread to pull.
+- ⛔ **The entire "Step 1" plan in the previous HANDOFF** — hardware write-watchpoint on `+0x9c` to catch
+  a "6th writer". There is no 6th writer; the five above are the complete set, found by a scripted store
+  sweep. (And `debugger_watch_memory` rejects heap addresses, as the older doc originally said.)
+- ⛔ **"`villageList+0x9c` = assign state, `+0xa0` = a callback fn-ptr"** — the previous HANDOFF's
+  "Corrected:" line. It was the correction that was wrong; the ORIGINAL names were right.
+- ⛔ **"`+0x9c = 0xFFFFFFFF` means PENDING"** — that is INVALID. PENDING is `0xFFFFFFFE`.
+- ⛔ **"`GameServerAssigned` clears the game-server gate"** — it is the *referee* completion and never
+  touches `+0x9c`.
+- ⛔ **"Pushing `GameServerAssigned` would crash on a garbage callback"** — refuted; the ctor zeroes it.
+- ⛔ **"The exit hatch silently no-ops"** — my own hypothesis, refuted live: `CLobby+0x270 = 3` and
+  `+0xc0 = 0x25DEFA70` (non-NULL), so it took the dispatch branch and worked.
+- ⛔ **A third delivery-shape experiment on the 168** — `CreateGameServer`'s only callers are
+  village-screen UI actions, not the game-room Start button. Killed before it cost a live run.
+- ⛔ **`running=true` broadcast** — reverted in `a2377d2` as unsupported (`170.running` appears nowhere
+  in the match-load path); ER marked ABANDONED. `MEMORY.md` used to claim it was implemented, deployed
+  and awaiting a live test. It was not. That entry is now corrected.
+
+## Where the wall actually is, and the two leads
+
+The wall sits where `MEMORY.md`'s `mp-host-join-ready-start-works-wall-match-load` already put it:
+**nothing initiates the match world load after VillageLeft(11).** Two concrete leads from tonight:
+
+1. **No `AssignServer(189)` ever fired and nothing dialled `:5481`** — despite `MEMORY.md` recording
+   "VillageLeft(11) → arms the referee", and despite `referee-delivery-proven-live` having that path
+   working. Either that model is wrong or the arm is conditional on something absent. **Start here** —
+   it is a named path we already know how to answer.
+2. **What is supposed to move the host off `SetupGameDialog`?** The client went back to browsing
+   (re-subscribed type 4/5) while the screen stayed put.
+
+## Environment left as-is
+- Stub live on `linux-server`, ports 7070/7071/5479/5481, logging to `stub_n.out`, current master.
+  Deployed content == master. (Four modules differ from local on md5 by **CRLF vs LF only** — strip CR
+  before comparing across a Windows→Linux deploy; a raw hash compare is not a valid equality test.)
+- Debugger **detached**; game pid 54956 left running. Tonight's six-trace set is recorded in
+  `decomp/RENAME_LIST.md` if you want to re-arm it.
+- Ghidra: program `sadk_noav.exe`, addrs 1:1 (SADK@0x400000, tincat3@0x10000000). All names/labels/plate
+  comments from today are applied and saved.
+
+## Method notes worth keeping
+- **Check for secondary vtables before trusting any quoted offset.** "When static and live disagree,
+  live wins" still holds — but this session the reverse also bit: a wrong *base* made live reads look
+  like they refuted a correct model.
+- **Check the artifacts you already have before spending a live run.** The whole match-start chain was
+  sitting unread in `minisrv:stub_gsassign.out` / `stub_final.out` from earlier sessions.
+- A named function is not a verified one. `CLobby_RequestExitVillage` is an *inferred* name (from the
+  `+0x80` neighbour and the shared `+0xc0` action object) — flagged `[TODO]` in its plate comment.
