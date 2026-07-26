@@ -582,3 +582,68 @@ wire change — breakpoint `LobbyManager::OnConnectionLost@0x004647e0` (reason a
 trigger a disconnect by restarting the stub while a client sits in the village. That yields both the reason
 value for an abrupt close **and** the tincat3 caller (from the stack), which is the site the heuristics
 failed to find.
+
+## 🎯 2026-07-26 — THE LOGOUT MECHANISM FOUND: msg **1006** `{code=0xDEADBEEF}` is the logout trigger
+
+Found by **live stepping**, not static sweeping (the user's call — three static shape-sweeps had produced
+only false positives). Method: breakpoint `LobbyManager::OnConnectionLost@0x004647e0`, drop the stub to
+force a disconnect, then read the true caller from `[ESP]` at function entry instead of trusting the
+unwinder.
+
+**Measured live:** at entry `ESP` held `[0x10030C30, connId, 1, 0x0000000A]` → caller `0x10030C30`,
+**reason = 10**.
+
+### `FUN_10030ad0` = `CommLayer::ConnectionReal` event handler (vtbl `+0x34`) — case 4 = DISCONNECT `[PROVEN]`
+```c
+case 4:
+  if (conn+0x38) observer->vtbl[8](arg);      // (a no-op stub for our connection)
+  iVar4 = *(conn+8);                          // ← the connection STATE at disconnect
+  *(conn+8) = 0;
+  if (sink) {
+     if (iVar4 == 8)  { r = commLayer->vtbl[0x40](10); sink->vtbl[0x10](conn, r); return; }  // ConnectionLost, REASON 10
+     if (iVar4 != 9)  { ...vtbl[8](conn, 0x3f)...      return; }                             // login-failed path
+     r = commLayer->vtbl[0x40]();              sink->vtbl[0x0c](conn, r);                    // ← **OnLoggedOut**
+  }
+```
+⇒ **`OnLoggedOut` IS reachable for `ConnectionReal`** — via the **state-9** branch here, *not* via the
+notification pump. **This overturns the earlier "unreachable" conclusion** (2026-07-25/26 entries above):
+the sweeps searched for the `[X+8]→vtable→slot` shape, but this site reaches the sink through a different
+indirection (`piVar2[2]` / `**(iVar4+8)`), so every shape-based sweep missed it. Reason 10 on the state-8
+branch is a hardcoded constant — which is exactly why our socket close produced the error dialog: the
+connection was still in state **8**.
+
+### What sets state 9: `ConnectionReal::Logout` (vtbl `+0x18` = `0x10030510`) — `*(conn+8) = 9`, then disconnect.
+
+### Who calls that Logout — `[PROVEN]`, scripted sweep of SADK for `conn[+0x34]->vtbl[+0x18]`
+| site | function |
+|---|---|
+| `0x0046ecf6` | **`VillageServerConnection::HandleWorldLoginAck`** ← **msg 1006** |
+| `0x0047ed90` | `FUN_0047ed70` = **`UserCommConnection::Logout`** (`if GetState()==8 → transport Logout`) |
+| `0x004795f7` | `RefereeServerConnection_Logout` (known) |
+| `0x0046db94` | `<no-func>` in the village-conn range — `[TODO]` undefined bytes, not yet analysed |
+
+### `HandleWorldLoginAck` (msg 1006) `[PROVEN]`
+```c
+if (code == 0xDEADBEEF) {
+    this->nLoginAckReceived = 1;
+    uc = LobbyManager::GetUserCommConnection();
+    if (uc->vtbl[0x2c]() == false) {          // UC NOT open
+        FUN_004324e0(&uc->field_0x60); FUN_004324e0(&uc->field_0x78);
+        this->transport->vtbl[0x18]();        // ← LOGOUT the VILLAGE transport → state 9
+        return;
+    }
+    FUN_00458860(&uc->field_0x1c);
+    FUN_0047ed70(uc);                         // ← else LOGOUT the USERCOMM connection
+}
+```
+**Two-phase teardown:** 1006 with UC open → log out UserComm; 1006 with UC closed → log out the village
+transport → state 9 → disconnect → **`OnLoggedOut`** → `HandleLoggedOut` → `SetState(VillageLeft=11)` →
+the `+0x1c` observer → **`LobbyGameScreen_OnVillageConnectionLoggedOut` → arms the referee.**
+
+`[INFERRED, strong]` that 1006 is the intended **answer to msg 2002**: it is the only message that reaches
+the logout path, and the client sits in `LeavingVillage(10)` waiting after sending 2002. Not yet proven
+that the real server sent it *in response to* 2002.
+
+⚠️ **Note on our current stub:** it already sends 1006 `{0xDEADBEEF}` — but on the **first PingCode during
+village ENTRY**, when UC *is* open, so it takes the UserComm-logout branch. That is very likely wrong and
+should be re-examined as part of implementing the leave answer.
