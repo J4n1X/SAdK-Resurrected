@@ -129,25 +129,13 @@ def send_enter_world(conn, magic=None, force=False):
                   "EnterWorld(1000) — HandleEnterWorld → SetState(9)")
 
 
-def send_world_login_ack(conn, magic=None, force=False):
-    """Send WorldLoginAck (msg 1006, code=0xDEADBEEF).
-
-    [PROVEN 2026-07-26] This message is the **LOGOUT trigger**, not merely an ack.
-    `VillageServerConnection::HandleWorldLoginAck@0x0046ecf6`, on code==0xDEADBEEF:
-      * UserComm OPEN   → `FUN_0047ed70` = UserCommConnection::Logout  (logs out the UC transport)
-      * UserComm CLOSED → `this->transport->vtbl[0x18]` = ConnectionReal::Logout on the VILLAGE
-        transport → state 9 → on disconnect `FUN_10030ad0` case 4 takes the **state-9** branch →
-        sink `OnLoggedOut` → `HandleLoggedOut` → `SetState(VillageLeft=11)` → the villageConn +0x1c
-        observer → arms the referee. (The state-8 branch instead raises ConnectionLost with a
-        hardcoded reason 10 — that is the !CONNECTION_LOST_TEXT dialog.)
-    So it is a two-phase teardown, and `force=True` is needed to re-send past the one-shot latch when
-    answering each leave request. ER: engagement_records/2026-07-26_leave-answer-worldloginack-1006.md
-
-    ⚠️ [TODO] The entry-time send (first in-world PingCode) takes the UserComm-logout branch, since UC
-    is open at that point. That looks wrong and is the next thing to examine — left unchanged for now
-    so the leave-answer experiment varies only one thing.
-    """
-    if not conn.alive or (getattr(conn, "_world_login_ack_sent", False) and not force):
+def send_world_login_ack(conn, magic=None):
+    """Send WorldLoginAck (msg 1006, code=0xDEADBEEF). ⚠️ [HYPOTHESIS — UNVERIFIED] previously believed to be
+    THE loading-screen gate ("without it the client sits on the loading screen forever"); the clean build
+    renders at SetState(9) without it, so that claim is NOT verified. Sent once, on the client's first
+    in-world PingCode (by which point HandleEnterWorld has fully run: JoinChannel done, connState=3), as a
+    best-effort in-world ack — not as a proven render trigger."""
+    if not conn.alive or getattr(conn, "_world_login_ack_sent", False):
         return
     conn._world_login_ack_sent = True
     _send_village(conn, config.VILLAGE_MSG_WORLD_LOGIN_ACK, world_login_ack_body(), magic,

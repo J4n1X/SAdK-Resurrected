@@ -13,21 +13,16 @@ Both previous stub behaviours were wrong answers:
   * answering with `EnterWorld(1000)` told the client to ENTER when it asked to LEAVE  → the "clone";
   * answering with nothing (the no-op)                                                 → hung forever.
 
-A third answer — closing the village connection — was implemented and LIVE-TESTED and is also WRONG: it
-raises "!CONNECTION_LOST_TEXT" (the disconnect hits while the transport is still in state 8, where
-FUN_10030ad0 case 4 raises ConnectionLost with a hardcoded reason 10), and at MATCH START both clients
-send 2002, so both get kicked.
-
-The genuine answer [PROVEN 2026-07-26]: **msg 1006 {code=0xDEADBEEF}**. HandleWorldLoginAck@0x0046ecf6
-calls ConnectionReal::Logout (UserComm first while it is open, then the VILLAGE transport), which sets
-state 9 — so the disconnect then takes the state-9 branch to OnLoggedOut -> HandleLoggedOut ->
-SetState(VillageLeft=11) -> the +0x1c observer -> arms the referee.
-ER: engagement_records/2026-07-26_leave-answer-worldloginack-1006.md
+A third answer — closing the village connection — was implemented and LIVE-TESTED on 2026-07-26 and is
+also WRONG: the leave completes (state 10 -> 11, back to character select) but raises
+"!CONNECTION_LOST_TEXT", and at MATCH START both clients send 2002, so both village conns are closed and
+BOTH PLAYERS ARE KICKED. Reverted to a no-op; the genuine answer is still unknown.
+ER: engagement_records/2026-07-26_village-leave-close-connection.md
 
 Proves:
-  1. A 2002 on a village conn is answered with WorldLoginAck(1006) — the logout trigger.
-  2. It is **never** answered with EnterWorld(1000) (clone regression guard).
-  3. EVERY repeated 2002 gets its own 1006 (the teardown is two-phase, so the latch must be bypassed).
+  1. A 2002 on a village conn is a NO-OP (closing it was live-falsified — see below).
+  2. It sends NO application frame — in particular **never** an EnterWorld(1000) (clone regression guard).
+  3. Repeated 2002s stay safe (the client resends while waiting) and keep an honest counter.
   4. A 2002 on a NON-village conn is ignored (never closes a lobby/UC connection).
   5. The in-world PingCode path is unaffected.
   6. `village.send_enter_world` force/one-shot semantics still hold (used by the entry push).
@@ -64,11 +59,6 @@ def _leave_fields():
     return {"msg_type": config.VILLAGE_LEAVE_REQUEST_MSGTYPE, "data": bytes.fromhex("affedead")}
 
 
-def _world_login_ack_frame():
-    return village.gamedata_frame(config.VILLAGE_MSG_WORLD_LOGIN_ACK, village.world_login_ack_body(),
-                                  config.VILLAGE_PAYLOAD_MAGIC)
-
-
 def _enter_world_frame():
     return village.gamedata_frame(config.VILLAGE_MSG_ENTER_WORLD, village.enter_world_body(),
                                   config.VILLAGE_PAYLOAD_MAGIC)
@@ -85,37 +75,26 @@ def test_leave_does_not_close_the_connection():
     assert c._leave_requests == 1
 
 
-def test_leave_is_answered_with_worldloginack_1006():
-    """[PROVEN 2026-07-26] msg 1006 {code=0xDEADBEEF} is the only message reaching the logout path
-    (HandleWorldLoginAck -> ConnectionReal::Logout -> state 9 -> OnLoggedOut -> VillageLeft(11))."""
-    c = FakeVillageConn()
-    c._enter_world_sent = True
-    c._world_login_ack_sent = True              # entry-time ack already latched; force must bypass it
-    dispatch._h_send_game_data(c, _leave_fields(), 0)
-    assert len(c.raw) == 1, f"msg 2002 must be answered with exactly one 1006, got {len(c.raw)}"
-    assert _world_login_ack_frame() in c.raw[0], "the answer must be the WorldLoginAck(1006) frame"
-
-
-def test_leave_never_answered_with_enterworld():
-    """Clone regression guard: answering 2002 with EnterWorld(1000) told the client to ENTER when it
-    asked to LEAVE — that is the origin of the match-start 'clone'. Must never come back."""
+def test_leave_sends_no_frames_and_never_enterworld():
+    """Clone regression guard: answering 2002 with EnterWorld(1000) is what re-entered the LOBBY world.
+    The leave path must emit no application frame at all."""
     c = FakeVillageConn()
     c._enter_world_sent = True
     dispatch._h_send_game_data(c, _leave_fields(), 0)
+    assert c.raw == [], f"msg 2002 must not send any frame, got {len(c.raw)}"
     joined = b"".join(c.raw)
     assert _enter_world_frame() not in joined, "msg 2002 must NEVER be answered with EnterWorld(1000)"
 
 
-def test_repeated_leaves_each_get_an_ack():
-    """The client resends 2002 while it waits (live-observed 3x). EVERY one must be answered — the
-    teardown is two-phase (UserComm logs out first, the village transport on a later round), so the
-    one-shot latch must be bypassed each time via force=True."""
+def test_repeated_leaves_are_safe_and_counted():
+    """The client resends 2002 while it waits (live-observed 3x in one session). Each is handled and the
+    counter stays honest — the close itself is idempotent at the socket layer."""
     c = FakeVillageConn()
     for _ in range(4):
         dispatch._h_send_game_data(c, _leave_fields(), 0)
     assert c._leave_requests == 4
-    assert len(c.raw) == 4, f"every 2002 must get a 1006 (two-phase teardown), got {len(c.raw)}"
-    assert c.closes == [], "the leave must not close the connection (that was live-falsified)"
+    assert c.closes == []
+    assert c.raw == []
 
 
 def test_leave_on_non_village_conn_is_ignored():

@@ -573,17 +573,7 @@ def _h_send_game_data(conn, fields, ticket):
         # when it asked to LEAVE (that is the "clone"); answering with nothing hung it forever. The
         # genuine completion is for the server to END the connection it was asked to leave.
         # ER: engagement_records/2026-07-26_village-leave-close-connection.md
-        # [PROVEN 2026-07-26] Answer the leave with WorldLoginAck (msg 1006, code=0xDEADBEEF) — the only
-        # message in the binary that reaches the logout path.
-        # HandleWorldLoginAck@0x0046ecf6: UC open → UserCommConnection::Logout; UC closed →
-        # ConnectionReal::Logout on the VILLAGE transport → state 9 → on disconnect FUN_10030ad0 case 4
-        # takes the state-9 branch → sink OnLoggedOut → HandleLoggedOut → SetState(VillageLeft=11) →
-        # villageConn +0x1c observer → arms the referee. (State 8 at disconnect instead yields
-        # ConnectionLost with hardcoded reason 10 = the !CONNECTION_LOST_TEXT dialog.)
-        # Two-phase: the client's own 2002 retry drives round two (UC logged out first, village second).
-        # ER: engagement_records/2026-07-26_leave-answer-worldloginack-1006.md
-        #
-        # ⛔ Superseded approach, kept as a warning — closing the connection is NOT how a logout completes.
+        # ⛔ LIVE-FALSIFIED 2026-07-26 — closing the connection is NOT how a logout completes.
         # We shipped exactly that (close the village conn on 2002) and tested it:
         #   * single client leaving a village → the leave DOES complete (state 10 → 11, screen returns
         #     to character select) BUT the client shows "!CONNECTION_LOST_TEXT"
@@ -596,11 +586,10 @@ def _h_send_game_data(conn, fields, ticket):
         # [TODO] Find the real answer. Leads: SADK's own vtbl[0x1c] call sites in StatePump_Tick
         # (0x465092/0x4650d0/0x4650e1) and next to CLobbyClient::LeaveVillage (0x5036ec).
         conn._leave_requests = getattr(conn, "_leave_requests", 0) + 1
-        log(f"  [VILLAGE] *** LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
-            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) → answering with WorldLoginAck(1006, "
-            f"code=0x{config.WORLD_LOGIN_ACK_CODE:08x}) → HandleWorldLoginAck → Logout (UserComm first, "
-            f"then the village transport) → state 9 → OnLoggedOut → SetState(VillageLeft=11) ***")
-        village.send_world_login_ack(conn, force=True)
+        log(f"  [VILLAGE] LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
+            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) — no-op. Client parks in LeavingVillage(10). "
+            f"Closing the conn was LIVE-FALSIFIED (kicks both players at match start); the genuine "
+            f"answer is still unknown — see engagement_records/2026-07-26_village-leave-close-connection.md")
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)
