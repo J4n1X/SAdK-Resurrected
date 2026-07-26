@@ -201,6 +201,21 @@ Read-only context: `0x462700 SetState`, `0x4626f0 GetState`, `0x4625e0 LobbyMana
 | 0x4626d0 | `LobbyManager_GetCommSystem` | returns mgr+0x54c |
 
 ### 2d. ServerList result callbacks (secondary vtable @ 0x7dbf8c) [PROVEN]
+
+> **⚠️ `this` = `ServerList + 8` in every function below.** The ctor installs the primary vtable at
+> `[ServerList+0]` and this `CommLayer::IGameServerObserver` table at `[ServerList+8]`, so **all field
+> offsets quoted inside these functions are +8 shifted** relative to the ServerList base — e.g. their
+> `this+0x94` is `ServerList+0x9c` (the hosting latch) and their `this+0x9c`/`this+0xa0` are
+> `ServerList+0xa4`/`+0xa8` (the referee callback pair). Proof: `CreateResultReceived` passes
+> `(int)this + -8` as the observer subject. Misreading this produced two wrong "facts" in one session
+> — see `docs/LOBBY_SCREEN_VTABLES.md` for the corrected field map and `decomp/RENAME_LIST.md`
+> (2026-07-26 night, cont.) for the derivation.
+>
+> Addresses here are the **original `SADK.exe`** build. On `sadk_noav.exe` the table is at `0x7daf8c`:
+> `+0x0c` GameServerAdded `0x00469610` · `+0x1c` **CreateResultReceived `0x0046a6a0`** ·
+> `+0x24` DeleteResultReceived `0x00469990` · `+0x28` GameServerAssigned `0x00469ad0` ·
+> `+0x2c` AssignGameServerResultReceived `0x00469be0`.
+
 | Addr | Name | Slot |
 |------|------|------|
 | 0x4695e0 | `LobbyServerList_UpdateResultReceived` | +0x20 (8) |

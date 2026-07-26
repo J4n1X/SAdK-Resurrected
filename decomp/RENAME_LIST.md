@@ -791,3 +791,157 @@ callback and is completed by an assign-result; the game-server flow registers no
    that we never trigger? If so, the missing step is upstream of the assignment entirely.
 3. Only then consider delivery-shape experiments. Two content-based guesses have now been falsified
    (unsolicited observer push, ticketed reply-to-168); a third guess is not worth a live run.
+
+### 2026-07-26 (night, cont.) — the `+0x9c` sweep: gate SOLVED, and two of my own claims CORRECTED
+
+Ran the scripted sweep from `[TODO]` 1 above (every `MOV [reg+0x9c]` in the binary, then every read,
+then the same for `+0xa4`/`+0xa8`). It closed both open questions — and overturned the two facts I
+recorded in the previous entry. **Both errors came from one root cause: I read the fields off the wrong
+base.**
+
+#### ⭐ The root cause — `LobbyComm::ServerList` has TWO vtables, and the observers run on `this+8`
+
+`LobbyComm_ServerList_ctor@0x0046a160` (was `FUN_0046a160`), disassembly, byte-exact:
+```
+0046a1a6  MOV dword ptr [ESI],      0x7dafcc     ; primary vtable          -> this = ServerList+0
+0046a1ac  MOV dword ptr [ESI + 0x8],0x7daf8c     ; CommLayer::IGameServerObserver sub-object
+...
+0046a27a  MOV ECX,[0x007db520] ; 0xFFFFFFFF
+0046a280  MOV dword ptr [ESI + 0x94],ECX         ; village-server id
+0046a286  MOV byte  ptr [ESI + 0x98],BL          ; <- BYTE
+0046a28c  MOV byte  ptr [ESI + 0x99],BL          ; <- BYTE
+0046a292  MOV EDX,[0x007db520] ; 0xFFFFFFFF
+0046a298  MOV dword ptr [ESI + 0x9c],EDX         ; GAME-server id
+0046a29e  MOV byte  ptr [ESI + 0xa0],BL          ; <- BYTE, not a pointer
+0046a2a4  MOV dword ptr [ESI + 0xa4],EBX         ; pending-referee callback CONTEXT
+0046a2aa  MOV dword ptr [ESI + 0xa8],EBX         ; pending-referee callback FPTR
+```
+**Every** function in the `0x7daf8c` table therefore runs with `this = ServerList + 8`, so all of their
+field offsets are shifted by +8. Independent proof inside `CreateResultReceived`: it passes
+`(int)this + -8` as the observer subject to `FUN_00464300`.
+
+| observer sees | is really |
+|---|---|
+| `this+0x8c / +0x90 / +0x91` | `ServerList+0x94 / +0x98 / +0x99` — village-server slot |
+| `this+0x94` | **`ServerList+0x9c`** — the game-server id |
+| `this+0x98` | `ServerList+0xa0` — a byte flag |
+| `this+0x9c` / `this+0xa0` | **`ServerList+0xa4` / `+0xa8`** — pending-referee callback (ctx, fptr) |
+
+Full `IGameServerObserver` vtable `@0x7daf8c` (all on `this = ServerList+8`):
+`+0x0c` GameServerAdded · `+0x10` AddOrUpdateDescriptor · `+0x18` GameServerDataReceived ·
+`+0x1c` **CreateResultReceived** · `+0x20` UpdateResultReceived · `+0x24` DeleteResultReceived ·
+`+0x28` **GameServerAssigned** · `+0x2c` AssignGameServerResultReceived · `+0x30` TANConnectionGranted ·
+`+0x34` RequestTANConnectionResultReceived · `+0x38` KickResultReceived.
+
+#### ⛔ CORRECTION 1 — "`+0x9c = 0xFFFFFFFF` (still PENDING)" was wrong. It means INVALID.
+
+`0x007db520` = **0xFFFFFFFF = INVALID_SERVER_ID** (now labelled `g_dwINVALID_SERVER_ID`)
+`0x007db524` = **0xFFFFFFFE = PENDING_SERVER_ID** (now labelled `g_dwPENDING_SERVER_ID`)
+(`0x007db538` = 0 = the assign-failure sentinel.) Read live via the Ghidra listing, not inferred.
+
+So the live read taken after the failed match start showed the gate at **INVALID — i.e. never armed, or
+armed and then reset** — *not* "pending forever". That inverts the reading of that experiment.
+
+#### ⛔ CORRECTION 2 — "`+0xa0` is a NULL callback" was wrong. It is a BYTE flag, on the wrong object.
+
+`ServerList+0xa0` is a `bool`, written `= 1` in `LobbyVillageScreen::OnLeaveVillage@0x00437899` right
+after `LobbyVillageServerList_SelectServerForRoom`. The callback pair `GameServerAssigned` fires is
+`ServerList+0xa4/+0xa8`, and the sweep shows **exactly one** function in the entire binary arms it:
+
+```
+MOV [ESI+0xa8], EBP   @00468fef   in LobbyServerList_RequestRefereeServer
+MOV [ESI+0xa4], EBX   @00468ff6   in LobbyServerList_RequestRefereeServer
+```
+which calls `pGameServerManager->vtbl[0x2c](4,4)` = **AssignServer(type 4, subtype 4)** — the referee
+assign we already have `[PROVEN]` working. So `GameServerAssigned` is the **referee** completion, full
+stop. It never touches `+0x9c`. The previous entry's *conclusion* (it does not clear the game-server
+gate) survives; its *reasoning* does not.
+
+#### ✅ The actual game-server gate, end to end — `[PROVEN static, TODO live]`
+
+Renamed this session: `LobbyServerList_CreateGameServer@0x0046aaa0` (was `FUN_0046aaa0`),
+`LobbyServerList_UpdateGameServer@0x0046aff0`, `LobbyServerList_DestroyGameServer@0x004683e0`,
+`LobbyServerList_DestroyGameServerAndShutdown@0x00468410`, `LobbyManager_GetServerList@0x0046b610`
+(literally `return LobbyManager + 0x54`), `LobbyComm_ServerList_ctor@0x0046a160`.
+
+```
+CreateGameServer(ServerList)                                   @0x0046aaa0
+  guard   ServerList+0x9c == INVALID              else return false, silently
+  Shutdown(false) -> StartUpNetwork(mode 4) -> ConnectAndJoin   each a hard bail-out
+  pGameServerManager(+0x6c)->vtbl[0x20](name,…,type=5,subtype=1,…)   == AddGameServer (168)
+  on send-ok:  ServerList+0x9c = PENDING (0xFFFFFFFE)
+  on send-err: Shutdown(false), +0x9c LEFT AT INVALID
+
+CreateResultReceived(newGameServerId, errorCode)               @0x0046a6a0   [this = ServerList+8]
+  if  ServerList+0x9c != PENDING   -> log 0x165 "CreateResult received for GameServerID %u,
+                                       but no create pending."  and DISCARD (silent)
+  elif errorCode == 0              -> ServerList+0x9c = newGameServerId
+                                      fire observer list ServerList+0x4c
+  else                             -> ServerList+0x9c = INVALID
+                                      fire error observer list ServerList+0x58
+                                      NComm_Manager_Shutdown()      <-- tears the net driver down
+```
+`UpdateGameServer` (`vtbl[0x24]`) and `DestroyGameServer` (`vtbl[0x28]`) both refuse to run unless
+`+0x9c` holds a **real** id, so the whole hosting lifecycle hangs off this one latch.
+
+#### What this means for the match-start wall
+
+`CreateGameServer`'s only three callers are **village-screen UI actions** — `FUN_00434230` case 6
+(village action-code 8), `LobbyVillageScreen::OnLeaveVillage` leave-popup result 0, and `FUN_004588e0`
+widget `[0x2d5]` — **not** the multiplayer game-room Start button. Combined with the live evidence that
+`GameServerAssigned` and `AssignGameServerResultReceived` are both silent during match start, the
+game-server-assign machinery looks like it is **not on the match-start path at all**.
+
+That kills `[TODO]` 3 from the previous entry outright: a third delivery-shape guess would have been
+aimed at a mechanism the host never enters. No live run spent on it.
+
+`[TODO]` The one remaining ambiguity is that the post-failure live read cannot distinguish
+"`CreateGameServer` never ran" from "it ran, got `errorCode != 0`, reset to INVALID **and Shut the net
+driver down**" — the second fits the observed symptom (host thrown back to the menu, dialogs greyed)
+uncomfortably well. **One trace run settles it**, and it needs no stub change:
+
+| # | address | function | what its firing/silence proves |
+|---|---|---|---|
+| 1 | `0x0046aaa0` | `LobbyServerList_CreateGameServer` | did the host even attempt to host? |
+| 2 | `0x0046a6a0` | `CreateResultReceived` | **args = (newGameServerId, errorCode)** — did our 153 land, and with what code? |
+| 3 | `0x00468410` | `DestroyGameServerAndShutdown` | who reset the gate to INVALID |
+| 4 | `0x00469610` | `LobbyServerList_GameServerAdded` | did the 170 arrive at the observer |
+
+Trace 2's `errorCode` argument is the single most informative value on the whole path.
+
+#### Reconciliation with the June captures — the old "sixth writer" mystery dissolves
+
+`docs/MATCH_START_HOST_WALL.md` recorded these live reads (2026-06-14, host PID 44992) and could not
+explain them. With the +8 correction they read cleanly:
+
+| logged | old reading | correct reading |
+|---|---|---|
+| room: `+0x9c = 0x65` (101) | "a valid non-sentinel value, so the gate is false" | a **real assigned game-server id**. Our stub allocates ids from 100 ⇒ `CreateGameServer → AddGameServer(168) → our 153 → CreateResultReceived` **completed end to end**. The hosting handshake demonstrably works. |
+| post-start: `+0x9c = 0xFFFFFFFF` | "an unidentified 6th writer — needs a hardware watchpoint" | one of the five known writers reset it to INVALID: `CreateResultReceived` with `errorCode != 0`, `DeleteResultReceived`, or `DestroyGameServerAndShutdown`. All three are ordinary traceable functions. |
+| `+0xa0 = 0x70732E00` throughout | "an uninitialised callback pointer; pushing GameServerAssigned would crash" | `+0xa0` is a **bool** = `0x00`; bytes `+0xa1..+0xa3` (`2E 73 70` = `".sp"`) are heap padding the ctor never writes. The callback is `+0xa8`, and the ctor zeroes it. **The crash claim is refuted.** |
+
+Complete writer set of `ServerList+0x9c` — **five, no more**:
+| writer | value |
+|---|---|
+| `LobbyComm_ServerList_ctor@0x0046a160` | INVALID |
+| `LobbyServerList_CreateGameServer@0x0046aaa0` | PENDING (after a successful 168 send) |
+| `LobbyVillageServerList_CreateResultReceived@0x0046a6a0` `[this+0x94]` | real id (err 0) / INVALID + `NComm_Shutdown` (err≠0) |
+| `LobbyServerList_DeleteResultReceived@0x00469990` `[this+0x94]` | INVALID, when a real id was held and err 0 |
+| `LobbyServerList_DestroyGameServerAndShutdown@0x00468410` | INVALID + `NComm_Shutdown`, when NComm state != 4 |
+
+So the June plan ("arm a hardware WRITE watchpoint on the absolute address of `+0x9c`", which the
+debugger MCP cannot do for heap addresses anyway) is **obsolete**. Three ordinary
+`debugger_trace_function` hooks cover every writer.
+
+`[HYPOTHESIS]` — the match-start failure, restated. Not yet live-tested:
+1. Host hosts a game; `+0x9c` latches a real id (101 in the June capture). `[PROVEN]`
+2. Host presses Start; one of the three reset writers fires → `+0x9c = INVALID` **and the NComm net
+   driver is Shut down**.
+3. `LobbyMenu_SetupGameDialog_Update@0x00457a00` then sees `+0x9c ∈ {-1,-2}`, shows
+   **"Verbindung zu Spieleserver wird hergestellt"** and early-returns every frame.
+That is exactly the symptom reported live this session (host on that modal, dialogs greyed out).
+The open question is whether step 2 is correct behaviour that a re-run of `CreateGameServer` is
+*supposed* to follow (its guard `+0x9c == INVALID` is satisfied precisely then, and its body is the
+`Shutdown → StartUpNetwork(4) → ConnectAndJoin → AddGameServer` sequence the host needs to become the
+mode-4 match host) — and if so, what should call it, given all three known callers are village-screen
+UI actions and `FUN_004588e0`'s widget pump is itself blocked by the modal.
