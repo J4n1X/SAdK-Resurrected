@@ -945,3 +945,80 @@ The open question is whether step 2 is correct behaviour that a re-run of `Creat
 `Shutdown → StartUpNetwork(4) → ConnectAndJoin → AddGameServer` sequence the host needs to become the
 mode-4 match host) — and if so, what should call it, given all three known callers are village-screen
 UI actions and `FUN_004588e0`'s widget pump is itself blocked by the modal.
+
+### 2026-07-26 (night, cont. 2) — the match-start chain CLOSED from existing artifacts; escape hatch found
+
+No live run needed for this — the answer was in `minisrv:stub_gsassign.out` / `stub_final.out` plus two
+decompiles.
+
+#### The modal gate, byte-exact on the clean binary [PROVEN static]
+
+`LobbyMenu_SetupGameDialog_Update@0x00457a00`, now rendering with the new labels:
+```c
+if (screen_visible && NComm_IsHost()) {
+    serverList = LobbyManager_GetServerList(LobbyManager_GetInstance());
+    if (serverList->0x9c == g_dwINVALID_SERVER_ID || == g_dwPENDING_SERVER_ID) {
+        show "!Connecting to Game Server" / "!PLEASE WAIT";
+        goto LAB_00457d39;            // EARLY-RETURN, every frame
+    }
+}
+...
+if (NComm+0x3cc /* StartLoading */ && LobbyManager state == VillageEntered) {
+    LobbyServerList_DestroyGameServer(serverList);   // -> RemoveServer (169)
+    screen[0xe]->{+0x3b8}->vtbl[0x84]();             // the intended exit
+}
+```
+The modal is **host-only** (`NComm_IsHost()`), which matches the live report exactly: host on the
+modal, joiner no dialog but everything greyed/inert.
+
+#### The wire evidence was already on disk
+
+`stub_gsassign.out`:
+```
+17:38:28.250  168 AddGameServer    id=101 'Testlerwill spielen' owner=1 subtype=1
+17:38:28.271  177 ChangeGameServer id=101      (x4 over 13 s)
+17:38:41.923  169 RemoveServer                 <- last event before the hang
+```
+`stub_final.out` shows the identical shape (`id=101` … `169 RemoveServer` at 16:54:46.819).
+**`id=101` is the same 101 the June live read saw at `ServerList+0x9c`** — independent confirmation
+that `AddGameServer(168) -> our 153 -> CreateResultReceived` completed end to end.
+
+#### The chain, closed
+
+1. Host hosts → our 153 → `ServerList+0x9c = 101`. **Working.**
+2. Both ready → StartLoading → the client calls `DestroyGameServer` **on itself** → **169 RemoveServer**.
+3. Stub acks (correct — a real server acks a delist) → `DeleteResultReceived(err=0)` → `+0x9c = INVALID`.
+4. Next frame: host + INVALID → modal + early-return, forever.
+
+The 169 is the client's own doing and our ack is right, so **step 2's second line is the wall.**
+
+#### The escape hatch — `CLobby_RequestExitVillage@0x004f5090` (was `FUN_004f5090`)
+
+Resolved the receiver statically: `screen[0xe]+0x38` → `FUN_00429940` returns `+0x3b8`, which
+`FUN_0042a3a0` (= `LobbyMenu::System` ctor, singleton `DAT_008857bc`) sets from its ctor arg; the sole
+caller `FUN_004f8c90` passes its own `this`, and `FUN_004f8c90` is slot `+0xc` of vtable **`0x7e599c`**
+— the `CLobby` class (`+0x2c` `App_RequestStateTransition`, `+0x3c` `App_ProcessStateTransition`,
+`+0x80` `CLobby_RequestEnterVillage`). So slot `+0x84` is `0x004f5090`:
+
+```c
+if (this+0x270 == 2)      this->vtbl[0x2c](0);      // App_RequestStateTransition@0x004f4eb0
+else if (this+0xc0 != 0)  FUN_00503470(this+0xc0);  // same action object RequestEnterVillage uses
+// otherwise: FALLS THROUGH, DOES NOTHING — a silent no-op
+```
+
+`[HYPOTHESIS]` the wall is that third path — `+0x270 != 2` **and** `+0xc0 == 0` → the hatch silently
+no-ops → the host never leaves SetupGameDialog → modal spins on the now-INVALID latch. A silent no-op
+escape hatch is exactly the failure shape we are seeing. **Not yet live-tested.**
+
+#### The five-trace run that settles it (no stub change)
+
+| # | address | function | reading |
+|---|---|---|---|
+| 1 | `0x004683e0` | `LobbyServerList_DestroyGameServer` | the client's self-delist fires |
+| 2 | `0x00469990` | `DeleteResultReceived` (`errorCode`) | our ack lands → `+0x9c` = INVALID |
+| 3 | `0x004f5090` | **`CLobby_RequestExitVillage`** | **does the escape hatch even fire?** |
+| 4 | `0x004f4eb0` | `App_RequestStateTransition` | **did the hatch DO anything?** |
+| 5 | `0x0046a6a0` | `CreateResultReceived` (`id`, `errorCode`) | catches any re-host attempt |
+
+**3 fires + 4 silent ⇒ the no-op branch is confirmed**, and `CLobby+0x270` / `CLobby+0xc0` become the
+next targets. 3 silent ⇒ the `StartLoading && VillageEntered` guard is false and the problem is upstream.
