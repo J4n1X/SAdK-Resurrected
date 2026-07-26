@@ -404,3 +404,39 @@ right (state advances!) while being wrong — the worst kind of false positive.
 `[TODO]` Since `OnLoggedOut` is unreachable for `ConnectionReal`, the "match-start needs a village
 LoggedOut" model cannot be how the real flow works. Next line of enquiry: what *else* clears
 `LeavingVillage(10)` legitimately — i.e. find the real consumer of the msg-2002 request server-side.
+
+### 2026-07-26 (correction) — the "socket close = error dialog" verdict was WRONG; the dialog is CONDITIONAL
+
+⚠️ **Correcting my own entry above.** I wrote that closing the village connection "fires the Disconnected
+observer → `!CONNECTION_LOST_TEXT` → never arms the referee", and labelled it `[PROVEN]`. The error dialog
+part is **wrong**: it is guarded. `LobbyGameScreen_OnGameConnectionResult@0x00432ed0` reads:
+
+```c
+Game_SetRunMode(host, 2);               // UNCONDITIONAL — return to the lobby/village screen
+Game_PropagateModeToChildren(host);
+if (param_2 != 0) {                     // CONDITIONAL — only on a non-zero reason code
+    ... "!ERROR_DIALOG" / "!CONNECTION_LOST_TEXT" ...
+}
+```
+With reason code **0** (graceful close) there is **no dialog** — the client simply goes to run-mode 2,
+i.e. back out of the village. Combined with `HandleDisconnected@0x00470f90` reaching
+`SetState(VillageLeft = 0xB)`, that is a **complete, clean leave-village**.
+
+The reason code is threaded through: `LobbyManager::OnConnectionLost(this, connId, ?, reason)` →
+`villageConn->vtbl[0x20](reason)` = `HandleDisconnected` → `BaseConnection::Disconnected@0x0048e3c0`
+(which logs only `if (reason != 0)`) → fires the `+0x28` observer list **with that same reason**.
+
+**Revised conclusion:** for the *village-leave* itself, the genuine mechanism is very likely that the
+server **closes the village connection** after receiving msg 2002, and the client completes via
+`ConnectionLost → HandleDisconnected → VillageLeft(11)` + run-mode 2. This also resolves the paradox of
+`OnLoggedOut` being unreachable for `ConnectionReal`: the village conn was never meant to use it.
+
+**Open, and the thing to test:** whether a server-side close surfaces with **reason 0** (clean → no
+dialog) or non-zero (→ dialog). That is empirical, and the two breakpoints `0x00464bf0` (OnLoggedOut) and
+`0x004647e0` (OnConnectionLost, where the reason arrives as an argument) read it directly.
+
+**Also established this session:** the leave is a normal UI flow — `LobbyVillageScreen::OnLeaveVillage`
+case 5 raises the `!LEAVE_VILLAGE_QUESTION` / `!LEAVE_VILLAGE` confirm popup; on confirm the callback
+`FUN_00431ce0` (param_2 == 2) calls screenHost `vtbl[0x84]` = `CLobbyClient::LeaveVillage@0x00503470`,
+which **tail-jumps** into `SendLeaveVillageRequest_2002`. (That tail jump is why the live stack showed the
+2002 sender returning to `0x00431CFB` — `[ESP]` held LeaveVillage's caller, not its own.)
