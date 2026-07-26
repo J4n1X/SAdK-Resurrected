@@ -87,7 +87,18 @@ def world_login_ack_body(code=None):
     the client read the length prefix (0x20) as the value → 0x20 != 0xDEADBEEF → gate NEVER fires (the
     synthesis's bug, caught by the independent review before the drive)."""
     code = config.WORLD_LOGIN_ACK_CODE if code is None else code
-    return struct.pack("<I", code)                        # bare u32; the gate compares THIS dword to 0xDEADBEEF
+    # ⭐ BIG-ENDIAN [PROVEN 2026-07-26] — this was a silent bug that made the 1006 gate NEVER fire, in
+    # any session since the message was first implemented. The TinCat PropertyDataConverter serialises
+    # integer scalars big-endian ("network order"), so:
+    #   * the client's OWN 2002 wrote WriteInt(0xAFFEDEAD, 32) and it appeared on the wire as
+    #     `af fe de ad` — captured byte-exact (little-endian would have been `ad de fe af`);
+    #   * MEMORY.md independently records the ServerDataBlock roomId as a BIG-ENDIAN u32.
+    # Writer and reader share the converter, so HandleWorldLoginAck@0x0046ec50 only sees 0xDEADBEEF if
+    # we send `de ad be ef`. We were sending `ef be ad de`, which it read as 0xEFBEADDE — so the whole
+    # `if (code == 0xDEADBEEF)` block (both Logout branches) was skipped every time.
+    # Live evidence: a trace showed HandleWorldLoginAck ENTERED but ConnectionReal::Logout never fired,
+    # while the UC transport was verifiably in state 8 (so its guard would have passed).
+    return struct.pack(">I", code)                        # bare BIG-ENDIAN u32, no length prefix
 
 
 def pong_body(token=b"\x00\x00\x00\x00"):

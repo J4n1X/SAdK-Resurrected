@@ -80,6 +80,17 @@ def _enter_world_frame():
                                   config.VILLAGE_PAYLOAD_MAGIC)
 
 
+def test_1006_code_is_big_endian():
+    """REGRESSION GUARD. The 1006 gate never fired in ANY session because the code scalar was written
+    little-endian. TinCat's PropertyDataConverter serialises integers BIG-endian: the client's own 2002
+    wrote WriteInt(0xAFFEDEAD,32) and it appeared on the wire as `af fe de ad` (captured byte-exact), and
+    MEMORY.md independently records the ServerDataBlock roomId as a big-endian u32. If this flips back,
+    HandleWorldLoginAck@0x0046ec50 reads 0xEFBEADDE, the `if (code == 0xDEADBEEF)` block is skipped, and
+    BOTH Logout branches silently die - which is exactly the bug that cost us a day."""
+    assert village.world_login_ack_body() == bytes.fromhex("deadbeef"), (
+        f"1006 code must be big-endian de ad be ef, got {village.world_login_ack_body().hex(' ')}")
+
+
 def test_phase1_answers_with_worldloginack():
     c = _village()
     c._enter_world_sent = True
