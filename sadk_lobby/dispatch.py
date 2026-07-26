@@ -645,12 +645,16 @@ def _h_send_game_data(conn, fields, ticket):
             f"socket goes away. ***")
         village.send_world_login_ack(conn, force=True)
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
-        village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
-        first_ack = not getattr(conn, "_world_login_ack_sent", False)
-        village.send_world_login_ack(conn)                  # …and (once) the best-effort 1006 WorldLoginAck
-        if first_ack:
-            log("  [VILLAGE] 1006 WorldLoginAck sent on first PingCode "
-                "([TODO] its in-world effect is unverified on the clean build)")
+        village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip
+        # ⛔ DO NOT send WorldLoginAck(1006) here. [PROVEN LIVE 2026-07-26] msg 1006 is the LOGOUT
+        # trigger, not an in-world ack: HandleWorldLoginAck@0x0046ec50 → ConnectionReal::Logout on the
+        # UserComm AND village transports → state 9 → OnLoggedOut → HandleLoggedOut →
+        # SetState(VillageLeft=11). Sending it on the first in-world PingCode logged the player straight
+        # back out to character select ~0.1s after entering the world.
+        # This call existed for months and looked harmless ONLY because the code scalar was serialised
+        # little-endian, so the client's `if (code == 0xDEADBEEF)` never matched and the whole handler
+        # body was skipped. Fixing the byte order (village.world_login_ack_body) exposed it immediately.
+        # 1006 is now sent ONLY as the answer to a leave request (msg 2002), above.
     else:
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on conn #{conn.id} — logged, no in-world handler)")
 
