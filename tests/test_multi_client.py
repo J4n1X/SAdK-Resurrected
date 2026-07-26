@@ -63,8 +63,14 @@ def _add_game(conn, **over):
     }
     fields.update(over)
     dispatch._h_add_game_server(conn, fields, TICKET)
-    # the new server_id is whatever status_with_id recorded
-    return conn.sent[-1][1]["id"]
+    # The new server_id is whatever status_with_id recorded — find the AddResult(153) explicitly
+    # rather than assuming it is the LAST message. Since 2026-07-26 the handler also emits a ticketed
+    # GameServerData(170) after it (the reply that clears the host's "Connecting to Game Server" gate),
+    # so sent[-1] is the 170.
+    for mtype, body in reversed(conn.sent):
+        if "id" in body:
+            return body["id"]
+    raise AssertionError(f"no AddResult(153) with an id in {[m for m, _ in conn.sent]}")
 
 
 # ── 1. Player resolution ───────────────────────────────────────────────────────
