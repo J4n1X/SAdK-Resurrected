@@ -647,3 +647,66 @@ that the real server sent it *in response to* 2002.
 ⚠️ **Note on our current stub:** it already sends 1006 `{0xDEADBEEF}` — but on the **first PingCode during
 village ENTRY**, when UC *is* open, so it takes the UserComm-logout branch. That is very likely wrong and
 should be re-examined as part of implementing the leave answer.
+
+## 🎯 2026-07-26 (evening) — VILLAGE LOGOUT WORKS; match start advances to a NEW wall
+
+### 1. The logout, proven live end to end
+Trace, immediately after the big-endian fix:
+```
+SetState(8) EnteringVillage → SetState(9) VillageEntered → HandleWorldLoginAck (msg 1006)
+→ ConnectionReal::Logout(0x02AA9218) ←0x0047ED92  (UserComm transport)
+→ ConnectionReal::Logout(0x1BC23E30) ←0x0046DB96  (VILLAGE transport)
+→ HandleLoggedOut ←0x00464D57 (OnLoggedOut sink) → SetState(0x0B) VillageLeft(11)
+```
+The **clean** exit (`OnLoggedOut`), not `HandleDisconnected`/`ConnectionLost` — i.e. the referee-arming
+path. Contrast in the same log 100 s earlier: `OnConnectionLost(reason=0x0A)` + `HandleDisconnected` (the
+`!CONNECTION_LOST_TEXT` path) from a stub restart. Both branches of `FUN_10030ad0` case 4 observed live.
+The village-side Logout came from `0x0046DB96`, inside the `<no-func>` at `0x0046db94` previously flagged
+`[TODO]` — it is on this path.
+
+### 2. Root cause that had hidden all of it: BIG-ENDIAN integer scalars
+TinCat's `PropertyDataConverter` serialises integer scalars **big-endian**. We wrote msg 1006's `code`
+little-endian, so the client's `if (code == 0xDEADBEEF)` never matched and the entire handler body — both
+Logout branches — was skipped. Silently, since the message was first implemented. Anchors: the client's
+own 2002 wrote `WriteInt(0xAFFEDEAD,32)` → wire bytes `af fe de ad`; `MEMORY.md` already recorded the
+ServerDataBlock roomId as a big-endian u32. Fixed + regression-guarded.
+⚠️ **Audit every other integer scalar we emit for the same bug.**
+
+### 3. msg 1006 must NOT be sent at village entry
+It is the logout trigger, so the old "send 1006 on the first in-world PingCode" call threw the player back
+to character select ~0.1 s after entering. It only ever looked harmless because of the byte-order bug.
+Now sent **only** as the answer to msg 2002. Regression-guarded.
+
+### 4. At MATCH START the leave is driven by the match-start path itself `[PROVEN]`
+The 2002 sender's caller differs by context:
+| caller | context |
+|---|---|
+| `0x00431CFB` | the `!LEAVE_VILLAGE_QUESTION` confirm popup (user clicks leave) |
+| **`0x00457C13`** | inside **`FUN_00457a00`** — the *"Connecting to Game Server"* / SetupGameDialog update, i.e. **match start** |
+So leaving the village at Start is the designed flow (it is what fires `OnLoggedOut` → arms the referee),
+and both clients dropping to the main menu at Start is correct, not a bug.
+
+### 5. NEW WALL — the host waits on a game-server assignment `[PROVEN]`
+`FUN_0046aaa0` (this = `ServerList` = `LM+0x54`) **does fire**, at game-creation time. Its structure:
+```c
+if (serverList+0x9c == DAT_007db520) {                 // gate: idle
+  if (FUN_0046c100(villageConn, &out)) {               // gate: village conn info
+    ...map list must be non-empty...
+      NComm_Manager_Shutdown(mgr, 0);
+      NComm_Manager_StartUpNetwork(mgr, 4);            // mode 4 = MATCH HOST
+      NComm_Manager_ConnectAndJoin(mgr);
+      r = gameServerManager->vtbl[0x20](name, …, 5, 1, …);   // = AddGameServer(168), type 5 / sub 1
+      if (r == 0) { serverList+0x9c = DAT_007db524; return 1; }   // → PENDING
+```
+It **succeeds**: the log shows `AddGameServer(168) type5/sub1` at the same instant, and `+0x9c` is left at
+`DAT_007db524`. So the live read `+0x9c = 0xFFFFFFFF` means **request PENDING**, not "unassigned" — my
+earlier reading of that value was wrong.
+
+⇒ The host is waiting for an assignment result that would fire
+`LobbyServerList_GameServerAssigned@0x00469ad0` and clear `+0x9c`. That trace **never fires**. We answer
+168 with `AddResult(153){errorcode=0, id=sid, ticket}`, which evidently is not what clears it.
+
+`[TODO]` **The open question:** what inbound message drives `LobbyServerList_GameServerAssigned`? Clue
+from the live probe: the ServerList's stashed callback pair `+0xA4/+0xA8` held
+`{LobbyManager, SetRefereeServerAddress@0x004625D0}` — the **referee** callback — so the game-server
+request may have no callback registered to receive its result, or uses a different slot. Start there.
