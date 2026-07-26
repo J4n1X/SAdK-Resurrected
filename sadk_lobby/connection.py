@@ -92,6 +92,27 @@ class Conn:
         self.send_app(153, body)
 
     # ── Receive loop ──────────────────────────────────────────────────────────
+    def close_graceful(self, why=""):
+        """Half-close this connection so the peer sees a clean FIN (not an RST).
+
+        Used to complete the client's village LEAVE request (msg 2002) — see
+        `engagement_records/2026-07-26_village-leave-close-connection.md`. The client's
+        `LobbyManager.state` leaves `LeavingVillage(10)` ONLY via `HandleLoggedOut` (vtbl+0x1c,
+        unreachable for the village transport class `CommLayer::ConnectionReal`) or
+        `HandleDisconnected` (vtbl+0x20, reached from `OnConnectionLost`) — so ending the connection
+        the client asked to leave is the genuine completion, not a forced result.
+
+        `shutdown(SHUT_WR)` (rather than `close()`) is deliberate: it sends FIN and lets the client
+        close its own side, which is the graceful teardown most likely to surface with reason code 0.
+        `[TODO — VERIFY LIVE]` the client shows `!CONNECTION_LOST_TEXT` only when that reason is
+        non-zero; the reason is produced inside tincat3 and cannot be determined statically.
+        """
+        try:
+            self._sock.shutdown(socket.SHUT_WR)
+            log(f"  [#{self.id}] half-closed (FIN sent){(' — ' + why) if why else ''}")
+        except OSError as e:  # already closed / reset by peer — nothing to do
+            log(f"  [#{self.id}] close_graceful: socket already down ({e})")
+
     def run(self):
         try:
             local_port = self._sock.getsockname()[1]
@@ -237,7 +258,7 @@ class Conn:
                 off = 6 if (len(payload) >= 6 and struct.unpack_from("<H", payload, 4)[0] == t1) else 4
                 if len(payload) >= off + 4:
                     msg_type = struct.unpack_from("<I", payload, off)[0]
-                    return msg_type not in (config.WORLD_LOGIN_REQUEST_MSGTYPE,
+                    return msg_type not in (config.VILLAGE_LEAVE_REQUEST_MSGTYPE,
                                             config.VILLAGE_PINGCODE_MSGTYPE)
             return False                                                   # base login / other village frames stay
         return dispatch.is_quiet(t1)

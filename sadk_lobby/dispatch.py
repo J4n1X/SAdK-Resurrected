@@ -563,18 +563,21 @@ def _h_send_game_data(conn, fields, ticket):
     if not getattr(conn, "is_village", False):
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on non-village conn #{conn.id} — logged)")
         return
-    if msg_type == config.WORLD_LOGIN_REQUEST_MSGTYPE:        # 0x27D2 — world-login request (LIVE at match-start)
-        conn._world_login_answers = getattr(conn, "_world_login_answers", 0) + 1
-        if config.ANSWER_WORLD_LOGIN_REQUEST and conn._world_login_answers <= config.WORLD_LOGIN_MAX_ANSWERS:
-            log(f"  [VILLAGE] *** WORLD-LOGIN REQUEST #{conn._world_login_answers} — SendGameData(74)"
-                f"{{msg_type=0x{msg_type:x}, code=0x{data[:4][::-1].hex()}}} → EnterWorld(1000) ***")
-            village.send_enter_world(conn, force=True)   # bypass the one-shot latch for the explicit request
-        elif config.ANSWER_WORLD_LOGIN_REQUEST:
-            log(f"  [VILLAGE] WARNING: 0x27D2 resend #{conn._world_login_answers} past cap "
-                f"{config.WORLD_LOGIN_MAX_ANSWERS} — not answering (resend-loop guard)")
-        else:
-            log("  [VILLAGE] 0x27D2 world-login request — ANSWER_WORLD_LOGIN_REQUEST off (RE 2026-06-14: a "
-                "1000 re-enters the LOBBY village = the clone; masks the freeze, no match) — no-op")
+    if msg_type == config.VILLAGE_LEAVE_REQUEST_MSGTYPE:      # 0x27D2 — msg 2002 LEAVE-VILLAGE request
+        # [PROVEN 2026-07-25/26] This is a LEAVE request, not a world-login: the client's
+        # VillageServerConnection_SendLeaveVillageRequest_2002@0x0046bde0 sets
+        # LobbyManager::SetState(LeavingVillage=10) and then WAITS. State 10 has exactly two exits —
+        # HandleLoggedOut (vtbl+0x1c, unreachable for the village transport class ConnectionReal) and
+        # HandleDisconnected (vtbl+0x20, via OnConnectionLost) — and StatePump_Tick never touches state
+        # 10, so the client cannot recover on its own. Answering with EnterWorld(1000) told it to ENTER
+        # when it asked to LEAVE (that is the "clone"); answering with nothing hung it forever. The
+        # genuine completion is for the server to END the connection it was asked to leave.
+        # ER: engagement_records/2026-07-26_village-leave-close-connection.md
+        conn._leave_requests = getattr(conn, "_leave_requests", 0) + 1
+        log(f"  [VILLAGE] *** LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
+            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) → closing the village connection (FIN) "
+            f"→ OnConnectionLost → HandleDisconnected → SetState(VillageLeft=11) ***")
+        conn.close_graceful(why="village leave (msg 2002)")
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)
