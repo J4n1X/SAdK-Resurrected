@@ -129,13 +129,26 @@ def send_enter_world(conn, magic=None, force=False):
                   "EnterWorld(1000) — HandleEnterWorld → SetState(9)")
 
 
-def send_world_login_ack(conn, magic=None):
-    """Send WorldLoginAck (msg 1006, code=0xDEADBEEF). ⚠️ [HYPOTHESIS — UNVERIFIED] previously believed to be
-    THE loading-screen gate ("without it the client sits on the loading screen forever"); the clean build
-    renders at SetState(9) without it, so that claim is NOT verified. Sent once, on the client's first
-    in-world PingCode (by which point HandleEnterWorld has fully run: JoinChannel done, connState=3), as a
-    best-effort in-world ack — not as a proven render trigger."""
-    if not conn.alive or getattr(conn, "_world_login_ack_sent", False):
+def send_world_login_ack(conn, magic=None, force=False):
+    """Send WorldLoginAck (msg 1006, code=0xDEADBEEF).
+
+    [PROVEN 2026-07-26] This message is the **LOGOUT trigger**, not just an ack.
+    `VillageServerConnection::HandleWorldLoginAck@0x0046ec50`, on code==0xDEADBEEF, branches on whether
+    the UserComm connection is open:
+      * UC OPEN   → `FUN_0047ed70` = `UserCommConnection::Logout`
+      * UC CLOSED → `this->transport->vtbl[0x18]` = `ConnectionReal::Logout` on the VILLAGE transport
+        → transport state 9 → on disconnect `FUN_10030ad0` case 4 takes the **state-9** branch →
+        sink `OnLoggedOut` → `HandleLoggedOut` → `SetState(VillageLeft=11)` → the villageConn +0x1c
+        observer → arms the referee. (The state-8 branch instead raises ConnectionLost with a
+        hardcoded reason 10 = the !CONNECTION_LOST_TEXT dialog.)
+    So a full leave needs TWO of these, and `force=True` bypasses the one-shot latch for the re-send.
+    ER: engagement_records/2026-07-26_leave-two-phase-worldloginack.md
+
+    ⚠️ The entry-time send (first in-world PingCode) is [VERIFIED HARMLESS 2026-07-26 by trace]: it
+    reaches HandleWorldLoginAck but `ConnectionReal::Logout` never fires, because
+    `UserCommConnection::Logout` is guarded on `transport->GetState()==8` and UC is not in state 8 then.
+    """
+    if not conn.alive or (getattr(conn, "_world_login_ack_sent", False) and not force):
         return
     conn._world_login_ack_sent = True
     _send_village(conn, config.VILLAGE_MSG_WORLD_LOGIN_ACK, world_login_ack_body(), magic,

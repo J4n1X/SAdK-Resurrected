@@ -48,6 +48,57 @@ def unregister_observer(conn):
                 pass
 
 
+# ── Live-connection registry ──────────────────────────────────────────────────
+# A client owns several sockets (lobby / UC-chat / village / referee). The village LEAVE is a
+# two-phase teardown that needs the UC and village conns paired, so we keep a live list and match
+# on the player's perm_id (players.of() resolves lobby by username, UC/village by token perm_id).
+_live_lock = threading.Lock()
+_live: list = []
+
+
+def register_conn(conn):
+    with _live_lock:
+        if conn not in _live:
+            _live.append(conn)
+
+
+def _find_live(pred):
+    with _live_lock:
+        return [c for c in _live if getattr(c, "alive", False) and pred(c)]
+
+
+def on_conn_closed(conn):
+    """Called from connection.py once a socket is fully down.
+
+    Drives **phase 2** of the village leave. `HandleWorldLoginAck@0x0046ec50` branches on whether the
+    UserComm connection is open:
+        UC OPEN   → UserCommConnection::Logout   (phase 1 — logs UC out; the player name goes "default")
+        UC CLOSED → ConnectionReal::Logout on the VILLAGE transport → state 9 → on disconnect
+                    FUN_10030ad0 case 4 takes the state-9 branch → OnLoggedOut → HandleLoggedOut →
+                    SetState(VillageLeft=11) → the +0x1c observer → arms the referee.
+    The client sends msg 2002 exactly ONCE (live-verified 2026-07-26 by trace), so it will never
+    prompt us for the second 1006 — we must send it ourselves, and the right trigger is the UC socket
+    actually going away. That is what this hook is for.
+    """
+    with _live_lock:
+        try:
+            _live.remove(conn)
+        except ValueError:
+            pass
+    if not getattr(conn, "is_chat", False):
+        return                                    # only a UC/chat close can complete a leave
+    me = players.of(conn)
+    waiting = _find_live(lambda c: getattr(c, "is_village", False)
+                         and getattr(c, "_leave_phase", 0) == 1
+                         and players.of(c).perm_id == me.perm_id)
+    for v in waiting:
+        v._leave_phase = 2
+        log(f"  [VILLAGE] leave phase 2 — UC conn #{conn.id} is gone, so HandleWorldLoginAck will now "
+            f"take the VILLAGE branch: re-sending WorldLoginAck(1006) on conn #{v.id} "
+            f"→ ConnectionReal::Logout → transport state 9 → OnLoggedOut → SetState(VillageLeft=11)")
+        village.send_world_login_ack(v, force=True)
+
+
 def _push_to_obs(server_type, srv):
     """Push a 170 GameServerData to all registered observers for server_type (and type-0 subscribers)."""
     with _obs_lock:
@@ -586,10 +637,13 @@ def _h_send_game_data(conn, fields, ticket):
         # [TODO] Find the real answer. Leads: SADK's own vtbl[0x1c] call sites in StatePump_Tick
         # (0x465092/0x4650d0/0x4650e1) and next to CLobbyClient::LeaveVillage (0x5036ec).
         conn._leave_requests = getattr(conn, "_leave_requests", 0) + 1
-        log(f"  [VILLAGE] LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
-            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) — no-op. Client parks in LeavingVillage(10). "
-            f"Closing the conn was LIVE-FALSIFIED (kicks both players at match start); the genuine "
-            f"answer is still unknown — see engagement_records/2026-07-26_village-leave-close-connection.md")
+        conn._leave_phase = 1
+        log(f"  [VILLAGE] *** LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
+            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) → phase 1: WorldLoginAck(1006, "
+            f"code=0x{config.WORLD_LOGIN_ACK_CODE:08x}) → HandleWorldLoginAck → UserCommConnection::Logout "
+            f"(UC is open, so it takes that branch). Phase 2 fires from on_conn_closed() when the UC "
+            f"socket goes away. ***")
+        village.send_world_login_ack(conn, force=True)
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)
