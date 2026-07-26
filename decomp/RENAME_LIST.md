@@ -544,3 +544,41 @@ case 5 raises the `!LEAVE_VILLAGE_QUESTION` / `!LEAVE_VILLAGE` confirm popup; on
 `FUN_00431ce0` (param_2 == 2) calls screenHost `vtbl[0x84]` = `CLobbyClient::LeaveVillage@0x00503470`,
 which **tail-jumps** into `SendLeaveVillageRequest_2002`. (That tail jump is why the live stack showed the
 2002 sender returning to `0x00431CFB` — `[ESP]` held LeaveVillage's caller, not its own.)
+
+### 2026-07-26 (evening) — after the live falsification: four more hypotheses closed
+
+Following the live result that closing the village conn is NOT the answer (kicks both players at match
+start), these were checked and **ruled out**:
+
+1. **SADK does not call the village conn's `vtbl[0x1c]` itself.** Scripted sweep of sadk_noav for indirect
+   calls through `vtbl[+0x1c]`: 270 sites, and every one in lobby code resolves to something else —
+   `StatePump_Tick`'s three (`0x465092`/`0x4650d0`/`0x4650e1`) are **sub-object ticks**
+   (`LM+0x2f8` world-stream handler, `LM+0x3bc` post office, `LM+0x140` loader); connections are ticked via
+   `vtbl[0x28]` instead (`LM+0x540`, `LM+0x3d8`). `FUN_005036d0` (undefined bytes beside
+   `CLobbyClient::LeaveVillage`) is an **avatar** helper (`FUN_0046b680`→`FUN_004901e0`→`vtbl[0x1c]`→
+   `FUN_00508090`), same shape as the tail of `CLobbyClient::UpdateAvatar`. `FUN_0047ede0` (called by
+   `OnLeaveVillage`) is `LobbyUserCommConnection.cpp` leaving the village **chat channel**
+   (`m_ChatChannelManager->vtbl[0x1c]`). ⇒ Both sweeps (tincat3 + SADK) now agree: `HandleLoggedOut` is
+   reachable **only** via `LobbyManager::OnLoggedOut`, i.e. only via the pump, i.e. never for ConnectionReal.
+2. **No inbound village NETMSG is a leave-ack.** Sampled the unexamined ids in
+   `VillageServerConnection::HandleMessage`: `0xe11` = NPC **shop inventory**
+   (NPCID/ShopID/ShopName/SellMod/StockCount), `0xe1b`/`0xe25` = **shop transactions** (ShopID/Result),
+   `0xc80` = owner-keyed entity lookup ("ownr"). The whole table is world/shop/chat **content** — there is
+   no session-control message in it. (`msgdefs.ini` likewise has no server→client logout.)
+3. **The connection class cannot be influenced by the server.** `ConnectionManagerINet_ctor@0x10030d50`
+   constructs `CommLayer::ConnectionReal` unconditionally (3 sites, plus `FUN_100196b0`/`FUN_10019750`), and
+   the manager type is chosen by SADK itself in `LobbyComm_System_Initialize` (CommLayer type 0 = INet).
+   So we cannot make the client build a `ConnectionBC`/`ConnectionLANLobby` whose pump *would* fire
+   `LoggedOut`.
+4. **The single sink-shaped `+0x10` call in tincat3 is not ConnectionLost.** `FUN_10029d50@0x10029e49`
+   calls `vtbl[0x10]` with **five** args (id, ×2, count, record-array of string+4 ints), whereas
+   `LobbyManager::OnConnectionLost` takes three — a different interface. The real ConnectionLost raise site
+   uses a code shape the `[X+8]`→vtable heuristic does not match. `[TODO]`
+
+**Where that leaves the logout question.** `HandleDisconnected` is the only live exit from
+`LeavingVillage(10)`, and it shows `!CONNECTION_LOST_TEXT` unless the reason code is 0. So the open
+question is now precisely: **is reason 0 ever produced, and by what?** Best next step is live and needs no
+wire change — breakpoint `LobbyManager::OnConnectionLost@0x004647e0` (reason arrives as an argument) and
+trigger a disconnect by restarting the stub while a client sits in the village. That yields both the reason
+value for an abrupt close **and** the tincat3 caller (from the stack), which is the site the heuristics
+failed to find.
