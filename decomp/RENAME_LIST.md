@@ -268,3 +268,92 @@ is **`[INFERRED]`, not proven**, and the competing possibility is that a remote 
 `ConnectionLost` (sink `+0x10` → `0x004647e0`) instead, which does **not** reach `HandleLoggedOut`.
 Next step: find the recv/EOF path that calls `vtbl[0x18]`, then ER + test "stub closes the village
 connection on 2002" with breakpoints on both `0x00464bf0` and `0x004647e0` to see which fires.
+
+### 2026-07-26 — static dive into the tincat3 Logout path: narrowed, but NOT closed
+
+Goal was to prove what makes the *village* connection fire sink `+0x0C` (OnLoggedOut). Result: the
+connection layer is a multi-class async state machine, and the answer is **not statically settled**.
+What is now established:
+
+- The tincat3 connection family is `CommLayer::Connection*` (RTTI-named, found via destructors):
+  `ConnectionDummy` (base — its ctor `FUN_1002f990@0x1002f990` zeroes `+0x24`/`+0x25`),
+  `ConnectionBC` (dtor `FUN_1002f330`), `ConnectionLANLobby` (dtor `FUN_10030170`).
+- Vtable region `0x100515bc`–`0x100516d0` holds four sibling vtables; every one has
+  `+0x0C` = `GetState` (`0x10036bd0`), and `+0x18` = that class's **Logout**:
+  | vtable base | `+0x18` Logout impl | behaviour |
+  |---|---|---|
+  | `0x100515bc` | `0x1002f400` `CommLayerConn_Logout_TeardownSocket_0x28` | destroys socket `+0x28`, then flags |
+  | `0x10051604` | `0x1002f9e0` `CommLayerConn_Logout_FlagLoggedOut` | `conn+0x25=1; conn+8=0` |
+  | `0x1005164c` | `0x1002fb90` `CommLayerConn_Logout_TeardownSocket_0x2c` | destroys socket `+0x2c`, then flags |
+  | **`0x10051694`** (the **live village transport**, read from the running client) | **`0x10030510`** | `state := 9`, then net-driver disconnect `FUN_10019130(conn+0x24)`; **does NOT set `+0x25`** |
+  (`0x10051604 +0x3C` = the notification pump `CommLayerConn_PumpPendingLoginNotifications`.)
+
+⚠️ **The gap `[PROVEN NEGATIVE]`:** `conn+0x25` is written by exactly two functions —
+`0x1002f9e0` (`=1`) and the `ConnectionDummy` ctor (`=0`). Neither is on the village transport class's
+Logout path, and there is **no `CMP [reg+8], 9`** anywhere in tincat3 (byte-searched EAX/ESI/EDI forms),
+so the `state==9` "logging out" condition is not polled in that idiom. **Conclusion: we cannot yet say
+which sink callback a remote close produces for the village connection** — `OnLoggedOut` (`+0x0C`,
+reaches `HandleLoggedOut` → `VillageLeft(11)`) or `ConnectionLost` (`+0x10` → `0x004647e0`, which does
+**not**). That distinction decides whether "stub closes the village socket" is the fix.
+
+**Decision:** stop the static dive here (diminishing returns against a large async state machine) and
+settle it empirically — the two breakpoints `0x00464bf0` (OnLoggedOut) and `0x004647e0` (ConnectionLost)
+discriminate the outcomes exactly, in one run. Requires an Engagement Record (stub wire-change).
+
+**Class identified `[PROVEN]`:** the village/lobby transport (vtable `0x10051694`) is
+**`CommLayer::ConnectionReal`** — ctor `FUN_100301f0@0x100301f0` (assigns the vftable; sets
+`+0x28=-1`, `+0x2c=0xefffffee`, `+0x38=0`, `+0x3c=1`, `+0x24`=socket wrapper `FUN_10018c70(...,2,0x1e61)`,
+`+0x30`=`PropertyDataConverter`, `+0x34`=`TinCat_CreatePropertySet()`), dtor `FUN_10030940`.
+Siblings: `ConnectionDummy` (base), `ConnectionBC`, `ConnectionLANLobby`.
+
+**`ConnectionReal` per-tick handler = vtbl`+0x3C` = `FUN_10030680`:**
+```c
+if (conn+0x24) FUN_100190d0(conn+0x24);                     // tick net driver
+if (conn+0x38) (**(**(conn+0x38) + 0xc))(*(int*)(conn+8));  // push STATE to observer@+0x38
+```
+`conn+0x38` is set after construction (live value `0x1BB51658`, in tincat3's heap — so it is an internal
+observer, NOT the LobbyManager sink, whose OnLoggedOut takes two args). **Resolving `conn+0x38`'s class
+is the remaining blocker**; it is a runtime-installed pointer, i.e. exactly the "purely runtime-virtual"
+case HARNESS §6 says to settle with a live read rather than static guessing.
+
+**Also upgraded to `[PROVEN]`:** sink slot `+0x10` = ConnectionLost — `FUN_004647e0@0x004647e0` carries
+the string `"LobbyComm::System::ConnectionLost"` (xref from `0x007dadd8`). Previously `[INFERRED]`.
+
+**Reference check (dead end, recorded so it is not repeated):** the AdK emulator
+(`~/Downloads/AdK-emulator`, our exact `0x26B6` wire) does **not** implement the village/world
+connection — no `0xAFFEDEAD`, no msg 2002 anywhere. Its `UserLoggedOut` is NETMSG **110**
+`{type, user_id}`, a presence broadcast to *other* users on disconnect, not a per-connection logout ack.
+It therefore says nothing about the village LoggedOut mechanism.
+
+### 2026-07-26 (cont.) — live pointer-walk + the decisive NEGATIVE: OnLoggedOut looks UNREACHABLE for ConnectionReal
+
+Read-only live walk (no breakpoints, no wire change), client in-world at `LobbyManager.state = 9`:
+`g_pLobbyManager@0x885890` → `0x0E6598E8` → `+0x540` villageConn `0x0E64FD38` (vtbl `0x007DB8D4` ✓)
+→ `+0x34` transport `0x1BBE80A0` (vtbl **`0x10051694` = `CommLayer::ConnectionReal`**, `+0x08` state = 8,
+`+0x1c` serverId = 50 ✓) → `+0x38` observer `0x1BB72858` → its vtable **`0x1004F8DC`**
+(RTTI ptr at base-4 `0x1005703C`).
+
+Observer vtable `0x1004F8DC`: `+0x00`=`0x100267E0`, `+0x04`=`0x10023BF0`, `+0x08`=`0x1000DC20`,
+**`+0x0C`=`0x1000DC20`**, `+0x10`=`CommLayer_ClientRecvHandler_StateMachine@0x10023460`,
+`+0x14`=`0x10023AF0`. **`FUN_1000dc20` is `{ return; }` — a shared no-op stub** (hence the same address
+in two slots). So `ConnectionReal`'s per-tick state push (`0x10030680`) goes nowhere.
+
+**Therefore, for `CommLayer::ConnectionReal` (the village transport):**
+1. tick `vtbl[0x3C]`=`0x10030680` does **not** call the notification pump;
+2. `Logout` `vtbl[0x18]`=`0x10030510` sets `state:=9` + net-driver disconnect, never sets `+0x25`;
+3. the pump (`CommLayerConn_PumpPendingLoginNotifications`, the ONLY caller of sink `+0x0C`) is invoked
+   only from the *other* classes' ticks — `FUN_1002f920`, `FUN_10030110` — and their vtable slot.
+
+⇒ **`OnLoggedOut` is not reachable for this connection class via any path found.** Consequence:
+**"stub closes the village connection on msg 2002" would NOT drive `VillageLeft(11)`** — do not implement
+it on that premise. (Consistent with the earlier live run where a `LobbyManager::OnLoggedOut` breakpoint
+never fired.)
+
+⚠️ **Honest limit of this negative:** the sweep for sink `+0x0C` call sites is **not exhaustive** — it
+covered both recv state machines, the two `conn+0x25` writers, and the pump's callers, but not every
+`MOV r32,[r32+0x0c]` register encoding program-wide. So this is **`[STRONG, not airtight]`**. The paradox
+worth resolving next: the client *does* subscribe a game-screen observer to the village conn's LoggedOut
+list and `LobbyManager::OnLoggedOut` has a full village branch (resets world-stream handler, server list,
+re-registers type-4/5 observers = exactly "return to the village list"), so the path is clearly *intended*
+to run. Either a reachable trigger exists that this sweep missed, or the real village-leave completes by a
+different mechanism entirely.
