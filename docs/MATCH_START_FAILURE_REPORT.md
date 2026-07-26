@@ -108,7 +108,7 @@ transition?** Settling that needs the real server's behavior or deeper client-si
 `Manager_HandleNCommEvent@0x40e560` **case 0x3000b**: `if (NComm_IsHost() && FUN_004083e0()[all-ready]) →`
 send **`NComm::Event1Integer 0x2002b`**; and it arms `+0x3ae bStartLoadingReady` when `+0x3ad bStartLoadingArmed`.
 The networked start is: all-ready → `0x2002b` → **`StartLoading (0x30012)`** over the P2P → each client's
-`case 0x30012` sets `+0x3cc` + arms the referee (`LM+0x3625`) → `OnStartLoading@0x4316c0` (which does **NOT**
+`case 0x30012` sets `+0x3cc` + arms the referee (`LM+0x3625`) → `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` (⚠️ NOT the NE_StartLoading handler — corrected 2026-07-25; it is the village-conn LoggedOut observer) (which does **NOT**
 `StartUpNetwork(0)` — P2P preserved) → `OnEnter`/`BuildWorldSequence`. The host took the **loopback** path (#2),
 not this networked path (#1) — which is exactly why **no referee frame and no `0x30012` ever appeared on the wire.**
 
