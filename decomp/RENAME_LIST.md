@@ -710,3 +710,44 @@ earlier reading of that value was wrong.
 from the live probe: the ServerList's stashed callback pair `+0xA4/+0xA8` held
 `{LobbyManager, SetRefereeServerAddress@0x004625D0}` — the **referee** callback — so the game-server
 request may have no callback registered to receive its result, or uses a different slot. Start there.
+
+### 2026-07-26 (late) — what clears the "Connecting to Game Server" gate `[PROVEN static]`
+
+`LobbyServerList_GameServerAssigned@0x00469ad0` is **vtbl slot `+0x28`** of the ServerList's observer
+interface (vtable base `0x007daf8c`, RTTI at base-4 `0x007daf88`). Its body:
+```c
+id = <failureSentinel>; if (assignedServerId) id = *assignedServerId;
+(**(code **)(this + 0xa0))(id, …);   // fire the PENDING callback
+this+0x9c = 0;  this+0xa0 = 0;        // clear the pending state  ← what closes the dialog
+```
+(so `+0x9c` is the pending **state** and `+0xa0` the pending **callback** — correcting the earlier note
+that read `+0x9c` as an "assigned server id".)
+
+**Who invokes it — `[PROVEN]`, scripted sweep of tincat3 for indirect calls through `vtbl[+0x28]`:**
+`GameServerManager_OnGameServerAssigned@0x10021520` (call site `0x10021573`):
+```c
+if (serverDesc+0x28 == 4 && serverDesc+0x29 == 5) {   // REFEREE descriptor (type4/sub5)
+    assignHandler = FUN_10006ca0(this+8);
+    assignHandler->vtbl[0x20](&descFields, *serverDesc, 0);
+    return;
+}
+if (this+4) (**(this+4))->vtbl[0x28](serverDesc);      // ← DEFAULT → LobbyServerList_GameServerAssigned
+```
+⇒ It is driven by an inbound **`GameServerData(170)` descriptor**, and branches on the descriptor's
+`server_type`/`server_subtype`. The **type4/sub5** arm is the referee path the stub already implements and
+which is live-proven (it latches `LM+0x580`). **Any other type/subtype falls through to the default arm
+and clears the game-server pending gate.**
+
+**Therefore `[INFERRED, strong — same shape as the proven referee flow]`:** the host's
+*"Verbindung zu Spieleserver wird hergestellt"* clears when it receives a `GameServerData(170)`
+descriptor for its own game (`server_type=5, server_subtype=1`) delivered down the path that reaches
+`OnGameServerAssigned`.
+
+`[TODO]` The open detail is **delivery/routing**, not content: the stub already pushes a 170 for the
+hosted game via `_push_to_obs` (the log shows `[OBS] pushed 170 GameServerData id=101 to 2 observer(s)`)
+and the gate did **not** clear — so an unsolicited observer push evidently routes to the server-list
+update path, not to `OnGameServerAssigned`. The referee 170 that *does* work is sent as a **ticketed
+reply to the request** (`AssignServer(189)` → 170 with that ticket). Next step: reply to the host's
+`AddGameServer(168)` with a ticketed `GameServerData(170)` (type 5 / sub 1) alongside the existing
+`AddResult(153)`, and confirm with a trace on `LobbyServerList_GameServerAssigned@0x00469ad0` — which is
+already in the standing trace set.
