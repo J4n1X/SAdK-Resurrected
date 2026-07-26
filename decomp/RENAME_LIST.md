@@ -751,3 +751,43 @@ reply to the request** (`AssignServer(189)` → 170 with that ticket). Next step
 `AddGameServer(168)` with a ticketed `GameServerData(170)` (type 5 / sub 1) alongside the existing
 `AddResult(153)`, and confirm with a trace on `LobbyServerList_GameServerAssigned@0x00469ad0` — which is
 already in the standing trace set.
+
+### 2026-07-26 (night) — ticketed-170-on-168 FALSIFIED live; and the gate's callback slot is NULL
+
+Shipped `8e38520` (answer `AddGameServer(168)` with a ticketed `GameServerData(170)` type5/sub1) and
+tested it with traces armed on `LobbyServerList_GameServerAssigned@0x00469ad0` and
+`AssignGameServerResultReceived@0x00469be0`.
+
+**Result — outcome 3, clean falsification.** The stub sent the 170 (log:
+`[GAME] GameServerData(170) id=100 type5/sub1 (ticket=22)` immediately after the 168), and:
+```
+814612.89   SetState(8)                              EnteringVillage
+814615.171  SetState(9)                              VillageEntered
+814629.828  FUN_0046AAA0(serverList=0x0E739094)      the gate IS set
+814643.578  SetState(0x0A) LeavingVillage
+814643.593  SetState(0x0B) VillageLeft               (15 ms — the logout remains solid)
+```
+`LobbyServerList_GameServerAssigned` — **never fired.** `AssignGameServerResultReceived` — **never fired.**
+⇒ A ticketed 170 replying to a 168 does **not** reach `GameServerManager_OnGameServerAssigned`. Reverted.
+
+**The decisive new fact — live read of the gate right after the attempt:**
+```
+ServerList+0x9c = 0xFFFFFFFF   (still PENDING)
+ServerList+0xa0 = 0x00000000   (pending callback = NULL)
+```
+`LobbyServerList_GameServerAssigned` does `(**(code **)(this + 0xa0))(id, …)` — with `+0xa0` NULL that
+path would **call a null pointer**. So it **cannot** be the mechanism that clears the gate for a game
+server: `FUN_0046aaa0` parks `+0x9c` **without ever registering a callback**, unlike
+`LobbyServerList_RequestRefereeServer@0x00468f60`, which explicitly stashes its `{this, fn}` pair.
+
+⇒ **Revised model.** The referee and game-server flows are *not* symmetric. The referee registers a
+callback and is completed by an assign-result; the game-server flow registers none, so whatever clears
+`+0x9c` for a game is a different route entirely — not the callback-firing path.
+
+`[TODO]` Next lines of enquiry, in order:
+1. Find **every writer of `ServerList+0x9c`** (scripted, same technique as the `LobbyManager+0x57C` sweep
+   that settled the state machine). One of them clears it without firing a callback; that is the target.
+2. Check whether `+0xa0` is *supposed* to be set — i.e. does some path register a game-server callback
+   that we never trigger? If so, the missing step is upstream of the assignment entirely.
+3. Only then consider delivery-shape experiments. Two content-based guesses have now been falsified
+   (unsolicited observer push, ticketed reply-to-168); a third guess is not worth a live run.
