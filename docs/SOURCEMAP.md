@@ -146,7 +146,28 @@ Read-only context: `0x462700 SetState`, `0x4626f0 GetState`, `0x4625e0 LobbyMana
 > Typed as struct `VillageServerConnection_vtable` in the project. Key slots (base 0x7dc8d4):
 > `+0x0c` Connect · `+0x14` HandleLoggedIn · `+0x18` HandleLoginFailed · `+0x1c` HandleLoggedOut ·
 > `+0x20` HandleDisconnected · `+0x24` HandleMessage · `+0x28` TickInWorld · `+0x3c` OpenUserComm ·
-> `+0x40` SendWorldLoginReq_2002.
+> `+0x40` **SendLeaveVillageRequest_2002** (renamed 2026-07-25 — see correction below).
+
+> **⚠️ CORRECTION 2026-07-25 `[PROVEN]` (verified on `sadk_noav.exe`, vtable base `0x007db8d4`;
+> slot `0x007db914` read = `0x0046bde0`).** Slot `+0x40` was named `SendWorldLoginReq_2002` and
+> carried the plate comment *"DORMANT (no analyzed caller) … Genuine world-entry is server-driven
+> (inbound 1000)"*. **Both were wrong**, and the error propagated into the match-start analysis for
+> several sessions. The function builds `LobbyMessage(cat=2, msgId=0x7d2=2002){code=0xAFFEDEAD}` and
+> calls `SetState(LeavingVillage=10)` — it is a **LEAVE-village request**, and it is *not* dormant
+> (this table already documented it as a live vtable slot). Caller: `FUN_00503470`
+> (`CLobbyClient::LeaveVillage`) tail-jumps `villageConn->vftable+0x40`.
+>
+> Consequence: after sending 2002 the client sits in `LeavingVillage(10)` awaiting the connection to
+> be driven to **LoggedOut** (`+0x1c` → `SetState(VillageLeft=11)`), which fires the village conn's
+> `+0x1c` observer list → `LobbyGameScreen_OnVillageConnectionLoggedOut` (`0x004316c0` in noav; was
+> misnamed `LobbyGameScreen_OnStartLoading`) → **arms the referee login**, which is the gate on the
+> whole match-load chain. Answering 2002 with `EnterWorld(1000)` re-enters the *lobby* world instead.
+>
+> `[TODO]` What inbound event makes the transport (`conn+0x34`) fire the LoggedOut observer is **not
+> yet determined**. Transport interface so far: `vtbl[0x0c]`=GetState, `[0x10]`=Login/Open,
+> `[0x18]`=**Logout**, `[0x1c]`=Send. Note `SendLeaveVillageRequest_2002` does **not** call transport
+> Logout. `HandleMessage` (`+0x24`) does **not** dispatch 2002 or any logout id, so LoggedOut is a
+> connection-state callback, not a village NETMSG.
 | Addr | Name | Msg / role |
 |------|------|------------|
 | 0x470890 | `VillageServerConnection::HandleMessage` | dispatcher; type via FUN_005025e0 (msg+0x28) |
