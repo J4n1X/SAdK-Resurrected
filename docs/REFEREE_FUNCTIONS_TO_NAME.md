@@ -7,7 +7,7 @@
 > 32 rapid separate POSTs race on async commit and silently drop most. Corrections found live: `0x00479ab0`
 > = **GiveUpGame** (not FinishGame); the real SEND methods **FinishGame=`0x00479c40`**, **ClaimChest=`0x00479670`**;
 > NComm `Manager_HandleNCommEvent` entry = **`0x0040e560`** (old `0x40e720` is mid-body); referee-login pump =
-> **`LobbyGameScreen_Update`=`0x00435980`**, arm = **`LobbyGameScreen_OnStartLoading`=`0x004316c0`**.
+> **`LobbyGameScreen_Update`=`0x00435980`**, arm = **`LobbyGameScreen_OnVillageConnectionLoggedOut`=`0x004316c0`**.
 > **Section D (tincat3.dll) DONE too:** cross-program apply+`df.save` (`docs/tincat3_naming_plan.json`) named the
 > 3 unnamed ones — **`GameServerManager_AssignServer`=`0x10021830`** (NETMSG 0xbd=189), **`GameServerManager_OnGameServerAssigned`=`0x10021520`**
 > (type4/subtype5 referee gate), **`CommLayer_OnUsercommServerData`=`0x10030420`** (192); the other 2 were already named

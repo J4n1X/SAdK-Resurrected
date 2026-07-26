@@ -1,5 +1,23 @@
 # Match-start world-login (`0x27D2` → `EnterWorld(1000)`) — model
 
+> ## ⛔ CORRECTED 2026-07-25/26 — READ BEFORE USING THIS DOC
+>
+> **The core prescription of this document is WRONG.** Msg **2002** (`0x27D2`, `code=0xAFFEDEAD`) is a
+> **LEAVE-VILLAGE request**, not a world-login request: `VillageServerConnection_SendLeaveVillageRequest_2002
+> @0x46bde0` calls `SetState(LeavingVillage=10)` and waits. Answering it with `EnterWorld(1000)` tells the
+> client to *enter* the lobby world when it asked to *leave* — that is the origin of the "clone" (both
+> clients reloading the lobby world at match-start). **Do not answer `0x27D2` with `1000`.**
+>
+> Live-proven 2026-07-25: the stub receives the frame and no-ops it; the client parks in
+> `LeavingVillage(10)` and retries forever (no timeout, no disconnect).
+>
+> Also **do not** "fix" it by closing the village connection: that reaches `VillageLeft(11)` but fires the
+> **Disconnected** observer (`villageConn+0x28` → `LobbyGameScreen_OnGameConnectionResult@0x432ed0`),
+> producing an `!ERROR_DIALOG` / `!CONNECTION_LOST_TEXT` and never arming the referee. `[PROVEN]`
+>
+> What legitimately clears `LeavingVillage(10)` is **still unknown** — see `decomp/RENAME_LIST.md`
+> (2026-07-25/26 entries) for the full evidence chain and the open question.
+
 > **s42 (2026-06-10), ranked MP live test + read-only RE on `sadk_noav.exe` (image base 0x400000).**
 > Status discipline: every claim tagged **[PROVEN]** (binary addr + read-only/live evidence) or
 > **[HYPOTHESIS]**. This doc is the model behind `engagement_records/2026-06-10_match-world-login.md`.
@@ -44,7 +62,7 @@ magic 0x26b6 | t1=74 | t2=74 | msg_type=0x27d2 | memblock len=4 | code = AF FE D
 
 ## 2. Binary mechanism — the client SENDS `0x27D2` at match-start [PROVEN — binary + live]
 
-`LobbyManager_SendWorldLoginReq_2002 @0x46bde0`:
+`VillageServerConnection_SendLeaveVillageRequest_2002 @0x46bde0`:
 - Guards `connState (conn+0x34 →vtbl[0xc]) == 8` (authorized/in-village); else returns false.
 - `LobbyMessage(cat=2, id=0x7d2)` → wire type word **`0x27D2`** = `(2<<12)|0x7d2`.
 - Field `"code"` = `WriteInt(-0x50012153)` = **`0xAFFEDEAD`** (matches the captured bytes exactly).
@@ -93,7 +111,7 @@ unchanged from `[[world-build-model-clean-binary]]`.
 
 ## 5. Referee relationship [PROVEN static / live]
 
-- The referee login is armed for **every non-observer MP match-start** — `LobbyGameScreen_OnStartLoading
+- The referee login is armed for **every non-observer MP match-start** — `LobbyGameScreen_OnVillageConnectionLoggedOut
   @0x4316c0` arms `+0x3624/+0x3625` gated only on a player/observer predicate + `Manager+0x3cc`
   (StartLoading flag); **no `RankedGame` branch**. The pump `LobbyGameScreen_Update @0x435980` has none
   either. **[PROVEN static]** So ranked is **not** the gate for whether the referee is contacted.

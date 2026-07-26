@@ -1,5 +1,20 @@
 # Match start — pre-game room → loading the map → playing
 
+> ## ⚠️ CORRECTED 2026-07-25/26
+>
+> `0x4316c0` was named `LobbyGameScreen_OnStartLoading` and described as the **`NE_StartLoading`
+> (NComm `0x30012`) handler**. **Both were wrong.** It is the **village connection's `LoggedOut`
+> observer** (`villageConn+0x1c`), renamed `LobbyGameScreen_OnVillageConnectionLoggedOut`. The real
+> `NE_StartLoading` handler is `Manager_HandleNCommEvent@0x40e560` case `0x30012`, which only sets
+> `NComm+0x3cc`. Trigger references below have been corrected in place.
+>
+> ⛔ Consequence for the chain: the referee is armed by a **village LoggedOut**, which the client only
+> reaches after sending msg **2002** (leave village) — and `OnLoggedOut` has since been shown
+> **unreachable** for the village transport class (`CommLayer::ConnectionReal`). So the
+> "match-start needs a village LoggedOut" model **cannot be how the real flow works**. Treat the
+> referee/GameSeed phases below as still-valid RE, but the *entry* into them as an open question.
+> Evidence: `decomp/RENAME_LIST.md`, 2026-07-25/26 entries.
+
 How the **client** transitions out of the pre-game game-screen into actually loading the
 map and starting the match. This is the long-stuck `[TODO]` ("Entering matches"). All
 addresses are **`sadk_noav.exe`** (the active binary), verified live via the Ghidra MCP
@@ -26,8 +41,9 @@ this session. Evidence tags: `[PROVEN]` = address + decompiled evidence here;
                                                                             (seed → +0x50 fan-out)
 
   ALL clients (host + joiners):
-   NE_StartLoading (NComm 0x30012)
-        → LobbyGameScreen_OnStartLoading@0x4316c0
+   NE_StartLoading (NComm 0x30012) sets NComm+0x3cc; then client sends msg 2002 (leave village)
+   and the village conn must report LoggedOut (+0x1c)  [SEE CORRECTION BANNER]
+        → LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0
             ├ observer?         → just proceed (vtbl[0x30])
             ├ MP game?          → ARM referee login  (+0x3624=1,+0x3625=1,+0x362c=0,+0x3628=0x10)
             └ single/direct?    → LOAD NOW: Game_SetRunMode(game,2) + Game_PropagateModeToChildren(game)
@@ -53,7 +69,7 @@ this session. Evidence tags: `[PROVEN]` = address + decompiled evidence here;
 |---|---|---|
 | `RefereeServerConnection` sub-object | `LobbyManager+0x490` | getter `LobbyManager_GetRefereeServerConnection@0x4624f0` |
 | Host start trigger | `Lobby_HostRegisterGameWithReferee@0x432240` | sole caller of `RegisterGame` |
-| Start-loading event handler | `LobbyGameScreen_OnStartLoading@0x4316c0` | NE_StartLoading (NComm 0x30012) |
+| Village-conn **LoggedOut** observer | `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | villageConn `+0x1c` LoggedOut — **NOT** NComm 0x30012 (corrected 2026-07-25) |
 | Per-frame pump / login retry | `LobbyGameScreen_Update@0x435980` | drives the arm flags below |
 | Observer subscribe / unsubscribe | `LobbyGameScreen_Subscribe/UnsubscribeConnectionObservers@0x4351a0 / 0x433d80` | OnEnter / OnExit |
 | Load kick | `Game_SetRunMode@0x429900` + `Game_PropagateModeToChildren@0x42a640` → `Game_NotifyChildrenLifecycle@0x429de0` | `game+0xc=2`, then fan-out to children |
@@ -97,7 +113,7 @@ match cannot start.**
 
 ## Phase 3 — start-loading + the referee-login gate `[PROVEN]`
 
-`NE_StartLoading` (NComm `0x30012`) → `LobbyGameScreen_OnStartLoading`. For a **multiplayer**
+The village conn’s **LoggedOut** callback (`villageConn+0x1c`, fired by `BaseConnection::LoggedOut@0x48e2a0`) → `LobbyGameScreen_OnVillageConnectionLoggedOut` — **not** `NE_StartLoading` (corrected 2026-07-25). For a **multiplayer**
 game (gate: `NMenuSystem+0x3cc != 0`) it does *not* load immediately — it **arms** the login
 (`+0x3624/+0x3625/+0x362c/+0x3628`). Observers skip the gate; single-player / direct loads
 immediately.
@@ -167,7 +183,7 @@ The screen watches **two** connections: the referee conn (`LM+0x490`) and the vi
 | `refConn+0x5c` | `OnRegisterGameResult` failure | `LobbyGameScreen_OnRegisterGameFailed@0x432fd0` | `!REGISTER_GAME_FAILED` dialog |
 | `refConn+0x80` | `OnLoginSuccess` | `Lobby_HostRegisterGameWithReferee@0x432240` | **host sends `RegisterGame(0xDB6)`** (login OK → register) |
 | `refConn+0x8c` | `OnLoginFailed` | `LobbyGameScreen_OnRefereeLoginFailed@0x4317d0` | retry+backoff (identical to `+0x10`) |
-| `villageConn+0x1c` | `NE_StartLoading` (`0x30012`) | `LobbyGameScreen_OnStartLoading@0x4316c0` | arm referee login (MP) or load now |
+| `villageConn+0x1c` | **LoggedOut** (via `BaseConnection::LoggedOut@0x48e2a0`) | `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | arm referee login (MP) or load now |
 | `villageConn+0x28` | game-connect result | `LobbyGameScreen_OnGameConnectionResult@0x432ed0` | **load kick** (`Game_SetRunMode(2)`+propagate); `!CONNECTION_LOST` dialog on error |
 | `villageConn+0x8c` | join rejected: no table | `LobbyGameScreen_OnJoinFailedNoTable@0x433280` | `!MINIGAME_NOTABLELEFT` dialog |
 | `villageConn+0x98` | join rejected: no slot | `LobbyGameScreen_OnJoinFailedNoSlot@0x433380` | `!MINIGAME_NOPLAYERSLOTLEFT` dialog |
@@ -280,7 +296,7 @@ or an AI to a slot → click **Start**. (For the joiner side, join the hosted ga
 **Tier A — observable against the *current* stub (no referee needed):**
 | Breakpoint | Read | Confirms |
 |---|---|---|
-| `LobbyGameScreen_OnStartLoading@0x4316c0` | `this+0x3624/0x3625/0x362c/0x3628`; `NMenuSystem+0x3cc` | the arm vs load-now fork |
+| `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | `this+0x3624/0x3625/0x362c/0x3628`; `NMenuSystem+0x3cc` | the arm vs load-now fork |
 | `RefereeServerConnection_Login@0x4793f0` | the referee transport target (ip:port) at `this+0x34` | Phase 1/3 — client *does* try the referee |
 | `LobbyGameScreen_Update@0x435980` (the `0x362c>4` branch) | retry count | the give-up-after-5 → load-anyway path |
 | `Game_SetRunMode@0x429900` | `game+0xc` becomes `2` | the load kick fires |

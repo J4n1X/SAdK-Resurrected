@@ -100,7 +100,7 @@ or whether the `+0x9c` modal is *blocking* the FreeGamePanel Start. **Capture #3
   code/loaded-module address → invalid callback).
 - 7 non-breaking traces armed BEFORE the start, across the full start→park: **0 hits on all of**
   `FUN_0046aaa0` (0x46aaa0), `GameServerManager_AssignServer` (tincat3 0x10021830),
-  `LobbyGameScreen_OnStartLoading` (0x4316c0), button/slot dispatch `FUN_00434230` (0x434230),
+  `LobbyGameScreen_OnVillageConnectionLoggedOut` (0x4316c0), button/slot dispatch `FUN_00434230` (0x434230),
   and the NComm trio `StartUpNetwork`/`ConnectAndJoin`/`Shutdown` (0x40a9a0/0x40ad60/0x40b410).
 - Game stays alive (3D background animates) — confirmed a stuck wait, not a freeze/crash.
 - **Deadlock PROVEN (non-breaking traces on the parked host):** `LobbyGameScreen::Update`

@@ -81,7 +81,7 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   `Lobby_HostRegisterGameWithReferee@0x432240` sends **`RegisterGame(0xDB6)`** (GameID/MapGUID/MapName/
   MapSettings/Ranked/Wager/AIPlayer/6×AvatarID) → referee **`RegisterGameResult(0xDB8)`** carries the
   **`GameSeed`** (the lockstep determinism seed — no seed, no match). All clients: `NE_StartLoading`
-  (NComm 0x30012) → `LobbyGameScreen_OnStartLoading@0x4316c0` **arms referee login** for MP games;
+  (NComm 0x30012) sets `NComm+0x3cc`; the referee login is armed later, by the **village-conn LoggedOut** callback `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` (NOT by NE_StartLoading — corrected 2026-07-25);
   per-frame `LobbyGameScreen_Update@0x435980` pumps `RefereeServerConnection_Login@0x4793f0` (5 retries
   then loads anyway); `LoginSuccess(0xDCA)`/`LoginFailed(0xDCB)` fan out to game-screen observers
   (`refConn+0x80`/`+0x8c`; seed on `+0x50`). The **load kick** = `Game_SetRunMode(game,2)` (game+0xc=2)
