@@ -122,6 +122,7 @@ class Conn:
         log(f"  CONNECTION #{self.id}  {self.addr[0]}:{self.addr[1]}"
             f"  ->  listener :{local_port} [{self.role}]")
         log(f"{'#' * 60}")
+        dispatch.register_conn(self)      # live-conn registry (lets the leave flow pair UC ↔ village)
         try:
             self._sock.settimeout(60.0)
             while self.alive:
@@ -146,6 +147,9 @@ class Conn:
                 log(f"  [REGISTRY] dropped {len(dead)} game(s) owned by #{self.id}: {dead}")
             dispatch.unregister_observer(self)
             log(f"\n  DISCONNECTED #{self.id} [{self.role} :{local_port}]")
+            # Must run AFTER the log line above so the ordering reads correctly, and after the socket
+            # is closed — the village-leave phase 2 keys off the UC conn actually being gone.
+            dispatch.on_conn_closed(self)
 
     def _process(self):
         while True:
