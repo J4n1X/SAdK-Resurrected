@@ -1,5 +1,13 @@
 # Match-start host wall — the host never obtains a game-server assignment
 
+> **⚠️ PARTIALLY CORRECTED 2026-06-17 — read `docs/MATCH_START_STATIC_RECONCILIATION.md` first.**
+> Two fixes from a fresh static pass: (1) the screen here called "LobbyGameScreen::Update" is actually
+> **two** screens — `0x457a00`=`SetupGameDialog::Update` (owns the modal), `0x435980`=`WorldScreen::Update`
+> (owns the arm); (2) `FUN_004ac170(...,4,1)` is a screen-stack enable-bit setter, **not** a world build.
+> The AssignServer trigger is now fully mapped and is **button-free** (deferred-flag path); its sole
+> precondition is `EManagerState==0`, which the NComm never reaches at match-start. The core finding
+> here (the host never sends `AssignServer`) stands.
+
 Status: **2026-06-14, live-debugged on the real binary** (dbgeng MCP on host PID 37676, magazine
 build `sadk_noav.exe`, image base 0x400000, all addrs 1:1). The 2026-06-14 binary question
 ("does `FUN_0046aaa0` fire on Start?") is **ANSWERED: it never fires.** Every claim below is
@@ -169,3 +177,35 @@ a different subsystem). Reads/`get_modules` require the target stopped.
 Corrects the 2026-06-14 framing that the wall hinged on whether `FUN_0046aaa0` fires "then bails in
 NComm bring-up". It never fires at all; the host sits at the constructor-default unassigned state
 and the LobbyGameScreen Update early-returns before any request could be pumped.
+
+## 2026-06-17 — the chase narrowed to the `+0x9c` writer (NEXT-SESSION PLAN)
+
+Two new `[PROVEN static]` facts tighten the wall to a single live question:
+
+- **No automatic NComm teardown exists.** `ShutdownNCommIfNotMatchHost@0x468410` (→ `NComm_Manager_Shutdown`
+  → `+0x9c=-1`) is reached by exactly two callers: the **LeaveButton** handler, and the slot-36 wrapper
+  `LobbyVillageServerList_ShutdownNComm_Wrapper@0x452d90` (`SetupGameDialog vtbl+0x90`). A program-wide
+  `call [reg+0x90]` search returns **one** hit, at `0x7450fe` (`FUN_00741360`, a 0x74xxxx non-lobby class)
+  — i.e. slot-36 is **not dispatched anywhere in the lobby**. So the only real path to the teardown (hence
+  to the arm → `AssignServer` → modal-clear) is the player clicking **Leave**. There is **no auto-start
+  trigger** for the `+0x9c`/AssignServer mechanism. *(Caveat: a `mov eax,[edx+0x90]; call eax` form would
+  not match that search; no direct virtual dispatch exists though.)*
+- **The village list is constructed once.** `LobbyComm_ServerList_ctor@0x46a160` has a single caller,
+  `LobbyManager::ctor@0x46408f`. It is **not** rebuilt at match-start ⇒ the `+0x9c=-1` the capture saw is a
+  **write**, not a fresh construction.
+
+**The contradiction that pins our ignorance:** the capture shows `+0x9c=-1` at match-start while
+`NComm_Manager_Shutdown@0x40b410` had **0 hits** and the list was not reconstructed. So the `-1` was written
+by **none of the five known `MOV`-store writers** (ctor / GameServerAssigned→0 / AssignGameServerResultReceived→0
+/ FUN_0046aaa0→-2 / ShutdownNCommIfNotMatchHost→-1). It is an **unidentified 6th writer** that a
+store-instruction search cannot see — almost certainly a **struct copy / `memcpy`** that carries `+0x9c`
+along (same story as the room value `101`). **This is why static RE can't tell us why the modal appears.**
+
+**THE PLAN (next session):** arm a **hardware WRITE watchpoint on the absolute address of `+0x9c`** =
+`LM + 0xF0` (resolve `LM = *(0x00885890)`), then log in → host → both-ready and read the faulting
+instruction. That names the 6th writer and decides whether `-1` is correct ("must ASK for a game server")
+or a clobber. **Try `debugger_watch_memory` first** — the earlier "watchpoints not exposed" claim predates
+the current MCP and may be stale; if it works this is a one-session fix. Alongside, trace
+`NComm_Manager_BroadcastStartLoading@0x40fe50` (fires at all-ready? → past the modal) and confirm the
+selected map exists on both peers (`SP_CheckMapExists` → `"!MAP NOT EXISTING"` kick). Full pick-up plan in
+`HANDOFF.md`.

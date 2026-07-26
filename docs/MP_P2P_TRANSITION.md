@@ -1,5 +1,12 @@
 # MP match P2P transition — how the client leaves the lobby and enters the host's game server
 
+> **⚠️ CORRECTED 2026-06-17 — read `docs/MATCH_START_STATIC_RECONCILIATION.md` first.**
+> The §"Host game-server assignment" step-1 claim *"No external trigger needed — the host tears its
+> own NComm down whenever it isn't already the mode-4 match host"* is **REFUTED**: the teardown
+> `LobbyVillageServerList_ShutdownNCommIfNotMatchHost@0x468410` is reached only via the **LeaveButton**
+> click (`SetupGameDialog` widget `this[0x2de]`) or the slot-36 virtual wrapper `0x452d90` — neither is
+> automatic. The rest of the transport state-machine description here is sound.
+
 Status: 2026-06-14, static RE on the magazine build (`sadk_noav.exe`, base 0x400000). Claims are
 `[PROVEN static]` unless tagged `[HYPOTHESIS]`. Companion to `docs/MATCH_START_HOST_WALL.md` and
 `docs/MATCH_WORLD_LOGIN.md`.

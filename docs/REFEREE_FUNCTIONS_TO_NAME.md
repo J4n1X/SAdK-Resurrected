@@ -80,7 +80,7 @@ RECEIVE handlers (called from the router switch — each reads a field or two; *
 | addr | name | role |
 |---|---|---|
 | 0x0040e720 | Manager::HandleMessage (NComm) | the 0x30001 join handler (version/static-data-checksum kick) | complex |
-| (NE_StartLoading handler @~0x4316c0) | Game::OnStartLoading | sets game+0x3cc=1, +0x3625=1 (do-referee-login), +0x362c=0 (attempts) | complex |
+| (⚠️ NOT the NE_StartLoading handler — it is the village-conn **LoggedOut** observer, corrected 2026-07-25: `LobbyGameScreen_OnVillageConnectionLoggedOut` @`0x4316c0`) | Game::OnStartLoading | sets game+0x3cc=1, +0x3625=1 (do-referee-login), +0x362c=0 (attempts) | complex |
 | (referee-login loop @~0x436000, ret 0x435ac5/0x436140) | Game::Update_RefereeLoginPump | per-frame; calls RefereeServerConnection::Login 5x ([Reconnector] timesClientRetries) then aborts | complex |
 
 > ⚠ Apply on the program whose addresses these are (**build 34688 = SADK.exe**). On `sadk_noav.exe` (the clean
