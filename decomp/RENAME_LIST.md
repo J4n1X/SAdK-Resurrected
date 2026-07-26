@@ -1022,3 +1022,74 @@ escape hatch is exactly the failure shape we are seeing. **Not yet live-tested.*
 
 **3 fires + 4 silent ⇒ the no-op branch is confirmed**, and `CLobby+0x270` / `CLobby+0xc0` become the
 next targets. 3 silent ⇒ the `StartLoading && VillageEntered` guard is false and the problem is upstream.
+
+### 2026-07-26 (night, cont. 3) — LIVE RUN: hypothesis REFUTED, +8 rule CONFIRMED, lobby half cleared
+
+Six traces on pid 54956 + the stub log. LobbyManager `0x0E6A4570`, ServerList = LM+0x54 = `0x0E6A45C4`.
+
+```
+817608.500  [21] CreateResultReceived(this=0x0E6A45CC, id=0x64=100, errorCode=0)
+817618.296  [17] DestroyGameServer(serverList=0x0E6A45C4)                 caller 0x00457BFF
+817618.296  [19] CLobby_RequestExitVillage(this=0x0E6B6D88, vtbl=0x007E599C)  caller 0x00457C13
+817618.296  [22] SetState(0x0A LeavingVillage)                            caller 0x0046BE7B
+817618.406  [22] SetState(0x0B VillageLeft)                               caller 0x00470F45
+817618.656  [18] DeleteResultReceived(this=0x0E6A45CC, errorCode=0)
+```
+
+#### ✅ The `this = ServerList+8` rule is LIVE-CONFIRMED
+
+The observer callbacks came in with `this = 0x0E6A45CC`. ServerList base is `0x0E6A45C4`.
+**0x0E6A45CC − 0x0E6A45C4 = 8, exactly.** Meanwhile `DestroyGameServer` — a normal member, not an
+observer — got the base `0x0E6A45C4`. Both match the static derivation from this afternoon. Also
+`CLobby_RequestExitVillage`'s captured `arg1` is `0x007E599C`, the vtable itself (EDX still holds it
+at the `CALL EAX`), independently confirming the receiver class.
+
+#### ⛔ REFUTED — the "silent no-op escape hatch" hypothesis
+
+Live reads at the captured `this = 0x0E6B6D88`:
+```
+CLobby+0x270 = 0x00000003    (!= 2, so no App_RequestStateTransition — matches trace 20 = 0 hits)
+CLobby+0xc0  = 0x25DEFA70    (NON-NULL -> the dispatch branch WAS taken)
+```
+The hatch fired and worked: it tail-jumped through to `SendLeaveVillageRequest_2002`, and the host
+went LeavingVillage → VillageLeft in **110 ms** via `HandleLoggedOut` (caller `0x00470F45`, inside
+`0x00470E20`) — the clean exit, not `HandleDisconnected`. My hypothesis was wrong; it is not a no-op.
+
+#### The modal is a STUCK SCREEN, not a stuck protocol
+
+Order matters: `DestroyGameServer` (817618.296) does **not** clear `+0x9c`; `DeleteResultReceived`
+does, at 817618.656 — i.e. **after** the village leave already completed. From that frame on, the
+still-visible `SetupGameDialog` sees `NComm_IsHost() && +0x9c == INVALID`, shows
+"Verbindung zu Spieleserver wird hergestellt" and early-returns forever. The user confirmed the modal
+appeared. So the leave is correct and the *screen transition* is what is missing.
+
+#### Stub-side, same moment (18:28:16)
+```
+16.130  #8 world  <- 2002 -> our 1006 -> DISCONNECTED #8
+16.300  DISCONNECTED #7 [uc]
+16.663  #4 world  <- 2002 -> our 1006 -> DISCONNECTED #4
+16.740  #1        <- 169 RemoveServer server_id=100
+16.741  #1        <- RegObserverServerList type=4 -> 1 server ; type=5 -> 0 servers
+16.816  DISCONNECTED #3 [uc]
+```
+**Both** clients left the village and dropped **both** world (:5479) and UC (:7071) connections, then
+re-subscribed to the server-list observers — the client went back to *browsing*.
+**No `AssignServer(189)` anywhere, and nothing dialled `:5481`.** `MEMORY.md` had
+"VillageLeft(11) → arms the referee"; it did not fire this run. `running` was `False` on every 177 —
+expected, since the `running=true` broadcast was reverted in `a2377d2` as unsupported.
+
+#### Net effect on the map
+
+The lobby half of match-start is now **cleared end to end**: hosting latches, the delist is the
+client's own doing, the exit hatch works, the village leave is clean. Three suspects eliminated and one
+hypothesis killed. The wall sits where `[[mp-host-join-ready-start-works-wall-match-load]]` already put
+it — nothing initiates the match world load after VillageLeft(11) — with two concrete new leads:
+`[TODO]` (a) why the referee assign never arms at VillageLeft, and (b) what is supposed to change the
+host off `SetupGameDialog`.
+
+#### Process note — a false alarm I raised and retracted
+
+I flagged `players/referee/registry/server.py` as differing between local and minisrv on md5. They
+differ only by **CRLF vs LF** (`diff --strip-trailing-cr` → 0 lines): the files I scp'd from Windows
+carry CRLF, the ones still from the git checkout carry LF. Deployed content is identical to master.
+Hash-compare across a Windows→Linux deploy is not a valid equality test — strip CR first.
