@@ -113,14 +113,20 @@ DEFAULT_CHANNELS = [
 # EnteringVillage(8) waiting for 1000. HandleEnterWorld calls SetState(VillageEntered=9) as
 # its FIRST instruction, so a single well-framed 1000 enters the world. The stub pushes it
 # on the village conn a short delay after the 153 login ACK (dispatch._h_send_token).
-# Its own client-side world-login request (SendGameData(74){0x27D2}) path is dormant/dead,
-# so the stub does NOT wait for it — it provides 1000 via the genuine mechanism.
+# The client's own SendGameData(74){0x27D2} is NOT a world-login request — it is the LEAVE-VILLAGE
+# request (msg 2002); see VILLAGE_LEAVE_REQUEST_MSGTYPE below. The stub does not wait for it at
+# entry — it provides 1000 via the genuine mechanism (the server push).
 VILLAGE_MSG_ENTER_WORLD = 1000    # 0x3E8 — HandleEnterWorld (server → client)
 VILLAGE_SENDGAMEDATA    = 74      # 0x4A NETMSG SendGameData — the envelope that carries every
 #   village/world message (1000+). [PROVEN, s35] The client's inbound bridge only routes NETMSG
 #   73/74 to VillageServerConnection::HandleMessage and extracts the inner msg_type as the dispatch
 #   key, so EnterWorld(1000) MUST ride a SendGameData(74) envelope. A bare 1000 frame is dropped.
-WORLD_LOGIN_REQUEST_MSGTYPE = 0x27D2  # 10194 — the (dormant) client world-login request msg_type
+VILLAGE_LEAVE_REQUEST_MSGTYPE = 0x27D2  # 10194 = (cat 2 << 12) | 0x7d2 → NETMSG **2002, LEAVE VILLAGE**
+#   [PROVEN 2026-07-25/26] Sent by VillageServerConnection_SendLeaveVillageRequest_2002@0x0046bde0
+#   (village vtable +0x40) with field "code" = 0xAFFEDEAD, immediately after
+#   LobbyManager::SetState(LeavingVillage=10). Reached from the !LEAVE_VILLAGE_QUESTION confirm popup
+#   via CLobbyClient::LeaveVillage@0x00503470 (which tail-jumps into it). It was long mis-named
+#   "world-login request" — that error is what produced the match-start "clone".
 VILLAGE_PAYLOAD_MAGIC = PAYLOAD_MAGIC  # msg 1000 rides the single 0x26B6 comm layer, same as login
 
 ENTER_WORLD_WORLDNAME = "world1"   # must match the ServerType=4 village entry name/map
@@ -136,14 +142,13 @@ WORLD_LOGIN_ACK_CODE = 0xDEADBEEF         # the value the client compares in msg
 VILLAGE_MSG_PONG = 0xED7                   # 3799 — HandlePongCode; our reply to the client's in-world PingCode
 VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world keepalive PingCode (SendGameData 74)
 
-# Match-start world-login resend (s42, ER engagement_records/2026-06-10_match-world-login.md): at MATCH
-# start the client re-sends SendGameData(74){0x27D2}; answering each with a fresh EnterWorld(1000) (forced
-# past the one-shot latch) unfroze the ~80s timeout. BUT RE 2026-06-14 (docs/MP_P2P_TRANSITION.md) showed
-# EnterWorld(1000) re-enters the LOBBY village (the "clone") — it MASKS the freeze, it does not start the
-# match. So it is OFF by default (honest: an unproven/disproven wire-change is not the default), and capped
-# so it can never flood if re-enabled for investigation.
-ANSWER_WORLD_LOGIN_REQUEST = False
-WORLD_LOGIN_MAX_ANSWERS = 3
+# RETIRED 2026-07-26 — `ANSWER_WORLD_LOGIN_REQUEST` / `WORLD_LOGIN_MAX_ANSWERS` are gone.
+# They gated answering the client's 0x27D2 with a fresh EnterWorld(1000). BOTH settings were wrong
+# answers to a misunderstood message: 0x27D2 is the LEAVE-VILLAGE request, so a 1000 told the client to
+# ENTER when it asked to LEAVE (the "clone"), while the off/no-op setting hung it in LeavingVillage(10)
+# forever. The stub now completes the leave the genuine way — by closing the village connection
+# (dispatch._h_send_game_data → conn.close_graceful). No flag: working behaviour is the default
+# (HARNESS §5). ER: engagement_records/2026-07-26_village-leave-close-connection.md
 VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
 
 # ── Referee / match-arbiter server ────────────────────────────────────────────
