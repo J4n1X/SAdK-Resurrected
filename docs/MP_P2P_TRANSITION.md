@@ -18,7 +18,7 @@ The master variable is the **NComm `EManagerState` (Manager+0x1c: 0=None, 1=Netw
 read via `FUN_00408430`. The per-frame **`LobbyGameScreen_Update @0x435980`** drives the whole transition,
 in this order each frame:
 
-1. **Referee pump** (armed by `LobbyGameScreen_OnStartLoading` → `this+0x3624`): if armed →
+1. **Referee pump** (armed by `LobbyGameScreen_OnVillageConnectionLoggedOut` → `this+0x3624`): if armed →
    `RefereeServerConnection_Login` (gated on the StartLoading flag `NComm+0x3cc` + `this+0x3625`, after a
    `this+0x3628` countdown). **ABORTS the match** (`Game_SetRunMode(2)` + `NComm_Manager_Shutdown`) if
    `this+0x362c > 5` (5 tries) **OR `EManagerState == 0`**. This is the s39.5 ~13s abort.
