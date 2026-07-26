@@ -13,11 +13,14 @@ Both previous stub behaviours were wrong answers:
   * answering with `EnterWorld(1000)` told the client to ENTER when it asked to LEAVE  → the "clone";
   * answering with nothing (the no-op)                                                 → hung forever.
 
-The stub now completes the leave the genuine way: it closes the village connection (FIN).
+A third answer — closing the village connection — was implemented and LIVE-TESTED on 2026-07-26 and is
+also WRONG: the leave completes (state 10 -> 11, back to character select) but raises
+"!CONNECTION_LOST_TEXT", and at MATCH START both clients send 2002, so both village conns are closed and
+BOTH PLAYERS ARE KICKED. Reverted to a no-op; the genuine answer is still unknown.
 ER: engagement_records/2026-07-26_village-leave-close-connection.md
 
 Proves:
-  1. A 2002 on a village conn closes the connection gracefully.
+  1. A 2002 on a village conn is a NO-OP (closing it was live-falsified — see below).
   2. It sends NO application frame — in particular **never** an EnterWorld(1000) (clone regression guard).
   3. Repeated 2002s stay safe (the client resends while waiting) and keep an honest counter.
   4. A 2002 on a NON-village conn is ignored (never closes a lobby/UC connection).
@@ -61,13 +64,14 @@ def _enter_world_frame():
                                   config.VILLAGE_PAYLOAD_MAGIC)
 
 
-def test_leave_closes_the_connection():
-    """The genuine completion: msg 2002 → graceful close, so the client reaches
-    OnConnectionLost → HandleDisconnected → SetState(VillageLeft=11)."""
+def test_leave_does_not_close_the_connection():
+    """LIVE-FALSIFIED 2026-07-26: closing the village conn on 2002 completes the leave but raises
+    !CONNECTION_LOST_TEXT, and at MATCH START it kicks BOTH players (both send 2002). Reverted to a
+    no-op; this test locks that in so the close is not reintroduced without new evidence."""
     c = FakeVillageConn()
     c._enter_world_sent = True                  # already in the village (entry push fired)
     dispatch._h_send_game_data(c, _leave_fields(), 0)
-    assert len(c.closes) == 1, f"msg 2002 must close the village conn once, got {len(c.closes)}"
+    assert c.closes == [], "msg 2002 must NOT close the village conn (kicks both players at match start)"
     assert c._leave_requests == 1
 
 
@@ -89,7 +93,7 @@ def test_repeated_leaves_are_safe_and_counted():
     for _ in range(4):
         dispatch._h_send_game_data(c, _leave_fields(), 0)
     assert c._leave_requests == 4
-    assert len(c.closes) == 4
+    assert c.closes == []
     assert c.raw == []
 
 

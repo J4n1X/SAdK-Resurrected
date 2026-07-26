@@ -86,3 +86,38 @@ close must be shaped differently (e.g. a different shutdown/linger), not that th
 Revert the three files (`git revert`). The prior behaviour was an explicit no-op on `0x27D2`, so reverting
 restores byte-identical wire behaviour. Any forced or unexplained result is a diagnostic only and is never
 reported as success.
+
+---
+
+## ⛔ LIVE RESULT 2026-07-26 — FALSIFIED. Reverted.
+
+Tested on the real client against the deployed stub.
+
+**Single client, leave village:** the leave **does complete** — `LobbyManager.state` 10 → 11 and the
+client returns to character select, so `close → OnConnectionLost → HandleDisconnected →
+SetState(VillageLeft=11) → Game_SetRunMode(2)` all fired exactly as modelled. **But** the client showed
+`!CONNECTION_LOST_TEXT` ("Fehler: Verbindung zum Server verloren"), i.e. **outcome 3 (PARTIAL)**: the
+graceful `shutdown(SHUT_WR)` still surfaces with a **non-zero reason code**. So reason 0 is not
+achievable merely by making the close graceful.
+
+**Match start (both clients):** at Start **both** players send msg 2002, so the stub closed **both**
+village connections and **both players were kicked**. That is strictly worse than the hang it replaced —
+it converts a stall into a disconnect for everyone.
+
+**Verdict:** a socket close is **not** the server's answer to msg 2002. Reverted to a no-op
+(`dispatch._h_send_game_data`); `tests/test_village_leave.py` now asserts the no-op so the close cannot be
+reintroduced without new evidence. `connection.close_graceful()` is retained but **unused**.
+
+### What survives, and what does not
+- **Survives `[PROVEN]`:** msg 2002 is the leave-village request; state 10 has exactly two exits;
+  `HandleDisconnected` does reach `VillageLeft(11)`; `OnLoggedOut` is unreachable for `ConnectionReal`;
+  the `!CONNECTION_LOST_TEXT` dialog is conditional on a non-zero reason.
+- **Refuted:** that ending the connection is how a logout completes. The user's read is the right summary —
+  *"log outs do not actually seem to just end the socket connection."*
+
+### Next leads (untested)
+An exhaustive scripted sweep of **SADK.exe** for indirect calls through `vtbl[+0x1c]` (270 sites, mostly
+unrelated classes) leaves a few in lobby code worth checking — notably three inside
+`StatePump_Tick` (`0x465092`, `0x4650d0`, `0x4650e1`) and one immediately beside
+`CLobbyClient::LeaveVillage` (`0x5036ec`, in undefined bytes). If SADK itself invokes the village conn's
+`vtbl[0x1c]`, that is the missing `LoggedOut` trigger and it would not need tincat3 at all.

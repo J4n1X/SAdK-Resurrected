@@ -573,11 +573,23 @@ def _h_send_game_data(conn, fields, ticket):
         # when it asked to LEAVE (that is the "clone"); answering with nothing hung it forever. The
         # genuine completion is for the server to END the connection it was asked to leave.
         # ER: engagement_records/2026-07-26_village-leave-close-connection.md
+        # ⛔ LIVE-FALSIFIED 2026-07-26 — closing the connection is NOT how a logout completes.
+        # We shipped exactly that (close the village conn on 2002) and tested it:
+        #   * single client leaving a village → the leave DOES complete (state 10 → 11, screen returns
+        #     to character select) BUT the client shows "!CONNECTION_LOST_TEXT"
+        #     ("Fehler: Verbindung zum Server verloren") — so the close surfaces with a NON-ZERO reason;
+        #   * at MATCH START both clients send 2002, so BOTH village conns got closed and BOTH players
+        #     were KICKED — strictly worse than the hang it replaced.
+        # Reverted to a no-op. The RE model (state 10 has only two exits, and the referee arm hangs off
+        # the +0x1c LoggedOut observer which a close does NOT fire — a close fires +0x28 Disconnected)
+        # still stands; what is refuted is that a socket close is the server's answer to msg 2002.
+        # [TODO] Find the real answer. Leads: SADK's own vtbl[0x1c] call sites in StatePump_Tick
+        # (0x465092/0x4650d0/0x4650e1) and next to CLobbyClient::LeaveVillage (0x5036ec).
         conn._leave_requests = getattr(conn, "_leave_requests", 0) + 1
-        log(f"  [VILLAGE] *** LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
-            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) → closing the village connection (FIN) "
-            f"→ OnConnectionLost → HandleDisconnected → SetState(VillageLeft=11) ***")
-        conn.close_graceful(why="village leave (msg 2002)")
+        log(f"  [VILLAGE] LEAVE-VILLAGE REQUEST #{conn._leave_requests} — msg 2002 "
+            f"(0x{msg_type:x}, code=0x{data[:4].hex()}) — no-op. Client parks in LeavingVillage(10). "
+            f"Closing the conn was LIVE-FALSIFIED (kicks both players at match start); the genuine "
+            f"answer is still unknown — see engagement_records/2026-07-26_village-leave-close-connection.md")
     elif msg_type == config.VILLAGE_PINGCODE_MSGTYPE:         # 0x2ED6 — in-world keepalive PingCode
         village.send_pong(conn, token=data)                 # echo the ping token, close the RTT round-trip…
         first_ack = not getattr(conn, "_world_login_ack_sent", False)
