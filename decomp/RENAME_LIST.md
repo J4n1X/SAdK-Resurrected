@@ -357,3 +357,50 @@ list and `LobbyManager::OnLoggedOut` has a full village branch (resets world-str
 re-registers type-4/5 observers = exactly "return to the village list"), so the path is clearly *intended*
 to run. Either a reachable trigger exists that this sweep missed, or the real village-leave completes by a
 different mechanism entirely.
+
+### 2026-07-26 — EXHAUSTIVE sink sweep (in-Ghidra script) + the definitive verdict on "close the village socket"
+
+Ran two in-Ghidra scripts over tincat3 (all 101k instructions, every register encoding — the earlier
+byte-pattern and operand-filter attempts were both unreliable; the operand filter silently mangles `+`).
+
+**Sweep 1** — every indirect call through `[reg+0xC]`: **193 sites**.
+**Sweep 2** — filtered to the sink-call *shape* (object loaded from `[X+8]`, vtable deref, slot call),
+restricted to slots `+0x4`/`+0xc`: **97 candidates**, resolved as follows:
+- ~90 are `obj=[EDI+8]`/`[ESI+8]` = the pervasive *"connection at +8 → `GetState` at vtbl+0xc"* idiom;
+- 4 are `[EBP+8]` **message-factory** calls (`commLayer+0x20` → `vtbl[0xc]` = create PropertySet), e.g.
+  `FUN_10018340`, `FUN_1002ed80` — false positives of the heuristic (register reuse after a call);
+- **exactly 2 are real sink calls**, and both were already known:
+  `slot +0x4 @0x10024159` in `CommLayer_ServerRecvHandler_StateMachine` (**OnLoggedIn** — the one caught
+  live) and `slot +0xc @0x1002fa6e` in `CommLayerConn_PumpPendingLoginNotifications` (**OnLoggedOut**).
+
+⇒ **`[PROVEN]` The pump is the ONLY caller of sink `OnLoggedOut` in tincat3**, and it is unreachable for
+`CommLayer::ConnectionReal` (the village transport). The earlier `[STRONG, not airtight]` negative is now
+**hardened**. ⚠️ Note slot `+0xc` has **three** distinct meanings in this codebase (sink OnLoggedOut,
+connection GetState, property-factory Create) — never identify a sink call by offset alone.
+
+**BUT the socket-close question has a different, decisive answer — via `ConnectionLost`, not `LoggedOut`:**
+
+`LobbyManager::OnConnectionLost @0x004647e0` (sink `+0x10`, `LobbyManager.cpp:0x31e`) routes the village
+conn to `villageConn->vtbl[0x20]` = **`VillageServerConnection::HandleDisconnected @0x00470f90`**, which
+does the same teardown as HandleLoggedOut, **plus** tears down the UserComm conn, and **does reach
+`SetState(VillageLeft = 0xB)`** — then calls `LobbyComm::BaseConnection::Disconnected @0x0048e3c0`
+(`LobbyBaseConnection.cpp:0x8f`), which fires the observer list at **`conn+0x28`**
+(vs `BaseConnection::LoggedOut @0x0048e2a0`, `.cpp:0x82`, which fires **`conn+0x1c`**).
+
+**Observer registration `[PROVEN]`** (disassembled `LobbyGameScreen_SubscribeConnectionObservers`, the
+fn-ptr immediates sit right next to their `ADD ECX,<offset>`):
+| villageConn list | fires on | game-screen callback |
+|---|---|---|
+| `+0x1c` (`0x0043520a`, immediate at `0x004351fa`) | LoggedOut | `LobbyGameScreen_OnVillageConnectionLoggedOut@0x004316c0` — **arms the referee** |
+| `+0x28` (`0x004351e5`, immediate at `0x004351d5`) | Disconnected | `LobbyGameScreen_OnGameConnectionResult@0x00432ed0` — `Game_SetRunMode(host,2)` + **`!ERROR_DIALOG` / `!CONNECTION_LOST_TEXT`** |
+(This also upgrades the `+0x1c` → `0x004316c0` attribution from `[INFERRED-high]` to `[PROVEN]`.)
+
+## VERDICT `[PROVEN]` — do NOT close the village connection
+Closing it **would** clear `LeavingVillage(10)` → `VillageLeft(11)`, but it fires the **Disconnected**
+observer, not the LoggedOut one: the player gets a **"connection lost" error dialog** and is bounced to
+run-mode 2. The referee is never armed, so the match never loads. The change would have looked partly
+right (state advances!) while being wrong — the worst kind of false positive.
+
+`[TODO]` Since `OnLoggedOut` is unreachable for `ConnectionReal`, the "match-start needs a village
+LoggedOut" model cannot be how the real flow works. Next line of enquiry: what *else* clears
+`LeavingVillage(10)` legitimately — i.e. find the real consumer of the msg-2002 request server-side.
