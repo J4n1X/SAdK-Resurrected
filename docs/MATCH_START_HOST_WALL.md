@@ -1,5 +1,28 @@
 # Match-start host wall — the host never obtains a game-server assignment
 
+> ## ⛔⭐ CORRECTED AGAIN 2026-07-26 — the "unidentified sixth writer" does not exist
+>
+> A scripted sweep of every `[reg+0x9c]` store settled this file's open Crux. Read
+> `decomp/RENAME_LIST.md` (2026-07-26, night cont.) for the derivation. Three things below are wrong:
+>
+> 1. **`GameServerAssigned@0x469ad0` does NOT write `ServerList+0x9c`.** Its `this` is `ServerList+8`
+>    (the `CommLayer::IGameServerObserver` sub-object; second vtable `0x7daf8c` installed at `[ESI+8]`
+>    by the ctor), so its `this+0x9c`/`this+0xa0` are `ServerList+0xa4`/`+0xa8` — the **referee**
+>    request-callback pair, armed only by `LobbyServerList_RequestRefereeServer@0x00468f80`.
+> 2. **Therefore the writer set is five, all named, and the `101 → -1` reset at match-start is one of
+>    them** — `CreateResultReceived@0x0046a6a0` with `errorCode != 0`, `DeleteResultReceived@0x00469990`,
+>    or `DestroyGameServerAndShutdown@0x00468410`. All three also call `NComm_Manager_Shutdown` or follow
+>    one. No `memcpy`, no struct copy, **no hardware watchpoint needed** — three ordinary traces.
+> 3. **"A naive push of `GameServerAssigned` would crash on the garbage callback at `+0xa0`" is refuted.**
+>    `+0xa0` is a **bool**; the callback lives at `+0xa8` and the ctor zeroes it. The live read
+>    `+0xa0 = 0x70732E00` was the byte flag `0x00` plus three bytes of neighbouring padding garbage.
+>
+> **What this file's own live capture actually proves, re-read correctly:** in the room `+0x9c = 101`
+> is not "a valid non-sentinel value" in the abstract — it is a **real assigned game-server id**, and
+> our stub allocates ids from 100. So `CreateGameServer → AddGameServer(168) → our 153 →
+> CreateResultReceived` **completed end to end**. The hosting handshake works. The wall is that
+> something then resets the latch to INVALID at match-start and nothing re-runs `CreateGameServer`.
+>
 > **⚠️ PARTIALLY CORRECTED 2026-06-17 — read `docs/MATCH_START_STATIC_RECONCILIATION.md` first.**
 > Two fixes from a fresh static pass: (1) the screen here called "LobbyGameScreen::Update" is actually
 > **two** screens — `0x457a00`=`SetupGameDialog::Update` (owns the modal), `0x435980`=`WorldScreen::Update`

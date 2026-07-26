@@ -92,17 +92,34 @@ Slots 25–35 (`0x460BE0/E90/AD0/ED0`, `0x4607F0/B00/90/B0/C0/D0/E0`) are small 
 (SetChildPosition/Bounds/Rect, layout, init-flag `+0xb40`, flag `+0xb42`) currently carrying a
 `SetupGameDialog_` prefix but **shared across ~30 vtables** — see Follow-ups.
 
-## `LobbyComm_ServerList` (villageList, `LobbyManager+0x54`) — corrected mislabels [PROVEN static]
+## `LobbyComm_ServerList` (villageList, `LobbyManager+0x54`) — field map [PROVEN static, 2026-07-26]
 
-The 172-byte struct had two **wrong** field labels; corrected 2026-06-17 (layout byte-preserved):
-- `+0x9c`: `nPendingCreateGameServerId` → **`nGameServerAssignState`** (int): the game-server assign
-  state and the "Connecting to Game Server" modal gate — `-1` none / `-2` request-pending / `0` assigned
-  (ctor inits -1; `GameServerAssigned@0x469ad0` sets 0; `ShutdownNCommIfNotMatchHost@0x468410` sets -1;
-  `AssignServer FUN_0046aaa0` sets -2).
-- `+0xa0`: `fVillageLoginPending` (bool) → **`pAssignCompleteCallback`** (void\*): a **function pointer**,
-  fired by `GameServerAssigned(this, serverId)` as `(*(this+0xa0))(assignedId)` then cleared.
-- `+0x6c` `pGameServerManager` (already named) is the object whose `vtbl[0x20]`=AssignServer,
-  `vtbl[0x28]`=GameServerAssigned default sink.
+> **⛔ The 2026-06-17 "correction" recorded here was itself wrong and has been reverted.** It renamed
+> `+0x9c` → `nGameServerAssignState` and `+0xa0` → `pAssignCompleteCallback`; **the ORIGINAL names were
+> right.** Root cause: `LobbyComm_ServerList_ctor@0x0046a160` installs **two** vtables — `0x7dafcc` at
+> `[ServerList+0]` and `0x7daf8c` (`CommLayer::IGameServerObserver`) at `[ServerList+8]` — so every
+> function in the `0x7daf8c` table runs on `this = ServerList+8` and **all its offsets are +8 shifted**.
+> `GameServerAssigned`'s `this+0x9c`/`this+0xa0` are `ServerList+0xa4`/`+0xa8`, a different pair
+> entirely. Proof: `CreateResultReceived` passes `(int)this + -8` as the observer subject.
+> Full derivation: `decomp/RENAME_LIST.md`, 2026-07-26 (night, cont.).
+
+Byte-exact from the ctor disassembly (`0046a27a`–`0046a2aa`):
+
+| off | type | name | meaning |
+|---|---|---|---|
+| `+0x6c` | ptr | `pGameServerManager` | `vtbl[0x20]`=AddGameServer(168) · `vtbl[0x24]`=UpdateGameServer · `vtbl[0x28]`=DeleteGameServer · `vtbl[0x2c]`=AssignServer |
+| `+0x94` | u32 | `nVillageServerId` | village-server slot, same sentinels |
+| `+0x98`,`+0x99` | bool ×2 | | village-slot flags |
+| `+0x9c` | u32 | **`nPendingCreateGameServerId`** | the hosted game's server id. `0xFFFFFFFF`=INVALID · `0xFFFFFFFE`=PENDING · anything else = the **real assigned id**. Gates the "Connecting to Game Server" modal (`Update@0x457A00` early-returns while `∈{-1,-2}`) |
+| `+0xa0` | **bool** | **`fVillageLoginPending`** | a **BYTE**, not a pointer. Set `=1` in `LobbyVillageScreen::OnLeaveVillage@0x00437899` right after `SelectServerForRoom` |
+| `+0xa4` | ptr | `pPendingRefereeCbCtx` | armed **only** by `LobbyServerList_RequestRefereeServer@0x00468f80` |
+| `+0xa8` | fptr | `pPendingRefereeCbFn` | fired+cleared by `GameServerAssigned` — this is the **referee** completion |
+
+**Complete writer set of `+0x9c` — five, no more** (scripted sweep of every `[reg+0x9c]` store):
+`ctor`→INVALID · `LobbyServerList_CreateGameServer@0x0046aaa0`→PENDING ·
+`CreateResultReceived@0x0046a6a0`→real id (err 0) / INVALID + `NComm_Shutdown` (err≠0) ·
+`DeleteResultReceived@0x00469990`→INVALID · `DestroyGameServerAndShutdown@0x00468410`→INVALID +
+`NComm_Shutdown`. There is **no unidentified sixth writer** and no need for a hardware watchpoint.
 
 ## Follow-ups (not done this session — flagged honestly, no guessing)
 1. **`ComponentBase`/`DialogBase` reattribution.** SetupGameDialog vtable slots 25–35 target shared

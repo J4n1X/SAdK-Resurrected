@@ -189,3 +189,65 @@ verify with a trace at that time.
 **Method note:** a wrong scalar encoding fails *silently* — the handler runs, the compare fails, and the
 body is skipped, so it looks exactly like "the hypothesis was wrong". If a message provably reaches its
 handler but nothing happens, check the encoding before abandoning the theory.
+
+---
+
+## 8. `LobbyComm::ServerList` — the hosting latch (added 2026-07-26)
+
+`ServerList = LobbyManager + 0x54` (`LobbyManager_GetServerList@0x0046b610` is literally
+`return this + 0x54`). It carries the latch that gates hosting **and** the
+"Verbindung zu Spieleserver wird hergestellt" modal.
+
+### ⚠️ Read this before quoting any offset out of a ServerList observer
+
+`LobbyComm_ServerList_ctor@0x0046a160` installs **two** vtables:
+
+```
+0046a1a6  MOV [ESI],       0x7dafcc     ; primary                       -> this = ServerList+0
+0046a1ac  MOV [ESI + 0x8], 0x7daf8c     ; CommLayer::IGameServerObserver -> this = ServerList+8
+```
+
+Every function in the `0x7daf8c` table (`GameServerAdded`, `CreateResultReceived`,
+`DeleteResultReceived`, `GameServerAssigned`, `AssignGameServerResultReceived`, `TANConnectionGranted`,
+…) runs on `this = ServerList + 8`, so **their field offsets are all +8 shifted**. Getting this wrong
+cost two false "facts" in one session. Proof: `CreateResultReceived` passes `(int)this + -8` as the
+observer subject.
+
+| field | type | meaning |
+|---|---|---|
+| `+0x6c` | ptr | `pGameServerManager` — `vtbl[0x20]` AddGameServer(168) · `[0x24]` Update · `[0x28]` Delete · `[0x2c]` AssignServer |
+| `+0x94` / `+0x98` / `+0x99` | u32 / bool / bool | village-server slot |
+| **`+0x9c`** | u32 | **the hosting latch.** `0xFFFFFFFF` INVALID · `0xFFFFFFFE` PENDING · else = the real assigned game-server id |
+| `+0xa0` | **bool** | a byte flag (`=1` in `OnLeaveVillage` after `SelectServerForRoom`) — **not** a pointer |
+| `+0xa4` / `+0xa8` | ptr / fptr | pending **referee** callback (ctx, fn); armed only by `RequestRefereeServer@0x00468f80`, fired+cleared by `GameServerAssigned` |
+
+Reading `+0xa0` as a dword yields the flag byte plus 3 bytes of uninitialised heap padding — it will
+look like garbage (e.g. `0x70732E00`). That is normal, not a stale pointer.
+
+### The hosting state machine
+
+```
+CreateGameServer@0x0046aaa0   guard +0x9c == INVALID
+   Shutdown(false) -> StartUpNetwork(4) -> ConnectAndJoin -> AddGameServer(168) type5/sub1
+   send ok -> +0x9c = PENDING
+CreateResultReceived@0x0046a6a0 (newGameServerId, errorCode)      [this = ServerList+8]
+   +0x9c != PENDING -> log "…but no create pending." and DISCARD
+   errorCode == 0   -> +0x9c = newGameServerId          (hosting live)
+   errorCode != 0   -> +0x9c = INVALID + NComm_Manager_Shutdown()
+```
+
+`LobbyMenu_SetupGameDialog_Update@0x00457a00` shows the modal and **early-returns every frame** while
+`+0x9c ∈ {INVALID, PENDING}` — which also stops the widget pump that could clear it.
+
+### The decisive trace set for a match-start run (no stub change needed)
+
+| # | address | function | what it proves |
+|---|---|---|---|
+| 1 | `0x0046aaa0` | `LobbyServerList_CreateGameServer` | did the host attempt to host at all? |
+| 2 | `0x0046a6a0` | `CreateResultReceived` | **args `(newGameServerId, errorCode)`** — did our 153 land, and with what code? The single most informative value on this path. |
+| 3 | `0x00468410` | `DestroyGameServerAndShutdown` | reset-to-INVALID + NComm teardown |
+| 4 | `0x00469990` | `DeleteResultReceived` | the other reset-to-INVALID |
+| 5 | `0x00469610` | `LobbyServerList_GameServerAdded` | did the 170 reach the observer |
+
+Together these cover **every** writer of `+0x9c`. The June-2026 plan to put a hardware write-watchpoint
+on its absolute address (which §4 says is impossible for heap addresses anyway) is obsolete.
