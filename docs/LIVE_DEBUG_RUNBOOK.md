@@ -152,3 +152,40 @@ logout mechanism was finally found by **stepping**, not sweeping.
 Corollary: prefer reading `[ESP]` at a function's *entry* over any stack trace — and remember tail-jumps
 (`CLobbyClient::LeaveVillage` tail-jumps into the 2002 sender, so `[ESP]` there holds *its caller's*
 return address, not its own).
+
+---
+
+## 7. Wire endianness — the rule, and the audit (2026-07-26)
+
+A little-endian/big-endian mix-up silently disabled msg 1006 for months with **no visible symptom**
+(the client's `if (code == 0xDEADBEEF)` simply never matched, so the whole handler body was skipped).
+After fixing it, every integer the stub puts on the wire was audited. The rule:
+
+| layer | endianness | proof |
+|---|---|---|
+| **NETMSG** (`msgdefs.py` / `codec.py`) | **little** (`fmt = "<" + …`) | login, server browser and room config all carry `UNLONG` fields and work end to end |
+| **TinCat framing** — envelope `msg_type`, MEMBLOCK length prefix, type words | **little** | the client's own msg-2002 frame, captured byte-exact: `… d2 27 00 00 │ 04 00 00 00 │ …` |
+| **TinCat property VALUES** (scalars inside a LobbyMessage/PropertySet) | **BIG** | same frame: `code=0xAFFEDEAD` → wire `af fe de ad`; independently, `MEMORY.md` records the ServerDataBlock `roomId` as a big-endian u32 |
+| **MEMBLOCK payload bytes** | raw, unswapped | `enter_world_body`'s 32-byte channel-count block (first dword = N) works as a raw dword; EnterWorld renders |
+
+**Audit results — one real bug, since fixed:**
+- `village.world_login_ack_body` (msg 1006 `code`) — was little-endian. **THE bug.** Fixed → big-endian,
+  regression-guarded by `test_1006_code_is_big_endian`.
+- `dispatch.py` ServerDataBlock `roomId` — already `>I`. Correct.
+- `village.gamedata_frame` envelope `msg_type`, `enter_world_body`, `pong_body` (echoes the client's
+  token raw), `world_tick_body` — correct.
+- `chat.py`, `connection.py` (`status_with_id` → AddResult 153), `crypto.py` — NETMSG layer, correct.
+
+**`[TODO]` Latent, NOT currently harmful — `referee.py`.** Its `_u32()` packs *property values*
+little-endian, which is wrong by the rule above. It does not bite today:
+`RefereeServerConnection_OnRegisterGameResult@0x0047a580` reads `GameID` but **never compares it**; its
+only branch is `if (Result == 0)`, and `Result = 0` is byte-order symmetric; `GameSeed` is byte-swapped
+but our fixed constant swaps identically for every client, so lockstep still agrees; `PermID` in
+LoginSuccess is ignored (the client gates on the message id). Deliberately **left unchanged** — the
+referee path has never been exercised end to end, so changing an untested encoding on an inference could
+introduce a fresh bug we have no way to detect. Fix it *when* that path is first driven for real, and
+verify with a trace at that time.
+
+**Method note:** a wrong scalar encoding fails *silently* — the handler runs, the compare fails, and the
+body is skipped, so it looks exactly like "the hypothesis was wrong". If a message provably reaches its
+handler but nothing happens, check the encoding before abandoning the theory.
