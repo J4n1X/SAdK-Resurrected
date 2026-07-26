@@ -513,6 +513,31 @@ def _h_add_game_server(conn, fields, ticket):
     log(f"  AddGameServer: id={sid} name={info['name']!r} map={info['map']!r} "
         f"owner={info['owner_id']} subtype={info['server_subtype']}")
     conn.status_with_id(0, sid, ticket)
+    # ── Clear the host's "Connecting to Game Server" gate ────────────────────────────────────────
+    # [PROVEN 2026-07-26 — live trace + RE] FUN_0046aaa0 (this = ServerList) does
+    # Shutdown → StartUpNetwork(mode 4 = match host) → ConnectAndJoin → gameServerManager->vtbl[0x20]
+    # and then parks serverList+0x9c = DAT_007db524 (PENDING), which is what holds the
+    # "!Connecting to Game Server" / "Verbindung zu Spieleserver wird hergestellt" modal up.
+    # vtbl[0x20] emits **AddGameServer(168)**, NOT AssignServer(189) — live-confirmed: the 168 lands on
+    # the wire at the exact instant FUN_0046aaa0 traces. (The referee uses a different slot, vtbl[0x2c]
+    # = AssignServer(189), which is why REPLY_GAME_SERVER_ASSIGN in _h_assign_server never fires for a
+    # game — it waits on a 189 the host never sends for this.)
+    # The gate is cleared by tincat3 GameServerManager_OnGameServerAssigned@0x10021520, which is driven
+    # by an inbound GameServerData(170) descriptor and branches on its type/subtype:
+    #     type4/sub5  → the REFEREE arm (already implemented, live-proven, latches LM+0x580)
+    #     anything else → LobbyVillageServerList vtbl[0x28] = LobbyServerList_GameServerAssigned@0x469ad0
+    #                     → fires the pending callback → clears +0x9c → the dialog completes
+    # So answer the 168 with a TICKETED 170 echoing the host's own game (type 5 / sub 1 — never 4/5).
+    # Ticketed matters: the unsolicited _push_to_obs 170 below already went out and did NOT clear the
+    # gate, so an observer push routes to the server-list update path instead. The referee 170 that does
+    # work is likewise a ticketed reply to its request.
+    # ER: engagement_records/2026-07-26_gameserver-assign-170-on-168.md
+    game = _get_game(conn, sid)
+    if game is not None and not (game.get("server_type") == 4 and game.get("server_subtype") == 5):
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(game, ticket)))
+        log(f"  → [GAME] GameServerData(170) id={sid} "
+            f"type{game.get('server_type')}/sub{game.get('server_subtype')} (ticket={ticket}) "
+            f"→ OnGameServerAssigned → LobbyServerList_GameServerAssigned → clears serverList+0x9c")
     # Push 170 to all subscribed observers so their browser updates without a re-request.
     _push_to_obs(info["server_type"], {**info, "id": sid})
 
