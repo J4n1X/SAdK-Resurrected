@@ -69,9 +69,19 @@ byte length of the string in every case — `0x1c` = 28 = `len(".\LobbyVillageSe
 
 ### 1.2 Three separate payoffs, all free
 
-**(a) Mass symbol recovery.** A Ghidra script (`run_script_inline` — HARNESS-legal) can walk every
-function, match the prologue shape, and rename the function to its own embedded string. That is
-~217 exact, developer-authored names, against the ~150 we have hand-ported at considerable cost.
+**(a) Mass symbol recovery — but the payoff is smaller than the raw count suggests.**
+A Ghidra script (`run_script_inline` — HARNESS-legal) can walk every function, match the prologue
+shape, and rename it from its own embedded string. That is up to ~217 exact, developer-authored
+names.
+
+> **⚠️ CORRECTED 2026-07-27, after checking against the live program.** A meaningful share of these
+> are **already named** from prior sessions — e.g. `RefereeServerConnection::RegisterGame` was
+> already `RefereeServerConnection_RegisterGame`. So "217 free names" overstates the delta against
+> our ~150 hand-ported ones; the true new-name yield is unmeasured and likely much smaller. **The
+> value was not the bulk rename.** It was that the string list named a handful of *unexplored*
+> functions sitting directly on the open leads — which is exactly what paid off (see below).
+> If the sweep is run, do it for the `(file, line)` map in (b), not for the name count.
+
 It also settles open naming debts: `CLobby_RequestExitVillage` is currently an **inferred** name
 flagged `[TODO]` — the string table is the place to confirm or kill it.
 
