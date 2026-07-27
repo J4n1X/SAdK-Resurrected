@@ -25,8 +25,8 @@ Therefore:
 
 **Milestones** — each a *demonstration* of understanding, subordinate to the goal above:
 1. ✅ Load into the 3D lobby world at all (even with nothing working inside it).
-2. ◀ **current** — Host and Join matches.
-3. Finalize the lobby system.
+2. ✅ **Host and Join matches** — achieved 2026-07-27, two games back-to-back.
+3. ◀ **current** — Finalize the lobby system.
 
 ---
 
@@ -87,13 +87,24 @@ Two tracks:
 | Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
 | Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
 | In-world content (NPCs, entities, populated browsers) | ❌ not implemented |
-| Hosting / pre-game room (slot/tribe/team/ready protocol) | ❌ unreversed — `[TODO]` |
-| Entering matches | ❌ broken — `[TODO]` (see `MEMORY.md`) |
+| Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
+| **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
+| In-match referee msgs `0xDD4` / `0xDC0` (GiveUp / FinishGame) | ⚠️ logged, not acked — `[TODO]` |
 
-The referee/match-arbiter subsystem was **removed** from the stub: entering matches
-is broken and the referee's exact role is unclear. Some referee functions are already
-named (`docs/REFEREE_FUNCTIONS_TO_NAME.md`) as a starting point if/when that work
-restarts. See the TODO in `MEMORY.md`.
+The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
+arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The
+full chain — and the four *silent* bugs that hid it — are documented in `sadk_lobby/referee.py`,
+`dispatch.py` (`_h_assign_server` / `_h_connection_data`) and
+`engagement_records/2026-07-27_referee-*.md`. **Read those before touching anything referee-related:
+every failure mode in this subsystem is silent** (frame accepted, socket stays open, nothing
+logged anywhere), so "no error" tells you nothing.
+
+Two facts worth burning in:
+- The referee assign reply must be **type4/sub4**, never 4/5 — 4/5 is special-cased to a
+  tincat3-private handler that never notifies the lobby, so `LM+0x580` never latches. The
+  exact-60 s `189` retry cadence is the tell that the latch worked.
+- **LobbyMessage field scalars are BIG-endian** (`village.py` already knew: `struct.pack(">I")`).
+  A little-endian `PermID` is silently discarded by the guard in `OnLoginSuccess@0x0047ac20`.
 
 ---
 
