@@ -1,104 +1,127 @@
-# HANDOFF — pick-up note for the next agent (2026-07-27)
+# HANDOFF — pick-up note for the next agent (end of 2026-07-27)
 
-Branch `master`, clean tree. Today built a **new capability** (Time Travel Debugging in the debugger
-MCP), used it to map the referee chain, ran **one** stub experiment, and cleanly **falsified** it.
-No match yet. Commits: `7883213` (TTD + method research), `2f8411a` (experiment), `4f8da76` (revert).
+Branch `master`, clean tree. **This was the day the project's central wall came down: two
+unmodified clients now host, join and PLAY A MATCH end to end.** Milestone 2 is done; the current
+milestone is 3 (finalise the lobby). Afterwards we made the lobby channel list social, established
+that in-world chat *text* is blocked client-side, and derived + implemented (but did not yet
+confirm) in-world avatar presence.
 
 ## Read first
 1. `CLAUDE.md` · 2. `HARNESS.md` · 3. `MEMORY.md`
-4. **`docs/LIVE_DEBUG_RUNBOOK.md` §9** — TTD: how to record and query. Read before any live work.
-5. `engagement_records/2026-07-27_referee-loginsuccess-push-after-153.md` — the falsified experiment
-   and the corrected model that came out of it.
-6. `docs/RE_METHOD_RESEARCH.md` — why we changed method.
+4. **`README.md` → "How the match-start chain works"** — the eight steps, with the gotcha per link.
+5. **`docs/IN_WORLD_PRESENCE.md`** — the live frontier (avatars/NPCs), spec + what is implemented.
+6. `docs/LIVE_DEBUG_RUNBOOK.md` §9 — TTD: record once, query offline. Read before any live work.
+7. `engagement_records/2026-07-27_*.md` — six records, including four **refuted** models with
+   banners saying why. Read the refutations; they are what stops the fourth repeat.
 
 ---
 
-## ⭐ The big change: you no longer need a live run to ask a question
+## 🏆 DONE: matches start and run
 
-**TTD is wired into the debugger MCP and validated end to end.** Record one run, then query the
-trace offline, forwards and backwards, as many times as you like, at ~0.4 s per question.
+Proven twice back-to-back on the wire (`stub_refbe.out`, GameID 100 and 101, both clients):
+`RegisterGame(0xDB6)` inbound → `Ack(0xDB7)` + `Result(0xDB8, GameSeed)` → in-match referee traffic.
+
+The chain, all eight links now proven — full table in `README.md`:
 
 ```
-ttd_status · ttd_record(mode="attach") · ttd_stop · ttd_list_traces
-ttd_calls(trace, "0x432240")      -- did X EVER get called, anywhere in the run?
-ttd_memory(trace, "0xE769E68")    -- full write history of ANY address, heap included, with the writing IP
-ttd_query(trace, "...")           -- arbitrary dx/cdb, incl. running backwards
+login → AssignServer(189) ONE-SHOT → stub replies 170 type4/sub4 (NEVER 4/5) → LM+0x580 latches
+→ match start → RefereeServerConnection::Login OPENS the socket (sends NOTHING)
+→ client asks 221 RequestConnectionData(server_id=77) → stub answers 222 → :5481
+→ base TinCat login on the referee socket (…→153)
+→ stub PUSHES LoginSuccess(0xDCA){PermID} → +0x80 fan-out → RegisterGame(0xDB6)
 ```
 
-- Recording needs the debugger server **elevated**; querying does not.
-- **A retained 3.9 GB trace of a full match-start already exists:** `~/ttd_traces/matchstart_host.run`
-  (host side, 2026-07-27, pre-fix). It is indexed. **Query it before asking for another run.**
-- ⛔ **Two traps, both handled in code but know them:** an *unindexed* trace returns **0 results
-  instead of erroring** (silent false negative — every query now auto-`!index`es); and `TTD.exe`
-  cannot execute from inside `WindowsApps` (auto-copied to `%LOCALAPPDATA%`).
-- The running `SADK.exe` is **byte-identical** to Ghidra's `sadk_noav.exe` (sha256 `591731…`), so
-  Ghidra addresses map 1:1. Re-verify with a hash if the install ever changes.
+⚠️ The `189` is a **one-shot** (`StatePump_Tick+0x584`); its only re-arm needs `+0x588 < 0`, and
+`+0x588` is armed *only* by a successful latch. Miss the first one and the client never asks again
+for the whole process lifetime — which also means **a TTD recording must start before the client's
+first login**, or it records only zeros. Two traces were wasted learning that.
+
+### The two facts most likely to be re-broken
+- **The referee assign descriptor is `type4/sub4`, never `4/5`.** `4/5` is special-cased in tincat3
+  to a private handler that never notifies the lobby. The tell that the latch worked: `189` starts
+  repeating on an exact **60 s** cadence.
+- **LobbyMessage field scalars are BIG-endian** (`struct.pack(">I")`), while the surrounding TinCat
+  body scalars are little-endian. A little-endian `PermID` is silently discarded.
+
+### Why it took so long — four stacked bugs, every one silent
+wrong descriptor · `221` unresolved (we sent the referee to `:5479`, the world port, and the client
+obediently dialled it) · a duplicated type word inside the MEMBLOCK · endianness. **In this
+subsystem "no error" means nothing** — frame accepted, socket open, nothing logged.
+
+TTD is what ended it: `ttd_calls 0x0047ac20` = 1 call, fan-out = 0 calls, then reading the guard
+operands named the bug exactly. ⚠️ `dd` prints the dword VALUE — `01000000` means `0x01000000`, not
+1. **Trust the flags** (`efl 0x246 → 0x216`, ZF cleared), not the hex.
 
 ---
 
-## ⭐ Corrected referee model (this supersedes everything older)
+## 💬 Lobby chat — half works, and the other half is not ours to fix
 
-```
-StartLoading (netmgr+0x3cc)
-  -> arms referee login       (screen+0x3624 pending, +0x3625 arm, +0x3628 delay, +0x362c try-count)
-  -> LobbyGameScreen_Update@0x00435980 calls RefereeServerConnection::Login@0x004793f0
-  -> SERVER answers LoginSuccess(0xDCA)
-  -> RefereeServerConnection +0x80 observer
-  -> Lobby_HostRegisterGameWithReferee@0x00432240   (no direct callers — installed at 0x00435269)
-  -> RegisterGame(0xDB6) -> we answer Ack(0xDB7) + Result(0xDB8, GameSeed)
-```
+**Working, confirmed from the client's OWN `LobbyComm.log`:** `JoinChannelReceived`,
+`UserJoinedReceived` **for the other player**, `UserLeftReceived`. The channel roster, join/leave
+fan-out and global-chat relay (`107`/`108`/`2`/`165`) are all in.
 
-After **5** failed tries (`screen+0x362c`) the pump **aborts the match** via `NComm_Manager_Shutdown`.
+The join fix that mattered: the client sends `RequestJoinChannel` with **`cell_id=0`** — it is
+asking the *server* to assign. Echoing 0 back made it reject the join via chat-magic
+**id 11 = StatusReply{cell_id, ticket_id, status}** (bidirectional!) with `status=2`.
 
-**The referee login belongs to MATCH START, not to login.** The server's job is to *answer* it —
-`referee.handle_frame` already does. Today's experiment pushed `LoginSuccess` unprompted after the
-referee conn's base-login 153; it was **inert** (LobbyGameScreen has not entered yet, so nothing is
-subscribed to `+0x80`) and has been reverted.
-
-### What the 2026-07-27 trace proved (all live, all re-queryable)
-
-| fact | how |
-|---|---|
-| `RegisterGame` never called | `TTD.Calls(0x432240) = 0` |
-| `RequestRefereeServer` never called in-window (it is a **login-time one-shot**, latched `+0x584`) | `TTD.Calls(0x468f80) = 0` |
-| referee never ready: `InitRefereeServerConnection` on **19/19** pump ticks | `TTD.Calls(0x462910) = 0x13` = `StatePump_Tick` |
-| `LobbyManager+0x580` (`nRefereeServerId`) = **0**, with **zero writes** in-window | `ttd_memory` |
-| referee assign callback `ServerList+0xa4/+0xa8` still armed at 5% **and** 90% (`+0xa8 = 0x004625D0`) | `ttd_memory` |
-| state `9 VillageEntered` → `11 VillageLeft`; `CLobby_RequestExitVillage` ×1; `DeleteResultReceived` ×1 | `TTD.Calls` |
-| the stub **does** answer `AssignServer(189,4/4)` and the client **does** dial `:5481` and base-auth | `minisrv:stub_n.out` |
-
-⚠️ `LobbyManager+0x580` reading 0 with zero in-window writes is **not yet reconciled** with the fact
-that the client dialled `:5481` at 10:40 (which requires `+0x580 != INVALID` at that moment). Either
-it was reset before the window, or the readiness predicate differs. **Resolve this before theorising.**
+⛔ **Chat TEXT is blocked CLIENT-SIDE. Do not chase it from the server.** Typing produces zero wire
+traffic, zero log entries, **and no local echo** — the submit handler would call
+`AppendLine@0x004ae200` before any network I/O, so it never runs. `UserCommConnection` has no
+outbound chat method at all. The in-world tabs are hardcoded in `FUN_004389d0`
+(GLOBAL/LOCAL/MINIGAME/SETTLERS; 3+4 disabled; **LOCAL is the default active tab**), and LOCAL
+plausibly depends on in-world presence — i.e. chat text may be *downstream* of the frontier below.
 
 ---
 
-## ▶ Start here next session — no new game run required
+## 🌍 CURRENT FRONTIER: in-world presence (implemented, UNCONFIRMED)
 
-**Query the existing trace** (`matchstart_host.run`) for the upstream question:
-*does the host ever reach `StartLoading`, or does it leave the village first?*
+Spec: `docs/IN_WORLD_PRESENCE.md`. Code: `village.BitWriter` / `entity_create_body` /
+`entity_remove_body`, `dispatch._spawn_world_avatars` + despawn in `on_conn_closed`.
+Tests: `tests/test_world_presence.py`. Deployed on `stub_avatars.out`. **Never seen working.**
 
-1. `ttd_calls(trace, "0x00435980")` — did `LobbyGameScreen_Update` run at all, and how often?
-2. `ttd_memory` on `netmgr+0x3cc` (**StartLoading**) — is it ever set? `FUN_00408290()` returns the
-   net-manager; get its live pointer from the trace, then watch `+0x3cc`.
-3. `ttd_memory` on `screen+0x3624` / `+0x3625` / `+0x362c` — is the referee-login pump ever armed,
-   and does the 5-try counter reach the abort?
+- ⭐ **1001 EntityCreate** puts a VISIBLE body in the world (AvatarProxy → `+0x170`).
+  ⛔ **1004 PlayerCreate is a player RECORD** (`+0x174`), not a body — an earlier draft got this
+  wrong. ⛔ **1002 EntityUpdate is NOT movement** (bare proxy, no payload). Movement is **unfound**.
+- Wire: **bit-packed, MSB-first**, names=0 so widths only. `dtblcks` 4-bit mask selects blocks; we
+  send `1` (location). `id 32 │ dtblcks 4 │ tick 16 │ posx 11 │ posy 11 │ posz 11 │ rot 7 │
+  zone 4 │ ghstzne 4 │ rnng 1 │ jmp 1` = 13 bytes. EntityRemove = `id 32`, nothing else.
+- Origin at ground = `posx 1024, posy 512, posz 1024`. ⚠️ the scale constants at `0x7deb*` are
+  **doubles**; read as floats they are 0.0 and every avatar collapses into the map corner.
 
-That triage decides everything: if StartLoading never fires, the referee is a red herring and the
-real wall is whatever makes the host exit the village instead. Our trace already shows it reaching
-`VillageLeft(11)` — so that is the live suspicion.
+### ⭐ How to read the first live test — this subsystem LOGS its failures
+Two clients into the lobby world, then read `Documents/SAdK/dumps/LobbyComm.log`:
 
-## Also open
-- `referee.py::_u32` packs **little-endian**; unproven for BitStream LobbyMessage fields. Matters for
-  `GameSeed`, less for `LoginSuccess` (client checks the message id, not the PermID value).
-- `OnLoginSuccess` reads its field via `LobbyMessage_SelectField(msg, "PermID", 0)` — **by name**.
-  Our `type_word()` sends `names=0`. Worth confirming whether the wire must carry names.
-- The developer log-scope strings (`docs/RE_METHOD_RESEARCH.md` Part 1) are a real but *smaller*
-  win than first claimed — many are already named. Value is the `(file, line)` map, not the count.
+| observation | meaning | next move |
+|---|---|---|
+| avatars on a ring around the town square | 🎉 | movement, then NPCs |
+| `Can't peek AvatarID` | leading 32-bit id wrong/not first | fix the header |
+| `Could not read AvatarLocation from message.` | location block malformed | re-check widths |
+| **no error, no avatar** | it PARSED, nothing rendered | add AvatarStyle (`dtblcks \|= 2`) — **do not** re-check the location block |
+
+That last row is the point: unlike the referee, silence here is *informative*. NPCs are deliberately
+NOT implemented yet — they will likely need AvatarStyle too, and stacking a second unproven block on
+an unproven spawn makes a failure impossible to attribute.
+
+---
+
+## Other open ends (none blocking)
+- **End-of-match**: `0xDD4` (GiveUpGame) and `0xDC0` (FinishGame) arrive in-match, are logged, and
+  are **not** acked (`0xDD5`/`0xDC1`). Matches play but do not *conclude* server-side.
+- **Spurious `192`**: the referee assign falls through and also sends `UsercommServerData`, so a
+  fresh UC connection is dialled every 60 s. It is also currently the ONLY thing standing up chat,
+  so untangle carefully.
+- `GameSeed` is the constant `0x5eed1234` (fine — all clients get the same one).
+- Unknown chat-magic ids now hex-dump themselves; `id=11` is solved (StatusReply).
 
 ## Environment
-- Stub live on `linux-server`, ports 7070/7071/5479/5481, **reverted code**, logging `stub_n.out`.
-  Previous run's logs: `stub_reflogin.out` (the falsified experiment), earlier `stub_n.out` (pre-fix).
-- Ghidra `sadk_noav.exe` open; today's names/comments saved (`Reconnector_RestartAsServer_DoAction`
-  @0x0040b700, plate comments on 0x00432240 and 0x0040b700).
-- Debugger server was running **elevated** for TTD recording. Game closed by the user ~11:02.
+Stub deployed to `linux-server:~/projects/sadk-resurrected` **by file copy, not git** — the
+remote checkout is an old commit with a dirty tree, so **verify by content hash, not `git log`**:
+`tr -d '\r' < f | md5sum` on both sides (local checkout is CRLF, remote is LF — a raw md5 differs
+even when the content is identical; that nearly caused a false alarm). Restart with
+`ssh linux-server "pkill -f '[s]adk_lobby'"` then `ssh -f … setsid nohup …`; note
+`pkill -f sadk_lobby` **self-matches the ssh command line** and kills your own session.
+
+## Housekeeping
+All work is committed. **Several commits are unpushed** — the remote
+(`github.com/J4n1X/sadk-resurrected`, public) was last pushed at `9ad2842`. Push when you want the
+match-start milestone and the in-world work visible.
