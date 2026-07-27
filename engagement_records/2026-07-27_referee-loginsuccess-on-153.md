@@ -80,6 +80,33 @@ would silently work for one client and silently fail for the other. The existing
    read the compared values.
 3. **Crash / disconnect on `:5481`** ⇒ the framing is wrong; fall back to capturing the raw bytes.
 
+## ✅ OUTCOME — prediction 2 hit, and it was the framing (resolved statically)
+
+Live 2026-07-27 (`stub_refok.out`): both pushes went out
+(`LoginSuccess(0xDCA, perm_id=1)` conn #7, `perm_id=2` conn #8, 20B each), both referee sockets
+stayed open, and **nothing came back** — no `0xDB6`, no disconnect.
+
+Root cause found without a trace. `RefereeServerConnection_OnReceive` is invoked as
+`vtbl[0x24](channel, &bitStream)` and passes both straight to
+`LobbyMessage_InitFromWire@0x0048fa50(this, typeWord, byteBuffer)`:
+
+```c
+*(this+0x20) = (typeWord >> 15) & 1;   // names
+*(this+0x24) = (typeWord >> 12) & 7;   // category
+*(this+0x28) = typeWord & 0xfff;       // ID  <- from the ARGUMENT
+*(this+0x08) = *(byteBuffer+4);        // field data ptr
+*(this+0x0c) = *(byteBuffer+8);        // field data length
+```
+
+The id comes from the **u32 channel**; the MEMBLOCK is **pure field data** — exactly the village
+shape. `referee_payload` was additionally repeating the type word as a `u16` at the head of the
+MEMBLOCK, so `OnLoginSuccess` read `PermID` as `0x00013DCA` (type word + low half of perm_id 1)
+instead of `1`, mismatched the guard at `0047ad09`, and returned silently. Frame accepted, ignored.
+
+Fixed: MEMBLOCK now carries fields only (18B frame, `inner = 01000000` → PermID reads 1). The
+receive-side `_inner_msg_id` was corrected the same way (type word read from offset 6, `game_id`
+from inner offset 0 instead of 2).
+
 ## Verification
 
 Cheap first: host + Start, then read `stub_221ref.out` for `RegisterGame(0xDB6)` inbound on the
