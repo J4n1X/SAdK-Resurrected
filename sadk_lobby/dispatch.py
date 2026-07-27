@@ -87,6 +87,15 @@ def on_conn_closed(conn):
         except ValueError:
             pass
     _gchat_drop(conn)                             # global-chat subscribers must not leak
+    # A village conn going away means that player's avatar must be despawned for everyone still
+    # in-world, or they are left staring at a ghost that never moves.
+    if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
+        gone = _player(conn)
+        for other in _find_live(lambda c: getattr(c, "is_village", False) and c is not conn
+                                and getattr(c, "_enter_world_sent", False)
+                                and _player(c).perm_id != gone.perm_id):
+            village.send_entity_remove(other, gone.perm_id,
+                                       label=f"[{gone.char_name!r} left the world]")
     if not getattr(conn, "is_chat", False):
         return                                    # only a UC/chat close can complete a leave
     chat.on_conn_closed(conn)                     # drop from channel rosters + notify members

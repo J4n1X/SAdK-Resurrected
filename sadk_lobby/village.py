@@ -308,6 +308,23 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
                   f" — HandleEntityCreate → AvatarProxy into +0x170")
 
 
+def entity_remove_body(avatar_id):
+    """Body for EntityRemove (msg 1003) — despawn an avatar.
+
+    `HandleEntityRemove@0x0046e570` reads **only** `id` (32 bits), looks it up in the avatar
+    container at +0x170 and releases the handle. So the whole body is one big-endian dword.
+    Logs "Can't read AvatarID" / "Can't find Avatar" on failure."""
+    return BitWriter().write(avatar_id, 32).bytes()
+
+
+def send_entity_remove(conn, avatar_id, magic=None, label=""):
+    """Remove a previously spawned avatar from this client's world (msg 1003)."""
+    if not conn.alive:
+        return
+    _send_village(conn, config.VILLAGE_MSG_ENTITY_REMOVE, entity_remove_body(avatar_id), magic,
+                  f"EntityRemove(1003) avatar id={avatar_id} {label}")
+
+
 def handle_frame(conn, payload):
     """Raw-frame capture for the village conn (hex log while we RE the in-world protocol). The actual
     world-entry trigger (SendGameData(74){msg_type=0x27D2} → reply EnterWorld(1000)) is handled in
