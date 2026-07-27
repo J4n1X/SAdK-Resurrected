@@ -17,7 +17,7 @@ import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, players, registry, village
+from . import chat, codec, config, crypto, msgdefs, players, referee, registry, village
 from .log import log
 
 HANDLERS = {}
@@ -597,6 +597,22 @@ def _h_send_token(conn, fields, ticket):
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")
+    # REFEREE LOGIN [PROVEN 2026-07-27 live · ER 2026-07-27_referee-loginsuccess-push-after-153]
+    # Same shape as the village push above, and for the same reason: after this 153 the referee conn
+    # is fully base-authed but the client then waits — silently, without disconnecting — for the
+    # referee-level LoginSuccess(0xDCA). We previously only sent it in reaction to a referee-channel
+    # frame, which the client never sends because it is waiting for exactly this message: a mutual
+    # deadlock, observed on the wire (conn silent 10:40:16 → 10:43:53, through a whole Start attempt).
+    # LoginSuccess fires RefereeServerConnection's +0x80 observer, which is where
+    # Lobby_HostRegisterGameWithReferee@0x00432240 is installed (disasm 0x00435269-0x0043527f) — that
+    # is what sends RegisterGame(0xDB6). No LoginSuccess ⇒ no RegisterGame ⇒ no match. Ever.
+    elif getattr(conn, "is_referee", False):
+        def _push_referee_login_ok(c=conn):
+            time.sleep(config.REF_LOGIN_SUCCESS_DELAY)
+            referee.send_login_success(c)           # idempotent (_ref_login_sent latch)
+        threading.Thread(target=_push_referee_login_ok, daemon=True).start()
+        log(f"  [REFEREE] 153 ACK — pushing LoginSuccess(0xDCA) in {config.REF_LOGIN_SUCCESS_DELAY}s "
+            "→ +0x80 observer → Lobby_HostRegisterGameWithReferee → RegisterGame(0xDB6).")
     else:
         log("  [ENTER] (lobby/UC) 153 ACK — no world push on this conn.")
 
