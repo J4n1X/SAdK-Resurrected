@@ -377,11 +377,10 @@ def _h_assign_server(conn, fields, ticket):
             f"type{REFEREE_SERVER['server_type']}/sub{REFEREE_SERVER['server_subtype']} "
             f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) "
             "— default branch → LobbyServerList_GameServerAssigned → LM+0x580")
-        # …then, once the pump has CREATED that connection, address it. Two frames, two jobs:
-        # this one latches the id, the delayed one supplies ip:port. See _push_referee_address.
-        t = threading.Timer(config.REFEREE_ADDRESS_PUSH_DELAY, _push_referee_address, (conn,))
-        t.daemon = True
-        t.start()
+        # This frame ONLY latches the id and gets the connection created. The ip:port arrives
+        # separately, when the client asks for it with 221 RequestConnectionData → see
+        # _h_connection_data. (A follow-up 170 was tried here on 2026-07-27 and did nothing —
+        # 170 is not the message that addresses a connection.)
 
     # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
     # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
@@ -480,35 +479,10 @@ REFEREE_SERVER = {
 }
 
 
-def _push_referee_address(conn):
-    """The SECOND referee 170 — the one that actually applies ip:port to the connection.
-
-    [PROVEN 2026-07-27] tincat3 keys connections by server id at conn+0x1c and dials from
-    conn+0x14 (host strdup) / conn+0x18 (port). `FUN_100196b0` — the create-by-server-id path that
-    InitRefereeServerConnection uses — makes the connection ADDRESS-LESS (verified at instruction
-    level: RET 0x4, [EDI+0x1c] = EBX, no address write). A GameServerData(170) for server id N is
-    what fills +0x14/+0x18 on the live connection keyed by N, exactly as
-    CommLayer_OnUsercommServerData does for the UC conn.
-
-    Measured proof, from the WORKING village connection (referee_gateA.run / host_start_full.run):
-        conn+0x14 -> "192.168.1.130"   conn+0x18 = 0x1567 (5479)   conn+0x1c = 0x32 (50)
-    id 50 is FAKE_VILLAGE's id and 5479 its port — the client can only have learned that pair from
-    our village 170.
-
-    ORDERING IS THE WHOLE POINT. The connection keyed by REF_SERVER_ID does not exist until
-    StatePump_Tick runs InitRefereeServerConnection, which is gated on LM+0x580, which only latches
-    when the ASSIGN reply reaches the lobby observer. Advertising the referee in _send_server_list
-    (answering 171 at login) put this 170 ~37 s too early, which is why that attempt failed.
-    """
-    if not getattr(conn, "alive", False):
-        return
-    try:
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, 0)))
-        log(f"  → [REFEREE] address 170 id={config.REF_SERVER_ID} -> "
-            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT} (post-assign) — applies ip:port to the "
-            "connection keyed by conn+0x1c == id, so ConnectionReal::Connect has a target")
-    except Exception:  # noqa: BLE001
-        pass
+# ⛔ There is deliberately NO "push a 170 to address the referee" helper here. That was tried on
+# 2026-07-27 and did nothing: 170 GameServerData is a DESCRIPTOR/list message, not the one that
+# fills conn+0x14/+0x18. The address is delivered by 222 ConnectionData in reply to the client's
+# 221 RequestConnectionData — see _h_connection_data.
 
 # ══ REFEREE ASSIGN — the complete proven model, 2026-07-27 (tincat3 + sadk_noav + TTD) ══
 #
@@ -658,20 +632,41 @@ def _h_change_server(conn, fields, ticket):
 
 @handler(221)  # RequestConnectionData -> ConnectionData
 def _h_connection_data(conn, fields, ticket):
+    """⭐ THIS is where a tincat3 connection learns its ip:port. [PROVEN 2026-07-27]
+
+    CommLayer_ServerRecvHandler_StateMachine@0x10023cc0 pulls the `server_id` / `ip` / `port`
+    fields (name strings @0x1004f154 / @0x1004f0f0 / @0x1004cd3c) out of the inbound message,
+    looks the connection up by server id (`vtbl[0x5c]` = FUN_10019570, matching conn+0x1c), and
+    on a hit calls FUN_10030420 → FUN_100191e0, which fills conn+0x14 (host strdup) and
+    conn+0x18 (port) and then dials. ConnectionReal::Connect@0x100309d0 dials from those two
+    fields ONLY — with them empty it takes a passive branch and never opens a socket.
+
+    ⇒ Any server the client must reach has to be resolvable HERE. The 170 GameServerData does NOT
+    carry the address into the connection; that was tried on 2026-07-27 and did nothing. Measured:
+    the client asked `221 server_id=77` and the old fallback answered :5479 (the world), so it
+    dialled the world listener instead of the referee and the referee connect failed with
+    COMM_LAYER_ERROR_CANNOT_CONNECT.
+    """
     sid = fields.get("server_id", 0)
     srv = _get_game(conn, sid)
-    # P2P handoff: a join to a real hosted game returns that host's advertised address (the joiner
-    # dials the host directly). The lobby-WORLD entry request (server_id=50, the injected
-    # FAKE_VILLAGE, never registered → srv is None) falls back to WORLD_PORT (:5479).
-    ip = srv["ip"] if srv else config.ADVERTISED_IP
-    port = srv["port"] if srv else config.WORLD_PORT
+    if sid == config.REF_SERVER_ID:
+        # The referee/ranking server. Its connection was created keyed by this id when the
+        # AssignServer(189) reply latched LM+0x580; this is the frame that gives it a target.
+        ip, port, note = config.ADVERTISED_IP, config.REFEREE_PORT, "  [REFEREE]"
+    elif srv:
+        # P2P handoff: a join to a real hosted game returns that host's advertised address
+        # (the joiner dials the host directly).
+        ip, port, note = srv["ip"], srv["port"], ""
+    else:
+        # The lobby-WORLD entry request (server_id=50, the injected FAKE_VILLAGE, never
+        # registered) falls back to WORLD_PORT (:5479).
+        ip, port, note = config.ADVERTISED_IP, config.WORLD_PORT, "  (unknown id — fell back to advertised world)"
     conn.send_app(222, codec.encode_body(222, {
         "perm_id": _player(conn).perm_id, "server_id": sid,
         "ip": ip, "port": port,
         "nonce": os.urandom(128), "errorcode": 0, "errormsg": None,
         "ticket_id": ticket}))
-    log(f"  → ConnectionData(222) server={sid} → {ip}:{port}"
-        + ("" if srv else "  (unknown id — fell back to advertised world)"))
+    log(f"  → ConnectionData(222) server={sid} → {ip}:{port}{note}")
 
 
 # ── Token / chat-login validation ─────────────────────────────────────────────
