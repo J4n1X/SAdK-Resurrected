@@ -151,6 +151,21 @@ VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world kee
 # (HARNESS §5). ER: engagement_records/2026-07-26_village-leave-close-connection.md
 VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
 
+# ── In-world presence (docs/IN_WORLD_PRESENCE.md) ────────────────────────────
+# Bit-packed avatar/entity messages. 1001 is the one that makes a body VISIBLE: it allocates an
+# AvatarProxy into VillageServerConnection+0x170. 1004 populates a separate *player* map at +0x174
+# and is NOT the visible avatar. All are still UNPROVEN on the wire — spec is static-only.
+VILLAGE_MSG_ENTITY_CREATE = 1001            # 0x3E9 — HandleEntityCreate@0x0046e1d0 (avatar spawn)
+VILLAGE_MSG_ENTITY_UPDATE = 1002            # 0x3EA — HandleEntityUpdate@0x0046e390 (movement)
+VILLAGE_MSG_ENTITY_REMOVE = 1003            # 0x3EB — HandleEntityRemove@0x0046e570 (despawn)
+VILLAGE_MSG_PLAYER_CREATE = 1004            # 0x3EC — HandlePlayerCreate@0x0046f8c0 (player record)
+# Where other players are spawned relative to the world origin, until real positions exist.
+# posx/posz 1024 == world centre; posy 512 == ground (y=0) given bounds (-10..30).
+AVATAR_SPAWN_SPREAD = 6.0                   # ring radius around the origin for placeholder avatars
+# Wait after EnterWorld(1000) before spawning avatars, so the client has finished entering the
+# world (SetState(VillageEntered=9)) and has an avatar container to insert into.
+AVATAR_SPAWN_DELAY = 2.0
+
 # ── Referee / match-arbiter server ────────────────────────────────────────────
 # The match-START gate. RE'd fresh this session (docs/MATCH_START.md, sadk_noav.exe):
 #   * StatePump_Tick@0x464ee0: at state>=6 calls LobbyServerList_RequestRefereeServer@0x468f60 ONCE,
