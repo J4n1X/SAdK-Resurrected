@@ -9,10 +9,56 @@ Builders return ready-to-send bytes (wrap in a TinCat application frame via
 conn.send_chat). Frame handlers take the owning Conn and use conn.send_chat().
 """
 import struct
+import threading
 
 from . import config, players
-from .log import log
+from .log import hex_dump, log
 from .tincat import BinaryReader, str_field, bytes_field
+
+
+# ── Channel roster ────────────────────────────────────────────────────────────
+# Who is in which chat cell, so joins/messages/leaves can be fanned out to the other members.
+# Before 2026-07-27 there was no roster at all: a joiner was told only about *themselves* and a
+# chat line was echoed only back to its author, so the lobby was completely asocial even with two
+# clients in the same channel.
+_roster_lock = threading.Lock()
+_roster: dict = {}          # cell_id -> list[Conn]  (UC/chat connections)
+
+
+def _roster_join(cell_id, conn):
+    """Add conn to the cell; return the OTHER live members."""
+    with _roster_lock:
+        members = _roster.setdefault(cell_id, [])
+        if conn not in members:
+            members.append(conn)
+        return [c for c in members if c is not conn and getattr(c, "alive", False)]
+
+
+def _roster_members(cell_id):
+    with _roster_lock:
+        return [c for c in _roster.get(cell_id, []) if getattr(c, "alive", False)]
+
+
+def on_conn_closed(conn):
+    """A UC socket went away: drop it from every cell and tell the remaining members."""
+    left = []
+    with _roster_lock:
+        for cell_id, members in _roster.items():
+            if conn in members:
+                members.remove(conn)
+                left.append(cell_id)
+    if not left:
+        return
+    p = players.of(conn)
+    for cell_id in left:
+        inner = inner_user_left(p.perm_id, cell_id)
+        others = _roster_members(cell_id)
+        for c in others:
+            try:
+                c.send_chat(reply(6, inner, cell_id, config.FROM_SERVER, ispropset=True))
+            except Exception:  # noqa: BLE001
+                pass
+        log(f"  → [CHAT] {p.char_name!r} left cell {cell_id} — told {len(others)} member(s)")
 
 
 # ── Payload builders ──────────────────────────────────────────────────────────
@@ -69,6 +115,13 @@ def inner_user_info(perm_id, cell_id, nick):
     return b
 
 
+def inner_user_left(perm_id, cell_id):
+    """lobby type 6 = UserLeftChannel {perm_id, cell_id} (docs/LOBBY_PROTOCOL.md §3.5).
+    ⚠️ INFERRED — only inner type 5 is live-confirmed. If members never disappear from the list,
+    this id is wrong; it is cosmetic, so drop it rather than let it block join/broadcast."""
+    return struct.pack("<H", 6) + struct.pack("<I", perm_id) + struct.pack("<I", cell_id)
+
+
 # ── Handlers (operate on a Conn) ──────────────────────────────────────────────
 def send_initial_reply(conn):
     """Push the default channel list the instant the chat handshake completes."""
@@ -95,7 +148,14 @@ def handle_frame(conn, payload):
     elif chat_id == config.CHAT_MESSAGE:
         _handle_message(conn, body)
     else:
-        log(f"  [CHAT] (no handler for chat id {chat_id})")
+        # Unknown chat-magic id. Dump the body so the next live run identifies it instead of us
+        # guessing — chat ids are a small enum separate from the NETMSG numbering, and the only
+        # cited source (S2Library ChatPayloads.cs) is not in this tree.
+        # Seen live 2026-07-27: id=11, 12-byte body, 24x per session, always in pairs right after
+        # a channel join. Our CHAT_STATUS_REPLY is also 11 but that is server→client, so this is
+        # either a different meaning in the client→server direction or a gap in our enum.
+        log(f"  [CHAT] (no handler for chat id {chat_id}) — {len(body)}B body:")
+        log(hex_dump(body))
 
 
 def _handle_message(conn, body):
@@ -105,8 +165,23 @@ def _handle_message(conn, body):
         data = r.blob(); cell_id = r.u32()
     except Exception as e:  # noqa: BLE001
         log(f"  [CHAT] failed to parse ChatMessage: {e}"); return
-    conn.send_chat(reply(message_id, data or b"", cell_id, config.FROM_SERVER, ispropset=True))
-    log(f"  → [CHAT] echoed ChatMessage in cell {cell_id}")
+    p = players.of(conn)
+    targets = _roster_members(cell_id)
+    if conn not in targets:            # not rostered (never joined / stale) — still show the author
+        targets.append(conn)
+    # ⚠️ from_id was FROM_SERVER here until 2026-07-27. Using the SPEAKER's perm_id is the natural
+    # reading of the field and is what lets the client attribute the line, but it is INFERRED —
+    # if lines show up unattributed or as the wrong player, put FROM_SERVER back and carry the
+    # speaker inside `data` instead. ER: 2026-07-27_channel-roster-and-chat-broadcast.md
+    frame = reply(message_id, data or b"", cell_id, p.perm_id, ispropset=True)
+    sent = 0
+    for c in targets:
+        try:
+            c.send_chat(frame)
+            sent += 1
+        except Exception:  # noqa: BLE001
+            pass
+    log(f"  → [CHAT] <{p.char_name}> relayed in cell {cell_id} to {sent} member(s)")
 
 
 def handle_join_channel(conn, fields, ticket):
@@ -116,6 +191,21 @@ def handle_join_channel(conn, fields, ticket):
     conn.send_chat(channel_joined(cell_id, ticket, option))
     conn.send_chat(status_reply(cell_id, ticket, 0))
     p = players.of(conn)
-    inner = inner_user_info(p.perm_id, cell_id, p.char_name)
-    conn.send_chat(reply(5, inner, cell_id, config.FROM_SERVER, ispropset=True))
-    log(f"  → [CHAT] JoinChatChannel cell={cell_id}: Joined + StatusReply + ChatUserInfo")
+    others = _roster_join(cell_id, conn)
+    mine = inner_user_info(p.perm_id, cell_id, p.char_name)
+    # 1. the joiner learns about themselves — the one frame proven to work (they appear in their
+    #    own member list), so everything below is the SAME frame to a different socket.
+    conn.send_chat(reply(5, mine, cell_id, config.FROM_SERVER, ispropset=True))
+    # 2. the joiner learns about everyone already here …
+    for other in others:
+        op = players.of(other)
+        conn.send_chat(reply(5, inner_user_info(op.perm_id, cell_id, op.char_name),
+                             cell_id, config.FROM_SERVER, ispropset=True))
+    # 3. … and everyone already here learns about the joiner.
+    for other in others:
+        try:
+            other.send_chat(reply(5, mine, cell_id, config.FROM_SERVER, ispropset=True))
+        except Exception:  # noqa: BLE001
+            pass
+    log(f"  → [CHAT] JoinChatChannel cell={cell_id}: {p.char_name!r} joined; "
+        f"exchanged ChatUserInfo with {len(others)} existing member(s)")
