@@ -169,12 +169,9 @@ VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim hea
 # never nailed by the prior (removed) attempt without live captures — re-confirm against the real client.
 REFEREE_PORT = 5481           # the RefereeServerConnection dials here (distinct from WORLD_PORT 5479)
 REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on the type-4 server list)
-# Delay before the follow-up referee 170 that APPLIES ip:port to the connection.
-# It must land AFTER LobbyManager::StatePump_Tick has run InitRefereeServerConnection (which only
-# creates the connection once the assign reply latched LM+0x580). The pump is per-frame, so any
-# value above one frame works; 0.5 s is a generous margin. Sending it too EARLY is exactly how the
-# 2026-07-27 server-list attempt failed — see ER 2026-07-27_referee-address-via-post-assign-170.
-REFEREE_ADDRESS_PUSH_DELAY = 0.5
+# NOTE: the referee's ip:port is NOT pushed — the client ASKS for it with 221 RequestConnectionData
+# and dispatch._h_connection_data answers 222 ConnectionData with REFEREE_PORT. Resolving
+# REF_SERVER_ID there is what makes the referee dial-able at all.
 # [LIVE TEST 2026-06-13 · ER engagement_records/2026-06-13_referee-assign-170.md] Reply a GameServerData(170)
 # type4/sub5 to the referee AssignServer(189, type=4, subtype=4) so its cat-0x108 ticket routes into
 # tincat3 GameServerManager_OnGameServerAssigned → SetRefereeServerAddress → LM+0x580. Set False to revert.
