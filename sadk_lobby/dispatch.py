@@ -364,22 +364,21 @@ def _h_assign_server(conn, fields, ticket):
     # ER 2026-07-27_referee-assign-subtype-routing. The 192 below still goes out (different message
     # type → tincat3's UsercommServerData dial handler, independent of the 170) so UC/chat stays up.
     if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
-        # TWO frames, and both are needed — they hit different halves of the client.
-        # [ER 2026-07-27_referee-dual-170-register-and-notify]
-        #   (1) sub5 → tincat3's PRIVATE handler → REGISTERS server_id → ip:port so that
-        #       InitRefereeServerConnection's ConnectionManager lookup (pComm->vtbl[0x38]/[0x18]
-        #       on LM+0x580) can resolve it. Without this the connect fails with
-        #       COMM_LAYER_ERROR_CANNOT_CONNECT ("TinCat failed to start connection",
-        #       LobbyManager::OnLoginFailed @ LobbyManager.cpp:907).
-        #   (2) sub4 → the DEFAULT branch → LobbyServerList_GameServerAssigned@0x00469ad0 →
-        #       SetRefereeServerAddress@0x004625d0 → LM+0x580 latched (+0x588 = 60000).
-        # Sending only one gives register-XOR-notify, which is how we got stuck twice.
-        for desc, why in ((REFEREE_SERVER_REGISTER, "registers id→addr in tincat3"),
-                          (REFEREE_SERVER, "notifies lobby → LM+0x580")):
-            conn.send_app(170, codec.encode_body(170, server_to_170_values(desc, ticket)))
-            log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
-                f"type{desc['server_type']}/sub{desc['server_subtype']} "
-                f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) — {why}")
+        # ONE frame, type4/sub4 → the DEFAULT branch of tincat3
+        # GameServerManager_OnGameServerAssigned@0x10021520 → LobbyServerList_GameServerAssigned
+        # @0x00469ad0 → SetRefereeServerAddress@0x004625d0 → LM+0x580 latched (+0x588 = 60000).
+        #
+        # ⛔ Do NOT also send a type4/sub5 twin here. Tried 2026-07-27 and it REGRESSED: with both
+        # frames (same ticket) the sub4 notification is swallowed and the latch never happens —
+        # measured by the 60 s retry, which only exists when SetRefereeServerAddress armed
+        # LM+0x588. sub4 alone → every client retried at +60 s; sub5+sub4 → no retry at all.
+        # The referee is instead advertised through the SERVER LIST (see _send_server_list), which
+        # is how the client is supposed to learn a server exists at all.
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
+        log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
+            f"type{REFEREE_SERVER['server_type']}/sub{REFEREE_SERVER['server_subtype']} "
+            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) "
+            "— default branch → LobbyServerList_GameServerAssigned → LM+0x580")
 
     # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
     # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
@@ -484,12 +483,11 @@ REFEREE_SERVER = {
     "map": "", "running": False, "data": None,
 }
 
-# The SAME referee server, advertised as type4/sub5 purely to reach tincat3's PRIVATE assign handler
-# (GameServerManager_OnGameServerAssigned → *(this+8+0x5c)→vtbl[0x20]). That handler is what REGISTERS
-# server_id → ip:port in the ConnectionManager, which InitRefereeServerConnection later needs to
-# resolve LM+0x580 into an address. It does NOT notify the lobby — hence the sub4 twin above. Both
-# frames go out on every referee assign; see the comment in _h_assign_server.
-REFEREE_SERVER_REGISTER = dict(REFEREE_SERVER, server_subtype=5)
+# NOTE: there is deliberately NO type4/sub5 "register" twin of REFEREE_SERVER. Sending one alongside
+# the sub4 frame suppressed the lobby notification entirely (2026-07-27: sub4 alone → every client
+# re-requested at +60 s, which only happens once SetRefereeServerAddress has armed LM+0x588;
+# sub5+sub4 → no retry at all, i.e. the latch never ran). The referee is advertised through the
+# SERVER LIST below instead — the mechanism by which the client learns any server exists.
 
 
 def _send_server_list(conn, server_type, ticket):
@@ -501,6 +499,22 @@ def _send_server_list(conn, server_type, ticket):
         conn.send_app(170, codec.encode_body(170, server_to_170_values(FAKE_VILLAGE, ticket)))
         sent += 1
         log("  → Injected fake village world (ServerType=4) w/ room-assign data blob")
+    # Advertise the REFEREE on the type-4 list. [ER 2026-07-27_referee-via-server-list]
+    # This is how the client is meant to learn a server exists: the assign only names an id, and
+    # the lobby side never resolves an address — pConnectionManager->vtbl[0x38]/[0x18] both funnel
+    # into FUN_10019570@tincat3, which just walks the live-connection list matching entry+0x1c ==
+    # serverId. So the client must already know server 77 from the list; otherwise
+    # InitRefereeServerConnection ends up with a connection that has nowhere to dial and the
+    # attempt dies as COMM_LAYER_ERROR_CANNOT_CONNECT (LobbyManager::OnLoginFailed, cpp:907).
+    # Deliberately AFTER the sent==0 village check so it can never suppress the fake village.
+    # No ServerDataBlock (data=None) → FillFromDescriptor@0x481640 leaves validity 0, so it should
+    # stay non-joinable in the browser; watch for a stray greyed row.
+    if server_type == 4:
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
+        sent += 1
+        log(f"  → [REFEREE] listed id={config.REF_SERVER_ID} "
+            f"type4/sub{REFEREE_SERVER['server_subtype']} "
+            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (so the assign's id resolves)")
     # NO synthetic GAME entry. The game browser (server_type 5) shows ONLY real hosted games,
     # registered via AddGameServer(168) and relayed cross-client from the registry in the loop above.
     # The client sets server_subtype=1 itself when it hosts a browsable game, so a hosted game routes

@@ -166,10 +166,13 @@ def test_referee_assign_unaffected():
         #   sub4 → default branch → LobbyServerList_GameServerAssigned → latches LM+0x580
         # ER: engagement_records/2026-07-27_referee-dual-170-register-and-notify.md
         refs = [b for t, b in conn.sent if t == 170]
-        assert len(refs) == 2, f"expected 2 referee 170s (register + notify), got {len(refs)}"
-        assert [(b["server_type"], b["server_subtype"]) for b in refs] == [(4, 5), (4, 4)]
-        assert all(b["server_id"] == config.REF_SERVER_ID for b in refs)
-        assert all(b["port"] == config.REFEREE_PORT for b in refs)
+        assert len(refs) == 1, (
+            f"expected exactly ONE referee 170, got {len(refs)} — a second (type4/sub5) frame "
+            "suppresses the lobby notification and LM+0x580 never latches"
+        )
+        assert (refs[0]["server_type"], refs[0]["server_subtype"]) == (4, 4)
+        assert refs[0]["server_id"] == config.REF_SERVER_ID
+        assert refs[0]["port"] == config.REFEREE_PORT
     finally:
         config.REPLY_REFEREE_ASSIGN = saved
 
