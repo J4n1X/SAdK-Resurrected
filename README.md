@@ -18,18 +18,20 @@ The project name riffs on the game's: *Aufbruch* (rise) → *Auferstehung* (resu
 > - It ships **no copyrighted game files.** You must own a legal copy of the game and
 >   generate/provide everything yourself (see *What you must provide* below).
 >
-> If you want a working multiplayer revival, this is **not that** — it is a research log and
-> a proof-of-concept that gets a single real client to *render the 3D lobby world* and *see
-> game browsers*, nothing more.
+> If you want a polished multiplayer revival, this is **not that** — it is a research log and a
+> proof-of-concept. That said, as of **2026-07-27** two unmodified clients can log in, host,
+> join, and **actually start and play a match** against each other through this stub. It is
+> fragile, environment-dependent, and the in-match end-of-game messages are still unanswered.
 
 ---
 
 ## What this is
 
 `sadk-lobby` re-implements just enough of the original **TinCat 3.0 / NETMSG** protocol to
-walk one unmodified game client through:
+walk unmodified game clients through:
 
-**login → lobby chat → server/game browser → into a (mostly empty) 3D lobby world.**
+**login → lobby chat → server/game browser → 3D lobby world → host/join a game → referee
+handshake → a running match.**
 
 The wire format is **data-driven from the game's own `msgdefs.ini`** (the NETMSG schema that
 `tincat3.dll` itself loads — 221 message types), so a single generic codec encodes/decodes
@@ -39,8 +41,9 @@ binding rules of engagement (`HARNESS.md`) — all RE/debugging goes through the
 
 ## What it is **not**
 
-- Not a playable multiplayer server — there is no working game room, no hosting, no NPC/entity
-  population, and no real two-player path.
+- Not a *polished* multiplayer server — matches do start and run, but the lobby world is empty
+  (no NPCs/entities), end-of-match reporting is unimplemented, and nothing is hardened or
+  load-tested. Expect to babysit it.
 - Not a crack or a redistribution of the game — no executables, assets, or memory dumps are included.
 - Not address-stable — the RE base changed between game builds; many docs cite **older addresses**.
 
@@ -68,6 +71,11 @@ binding rules of engagement (`HARNESS.md`) — all RE/debugging goes through the
   Win10/11.
 - **Multi-client** — two+ clients log in as distinct players (host + joiner); hosted games live
   in a process-global registry so one client's game is visible/joinable to another.
+- 🏆 **Hosting, joining and STARTING a match (2026-07-27)** — the full referee/match-arbiter
+  chain now completes and the match loads and runs. Verified with two consecutive games:
+  `RegisterGame(0xDB6)` arrives from both clients and is answered with `RegisterGameAck(0xDB7)`
+  + `RegisterGameResult(0xDB8, GameSeed)`, followed by live in-match referee traffic. See
+  *How the match-start chain works* below.
 
 **⚠️ Partial / experimental / unverified:**
 - **214 ValidateToken** is a best-effort echo; the `207` session key is generated then discarded,
@@ -82,12 +90,76 @@ binding rules of engagement (`HARNESS.md`) — all RE/debugging goes through the
   treat as **unproven** (`[TODO]`).
 
 **❌ Doesn't work / not implemented:**
-- **Hosting / pre-game room** — the SetupGame dialog opens but all player slots are empty; the
-  per-slot room protocol (occupant/tribe/team/color/ready) is **unidentified** (`[TODO]`).
-- **Entering matches** — broken; the referee/match-arbiter role is unclear, so that subsystem was
-  removed from the stub (`[TODO]`; named referee functions kept in `docs/REFEREE_FUNCTIONS_TO_NAME.md`).
-- **In-world content** — the rendered world is **empty**: no NPCs, no entities, dead in-world
+- **End-of-match reporting** — the in-match referee messages `0xDD4` (GiveUpGame) and `0xDC0`
+  (FinishGame) arrive and are logged, but are **not acknowledged** (`0xDD5` / `0xDC1`). Matches
+  play; they just don't *conclude* cleanly server-side, and no results/ranking are recorded.
+- **`GameSeed` is a fixed constant** (`0x5eed1234`). Fine for lockstep determinism as long as
+  every client in a match gets the same value — which they do — but it is not a real seed.
+- **In-world content** — the lobby world is **empty**: no NPCs, no entities, dead in-world
   browser, in-world chat loops, avatar shows `<UNNAMED>` / default appearance.
+- **Spurious UC churn** — the referee assign reply also emits a `192 UsercommServerData`, so a
+  fresh UC/chat connection is dialled every 60 s. Harmless in practice, but it is currently also
+  the only thing that stands up chat, so the two paths need untangling carefully.
+
+---
+
+## 🏆 How the match-start chain works
+
+This was the project's wall for weeks, so it is worth writing down properly. Getting from
+"both players ready" to "match running" is an **eight-step chain**, and *every* link fails
+silently if you get it wrong — the frame is accepted, the socket stays open, and nothing is
+logged anywhere. "No error" tells you nothing in this subsystem.
+
+| # | Who | What | Gotcha |
+|---|-----|------|--------|
+| 1 | client | `AssignServer(189, type4/sub4)` at **login** | A **one-shot**. `StatePump_Tick` latches `+0x584`; the only re-arm is `+0x588 < 0`, and `+0x588` is armed *only* by a successful latch. Miss it once and the client never asks again for the whole process lifetime. |
+| 2 | **stub** | reply `GameServerData(170)` **type4/sub4** | ⚠️ **Never `4/5`.** `4/5` is special-cased in `tincat3` to a private handler that returns *without* notifying the lobby, so `LM+0x580` never latches. The tell that it worked: `189` starts repeating on an exact **60 s** cadence. |
+| 3 | client | creates a connection keyed by the referee's `server_id` | Created **address-less** — it has no idea where to dial yet. |
+| 4 | client | at **match start** (not login), `RefereeServerConnection::Login` opens the channel | It **sends no message**. Having no address, the client emits `221 RequestConnectionData(server_id=77)`. |
+| 5 | **stub** | reply `222 ConnectionData` → `ip:5481` | ⭐ This is the *only* way a TinCat connection learns its target. The receive state machine reads `server_id`/`ip`/`port`, finds the connection by id, fills its host/port fields and dials. Resolve the referee id here or it silently gets the fallback (we sent it to the world port `:5479` for a while, and the client obediently connected to the wrong listener). |
+| 6 | both | normal base TinCat login on `:5481` (handshake → `188` → `211`/`212` → `213` → `153`) | Same login as every other connection. |
+| 7 | **stub** | **push** `LoginSuccess(0xDCA){PermID}` | Nothing requests it (see 4) — the server must push it unprompted. The client validates `PermID` against its own perm id and **returns silently** on mismatch. |
+| 8 | client → stub | `RegisterGame(0xDB6)` → answer `Ack(0xDB7)` + `Result(0xDB8, GameSeed)` | The match loads. |
+
+### Two facts that will bite you
+
+- The referee assign descriptor must be **type4/sub4**, never `4/5`.
+- **LobbyMessage field scalars are BIG-endian** (`struct.pack(">I")`), while the surrounding
+  TinCat body scalars are little-endian. A little-endian `PermID` is silently discarded.
+
+## 🔬 How we actually found it (the method)
+
+Four stacked, silent bugs hid this chain. What broke the deadlock was **not** more guessing:
+
+1. **Read the game's own logs.** The client writes `LobbyComm.log`, `comm.log`, `netlog.txt`
+   into `Documents/SAdK/dumps/` when launched with the right flag. Line numbers in those
+   messages (`LobbyManager.cpp:907`) map straight onto binary addresses, because every
+   instrumented function stores `__FILE__`/`__LINE__` into globals before logging.
+
+2. **The binary ships the developers' own symbols.** ~217 `Ns::Class::Method` log-scope strings
+   are sitting in the executable — `RefereeServerConnection::RegisterGame`,
+   `LobbyComm::System::LoggedIn`, and so on. Grepping those named most of this subsystem for
+   free, before any live testing. See `docs/RE_METHOD_RESEARCH.md`.
+
+3. **Time Travel Debugging (TTD) is the tool that ends arguments.** Record once, then query the
+   trace offline as many times as you like. The decisive sequence here was three questions:
+   `ttd_calls 0x0047ac20` → *1 call* (so the message arrived and dispatched), `ttd_calls`
+   on the observer fan-out → *0 calls* (so it was dropped at a guard), then travelling to the
+   compare instruction and reading the operands. That named the endianness bug exactly.
+   ⚠️ **Record before the moment you care about** — the referee request is a one-shot fired on
+   the first login after process start, and two traces were wasted attaching afterwards.
+   ⚠️ **`dd` prints the dword *value*** — `01000000` means `0x01000000`, not `1`. Two operands
+   looked equal until the flags (`efl 0x246 → 0x216`, ZF cleared) proved otherwise. Trust the
+   flags, not the hex.
+
+4. **Prefer a free observable to an expensive one.** Most steps above were confirmed from the
+   stub's own log (does a connection appear on `:5481`? does the `189` repeat every 60 s?)
+   before spending a 10 GB trace on it.
+
+5. **Write down refutations, not just conclusions.** `engagement_records/` contains the wrong
+   models too, with banners saying why they were wrong. The `4/5`-vs-`4/4` descriptor was
+   flipped three times across sessions because each attempt only recorded its conclusion. The
+   code comments now carry the *evidence*, not the verdict.
 
 ---
 
@@ -126,19 +198,37 @@ pip install -r requirements.txt          # cryptography, twofish
 python -m sadk_lobby                       # or: python tincat_server.py
 ```
 
-The server opens three listeners:
+The server opens four listeners:
 
-| Port | Role                       |
-|------|----------------------------|
-| 7070 | main lobby connection      |
-| 7071 | UC / chat (2nd connection) |
-| 5479 | village / world (3rd conn) |
+| Port | Role                                        |
+|------|---------------------------------------------|
+| 7070 | main lobby connection                       |
+| 7071 | UC / chat (2nd connection)                  |
+| 5479 | village / world (3rd conn)                  |
+| 5481 | referee / match-arbiter (dialled at match start) |
 
 Then point your game install at the stub (see the checklist above) and log in with
 `test` / `test` / `test`. Binding `7070` may require running elevated. The stub pushes
 `EnterWorld(1000)` automatically once the village connection logs in (no flags). Reaching the 3D
 world still requires launching the game elevated on Win10/11 (SecuROM). **It is fragile and
 environment-dependent.**
+
+### Playing an actual match
+
+With two clients pointed at the same stub: log both in, let both reach the lobby world, host a
+game on one, join from the other, both ready up, press **Start**. The referee chain above runs
+by itself. Useful things to watch in the stub log, in order:
+
+```
+→ [REFEREE] GameServerData(170) id=77 type4/sub4 …     # step 2 — the latch
+→ ConnectionData(222) server=77 → …:5481  [REFEREE]    # step 5 — the address
+  CONNECTION #n … -> listener :5481 [referee]          # the dial (this was never seen before 2026-07-27)
+→ [REFEREE] LoginSuccess(0xDCA, perm_id=N)             # step 7 — the push
+  [REFEREE] ← channel frame msg=0xdb6 …                # step 8 — RegisterGame: you're in
+```
+
+If the `189` in step 2 repeats every **60 s**, the latch is working. If it *doesn't* repeat at
+all, the assign reply never reached the lobby observer — check the descriptor is `4/4`.
 
 ### Wire encoding (from `msgdefs.ini` type tokens)
 
@@ -157,14 +247,16 @@ not the body, so the codec skips it.
 ## Tests
 
 ```bash
-python tests/test_codec_golden.py     # 170 reproduced byte-for-byte
+python tests/test_codec_golden.py     # 170 reproduced byte-for-byte vs the frozen legacy monolith
 python tests/test_server_smoke.py     # end-to-end vs a fake socket
-python tests/test_server_browser.py   # default wire unchanged + flag gating
+python tests/test_server_browser.py   # server-browser wire + the referee assign descriptor
+python tests/test_multi_client.py     # multi-player identities + global game registry
 # or: pytest tests/
 ```
 
 These exercise the wire codec/flow only — **not** the live game. There is no automated coverage
-for crypto/auth, chat, or the world-entry push.
+for crypto/auth, chat, the world-entry push, or the referee chain; those are only ever proven by
+driving a real client and reading the logs.
 
 ## Repo map
 
