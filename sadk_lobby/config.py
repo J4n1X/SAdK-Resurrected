@@ -182,12 +182,10 @@ REPLY_REFEREE_ASSIGN = True
 REPLY_GAME_SERVER_ASSIGN = True
 REF_GAME_SEED = 0x5EED1234    # fixed lockstep determinism seed (client never validates the value)
 
-# [PROVEN LIVE 2026-07-27 · ER engagement_records/2026-07-27_referee-loginsuccess-push-after-153.md]
-# The referee conn completes its base login (188 → 211/213 → 153) and then goes SILENT — it is waiting
-# for the referee-level LoginSuccess(0xDCA), which only the server can send. We used to send that only
-# in reaction to a referee-channel frame the client never sends: a mutual deadlock. So the SERVER
-# pushes it, unprompted, after the 153 ACK — exactly like the village conn's EnterWorld(1000) push.
-REF_LOGIN_SUCCESS_DELAY = 0.5  # seconds after the referee 153 ACK before pushing 0xDCA (settle)
+# ⛔ REF_LOGIN_SUCCESS_DELAY was added and REVERTED on 2026-07-27 — the "server must push LoginSuccess
+# after the referee 153" model was refuted the same day by LobbyGameScreen_Update@0x00435980: the
+# CLIENT sends RefereeServerConnection::Login at MATCH START (gated on netmgr+0x3cc StartLoading and
+# the arm flag screen+0x3625), and the server's job is to ANSWER it. See the ER for the full trace.
 
 REF_CATEGORY        = 3       # all referee LobbyMessages are category 3 (type word = names<<15|cat<<12|id)
 REF_LOGIN_OK        = 0xDCA   # LoginSuccess  (RefereeServerConnection_OnLoginSuccess) — clears the gate

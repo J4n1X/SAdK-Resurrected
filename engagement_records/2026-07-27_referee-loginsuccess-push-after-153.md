@@ -1,5 +1,32 @@
 # Engagement Record — push referee LoginSuccess(0xDCA) after the referee conn's 153 ACK
 
+> ## ⛔ REFUTED AND REVERTED, same day (2026-07-27). Prediction 3 occurred.
+>
+> **Live result:** the push went out cleanly — `→ [REFEREE] LoginSuccess(0xDCA, perm_id=1) … (20B)` at
+> `11:00:30.459`. The client did **not** crash and did **not** drop `:5481` (conn #2 survived until
+> `11:02:24`, when it reset *simultaneously with the lobby conn #1* — i.e. the user closing the game).
+> It simply had **no effect**: zero client frames afterwards, no `RegisterGame(0xDB6)`.
+>
+> **Why the model was wrong.** `LobbyGameScreen_Update@0x00435980` shows the **client** sends
+> `RefereeServerConnection::Login@0x004793f0` itself, from a per-frame retry pump gated on
+> `netmgr+0x3cc` (**StartLoading**) and the arm flag `screen+0x3625`, with a 5-try counter at
+> `screen+0x362c` that **aborts the match** (`NComm_Manager_Shutdown`) when exhausted. So the referee
+> login belongs to **MATCH START, not to login**, and the server's job is to **answer** it — which
+> `referee.handle_frame` already did. The original reactive trigger was correct.
+>
+> **Why it was inert rather than harmful:** at base-login time the `LobbyGameScreen` has not entered,
+> so `LobbyGameScreen_SubscribeConnectionObservers` has not run and nothing is subscribed to the
+> `+0x80` observer. `LoginSuccessReceived` fired its fan-out into an empty observer list.
+>
+> Reverted in the follow-up commit; `REF_LOGIN_SUCCESS_DELAY` removed. Kept as the record of a
+> falsifiable experiment that was cleanly falsified — and that produced the corrected model below.
+>
+> **Corrected chain for the next session:** StartLoading → arms referee login (`+0x3624`/`+0x3625`) →
+> `LobbyGameScreen_Update` sends `RefereeServerConnection::Login` → server answers `LoginSuccess(0xDCA)`
+> → `+0x80` observer → `Lobby_HostRegisterGameWithReferee` → `RegisterGame(0xDB6)`. The open question
+> is therefore **upstream**: why the host leaves the village (`VillageLeft 11`) instead of reaching a
+> state where that pump runs.
+
 - **Date:** 2026-07-27
 - **Type:** Stub wire-change (trigger move; **no flag** — working behaviour is the default, HARNESS §5)
 - **Approved by:** user (in-session, explicit: "You can change it if you like, yeah.")
