@@ -172,6 +172,11 @@ REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on
 # NOTE: the referee's ip:port is NOT pushed — the client ASKS for it with 221 RequestConnectionData
 # and dispatch._h_connection_data answers 222 ConnectionData with REFEREE_PORT. Resolving
 # REF_SERVER_ID there is what makes the referee dial-able at all.
+# Delay between the referee conn's base-login 153 ACK and our LoginSuccess(0xDCA) push. The client
+# never asks for that result (RefereeServerConnection::Login sends no message), so the 153 is the
+# only cue. Small delay because a bare frame sent too early was previously linked to a client-side
+# crash, and the 153 must first drive the client's own LoggedIn transition.
+REFEREE_LOGIN_OK_DELAY = 0.5
 # [LIVE TEST 2026-06-13 · ER engagement_records/2026-06-13_referee-assign-170.md] Reply a GameServerData(170)
 # type4/sub5 to the referee AssignServer(189, type=4, subtype=4) so its cat-0x108 ticket routes into
 # tincat3 GameServerManager_OnGameServerAssigned → SetRefereeServerAddress → LM+0x580. Set False to revert.

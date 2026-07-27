@@ -697,6 +697,24 @@ def _h_send_token(conn, fields, ticket):
     # fully-constructed channel container instead of corrupting a half-built one; s31).
     if getattr(conn, "is_chat", False):
         chat.send_initial_reply(conn)
+    # Post-login on the REFEREE conn: push LoginSuccess(0xDCA). [PROVEN 2026-07-27]
+    # RefereeServerConnection::Login@0x004793f0 sends NO message — its body is a log-scope prologue
+    # plus conn->vtbl[0x10](transport, 0), i.e. "open the channel" — so nothing on the wire ever
+    # asks for a login result and the server must PUSH it. This 153 is the only cue there is: the
+    # client sends no referee-channel frame to react to (which is why the old handle_frame trigger
+    # could never fire). Measured 2026-07-27: both clients dialled :5481, completed the base login,
+    # and the socket then went silent.
+    # ⚠️ referee.send_login_success uses THIS connection's perm_id, and that is load-bearing —
+    # OnLoginSuccess@0x0047ac20 compares the message's PermID against LobbyManager+0x54c and returns
+    # SILENTLY on mismatch (no log, no error). With test=1 and test2=2, a constant would work for
+    # one player and silently fail for the other.
+    # ER: engagement_records/2026-07-27_referee-loginsuccess-on-153.md
+    if getattr(conn, "is_referee", False):
+        t = threading.Timer(config.REFEREE_LOGIN_OK_DELAY, referee.send_login_success, (conn,))
+        t.daemon = True
+        t.start()
+        log(f"  [REFEREE] 153 ACK — pushing LoginSuccess(0xDCA, perm_id={perm_id}) in "
+            f"{config.REFEREE_LOGIN_OK_DELAY}s → +0x80 observer → RegisterGame(0xDB6)")
     # WORLD ENTRY [PROVEN, s39 live]: on the VILLAGE conn (:5479) after this 153 ACK the client parks
     # at LobbyManager EnteringVillage(8) and waits for the server to push EnterWorld (msg 1000). Its
     # own world-login request is dormant, so the genuine fix is for the server to PROVIDE msg 1000:

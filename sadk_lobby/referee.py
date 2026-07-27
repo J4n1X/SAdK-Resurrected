@@ -14,9 +14,22 @@ The match-START gate. Reverse-engineered fresh this session on sadk_noav.exe (do
     0xDCA → 0x3DCA. Fields are positional u32s (no names/tags); MEMBLOCK/STRING get a u32 length prefix.
 
 The two things the stub must do to start a match:
-  1. LoginSuccess(0xDCA) — clears the client's 5-retry match-start abort. The verdict is the MESSAGE
-     ID, not the PermID value (RefereeServerConnection_OnLoginSuccess reads PermID but never validates
-     it). NEVER send LoginFailed(0xDCB).
+  1. LoginSuccess(0xDCA) — clears the client's 5-retry match-start abort. NEVER send LoginFailed(0xDCB).
+     ⚠️ The PermID field IS validated. An earlier version of this note claimed it was not; that was
+     wrong and it is load-bearing. RefereeServerConnection_OnLoginSuccess@0x0047ac20:
+         0047acbf  MOV EDX,[0x007db510]   ; local = INVALID sentinel (measured 0)
+         0047ace1  CALL 0x0048f490        ; SelectField(msg,"PermID")   name string @0x7dc6f0
+         0047acf4  CALL EDX               ; read 32 bits into the local
+         0047ad04  CALL 0x00462510        ; returns LobbyManager+0x54c (the user's own perm id)
+         0047ad09  CMP  [ESP+0x10],EAX
+         0047ad0d  JNZ  skip              ; mismatch → returns SILENTLY: no log, no error
+         0047ad15  CALL 0x00479ef0        ; +0x80 fan-out → Lobby_HostRegisterGameWithReferee
+     So PermID must equal THAT client's perm_id (measured: test=1, test2=2). A constant would work
+     for one player and silently fail for the other.
+     ⚠️ Nothing on the wire requests this message: RefereeServerConnection::Login@0x004793f0 sends
+     NO message, it only opens the channel. The server must PUSH LoginSuccess when the referee
+     conn's base login completes (the 153) — see dispatch._h_send_token. The old trigger below (on
+     the first inbound referee-channel frame) could never fire, because the client sends none.
   2. For the host's RegisterGame(0xDB6): RegisterGameAck(0xDB7, Result=0) then
      RegisterGameResult(0xDB8, Result=0, GameSeed). OnRegisterGameResult reads GameSeed only when
      Result==0 (else it reads a FailReason and aborts). The GameSeed is the lockstep determinism seed —
