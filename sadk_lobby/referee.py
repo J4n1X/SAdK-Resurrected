@@ -53,8 +53,26 @@ def type_word(msg_id, names=False, category=None):
     return ((1 if names else 0) << 15) | ((cat & 7) << 12) | (msg_id & 0xFFF)
 
 
-def _u32(v):
+def _u32le(v):
+    """TinCat BODY scalar — little-endian. Used for the SendGameData(74) msg_type/type word, which
+    tincat3 parses as a normal body field (village.py does the same: struct.pack('<I', msg_type))."""
     return struct.pack("<I", v & 0xFFFFFFFF)
+
+
+def _u32(v):
+    """LobbyMessage FIELD scalar — ⚠️ BIG-endian.
+
+    [PROVEN LIVE 2026-07-27] The fields inside the MEMBLOCK are read big-endian, exactly like the
+    village's WorldLoginAck code (village.py: `struct.pack('>I', code)  # bare BIG-ENDIAN u32`).
+    This was originally packed little-endian, and it cost a full live drive to find: our PermID=1
+    went out as bytes 01 00 00 00 and RefereeServerConnection_OnLoginSuccess read it as
+    0x01000000 (16777216). Measured at the guard (0047ad09) in ref_loginok.run:
+        eax = 00000001            <- LobbyManager+0x54c, the expected perm id
+        [esp+0x10] = 0x01000000   <- what our little-endian field decoded to
+        efl 0x246 -> 0x216        <- ZF CLEARED, so the JNZ was taken
+    OnLoginSuccess ran (1 call) but returned silently before the +0x80 fan-out, which is why
+    RegisterGame(0xDB6) never came and nothing appeared in any log."""
+    return struct.pack(">I", v & 0xFFFFFFFF)
 
 
 def referee_payload(msg_id, fields=b""):
@@ -79,8 +97,8 @@ def referee_payload(msg_id, fields=b""):
     0047ad09 mismatched and returned with no log. Measured live 2026-07-27 — both referee sockets
     stayed open and nothing came back.
     """
-    body = _u32(type_word(msg_id)) + bytes_field(fields)
-    return app_payload(config.VILLAGE_SENDGAMEDATA, body)
+    body = _u32le(type_word(msg_id)) + bytes_field(fields)   # channel/type word: LITTLE-endian
+    return app_payload(config.VILLAGE_SENDGAMEDATA, body)    # fields inside the MEMBLOCK: BIG-endian
 
 
 # ── Builders (referee → client) ────────────────────────────────────────────────
@@ -129,11 +147,12 @@ def _inner_msg_id(payload):
     magic, t1, t2 = struct.unpack_from("<HHH", payload, 0)
     if magic != config.PAYLOAD_MAGIC or t1 != config.VILLAGE_SENDGAMEDATA or t2 != t1:
         return None, None                                   # not a 74 envelope → base-login/other
-    tw = struct.unpack_from("<I", payload, 6)[0]             # typeWord = names<<15|cat<<12|id
+    tw = struct.unpack_from("<I", payload, 6)[0]             # typeWord = names<<15|cat<<12|id (LE)
     msg_id = tw & 0xFFF
     blen = struct.unpack_from("<I", payload, 10)[0]
     inner = payload[14:14 + blen]
-    game_id = struct.unpack_from("<I", inner, 0)[0] if len(inner) >= 4 else 0
+    # ⚠️ LobbyMessage fields are BIG-endian — see _u32().
+    game_id = struct.unpack_from(">I", inner, 0)[0] if len(inner) >= 4 else 0
     return msg_id, game_id
 
 
