@@ -958,6 +958,14 @@ STATIC_TOOL_NAMES = {
     "debugger_watch_memory",
     "debugger_watch_stop",
     "debugger_watch_log",
+    # Time Travel Debugging (record once, query the trace offline)
+    "ttd_status",
+    "ttd_list_traces",
+    "ttd_record",
+    "ttd_stop",
+    "ttd_calls",
+    "ttd_memory",
+    "ttd_query",
 }
 
 for _static_tool_name in STATIC_TOOL_NAMES:
@@ -2116,6 +2124,167 @@ def debugger_watch_log(watch_id: int = -1, last_n: int = 50) -> str:
         "GET",
         "/debugger/watch/log",
         query={"watch_id": str(watch_id), "last_n": str(last_n)},
+    )
+
+
+# ==========================================================================
+# Time Travel Debugging (TTD) — record once, query the trace offline forever
+# ==========================================================================
+# The live engine can only answer questions decided before the run. TTD records
+# one execution to a .run trace, then replays it offline — forwards, backwards,
+# and arbitrarily many times. Recording needs elevation; querying does not.
+
+
+@mcp.tool()
+def ttd_status() -> str:
+    """Check whether the Time Travel Debugging toolchain is usable.
+
+    Reports the resolved WinDbg/TTD paths, whether the debugger server is
+    elevated (required to RECORD, not to query), and the trace directory.
+    Call this first — it explains exactly what is missing if anything is.
+    """
+    return _debugger_request("GET", "/debugger/ttd/status")
+
+
+@mcp.tool()
+def ttd_list_traces(trace_dir: str = "") -> str:
+    """List recorded TTD traces (.run files) with size and timestamp.
+
+    Args:
+        trace_dir: Override the trace directory. Empty = the configured default.
+    """
+    query = {"trace_dir": trace_dir} if trace_dir else None
+    return _debugger_request("GET", "/debugger/ttd/traces", query=query)
+
+
+@mcp.tool()
+def ttd_record(
+    target: str,
+    mode: str = "attach",
+    out: str = "",
+    args: str = "",
+    ring_buffer_mb: int = 0,
+    include_children: bool = False,
+) -> str:
+    """Start recording a Time Travel Debugging trace of a process.
+
+    Returns as soon as recording is underway; the trace keeps growing until the
+    target exits or ttd_stop() is called. Expect a 10-20x slowdown while
+    recording, so prefer mode="attach" immediately before the moment of
+    interest rather than recording a whole session.
+
+    Requires the debugger server to be running elevated.
+
+    Args:
+        target: PID or process name (mode="attach"), or exe path (mode="launch").
+        mode: "attach" to record a running process, "launch" to start one.
+        out: Output .run path. Empty = auto-name into the trace directory.
+        args: Space-separated arguments, mode="launch" only.
+        ring_buffer_mb: Cap the trace with a ring buffer of this many MB
+            (keeps only the most recent activity). 0 = unbounded.
+        include_children: Also record child processes.
+    """
+    body: dict = {
+        "target": target,
+        "mode": mode,
+        "include_children": include_children,
+    }
+    if out:
+        body["out"] = out
+    if args:
+        body["args"] = args.split()
+    if ring_buffer_mb:
+        body["ring_buffer_mb"] = ring_buffer_mb
+    return _debugger_request("POST", "/debugger/ttd/record", body, timeout=60)
+
+
+@mcp.tool()
+def ttd_stop(target: str = "all") -> str:
+    """Stop an in-progress TTD recording and finalize the .run file.
+
+    Args:
+        target: "all", a PID, or a process name.
+    """
+    return _debugger_request("POST", "/debugger/ttd/stop", {"target": target}, timeout=180)
+
+
+@mcp.tool()
+def ttd_calls(trace: str, function: str, limit: int = 200, timeout: int = 600) -> str:
+    """Find EVERY call to a function across an entire recorded run.
+
+    This is the query the live debugger cannot answer: it is retrospective, so
+    you do not need to have decided to watch this function before the run.
+
+    Since the target has no PDBs, pass an ADDRESS (e.g. "0x468f80"). A symbol
+    string ("module!Function") also works where symbols exist.
+
+    Args:
+        trace: Path or filename of a .run trace.
+        function: Address (hex string) or "module!Function".
+        limit: Max call records to return.
+        timeout: Seconds. First open of a trace builds an index and is slow.
+    """
+    return _debugger_request(
+        "POST",
+        "/debugger/ttd/query",
+        {"trace": trace, "kind": "calls", "function": function,
+         "limit": limit, "timeout": timeout},
+        timeout=timeout + 30,
+    )
+
+
+@mcp.tool()
+def ttd_memory(
+    trace: str,
+    address: str,
+    size: int = 4,
+    access: str = "w",
+    limit: int = 200,
+    timeout: int = 600,
+) -> str:
+    """Find every read/write/execute of a memory range across an entire run.
+
+    This works on HEAP addresses, which dbgeng hardware watchpoints refuse —
+    the history is reconstructed from the recording, not from a live watchpoint.
+
+    Args:
+        trace: Path or filename of a .run trace.
+        address: Start address (hex string, e.g. "0xE6A45C4").
+        size: Range length in bytes.
+        access: Any of "r" (read), "w" (write), "e" (execute), "c" (call).
+        limit: Max access records to return.
+        timeout: Seconds. First open of a trace builds an index and is slow.
+    """
+    return _debugger_request(
+        "POST",
+        "/debugger/ttd/query",
+        {"trace": trace, "kind": "memory", "address": address, "size": size,
+         "access": access, "limit": limit, "timeout": timeout},
+        timeout=timeout + 30,
+    )
+
+
+@mcp.tool()
+def ttd_query(trace: str, commands: str, timeout: int = 600) -> str:
+    """Run arbitrary debugger commands against a recorded TTD trace.
+
+    Full escape hatch for anything ttd_calls/ttd_memory do not cover. The
+    session is replayed headlessly under cdb; "q" is appended automatically.
+    Useful commands: "!tt <pos>" (travel to a position), "k" (stack),
+    "!ttdext.data" , "dx @$cursession.TTD.Events", "g-" (run backwards).
+
+    Args:
+        trace: Path or filename of a .run trace.
+        commands: Semicolon-separated debugger commands.
+        timeout: Seconds. First open of a trace builds an index and is slow.
+    """
+    return _debugger_request(
+        "POST",
+        "/debugger/ttd/query",
+        {"trace": trace, "kind": "raw",
+         "commands": [c.strip() for c in commands.split(";") if c.strip()],
+         "timeout": timeout},
+        timeout=timeout + 30,
     )
 
 

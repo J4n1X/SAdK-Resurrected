@@ -135,6 +135,20 @@ A single play-through with these armed yields an ordered event timeline instead 
 directly. Trace their *writers* instead — trace #0 (`SetState`) and #4 (`Logout`) cover every transition
 that matters. Reserve real watchpoints for globals in `.data`.
 
+> **This limitation is lifted by TTD (§9).** `ttd_memory` reconstructs the full read/write history of
+> *any* address, heap included, from a recording — no watchpoint involved.
+
+## 4b. Time Travel Debugging — the short version
+
+See **§9** for the full runbook. The rule of thumb:
+
+| Situation | Use |
+|---|---|
+| You know exactly what to watch, and want it live | live traces (§3) |
+| You want to ask questions you have not thought of yet | **TTD (§9)** |
+| The address is on the heap | **TTD (§9)** |
+| "Did X *ever* happen during that run?" | **TTD (§9)** |
+
 ## 5. Correlating with the stub
 
 The stub logs unbuffered (`python -u`) to `~/projects/sadk-resurrected/stub*.out` on `linux-server`
@@ -248,6 +262,111 @@ CreateResultReceived@0x0046a6a0 (newGameServerId, errorCode)      [this = Server
 | 3 | `0x00468410` | `DestroyGameServerAndShutdown` | reset-to-INVALID + NComm teardown |
 | 4 | `0x00469990` | `DeleteResultReceived` | the other reset-to-INVALID |
 | 5 | `0x00469610` | `LobbyServerList_GameServerAdded` | did the 170 reach the observer |
+
+---
+
+## 9. Time Travel Debugging — record once, query forever (added 2026-07-27)
+
+**The problem it solves.** Live debugging can only answer questions you decided to ask *before* the
+run. Every follow-up costs another full human-driven host+join+Start cycle. TTD records one
+execution into a `.run` trace, then replays it offline — forwards *and backwards* — as many times as
+you like. See `docs/RE_METHOD_RESEARCH.md` for the reasoning and the `HARNESS §3` stated reason.
+
+### Setup (done 2026-07-27)
+
+- Windows already ships the **recorder** inbox: `C:\Windows\System32\tttracer.exe` +
+  `ttdrecord.dll` / `ttdrecordcpu.dll`.
+- The **replay** half came from `winget install Microsoft.WinDbg`, which also provides headless
+  `cdb.exe`, `TTDReplay.dll`, `TtdExt.dll` and a `wow64` payload for our 32-bit target.
+- The toolchain is **auto-discovered** — no hard-coded paths. Override with `TTD_DIR` / `TTD_EXE`.
+
+> **⛔ Gotcha `[PROVEN]` 2026-07-27 — `TTD.exe` cannot be executed from inside `WindowsApps`.**
+> Launching `…\amd64\ttd\TTD.exe` fails CreateProcess with **Win32 error 5 (ACCESS_DENIED)**, *even
+> from an elevated process*. It is **not** an ACL issue — the ACLs are byte-identical to the sibling
+> `cdb.exe`, which runs fine from the same package — and **not** an elevation issue (error 5, not
+> 740 ELEVATION_REQUIRED). It is an MSIX execution restriction on the nested path. **Copying the
+> whole `ttd` folder out fixes it.** `debugger/ttd.py` now does this automatically, caching the
+> payload to `%LOCALAPPDATA%\ghidra_mcp_ttd_cache\ttd` and re-copying when WinDbg updates. `cdb.exe`
+> needs no such treatment and is used in place.
+> Also note `TTD.exe` prompts for EULA acceptance interactively unless `-accepteula` is passed —
+> which would hang a headless call. The module always passes it.
+- Traces default to `%USERPROFILE%\ttd_traces` (override with `TTD_TRACE_DIR`).
+  **Keep traces out of the repo — they are gigabytes.**
+
+### It lives in the debugger MCP, not in a script (HARNESS §1)
+
+Added to the `ghidra-mcp` debugger server as `debugger/ttd.py` plus five routes under
+`/debugger/ttd/*`, and exposed as MCP tools by `decomp/bridge_mcp_ghidra.py`:
+
+| tool | what it does |
+|---|---|
+| `ttd_status` | resolved paths, elevation, whether recording/querying is possible |
+| `ttd_record` | start recording (attach to a running PID, or launch) |
+| `ttd_stop` | finalize the `.run` |
+| `ttd_list_traces` | traces on disk with size + timestamp |
+| `ttd_calls` | **every call to a function across the whole run** |
+| `ttd_memory` | **every read/write of an address — heap included** (lifts §4) |
+| `ttd_query` | arbitrary cdb/`dx` commands against the trace |
+
+### Elevation — the one human step
+
+**Recording requires an elevated debugger server**; querying does not. That is not an extra burden:
+the game already runs elevated, so live debugging already required this. Start it with:
+
+```powershell
+# elevated PowerShell
+cd C:\Users\user\Downloads\ghidra-mcp
+python -m debugger
+```
+
+The payoff is the division of labour: **one elevated, human-driven run** → unlimited non-elevated
+analysis by the agent, with no further game launches.
+
+### Practical notes
+
+- **Expect a 10–20× slowdown while recording.** For MP this is a real risk: a slowed host can time
+  out the joiner and manufacture a fake "stuck" state (cf. `dbgeng-breakpoint-vs-loader-conflict`).
+  **Mitigation: `ttd_record(mode="attach")` immediately before pressing Start**, not at launch.
+  Consider `ring_buffer_mb` to cap the trace to the most recent activity.
+- **First query on a trace builds an index and can take minutes.** Later queries are fast. The
+  default timeout is 600 s.
+- **We have no PDBs**, so pass **addresses** to `ttd_calls` (e.g. `"0x468f80"`), not symbol names.
+  Module base is 1:1 with Ghidra (`SADK@0x400000`), so Ghidra addresses work directly.
+- Record the **host only** unless you specifically need both sides.
+
+### ⛔ The trap that will lie to you: an UNINDEXED trace returns ZERO, not an error
+
+**`[PROVEN]` 2026-07-27.** On a trace that has not been indexed, `TTD.Calls(...)` and
+`TTD.Memory(...)` return **0 results and exit 0** — they do *not* error. Read naively that says
+*"this function was never called"*. It is the exact false-negative shape that has cost this project
+sessions before.
+
+Measured on the same trace, same query:
+
+| | `NtAllocateVirtualMemory` | `LdrLoadDll` |
+|---|---|---|
+| before `!index` | **0** ← a lie | **0** ← a lie |
+| after `!index` | 0x43 (67) | 0x5 (5) |
+
+`debugger/ttd.py` now **prepends `!index` to every query**, so this cannot bite us. It is a no-op
+once the index exists (`Successfully created the index in 0ms`). If you ever query a trace by hand
+in WinDbg, index it first — the position line tells you: `Time Travel Position: B:0 [Unindexed]`.
+
+### Validation — the whole pipeline is `[PROVEN]` end to end (2026-07-27)
+
+Recorded `C:\Windows\SysWOW64\cmd.exe /c ver` (a **32-bit** target, via the wow64 payload) and
+queried it back:
+
+- `ttd_record` → `Recording has started… Full trace dumped` ✅
+- **`cdb -z` does open `.run` traces** ✅ — TTD analyzers load, `dx @$cursession.TTD` resolves.
+  (The `-?` text mentions only crash dumps; that was a documentation gap, not a limitation.)
+- `ttd_calls ntdll!LdrLoadDll` → 5 calls, each with time position, return value, thread id ✅
+- `ttd_memory 0x032ffc44 w` → **120 writes**, each with the **writing instruction pointer** and the
+  value stored ✅ — on a non-module-mapped address, i.e. exactly what §4 watchpoints refuse.
+  *One such query would have replaced the whole multi-session `+0x9c` writer hunt.*
+
+Queries run in **~0.4 s** once indexed. Output is stripped of cdb's banner/NatVis boilerplate by
+`_clean_output()`, so results stay readable.
 
 Together these cover **every** writer of `+0x9c`. The June-2026 plan to put a hardware write-watchpoint
 on its absolute address (which §4 says is impossible for heap addresses anyway) is obsolete.

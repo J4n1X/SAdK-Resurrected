@@ -60,6 +60,52 @@ clone, update the `args` path in `.mcp.json` to that copy.)
   structs + the `LobbyManagerState` enum, set `__thiscall` prototypes, rename, and chase the
   state-setter via xrefs — live.
 
+## 6. TTD (Time Travel Debugging) support — re-applying after a re-clone
+
+The debugger MCP was extended on 2026-07-27 with TTD record/replay (`ttd_*` tools). The bridge half
+lives in this repo (`decomp/bridge_mcp_ghidra.py`) and survives a re-clone; the **server half lives
+in the ghidra-mcp clone** and does not. To re-apply:
+
+1. Copy the canonical module into the clone:
+   `copy decomp\debugger_ttd.py <clone>\debugger\ttd.py`
+2. In `<clone>\debugger\server.py` add `from . import ttd as ttd_mod` next to the other
+   `from .tracing import TraceSession` import, then register five routes:
+   - `do_GET`: `/debugger/ttd/status` → `_handle_ttd_status`,
+     `/debugger/ttd/traces` → `_handle_ttd_traces`
+   - `do_POST`: `/debugger/ttd/record`, `/debugger/ttd/stop`, `/debugger/ttd/query`
+   The handler bodies are small and sit just above `_handle_status`; see the same-named methods
+   in the clone, or re-derive them from `decomp/debugger_ttd.py`'s public API
+   (`toolchain_status`, `list_traces`, `record`, `stop_recording`, `query`, `calls`,
+   `memory_accesses`).
+3. Prerequisite: `winget install Microsoft.WinDbg` (supplies `cdb.exe` + the `ttd/` payload;
+   the recorder itself is already inbox in `System32`).
+4. **Recording requires an elevated debugger server**; querying does not.
+
+Usage runbook: `docs/LIVE_DEBUG_RUNBOOK.md` §9. Rationale: `docs/RE_METHOD_RESEARCH.md`.
+
+## 7. Fix: debugger server hangs on "Shutting down..." `[PROVEN]` 2026-07-27
+
+**Symptom:** Ctrl+C prints `Shutting down...` and the server never exits; you have to kill it.
+
+**Cause — a textbook deadlock, in `<clone>\debugger\server.py::main()`.** The `SIGINT`/`SIGTERM`
+handler called `server.shutdown()` directly. Signal handlers run on the **main thread**, which is
+parked inside `serve_forever()`. `BaseServer.shutdown()` blocks until `serve_forever()` observes the
+stop flag and returns — which it cannot do, because the main thread is stuck inside the handler.
+Deadlock every time. Verified by isolating the pattern: the old form hangs indefinitely, the fixed
+form returns in ~1 s. A second hazard sat in front of it — the handler also called
+`engine.detach()`, and a dbgeng detach can block for a long time (it needs the target stopped).
+
+**Fix (applied):**
+- The signal handler no longer blocks. It sets an event, logs, and starts `server.shutdown()` on a
+  **separate daemon thread**. A second interrupt calls `os._exit(1)` as an escape hatch.
+- Detach and tracer teardown moved **out of the handler** into `_shutdown_cleanly()`, which runs
+  after the accept loop has stopped and bounds every blocking step with `_call_with_timeout()`
+  (traces 10 s, watchpoints 10 s, detach 20 s, listener close 10 s) so nothing can wedge exit.
+- `SIGBREAK` (Ctrl+Break) is registered too on Windows.
+
+This is an **upstream bug** in `bethington/ghidra-mcp`, not something we introduced — worth sending
+back as a PR. Until then it must be re-applied after any re-clone, alongside §6.
+
 ## Troubleshooting
 - **Bridge can't reach Ghidra:** confirm the plugin is enabled and on **8089**. If the bridge
   needs an explicit URL, add `"--ghidra-server", "http://127.0.0.1:8089/"` to the `args` in
