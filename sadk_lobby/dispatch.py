@@ -456,22 +456,13 @@ FAKE_VILLAGE = {
     "data": server_data_block(config.LOBBY_PROTOCOL_VERSION),
 }
 
-# The referee/match-arbiter server. Advertised so its server_id resolves to ip:port via the
-# ConnectionManager when LobbyManager_InitRefereeServerConnection dials it. A unique id (REF_SERVER_ID,
-# not 1/50) forces a real dial to REFEREE_PORT rather than reusing the UC/village conn. No data block
-# (not a joinable village); stays off the browsers (subtype 4 ≠ village 2 / game 1).
+# The referee / match-arbiter server (tincat3 calls it the RANKING server — its API is
+# RegisterGame / FinishGame / GiveUpGame / ClaimChest). Replied to AssignServer(189, type4/sub4).
+# A unique id (REF_SERVER_ID, not 1/50) forces a real dial to REFEREE_PORT rather than reusing the
+# UC/village conn. No data block (not a joinable village); stays off the browsers.
 #
-# ⚠️ server_subtype is 4, NOT 5 — this is load-bearing.
-# [PROVEN 2026-07-27, tincat3 decompile · ER 2026-07-27_referee-assign-subtype-routing]
-# GameServerManager_OnGameServerAssigned@0x10021520:
-#     if (desc+0x28 == 4 && desc+0x29 == 5) { (*(this+8+0x5c))->vtbl[0x20](...); return; }  // INTERNAL
-#     if (this+4)                            { (**(this+4)->vtbl[0x28])(desc); }            // LOBBY
-# type4/sub5 is special-cased to a tincat3-PRIVATE handler that RETURNS without notifying the lobby.
-# The latch we need — LobbyServerList_GameServerAssigned@0x00469ad0 (slot +0x28 of IGameServerObserver
-# vtable 0x7daf8c) → SetRefereeServerAddress@0x004625d0 → LM+0x580 — is on the DEFAULT branch, i.e.
-# reached only by descriptors that are NOT 4/5. We used to send 4/5 and wondered why LM+0x580 never
-# latched: TTD showed ServerList+0xa4/+0xa8 still armed and LM+0x580 = 0 with zero writes, while the
-# :5481 dial (done by the internal handler) made it look like it was working. Echo the requested 4/4.
+# subtype 5 is deliberate — but read the full chain below the dict before touching it. Both 4/4 and
+# 4/5 have now been proven to fail, for DIFFERENT reasons, and the descriptor is NOT the blocker.
 REFEREE_SERVER = {
     "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
     "name": "referee", "description": "SaDK Referee",
@@ -483,36 +474,58 @@ REFEREE_SERVER = {
     "map": "", "running": False, "data": None,
 }
 
-# ⚠️ server_subtype MUST be 5. [PROVEN 2026-07-27, tincat3 decompile — full chain below]
+# ══ REFEREE ASSIGN — the complete proven model, 2026-07-27 (tincat3 + sadk_noav + TTD) ══
 #
-# GameServerManager_AssignServer@0x10021830 allocates a ticket of kind 0x108 carrying
-# AssignServerTicketData{server_type, server_subtype} and puts its id in the 189. The reply is
-# matched back to that ticket, its kind becomes the dispatch discriminator, and ONLY 0x108 reaches
-# GameServerManager_OnGameServerAssigned@0x10021520. (Measured live: an unmatched/list reply carries
-# 0xAB = 171 and takes the list branch.) A ticket is consumed ONCE, so exactly one reply per 189 can
-# reach the assign path — sending two frames means the second is silently demoted to a list update.
+# TICKETING. GameServerManager_AssignServer@0x10021830 allocates a ticket of kind 0x108 and puts its
+# id in the 189. Only 0x108 replies reach GameServerManager_OnGameServerAssigned@0x10021520, and a
+# ticket is consumed ONCE — so exactly one reply per 189 can take the assign path. (Measured: an
+# unmatched reply carries 0xAB = 171 and is demoted to a list update.) That is why the "send both
+# 4/5 and 4/4" attempt regressed: the second frame never reached the assign handler at all.
 #
-# Inside OnGameServerAssigned, desc+0x28/+0x29 == 4/5 selects the referee branch → FUN_10029a20:
-#     conn = commLayer->vtbl[0x54]()          // create connection
-#     FUN_100191e0(conn, serverDesc+0x10)     // APPLY THE ADDRESS
-#     *(conn + 0x1c) = serverId               // key it by server id
-#     if (conn->vtbl[0x10](0,0) == 0) return  // CONNECT; success returns SILENTLY
-#     errorSink->vtbl[4](result)              // only FAILURE is reported upward
-# That is exactly the object LobbyManager_InitRefereeServerConnection@0x00462910 then looks up —
-# FUN_10019570@tincat3 matches on +0x1c == serverId, and the caller whitelists 0xcd ("already
-# exists"). So 4/5 is the protocol-correct descriptor and the address travels in the assign reply.
+# THE FORK. OnGameServerAssigned tests desc+0x28/+0x29. That single `CMP byte ptr [ESI+0x29],5` at
+# 0x1002152e is the ONLY test of subtype 5 in the entire DLL (exhaustive instruction search):
+#     4/5   -> CommLayer::RankingManager::vtbl[0x20] = FUN_10029a20   (lobby NEVER notified)
+#     other -> default branch -> LobbyServerList_GameServerAssigned@0x00469ad0
+#              -> SetRefereeServerAddress@0x004625d0 -> LM+0x580 = id, LM+0x588 = 60000
 #
-# ⛔ Do NOT "fix" this by sending 4/4, by sending both, or by listing the referee in the server list.
-# All three were tried on 2026-07-27 and all are refuted; see the ERs. 4/4 does latch LM+0x580 (via
-# the default branch → LobbyServerList_GameServerAssigned) but no connection is ever created, so the
-# dial fails with COMM_LAYER_ERROR_CANNOT_CONNECT — a fresh CommLayer::ConnectionReal initialises its
-# address string EMPTY (FUN_10037120(this+0x48, "")).
+# WHY 4/5 ALONE FAILS. FUN_10029a20 does NOT create a connection — vtbl[0x54] (=0x100185a0) is a
+# plain getter returning ConnectionManagerINet+0x1c, a PRE-ALLOCATED singleton built in the CM ctor
+# (kinds 0/1/2 live at +0x14/+0x18/+0x1c). It applies the address, sets +0x1c = serverId and dials.
+# So the :5481 dial we observe is real — but the lobby is never told, LM+0x580 stays INVALID, and
+# LobbyManager_InitRefereeServerConnection@0x00462910 never runs, so refConn+0x34 stays NULL and
+# RefereeServerConnection::Login@0x004793f0 is a silent no-op. (Measured: refConn+0x34 = 0.)
 #
-# OPEN [TODO]: with 4/5 the connect succeeds and FUN_10029a20 returns silently, so the latch of
-# LM+0x580 must come from the referee connection COMPLETING ITS LOGIN — which ours never does; the
-# :5481 socket goes quiet after our 153 ACK. Next question: what a server-class connection requires
-# to reach "logged in" (cf. uc-login-153-ack-not-214 — 153 completes the UC path, 214 the secured
-# server-class one). That is where to resume.
+# WHY 4/4 ALONE FAILS. It latches LM+0x580, so InitRefereeServerConnection runs and binds
+# refConn+0x34 = connMgr->lookup_by_serverId(77). That lookup (FUN_10019570) walks ONLY the +0x10
+# collection. The CM ctor creates +0x10 EMPTY and never adds the three fixed connections, so the
+# addressed kind-2 singleton is invisible to it. The lookup therefore falls to FUN_100196b0's
+# freshly created connection, which has an EMPTY address (FUN_10037120(this+0x48, "")). Login then
+# calls Connect(netTransportId, NULL) — param_2 NULL means it supplies no address either — so the
+# dial dies as COMM_LAYER_ERROR_CANNOT_CONNECT (LobbyManager.cpp:907 + LobbyBaseConnection.cpp:119,
+# both seen live on 4/4 runs).
+#
+# ⛔ THE DESCRIPTOR IS NOT THE BLOCKER. "list-registered AND keyed by serverId AND carrying an
+# address" is unsatisfiable by any code path in tincat3: FUN_100196b0 gives serverId without an
+# address, FUN_10019750 gives an address without a serverId, and FUN_10029a20 gives both but off the
+# list. Every caller of FUN_100191e0 (the address setter) was enumerated to confirm this. So do NOT
+# spend another session flipping this field, nor re-listing the referee on the server list — a list
+# entry creates no connection at all.
+#
+# ONE-SHOT DEADLOCK (LobbyManager::StatePump_Tick@0x00464ee0) — the reason retries are so rare:
+#     if (5 < state) {
+#         if (+0x584 == 0) { +0x584 = 1; RequestRefereeServer(); +0x588 = 0; }  // fires ONCE
+#         if (+0x588 < 0) +0x584 = 0;                                           // only re-arm
+#     }
+# +0x588 is armed (=60000) only by SetRefereeServerAddress. So if the first assign does not latch,
+# +0x588 stays 0, never goes negative, and the client NEVER requests a referee again for the whole
+# process lifetime. This is why 4/4 runs show a 60 s retry cadence and 4/5 runs show a single frame.
+# ⚠️ TEST RULE: the one-shot fires on the FIRST login after process start, so any TTD recording must
+# begin BEFORE that login (mode="launch" / restart the game) or it records only zeros.
+#
+# OPEN [TODO]: find what makes the client dial the referee BY ADDRESS, creating a list-registered
+# connection (FUN_10019750, CM vtbl+0x34). The known analogue is CommLayer_OnUsercommServerData —
+# NETMSG 192 carries the UC server's address and applies it via FUN_100191e0. A referee equivalent
+# is the most likely missing message. Resume there, NOT on the assign descriptor.
 
 
 def _send_server_list(conn, server_type, ticket):
