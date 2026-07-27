@@ -368,17 +368,20 @@ def _h_assign_server(conn, fields, ticket):
         # GameServerManager_OnGameServerAssigned@0x10021520 → LobbyServerList_GameServerAssigned
         # @0x00469ad0 → SetRefereeServerAddress@0x004625d0 → LM+0x580 latched (+0x588 = 60000).
         #
-        # ⛔ Do NOT also send a type4/sub5 twin here. Tried 2026-07-27 and it REGRESSED: with both
-        # frames (same ticket) the sub4 notification is swallowed and the latch never happens —
-        # measured by the 60 s retry, which only exists when SetRefereeServerAddress armed
-        # LM+0x588. sub4 alone → every client retried at +60 s; sub5+sub4 → no retry at all.
-        # The referee is instead advertised through the SERVER LIST (see _send_server_list), which
-        # is how the client is supposed to learn a server exists at all.
+        # ⛔ Do NOT also send a type4/sub5 twin here. Tried 2026-07-27 and it REGRESSED: the assign
+        # ticket (kind 0x108) is consumed ONCE, so the second frame never reaches the assign path at
+        # all — measured by the 60 s retry, which only exists once SetRefereeServerAddress armed
+        # LM+0x588. sub4 alone → retry at +60 s; sub5+sub4 → no retry, i.e. no latch.
         conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
         log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
             f"type{REFEREE_SERVER['server_type']}/sub{REFEREE_SERVER['server_subtype']} "
             f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) "
             "— default branch → LobbyServerList_GameServerAssigned → LM+0x580")
+        # …then, once the pump has CREATED that connection, address it. Two frames, two jobs:
+        # this one latches the id, the delayed one supplies ip:port. See _push_referee_address.
+        t = threading.Timer(config.REFEREE_ADDRESS_PUSH_DELAY, _push_referee_address, (conn,))
+        t.daemon = True
+        t.start()
 
     # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
     # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
@@ -461,18 +464,51 @@ FAKE_VILLAGE = {
 # A unique id (REF_SERVER_ID, not 1/50) forces a real dial to REFEREE_PORT rather than reusing the
 # UC/village conn. No data block (not a joinable village); stays off the browsers.
 #
-# subtype 5 is deliberate — but read the full chain below the dict before touching it. Both 4/4 and
-# 4/5 have now been proven to fail, for DIFFERENT reasons, and the descriptor is NOT the blocker.
+# subtype 4 is deliberate: only a NON-4/5 descriptor reaches the lobby observer and latches
+# LM+0x580. 4/5 goes to a tincat3-private handler that never notifies the lobby. But 4/4 alone is
+# NOT enough either — it latches an ADDRESS-LESS connection. The address arrives in the follow-up
+# 170 from _push_referee_address(). Read the full chain below the dict before touching either.
 REFEREE_SERVER = {
     "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
     "name": "referee", "description": "SaDK Referee",
     "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
     "max_players": 0, "cur_players": 0, "ai_players": 0,
     "lobby_id": config.LOBBY_PROTOCOL_VERSION, "version": "",
-    "server_type": 4, "server_subtype": 5,
+    "server_type": 4, "server_subtype": 4,
     "level": 0, "game_mode": 0, "hardcore": False,
     "map": "", "running": False, "data": None,
 }
+
+
+def _push_referee_address(conn):
+    """The SECOND referee 170 — the one that actually applies ip:port to the connection.
+
+    [PROVEN 2026-07-27] tincat3 keys connections by server id at conn+0x1c and dials from
+    conn+0x14 (host strdup) / conn+0x18 (port). `FUN_100196b0` — the create-by-server-id path that
+    InitRefereeServerConnection uses — makes the connection ADDRESS-LESS (verified at instruction
+    level: RET 0x4, [EDI+0x1c] = EBX, no address write). A GameServerData(170) for server id N is
+    what fills +0x14/+0x18 on the live connection keyed by N, exactly as
+    CommLayer_OnUsercommServerData does for the UC conn.
+
+    Measured proof, from the WORKING village connection (referee_gateA.run / host_start_full.run):
+        conn+0x14 -> "192.168.1.130"   conn+0x18 = 0x1567 (5479)   conn+0x1c = 0x32 (50)
+    id 50 is FAKE_VILLAGE's id and 5479 its port — the client can only have learned that pair from
+    our village 170.
+
+    ORDERING IS THE WHOLE POINT. The connection keyed by REF_SERVER_ID does not exist until
+    StatePump_Tick runs InitRefereeServerConnection, which is gated on LM+0x580, which only latches
+    when the ASSIGN reply reaches the lobby observer. Advertising the referee in _send_server_list
+    (answering 171 at login) put this 170 ~37 s too early, which is why that attempt failed.
+    """
+    if not getattr(conn, "alive", False):
+        return
+    try:
+        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, 0)))
+        log(f"  → [REFEREE] address 170 id={config.REF_SERVER_ID} -> "
+            f"{config.ADVERTISED_IP}:{config.REFEREE_PORT} (post-assign) — applies ip:port to the "
+            "connection keyed by conn+0x1c == id, so ConnectionReal::Connect has a target")
+    except Exception:  # noqa: BLE001
+        pass
 
 # ══ REFEREE ASSIGN — the complete proven model, 2026-07-27 (tincat3 + sadk_noav + TTD) ══
 #
@@ -504,12 +540,17 @@ REFEREE_SERVER = {
 # dial dies as COMM_LAYER_ERROR_CANNOT_CONNECT (LobbyManager.cpp:907 + LobbyBaseConnection.cpp:119,
 # both seen live on 4/4 runs).
 #
-# ⛔ THE DESCRIPTOR IS NOT THE BLOCKER. "list-registered AND keyed by serverId AND carrying an
-# address" is unsatisfiable by any code path in tincat3: FUN_100196b0 gives serverId without an
-# address, FUN_10019750 gives an address without a serverId, and FUN_10029a20 gives both but off the
-# list. Every caller of FUN_100191e0 (the address setter) was enumerated to confirm this. So do NOT
-# spend another session flipping this field, nor re-listing the referee on the server list — a list
-# entry creates no connection at all.
+# ✅ RESOLVED — the address comes from a SECOND 170, sent AFTER the connection exists.
+# The static sweep of FUN_100191e0's callers suggested "list-registered AND serverId-keyed AND
+# addressed" was unsatisfiable. That was WRONG, and measuring the working village connection proved
+# it: conn+0x14 -> "192.168.1.130", conn+0x18 = 5479, conn+0x1c = 50 (FAKE_VILLAGE's id). A
+# list-registered connection demonstrably carries both. A 170 for server id N fills +0x14/+0x18 on
+# the live connection keyed by N — the same job CommLayer_OnUsercommServerData does for the UC conn.
+# So the sequence is: 4/4 assign reply latches + creates the connection, then a follow-up 170
+# addresses it. See _push_referee_address() above.
+# ⛔ Ordering is load-bearing: advertising the referee in _send_server_list (answering 171 at login)
+# sends that 170 ~37 s BEFORE the connection exists and is silently useless — that is precisely how
+# the 2026-07-27 server-list attempt failed, and why it must NOT go back there.
 #
 # ONE-SHOT DEADLOCK (LobbyManager::StatePump_Tick@0x00464ee0) — the reason retries are so rare:
 #     if (5 < state) {
@@ -522,10 +563,11 @@ REFEREE_SERVER = {
 # ⚠️ TEST RULE: the one-shot fires on the FIRST login after process start, so any TTD recording must
 # begin BEFORE that login (mode="launch" / restart the game) or it records only zeros.
 #
-# OPEN [TODO]: find what makes the client dial the referee BY ADDRESS, creating a list-registered
-# connection (FUN_10019750, CM vtbl+0x34). The known analogue is CommLayer_OnUsercommServerData —
-# NETMSG 192 carries the UC server's address and applies it via FUN_100191e0. A referee equivalent
-# is the most likely missing message. Resume there, NOT on the assign descriptor.
+# NEXT [TODO] once the dial succeeds: RefereeServerConnection::Login@0x004793f0 sends NO message —
+# it only opens the channel — so nothing on the wire ever requests a login result. The server must
+# PUSH LoginSuccess(0xDCA), and OnLoginSuccess@0x0047ac20 silently drops it unless the message's
+# "PermID" field equals LobbyManager+0x54c (measured = 1, the logged-in user id; INVALID = 0).
+# That fan-out (+0x80) is what runs Lobby_HostRegisterGameWithReferee@0x00432240 → RegisterGame.
 
 
 def _send_server_list(conn, server_type, ticket):

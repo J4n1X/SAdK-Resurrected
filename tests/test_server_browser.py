@@ -159,26 +159,30 @@ def test_referee_assign_unaffected():
         types = [t for t, _ in conn.sent]
         assert 192 in types
 
-        # BOTH 170s must go out, in this order — they hit different halves of the client and
-        # sending only one gives register-XOR-notify (we got stuck that way twice on 2026-07-27):
-        #   sub5 → tincat3's private handler → REGISTERS server_id → ip:port (else the connect
-        #          fails with COMM_LAYER_ERROR_CANNOT_CONNECT / OnLoginFailed @ LobbyManager.cpp:907)
-        #   sub4 → default branch → LobbyServerList_GameServerAssigned → latches LM+0x580
-        # ER: engagement_records/2026-07-27_referee-dual-170-register-and-notify.md
-        # Exactly ONE 170, type4/sub5. [PROVEN 2026-07-27 from tincat3]
+        # Exactly ONE 170 on the assign itself, type4/sub4. [PROVEN 2026-07-27]
         # The 189 allocates a ticket of kind 0x108; the reply is matched to it and only 0x108
-        # reaches GameServerManager_OnGameServerAssigned. A ticket is consumed once, so a second
-        # frame is silently demoted to a list update — which is why two frames regressed.
-        # desc type/subtype 4/5 selects the referee branch (FUN_10029a20), the ONLY path that
-        # applies the address and creates a connection keyed by serverId at +0x1c — exactly what
-        # InitRefereeServerConnection then looks up (whitelisting 0xcd "already exists").
-        # 4/4 latches LM+0x580 but creates no connection → COMM_LAYER_ERROR_CANNOT_CONNECT.
+        # reaches GameServerManager_OnGameServerAssigned, and a ticket is consumed ONCE — so a
+        # second frame here never reaches the assign path at all (that is why the sub5+sub4 twin
+        # regressed). type4/sub5 is special-cased to a tincat3-PRIVATE handler that returns without
+        # notifying the lobby, so it must NOT be used: only a non-4/5 descriptor takes the default
+        # branch → LobbyServerList_GameServerAssigned@0x00469ad0 → SetRefereeServerAddress →
+        # LM+0x580 (+0x588 = 60000, the 60 s retry that is present in every 4/4 run and absent from
+        # every 4/5 run).
+        #
+        # The ADDRESS is not carried here — FUN_100196b0 creates the connection address-less. It
+        # arrives in a delayed follow-up 170 (_push_referee_address) that must land AFTER
+        # StatePump_Tick has created the connection. That frame is on a threading.Timer, so it is
+        # deliberately NOT part of this synchronous assertion.
+        # ER: engagement_records/2026-07-27_referee-address-via-post-assign-170.md
         refs = [b for t, b in conn.sent if t == 170]
         assert len(refs) == 1, (
-            f"expected exactly ONE referee 170, got {len(refs)} — the assign ticket is consumed "
-            "once, so any extra frame is demoted to a list update"
+            f"expected exactly ONE referee 170 from the assign, got {len(refs)} — the assign "
+            "ticket is consumed once, so any extra frame never reaches OnGameServerAssigned"
         )
-        assert (refs[0]["server_type"], refs[0]["server_subtype"]) == (4, 5)
+        assert (refs[0]["server_type"], refs[0]["server_subtype"]) == (4, 4), (
+            "referee descriptor must NOT be 4/5 — that is the tincat3-private branch that never "
+            "notifies the lobby, so LM+0x580 never latches"
+        )
         assert refs[0]["server_id"] == config.REF_SERVER_ID
         assert refs[0]["port"] == config.REFEREE_PORT
     finally:
