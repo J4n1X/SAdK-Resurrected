@@ -364,11 +364,22 @@ def _h_assign_server(conn, fields, ticket):
     # ER 2026-07-27_referee-assign-subtype-routing. The 192 below still goes out (different message
     # type → tincat3's UsercommServerData dial handler, independent of the 170) so UC/chat stays up.
     if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
-        log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
-            f"type{REFEREE_SERVER['server_type']}/sub{REFEREE_SERVER['server_subtype']} "
-            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) "
-            "— default branch → LobbyServerList_GameServerAssigned → LM+0x580")
+        # TWO frames, and both are needed — they hit different halves of the client.
+        # [ER 2026-07-27_referee-dual-170-register-and-notify]
+        #   (1) sub5 → tincat3's PRIVATE handler → REGISTERS server_id → ip:port so that
+        #       InitRefereeServerConnection's ConnectionManager lookup (pComm->vtbl[0x38]/[0x18]
+        #       on LM+0x580) can resolve it. Without this the connect fails with
+        #       COMM_LAYER_ERROR_CANNOT_CONNECT ("TinCat failed to start connection",
+        #       LobbyManager::OnLoginFailed @ LobbyManager.cpp:907).
+        #   (2) sub4 → the DEFAULT branch → LobbyServerList_GameServerAssigned@0x00469ad0 →
+        #       SetRefereeServerAddress@0x004625d0 → LM+0x580 latched (+0x588 = 60000).
+        # Sending only one gives register-XOR-notify, which is how we got stuck twice.
+        for desc, why in ((REFEREE_SERVER_REGISTER, "registers id→addr in tincat3"),
+                          (REFEREE_SERVER, "notifies lobby → LM+0x580")):
+            conn.send_app(170, codec.encode_body(170, server_to_170_values(desc, ticket)))
+            log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
+                f"type{desc['server_type']}/sub{desc['server_subtype']} "
+                f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) — {why}")
 
     # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
     # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
@@ -472,6 +483,13 @@ REFEREE_SERVER = {
     "level": 0, "game_mode": 0, "hardcore": False,
     "map": "", "running": False, "data": None,
 }
+
+# The SAME referee server, advertised as type4/sub5 purely to reach tincat3's PRIVATE assign handler
+# (GameServerManager_OnGameServerAssigned → *(this+8+0x5c)→vtbl[0x20]). That handler is what REGISTERS
+# server_id → ip:port in the ConnectionManager, which InitRefereeServerConnection later needs to
+# resolve LM+0x580 into an address. It does NOT notify the lobby — hence the sub4 twin above. Both
+# frames go out on every referee assign; see the comment in _h_assign_server.
+REFEREE_SERVER_REGISTER = dict(REFEREE_SERVER, server_subtype=5)
 
 
 def _send_server_list(conn, server_type, ticket):
