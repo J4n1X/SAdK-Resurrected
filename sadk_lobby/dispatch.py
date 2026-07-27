@@ -356,14 +356,19 @@ def _h_assign_server(conn, fields, ticket):
     # ── Referee assign (type=4, subtype=4) ── [flag-gated · ER 2026-06-13_referee-assign-170] ──────────
     # RequestRefereeServer@0x468f60 sends AssignServer(4,4); a debugger trace of AssignServer (2026-06-13,
     # live) confirmed the discriminator is server_subtype=4 (village-entry uses the 221→222 path, not 189).
-    # Reply a GameServerData(170) for the REFEREE_SERVER (type4/sub5) so its cat-0x108 ticket routes into
-    # tincat3 GameServerManager_OnGameServerAssigned@0x10021520 → SetRefereeServerAddress@0x4625d0 →
-    # LM+0x580. The 192 below still goes out (different message type → tincat3's UsercommServerData dial
-    # handler, independent of the 170) so UC/chat stays up.
+    # Reply a GameServerData(170) for the REFEREE_SERVER so it routes into tincat3
+    # GameServerManager_OnGameServerAssigned@0x10021520 → its DEFAULT branch →
+    # LobbyServerList_GameServerAssigned@0x00469ad0 → SetRefereeServerAddress@0x4625d0 → LM+0x580.
+    # ⚠️ The descriptor MUST NOT be type4/sub5 — that value is special-cased to a tincat3-private
+    # handler that returns without notifying the lobby. See the REFEREE_SERVER comment below and
+    # ER 2026-07-27_referee-assign-subtype-routing. The 192 below still goes out (different message
+    # type → tincat3's UsercommServerData dial handler, independent of the 170) so UC/chat stays up.
     if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
         conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
-        log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} type4/sub5 "
-            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket})")
+        log(f"  → [REFEREE] GameServerData(170) id={config.REF_SERVER_ID} "
+            f"type{REFEREE_SERVER['server_type']}/sub{REFEREE_SERVER['server_subtype']} "
+            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (ticket={ticket}) "
+            "— default branch → LobbyServerList_GameServerAssigned → LM+0x580")
 
     # ── Game-server assign (type=5, subtype=1) — the host's match-server registration ───────────────
     # [PROVEN static, docs/MP_P2P_TRANSITION.md] FUN_0046aaa0 does StartUpNetwork(4) (TinCat host) then
@@ -441,17 +446,29 @@ FAKE_VILLAGE = {
     "data": server_data_block(config.LOBBY_PROTOCOL_VERSION),
 }
 
-# The referee/match-arbiter server (server_type=4, server_subtype=5). Advertised so its server_id resolves
-# to ip:port via the ConnectionManager when LobbyManager_InitRefereeServerConnection dials it. A unique id
-# (REF_SERVER_ID, not 1/50) forces a real dial to REFEREE_PORT rather than reusing the UC/village conn.
-# No data block (not a joinable village); not on the browsable game list (subtype 5 ≠ village 2 / game 1).
+# The referee/match-arbiter server. Advertised so its server_id resolves to ip:port via the
+# ConnectionManager when LobbyManager_InitRefereeServerConnection dials it. A unique id (REF_SERVER_ID,
+# not 1/50) forces a real dial to REFEREE_PORT rather than reusing the UC/village conn. No data block
+# (not a joinable village); stays off the browsers (subtype 4 ≠ village 2 / game 1).
+#
+# ⚠️ server_subtype is 4, NOT 5 — this is load-bearing.
+# [PROVEN 2026-07-27, tincat3 decompile · ER 2026-07-27_referee-assign-subtype-routing]
+# GameServerManager_OnGameServerAssigned@0x10021520:
+#     if (desc+0x28 == 4 && desc+0x29 == 5) { (*(this+8+0x5c))->vtbl[0x20](...); return; }  // INTERNAL
+#     if (this+4)                            { (**(this+4)->vtbl[0x28])(desc); }            // LOBBY
+# type4/sub5 is special-cased to a tincat3-PRIVATE handler that RETURNS without notifying the lobby.
+# The latch we need — LobbyServerList_GameServerAssigned@0x00469ad0 (slot +0x28 of IGameServerObserver
+# vtable 0x7daf8c) → SetRefereeServerAddress@0x004625d0 → LM+0x580 — is on the DEFAULT branch, i.e.
+# reached only by descriptors that are NOT 4/5. We used to send 4/5 and wondered why LM+0x580 never
+# latched: TTD showed ServerList+0xa4/+0xa8 still armed and LM+0x580 = 0 with zero writes, while the
+# :5481 dial (done by the internal handler) made it look like it was working. Echo the requested 4/4.
 REFEREE_SERVER = {
     "id": config.REF_SERVER_ID, "owner_id": config.TEST_PERM_ID,
     "name": "referee", "description": "SaDK Referee",
     "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
     "max_players": 0, "cur_players": 0, "ai_players": 0,
     "lobby_id": config.LOBBY_PROTOCOL_VERSION, "version": "",
-    "server_type": 4, "server_subtype": 5,
+    "server_type": 4, "server_subtype": 4,
     "level": 0, "game_mode": 0, "hardcore": False,
     "map": "", "running": False, "data": None,
 }

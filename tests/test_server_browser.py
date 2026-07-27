@@ -140,7 +140,16 @@ def test_game_assign_no_hosted_game_falls_back_to_192():
 
 
 def test_referee_assign_unaffected():
-    # The referee path (type4/sub4) still emits its 170 type4/sub5 AND the 192 (chat stays up).
+    # The referee path (type4/sub4) still emits its 170 AND the 192 (chat stays up).
+    #
+    # ⚠️ The descriptor MUST NOT be type4/sub5. That exact pair is special-cased by
+    # tincat3 GameServerManager_OnGameServerAssigned@0x10021520 to a PRIVATE handler that
+    # returns without notifying the lobby, so LobbyServerList_GameServerAssigned@0x00469ad0
+    # never fires and LM+0x580 never latches — proven live 2026-07-27 (ServerList+0xa4/+0xa8
+    # still armed, LM+0x580 = 0 with zero writes). Anything that is not 4/5 takes the default
+    # branch into the lobby observer, which is what we need.
+    # This assertion previously demanded subtype == 5, i.e. it encoded the bug.
+    # ER: engagement_records/2026-07-27_referee-assign-subtype-routing.md
     saved = config.REPLY_REFEREE_ASSIGN
     try:
         config.REPLY_REFEREE_ASSIGN = True
@@ -149,7 +158,12 @@ def test_referee_assign_unaffected():
         dispatch._h_assign_server(conn, {"server_type": 4, "server_subtype": 4}, TICKET)
         types = [t for t, _ in conn.sent]
         assert 170 in types and 192 in types
-        assert dict(conn.sent)[170]["server_subtype"] == 5      # referee descriptor type4/sub5
+        body = dict(conn.sent)[170]
+        assert not (body["server_type"] == 4 and body["server_subtype"] == 5), (
+            "referee descriptor is type4/sub5 — that routes into tincat3's private handler "
+            "and the lobby never latches LM+0x580"
+        )
+        assert body["server_type"] == 4 and body["server_subtype"] == 4
     finally:
         config.REPLY_REFEREE_ASSIGN = saved
 
