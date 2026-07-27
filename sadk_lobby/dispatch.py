@@ -478,16 +478,41 @@ REFEREE_SERVER = {
     "ip": config.ADVERTISED_IP, "port": config.REFEREE_PORT,
     "max_players": 0, "cur_players": 0, "ai_players": 0,
     "lobby_id": config.LOBBY_PROTOCOL_VERSION, "version": "",
-    "server_type": 4, "server_subtype": 4,
+    "server_type": 4, "server_subtype": 5,
     "level": 0, "game_mode": 0, "hardcore": False,
     "map": "", "running": False, "data": None,
 }
 
-# NOTE: there is deliberately NO type4/sub5 "register" twin of REFEREE_SERVER. Sending one alongside
-# the sub4 frame suppressed the lobby notification entirely (2026-07-27: sub4 alone → every client
-# re-requested at +60 s, which only happens once SetRefereeServerAddress has armed LM+0x588;
-# sub5+sub4 → no retry at all, i.e. the latch never ran). The referee is advertised through the
-# SERVER LIST below instead — the mechanism by which the client learns any server exists.
+# ⚠️ server_subtype MUST be 5. [PROVEN 2026-07-27, tincat3 decompile — full chain below]
+#
+# GameServerManager_AssignServer@0x10021830 allocates a ticket of kind 0x108 carrying
+# AssignServerTicketData{server_type, server_subtype} and puts its id in the 189. The reply is
+# matched back to that ticket, its kind becomes the dispatch discriminator, and ONLY 0x108 reaches
+# GameServerManager_OnGameServerAssigned@0x10021520. (Measured live: an unmatched/list reply carries
+# 0xAB = 171 and takes the list branch.) A ticket is consumed ONCE, so exactly one reply per 189 can
+# reach the assign path — sending two frames means the second is silently demoted to a list update.
+#
+# Inside OnGameServerAssigned, desc+0x28/+0x29 == 4/5 selects the referee branch → FUN_10029a20:
+#     conn = commLayer->vtbl[0x54]()          // create connection
+#     FUN_100191e0(conn, serverDesc+0x10)     // APPLY THE ADDRESS
+#     *(conn + 0x1c) = serverId               // key it by server id
+#     if (conn->vtbl[0x10](0,0) == 0) return  // CONNECT; success returns SILENTLY
+#     errorSink->vtbl[4](result)              // only FAILURE is reported upward
+# That is exactly the object LobbyManager_InitRefereeServerConnection@0x00462910 then looks up —
+# FUN_10019570@tincat3 matches on +0x1c == serverId, and the caller whitelists 0xcd ("already
+# exists"). So 4/5 is the protocol-correct descriptor and the address travels in the assign reply.
+#
+# ⛔ Do NOT "fix" this by sending 4/4, by sending both, or by listing the referee in the server list.
+# All three were tried on 2026-07-27 and all are refuted; see the ERs. 4/4 does latch LM+0x580 (via
+# the default branch → LobbyServerList_GameServerAssigned) but no connection is ever created, so the
+# dial fails with COMM_LAYER_ERROR_CANNOT_CONNECT — a fresh CommLayer::ConnectionReal initialises its
+# address string EMPTY (FUN_10037120(this+0x48, "")).
+#
+# OPEN [TODO]: with 4/5 the connect succeeds and FUN_10029a20 returns silently, so the latch of
+# LM+0x580 must come from the referee connection COMPLETING ITS LOGIN — which ours never does; the
+# :5481 socket goes quiet after our 153 ACK. Next question: what a server-class connection requires
+# to reach "logged in" (cf. uc-login-153-ack-not-214 — 153 completes the UC path, 214 the secured
+# server-class one). That is where to resume.
 
 
 def _send_server_list(conn, server_type, ticket):
@@ -499,22 +524,11 @@ def _send_server_list(conn, server_type, ticket):
         conn.send_app(170, codec.encode_body(170, server_to_170_values(FAKE_VILLAGE, ticket)))
         sent += 1
         log("  → Injected fake village world (ServerType=4) w/ room-assign data blob")
-    # Advertise the REFEREE on the type-4 list. [ER 2026-07-27_referee-via-server-list]
-    # This is how the client is meant to learn a server exists: the assign only names an id, and
-    # the lobby side never resolves an address — pConnectionManager->vtbl[0x38]/[0x18] both funnel
-    # into FUN_10019570@tincat3, which just walks the live-connection list matching entry+0x1c ==
-    # serverId. So the client must already know server 77 from the list; otherwise
-    # InitRefereeServerConnection ends up with a connection that has nowhere to dial and the
-    # attempt dies as COMM_LAYER_ERROR_CANNOT_CONNECT (LobbyManager::OnLoginFailed, cpp:907).
-    # Deliberately AFTER the sent==0 village check so it can never suppress the fake village.
-    # No ServerDataBlock (data=None) → FillFromDescriptor@0x481640 leaves validity 0, so it should
-    # stay non-joinable in the browser; watch for a stray greyed row.
-    if server_type == 4:
-        conn.send_app(170, codec.encode_body(170, server_to_170_values(REFEREE_SERVER, ticket)))
-        sent += 1
-        log(f"  → [REFEREE] listed id={config.REF_SERVER_ID} "
-            f"type4/sub{REFEREE_SERVER['server_subtype']} "
-            f"-> {config.ADVERTISED_IP}:{config.REFEREE_PORT} (so the assign's id resolves)")
+    # ⛔ The referee is deliberately NOT advertised here. Listing it was tried on 2026-07-27 on the
+    # theory that the client learns id→address from the list; the tincat3 decompile refuted that —
+    # the address travels in the ASSIGN reply (serverDesc+0x10 → FUN_100191e0), and the lookup
+    # FUN_10019570 only walks live connections keyed by +0x1c. A list entry creates no connection.
+    # See the REFEREE_SERVER comment above and ER 2026-07-27_referee-via-server-list (REFUTED).
     # NO synthetic GAME entry. The game browser (server_type 5) shows ONLY real hosted games,
     # registered via AddGameServer(168) and relayed cross-client from the registry in the loop above.
     # The client sets server_subtype=1 itself when it hosts a browsable game, so a hosted game routes

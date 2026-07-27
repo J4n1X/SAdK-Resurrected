@@ -165,12 +165,20 @@ def test_referee_assign_unaffected():
         #          fails with COMM_LAYER_ERROR_CANNOT_CONNECT / OnLoginFailed @ LobbyManager.cpp:907)
         #   sub4 → default branch → LobbyServerList_GameServerAssigned → latches LM+0x580
         # ER: engagement_records/2026-07-27_referee-dual-170-register-and-notify.md
+        # Exactly ONE 170, type4/sub5. [PROVEN 2026-07-27 from tincat3]
+        # The 189 allocates a ticket of kind 0x108; the reply is matched to it and only 0x108
+        # reaches GameServerManager_OnGameServerAssigned. A ticket is consumed once, so a second
+        # frame is silently demoted to a list update — which is why two frames regressed.
+        # desc type/subtype 4/5 selects the referee branch (FUN_10029a20), the ONLY path that
+        # applies the address and creates a connection keyed by serverId at +0x1c — exactly what
+        # InitRefereeServerConnection then looks up (whitelisting 0xcd "already exists").
+        # 4/4 latches LM+0x580 but creates no connection → COMM_LAYER_ERROR_CANNOT_CONNECT.
         refs = [b for t, b in conn.sent if t == 170]
         assert len(refs) == 1, (
-            f"expected exactly ONE referee 170, got {len(refs)} — a second (type4/sub5) frame "
-            "suppresses the lobby notification and LM+0x580 never latches"
+            f"expected exactly ONE referee 170, got {len(refs)} — the assign ticket is consumed "
+            "once, so any extra frame is demoted to a list update"
         )
-        assert (refs[0]["server_type"], refs[0]["server_subtype"]) == (4, 4)
+        assert (refs[0]["server_type"], refs[0]["server_subtype"]) == (4, 5)
         assert refs[0]["server_id"] == config.REF_SERVER_ID
         assert refs[0]["port"] == config.REFEREE_PORT
     finally:
