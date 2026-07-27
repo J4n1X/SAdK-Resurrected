@@ -154,6 +154,16 @@ def handle_frame(conn, payload):
         # Seen live 2026-07-27: id=11, 12-byte body, 24x per session, always in pairs right after
         # a channel join. Our CHAT_STATUS_REPLY is also 11 but that is server→client, so this is
         # either a different meaning in the client→server direction or a gap in our enum.
+        # chat id 11 = StatusReply, and it is BIDIRECTIONAL — the client answers our
+        # ChannelJoined/StatusReply with one of its own. [PROVEN 2026-07-27: the middle u32 matches
+        # the ticket_id of the join it answers, 1 and 2.]
+        #     {cell_id u32, ticket_id u32, status u32}   status 0 = ok, non-zero = the client
+        #     rejected what we sent (we saw 2 while echoing a bogus cell_id=0).
+        if chat_id == config.CHAT_STATUS_REPLY and len(body) >= 12:
+            cell_id, tkt, status = struct.unpack_from("<III", body, 0)
+            verdict = "OK" if status == 0 else f"REJECTED (status={status})"
+            log(f"  [CHAT] ← StatusReply from client: cell={cell_id} ticket={tkt} → {verdict}")
+            return
         log(f"  [CHAT] (no handler for chat id {chat_id}) — {len(body)}B body:")
         log(hex_dump(body))
 
@@ -188,6 +198,25 @@ def handle_join_channel(conn, fields, ticket):
     """JoinChatChannel(17) arrives lobby-magic; replies are chat-magic."""
     cell_id = fields.get("cell_id", fields.get("CellId", 1))
     option = fields.get("option", fields.get("Option", 0))
+    # ⚠️ EXPERIMENT 2026-07-27 — resolve cell_id 0 to a real advertised channel.
+    # The client sends RequestJoinChannel with cell_id=0 (twice, tickets 1 and 2) even though we
+    # advertised cells 1 and 2 via ChannelInfo, i.e. it is asking the SERVER to assign. We used to
+    # echo 0 straight back in ChannelJoined + StatusReply, confirming membership of a channel that
+    # does not exist — and the client answered each one with chat-magic id 11 =
+    # StatusReply{cell_id=0, ticket_id=N, status=2}, then never transmitted a single chat frame.
+    # (Layout PROVEN by matching the middle field against the join ticket_ids, 1 and 2.)
+    # status != 0 is read as a failure report; assigning the Nth advertised channel to the Nth join
+    # is the natural reading, since the request carries no name/password to discriminate on.
+    # FALSIFIABLE: if this is right the client should answer status=0 and chat should start
+    # flowing. If status stays 2, cell assignment is not the problem — revert and read the client's
+    # StatusReply handler instead.
+    if not cell_id:
+        seen = getattr(conn, "_chan_joins", 0)
+        conn._chan_joins = seen + 1
+        channels = config.DEFAULT_CHANNELS
+        cell_id = channels[seen][0] if seen < len(channels) else channels[-1][0]
+        log(f"  [CHAT] join asked for cell 0 → assigning advertised cell {cell_id} "
+            f"({channels[min(seen, len(channels) - 1)][1]!r})")
     conn.send_chat(channel_joined(cell_id, ticket, option))
     conn.send_chat(status_reply(cell_id, ticket, 0))
     p = players.of(conn)
