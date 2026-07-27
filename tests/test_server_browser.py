@@ -157,13 +157,19 @@ def test_referee_assign_unaffected():
         conn.id = 1
         dispatch._h_assign_server(conn, {"server_type": 4, "server_subtype": 4}, TICKET)
         types = [t for t, _ in conn.sent]
-        assert 170 in types and 192 in types
-        body = dict(conn.sent)[170]
-        assert not (body["server_type"] == 4 and body["server_subtype"] == 5), (
-            "referee descriptor is type4/sub5 — that routes into tincat3's private handler "
-            "and the lobby never latches LM+0x580"
-        )
-        assert body["server_type"] == 4 and body["server_subtype"] == 4
+        assert 192 in types
+
+        # BOTH 170s must go out, in this order — they hit different halves of the client and
+        # sending only one gives register-XOR-notify (we got stuck that way twice on 2026-07-27):
+        #   sub5 → tincat3's private handler → REGISTERS server_id → ip:port (else the connect
+        #          fails with COMM_LAYER_ERROR_CANNOT_CONNECT / OnLoginFailed @ LobbyManager.cpp:907)
+        #   sub4 → default branch → LobbyServerList_GameServerAssigned → latches LM+0x580
+        # ER: engagement_records/2026-07-27_referee-dual-170-register-and-notify.md
+        refs = [b for t, b in conn.sent if t == 170]
+        assert len(refs) == 2, f"expected 2 referee 170s (register + notify), got {len(refs)}"
+        assert [(b["server_type"], b["server_subtype"]) for b in refs] == [(4, 5), (4, 4)]
+        assert all(b["server_id"] == config.REF_SERVER_ID for b in refs)
+        assert all(b["port"] == config.REFEREE_PORT for b in refs)
     finally:
         config.REPLY_REFEREE_ASSIGN = saved
 
