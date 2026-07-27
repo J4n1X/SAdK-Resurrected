@@ -266,6 +266,7 @@ tools/              only what the Ghidra MCP + a debugger can't do: a passive wi
 docs/               protocol + RE reference (SOURCEMAP, LOBBY_PROTOCOL, …); addresses may be from an older build
 decomp/             Ghidra MCP link: setup runbook, bridge, rename list (offline dumps are gitignored)
 tests/              offline codec / smoke / browser / multi-client tests
+API.md              flow-level protocol overview: sequence diagrams per connection + headers/IDs
 CLAUDE.md           authoritative agent instructions
 HARNESS.md          binding rules of engagement (MCP-first RE/debug; no faking; honest status; no flags)
 MEMORY.md           compact persistent context: proven facts + open TODOs

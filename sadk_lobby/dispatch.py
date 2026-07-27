@@ -12,6 +12,7 @@ Multiple clients can be logged in as distinct players at once; hosted games live
 in a process-global registry (players.py / registry.py) so one client's game is
 visible to another.
 """
+import math
 import os
 import struct
 import threading
@@ -99,6 +100,44 @@ def on_conn_closed(conn):
             f"take the VILLAGE branch: re-sending WorldLoginAck(1006) on conn #{v.id} "
             f"→ ConnectionReal::Logout → transport state 9 → OnLoggedOut → SetState(VillageLeft=11)")
         village.send_world_login_ack(v, force=True)
+
+
+def _spawn_spot(perm_id):
+    """A deterministic, non-overlapping spot on a small ring around the world origin.
+
+    Avatars need SOME position, and we do not yet know where players actually are (the client's own
+    position reports are unreversed). Keying the spot on perm_id keeps it stable across time and
+    identical for every observer, so two clients agree on where each other stand.
+    World origin is (0,0,0); bounds are x/z ±150, y −10..30 (see village.WORLD_BOUNDS)."""
+    ang = (perm_id % 8) * (math.pi / 4.0)
+    r = config.AVATAR_SPAWN_SPREAD
+    return (math.cos(ang) * r, 0.0, math.sin(ang) * r)
+
+
+def _spawn_world_avatars(conn):
+    """Mutual avatar spawn on world entry: show this client everyone already in-world, and show
+    this client TO everyone already in-world.
+
+    ⚠️ UNPROVEN ON THE WIRE — the EntityCreate(1001) layout is static-only
+    (docs/IN_WORLD_PRESENCE.md). Unlike the referee subsystem, this one REPORTS parse failures, so
+    the client's LobbyComm.log is the place to look: "Can't peek AvatarID" or
+    "Could not read AvatarLocation from message." mean the body is wrong. Silence + no avatar means
+    the message was accepted but something downstream (observer / render) did not fire."""
+    me = _player(conn)
+    others = _find_live(lambda c: getattr(c, "is_village", False)
+                        and c is not conn
+                        and getattr(c, "_enter_world_sent", False)
+                        and _player(c).perm_id != me.perm_id)
+    if not others:
+        log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
+        return
+    for other in others:
+        op = _player(other)
+        village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+                                   label=f"[{op.char_name!r} shown to {me.char_name!r}]")
+        village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),
+                                   label=f"[{me.char_name!r} shown to {op.char_name!r}]")
+    log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
 
 def _push_to_obs(server_type, srv):
@@ -727,6 +766,9 @@ def _h_send_token(conn, fields, ticket):
         def _push_enter_world(c=conn):
             time.sleep(config.ENTER_WORLD_DELAY)
             village.send_enter_world(c)             # idempotent (_enter_world_sent latch)
+            # Now that this client is in the world, exchange avatars with everyone else who is.
+            time.sleep(config.AVATAR_SPAWN_DELAY)
+            _spawn_world_avatars(c)
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")

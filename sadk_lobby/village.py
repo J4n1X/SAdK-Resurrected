@@ -115,6 +115,113 @@ def world_tick_body():
     return bytes_field(b"\x00" * 64)
 
 
+# ── In-world presence: bit-packed LobbyMessage bodies (msgs 1001-1004) ────────────────────────
+# [SPEC PROVEN 2026-07-27 static — docs/IN_WORLD_PRESENCE.md]
+# The entity/avatar messages do NOT use the positional PropertySet layout the rest of village.py
+# sends. They are a BIT-PACKED stream with non-byte-aligned field widths.
+#
+# Bit order (FUN_0048f0d0): each byte is consumed MSB-first (bit 7 down), and the value is
+# assembled MSB-first, i.e. plain big-endian bit packing — the same convention that made the
+# referee's 32-bit PermID exactly 4 big-endian bytes.
+#
+# Field NAMES are only looked up when the LobbyMessage "names" flag is set (bit 15 of the type
+# word). We send names=0, so FUN_0048f5f0 skips the name entirely and reads N bits positionally —
+# which is why this writer only needs widths, in order.
+class BitWriter:
+    """MSB-first bit packer. `write(value, nbits)` appends the low nbits of value, MSB first."""
+
+    def __init__(self):
+        self._bits = []
+
+    def write(self, value, nbits):
+        value = int(value) & ((1 << nbits) - 1)
+        for i in range(nbits - 1, -1, -1):
+            self._bits.append((value >> i) & 1)
+        return self
+
+    def write_bool(self, flag):
+        return self.write(1 if flag else 0, 1)
+
+    def write_string(self, s):
+        """8-bit length + one 8-bit char each (FUN_0048ffc0). No NUL, no 32-bit prefix, and NOT
+        byte-aligned — it rides the same bit stream."""
+        raw = (s or "").encode("iso-8859-15", "replace")[:255]
+        self.write(len(raw), 8)
+        for ch in raw:
+            self.write(ch, 8)
+        return self
+
+    def bytes(self):
+        """Pad the final partial byte with zero bits (the reader stops at the field count)."""
+        out = bytearray()
+        for i in range(0, len(self._bits), 8):
+            chunk = self._bits[i:i + 8]
+            chunk = chunk + [0] * (8 - len(chunk))
+            byte = 0
+            for bit in chunk:
+                byte = (byte << 1) | bit
+            out.append(byte)
+        return bytes(out)
+
+    def __len__(self):
+        return len(self._bits)
+
+
+# World bounds + quantisation, read from the binary (FUN_0048f670 / 2026-07-27):
+#   x = posx/2048 * (BOUND_MAX_X - BOUND_MIN_X) + BOUND_MIN_X      etc.
+#   rot_degrees = rot7 * 360.0 / 128
+# so 11 bits span each axis and 7 bits span a full turn.
+WORLD_BOUNDS = {           # axis: (min, max)  — floats at 0x87b700..0x87b714
+    "x": (-150.0, 150.0),
+    "y": (-10.0, 30.0),
+    "z": (-150.0, 150.0),
+}
+POS_STEPS = 2048           # 1/2048 scale at 0x7debc8 (11 bits)
+ROT_STEPS = 128            # 360.0 (0x7debc0) * 1/128 (0x7debb8) → 7 bits
+
+
+def quantise_axis(value, axis):
+    lo, hi = WORLD_BOUNDS[axis]
+    frac = 0.0 if hi == lo else (float(value) - lo) / (hi - lo)
+    return max(0, min(POS_STEPS - 1, int(round(frac * POS_STEPS))))
+
+
+def quantise_rot(degrees):
+    return int(round((float(degrees) % 360.0) / 360.0 * ROT_STEPS)) % ROT_STEPS
+
+
+def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
+                       zone=0, ghost_zone=0, running=False, jumping=False):
+    """Body for EntityCreate (msg 1001) — the message that puts a visible AVATAR in the world.
+
+    `HandleEntityCreate@0x0046e1d0` reads `id` (32 bits), allocates an AvatarProxy (0xE0 bytes) into
+    the avatar container at VillageServerConnection+0x170 if unknown, then `FUN_00482c20` parses the
+    payload and the observer fan-out tells the world about it.
+
+    `FUN_00482c20` reads a 4-bit `dtblcks` MASK and then only the blocks it selects:
+        bit0 AvatarLocation · bit1 AvatarStyle · bit2 ActiveItems · bit3 Avatar Stats
+    We send **dtblcks=1** (location only) — the minimal viable avatar. Each block has its own error
+    string in LobbyAvatarProxy.cpp, so a malformed one is VISIBLE in the client's LobbyComm.log
+    ("Could not read AvatarLocation from message." etc.) rather than failing silently.
+
+    AvatarLocation for a REMOTE avatar (FUN_004824b0, the `this+0xc != GetCommSystem()` branch):
+        tick 16 · posx 11 · posy 11 · posz 11 · rot 7 · zone 4 · ghstzne 4 · rnng 1 · jmp 1
+    """
+    w = BitWriter()
+    w.write(avatar_id, 32)                     # "id"       — peeked by HandleEntityCreate
+    w.write(1, 4)                              # "dtblcks"  — AvatarLocation only
+    w.write(tick, 16)                          # "tick"
+    w.write(quantise_axis(pos[0], "x"), 11)    # "posx"
+    w.write(quantise_axis(pos[1], "y"), 11)    # "posy"
+    w.write(quantise_axis(pos[2], "z"), 11)    # "posz"
+    w.write(quantise_rot(rot_deg), 7)          # "rot"
+    w.write(zone, 4)                           # "zone"
+    w.write(ghost_zone, 4)                     # "ghstzne"
+    w.write_bool(running)                      # "rnng"
+    w.write_bool(jumping)                      # "jmp"
+    return w.bytes()
+
+
 def _send_village(conn, msg_type, body, magic, tag):
     payload = gamedata_frame(msg_type, body, magic=(magic or config.VILLAGE_PAYLOAD_MAGIC))
     conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))
@@ -182,6 +289,23 @@ def send_world_tick(conn, magic=None):
     if not conn.alive:
         return
     _send_village(conn, config.VILLAGE_MSG_WORLD_TICK, world_tick_body(), magic, "WorldTick(1005)")
+
+
+def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
+                       label=""):
+    """Spawn a visible avatar in the recipient's lobby world (msg 1001). See entity_create_body.
+
+    ⚠️ UNPROVEN ON THE WIRE — spec is static-only (docs/IN_WORLD_PRESENCE.md). Unlike the referee
+    subsystem this one REPORTS its parse failures, so check the client's LobbyComm.log for
+    'Can't peek AvatarID' / 'Could not read AvatarLocation from message.' before assuming silence
+    means success."""
+    if not conn.alive:
+        return
+    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick)
+    _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
+                  f"EntityCreate(1001) avatar id={avatar_id} {label}"
+                  f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
+                  f" — HandleEntityCreate → AvatarProxy into +0x170")
 
 
 def handle_frame(conn, payload):
