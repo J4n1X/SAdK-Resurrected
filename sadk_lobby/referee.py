@@ -58,11 +58,28 @@ def _u32(v):
 
 
 def referee_payload(msg_id, fields=b""):
-    """App-payload for a referee LobbyMessage: wrap [type word(u16) | fields] in a SendGameData(74)
-    envelope (Magic | 74 | 74 | msg_type(u32) | MEMBLOCK([type word | fields])). See module docstring."""
-    tw = type_word(msg_id)
-    lobbymsg = struct.pack("<H", tw & 0xFFFF) + fields
-    body = _u32(tw) + bytes_field(lobbymsg)
+    """App-payload for a referee LobbyMessage:
+        Magic | 74 | 74 | typeWord(u32) | MEMBLOCK(fields ONLY)
+
+    ⚠️ The MEMBLOCK carries the FIELDS ONLY — the type word must NOT be repeated inside it.
+    [PROVEN 2026-07-27] RefereeServerConnection_OnReceive is invoked as vtbl[0x24](channel,
+    &bitStream) by LobbyManager::DispatchInboundToConnection@0x00462760, and passes those straight
+    to LobbyMessage_InitFromWire@0x0048fa50(this, typeWord, byteBuffer):
+        *(this+0x20) = (typeWord >> 15) & 1     ; names flag
+        *(this+0x24) = (typeWord >> 12) & 7     ; category
+        *(this+0x28) = typeWord & 0xfff         ; ID  <- from the ARGUMENT, not the buffer
+        *(this+0x08) = *(byteBuffer+4)          ; field data ptr
+        *(this+0x0c) = *(byteBuffer+8)          ; field data length
+    i.e. the id comes from the u32 channel and the buffer is pure field data — exactly like the
+    village envelope (village.py builds u32(msg_type) + bytes_field(fields)).
+
+    The first implementation duplicated the type word as a u16 at the head of the MEMBLOCK. That
+    frame was ACCEPTED and silently ignored: OnLoginSuccess read PermID off the front of the buffer
+    and got 0x00013DCA (type word + low half of perm_id 1) instead of 1, so the guard at
+    0047ad09 mismatched and returned with no log. Measured live 2026-07-27 — both referee sockets
+    stayed open and nothing came back.
+    """
+    body = _u32(type_word(msg_id)) + bytes_field(fields)
     return app_payload(config.VILLAGE_SENDGAMEDATA, body)
 
 
@@ -103,25 +120,20 @@ def send_login_success(conn):
 
 # ── Receive (client → referee) ───────────────────────────────────────────────────
 def _inner_msg_id(payload):
-    """Best-effort extract the referee LobbyMessage id from an inbound app frame. The referee channel
-    rides SendGameData(74) (Magic|74|74|msg_type|MEMBLOCK([type word|fields])); we read the type word
-    from inside the MEMBLOCK. Returns (msg_id, game_id) or (None, None) if it isn't a referee frame
-    (e.g. a base-login NETMSG, which the lobby dispatch handles). [VERIFY LIVE] confirm this shape."""
-    if len(payload) < 6:
+    """Extract the referee LobbyMessage id from an inbound app frame. The referee channel rides
+    SendGameData(74): Magic|74|74|typeWord(u32)|MEMBLOCK(fields). The id lives in the typeWord u32,
+    NOT inside the MEMBLOCK — see referee_payload() for the binary proof. Returns (msg_id, game_id),
+    or (None, None) if it isn't a referee frame (e.g. a base-login NETMSG the lobby dispatch owns)."""
+    if len(payload) < 14:
         return None, None
     magic, t1, t2 = struct.unpack_from("<HHH", payload, 0)
     if magic != config.PAYLOAD_MAGIC or t1 != config.VILLAGE_SENDGAMEDATA or t2 != t1:
         return None, None                                   # not a 74 envelope → base-login/other
-    # 74 body: msg_type(u32) at off 6, then MEMBLOCK (u32 len + bytes) = [type word(u16) | fields]
-    if len(payload) < 14:
-        return None, None
+    tw = struct.unpack_from("<I", payload, 6)[0]             # typeWord = names<<15|cat<<12|id
+    msg_id = tw & 0xFFF
     blen = struct.unpack_from("<I", payload, 10)[0]
     inner = payload[14:14 + blen]
-    if len(inner) < 2:
-        return None, None
-    tw = struct.unpack_from("<H", inner, 0)[0]
-    msg_id = tw & 0xFFF
-    game_id = struct.unpack_from("<I", inner, 2)[0] if len(inner) >= 6 else 0
+    game_id = struct.unpack_from("<I", inner, 0)[0] if len(inner) >= 4 else 0
     return msg_id, game_id
 
 
