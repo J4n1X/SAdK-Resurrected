@@ -1,5 +1,21 @@
 # Engagement Record — route the referee assign into the LOBBY observer (subtype 5 → 4)
 
+> ## ⛔ REFUTED AND REVERTED 2026-07-27 (same day)
+>
+> The premise — that the lobby must be notified via the DEFAULT branch — is right, but the
+> conclusion (send 4/4) is wrong. `4/4` does latch `LM+0x580`, but **no connection is ever created**,
+> so the dial fails with `COMM_LAYER_ERROR_CANNOT_CONNECT`: a fresh `CommLayer::ConnectionReal`
+> initialises its address string EMPTY (`FUN_10037120(this+0x48, "")`).
+>
+> The tincat3 decompile shows `4/5` is the protocol-correct descriptor. Its branch
+> (`FUN_10029a20`) is the ONLY path that applies the address (`serverDesc+0x10` → `FUN_100191e0`),
+> keys the connection by `serverId` at `+0x1c`, and dials it — precisely the object
+> `InitRefereeServerConnection` then looks up (whitelisting `0xcd` = "already exists").
+> On success it returns **silently**, so the latch of `LM+0x580` must come from the referee
+> connection COMPLETING ITS LOGIN, which ours never does.
+>
+> Reverted to `4/5`. See `2026-07-27_referee-via-server-list.md` for the full proven chain.
+
 - **Date:** 2026-07-27
 - **Type:** Stub wire-change (one descriptor field; **no flag**, HARNESS §5)
 - **Approved by:** user (in-session, explicit: "get that ER going and then you can do the changes")

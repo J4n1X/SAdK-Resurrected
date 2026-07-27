@@ -1,5 +1,18 @@
 # Engagement Record — advertise the referee on the SERVER LIST; assign stays a single sub4 frame
 
+> ## ⛔ REFUTED AND REVERTED 2026-07-27 (same day)
+>
+> The referee is **not** learned from the server list. `pConnectionManager->vtbl[0x38]/[0x18]` both
+> funnel into `FUN_10019570@tincat3`, which walks **live connections** matching `entry+0x1c ==
+> serverId` — a list entry creates no connection, so listing the referee cannot help. The address
+> travels in the **assign reply** (`serverDesc+0x10` → `FUN_100191e0` inside `FUN_10029a20`).
+> The list advertisement has been removed and the descriptor restored to `4/5`.
+>
+> Also refuted here: the "send both frames" idea. `GameServerManager_AssignServer@0x10021830`
+> allocates a ticket of kind **0x108**; the reply is matched to that ticket and only `0x108` reaches
+> `OnGameServerAssigned`. A ticket is consumed ONCE, so a second frame is silently demoted to a list
+> update (measured: an unmatched reply carries `0xAB` = 171).
+
 - **Date:** 2026-07-27
 - **Type:** Stub wire-change (revert the sub5 twin; add the referee to the type-4 list; **no flag**)
 - **Approved by:** user (in-session: *"we should ensure that the referee is fetched and assigned from
