@@ -85,8 +85,10 @@ def on_conn_closed(conn):
             _live.remove(conn)
         except ValueError:
             pass
+    _gchat_drop(conn)                             # global-chat subscribers must not leak
     if not getattr(conn, "is_chat", False):
         return                                    # only a UC/chat close can complete a leave
+    chat.on_conn_closed(conn)                     # drop from channel rosters + notify members
     me = players.of(conn)
     waiting = _find_live(lambda c: getattr(c, "is_village", False)
                          and getattr(c, "_leave_phase", 0) == 1
@@ -323,7 +325,7 @@ def _h_cdkeys(conn, fields, ticket):
 
 
 # ── Social / observers (ack-only) ─────────────────────────────────────────────
-@handler(56, 98, 99, 107, 108, 115, 116, 175, 176, 172, 146, 190)
+@handler(56, 98, 99, 115, 116, 175, 176, 172, 146, 190)
 def _h_ack(conn, fields, ticket):
     conn.ok(ticket)
 
@@ -805,11 +807,64 @@ def _h_join_channel(conn, fields, ticket):
     chat.handle_join_channel(conn, fields, ticket)
 
 
-@handler(2)  # ChatMessage
+# ── Global chat ───────────────────────────────────────────────────────────────
+# The client subscribes to the global-chat feed with 107 RegObserverGlobalChat and drops it with
+# 108. Until 2026-07-27 both were bare-acked and `2 ChatMessage` was answered by echoing a
+# "[Server] …" line back to the sender alone — so global chat looked alive to whoever was typing
+# and reached nobody. Layouts are straight from msgdefs.ini (authoritative):
+#     107 / 108  RegObserver / DeregObserverGlobalChat : ticket_id
+#     2   ChatMessage (client → server) : mode, txt(256), ticket_id, from_id
+#     165 Chat        (server → client) : txt(256), from_id
+# NOTE the client only sends 107 once the player actually opens the global-chat tab, so an empty
+# subscriber list is normal, not a bug — hence the echo-to-speaker fallback below.
+_gchat_lock = threading.Lock()
+_gchat: list = []
+
+
+@handler(107)  # RegObserverGlobalChat
+def _h_reg_global_chat(conn, fields, ticket):
+    with _gchat_lock:
+        if conn not in _gchat:
+            _gchat.append(conn)
+        n = len(_gchat)
+    log(f"  RegObserverGlobalChat — conn #{conn.id} subscribed ({n} listener(s))")
+    conn.ok(ticket)
+
+
+@handler(108)  # DeregObserverGlobalChat
+def _h_dereg_global_chat(conn, fields, ticket):
+    _gchat_drop(conn)
+    log(f"  DeregObserverGlobalChat — conn #{conn.id} unsubscribed")
+    conn.ok(ticket)
+
+
+def _gchat_drop(conn):
+    with _gchat_lock:
+        try:
+            _gchat.remove(conn)
+        except ValueError:
+            pass
+
+
+@handler(2)  # ChatMessage → relay to every global-chat subscriber as 165 Chat
 def _h_chat_message(conn, fields, ticket):
-    txt = fields.get("txt", "") or ""
-    log(f"  CHAT: {txt!r}")
-    conn.send_app(165, codec.encode_body(165, {"txt": f"[Server] {txt}", "from_id": 0}))
+    txt = (fields.get("txt") or "").strip()
+    if not txt:
+        return
+    speaker = _player(conn)
+    with _gchat_lock:
+        targets = [c for c in _gchat if getattr(c, "alive", False)]
+    if not targets:
+        targets = [conn]        # nobody has opened the global tab — at least show the speaker
+    body = codec.encode_body(165, {"txt": txt, "from_id": speaker.perm_id})
+    sent = 0
+    for c in targets:
+        try:
+            c.send_app(165, body)
+            sent += 1
+        except Exception:  # noqa: BLE001
+            pass
+    log(f"  CHAT <{speaker.char_name}> {txt!r} → relayed to {sent} listener(s)")
 
 
 # ── Quiet routing: keep routine 'default-implementation' chatter out of the main log ──────────────
