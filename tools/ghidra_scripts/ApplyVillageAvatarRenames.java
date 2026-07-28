@@ -45,10 +45,9 @@ public class ApplyVillageAvatarRenames extends GhidraScript {
         rename("0x00464300", "NotifyQueue_FireAndClear");
         rename("0x004780c0", "LobbyManager_RegisterAvatar");
 
-        // NOTE: the corresponding set_function_this_type("VillageServerConnection *") step for
-        // the 8 Handle* functions above is intentionally NOT replayed here -- it's a namespace
-        // move + auto-this-typing best done interactively (Window > Data Type Manager, or via
-        // the MCP tool) if you want it; the plain rename above is the load-bearing part.
+        // NOTE: the corresponding VillageServerConnection this-typing for the 8 Handle* functions
+        // above is a separate follow-up script -- see ApplyVillageServerConnectionThisTypes.java
+        // in this same directory (run either before or after this one, either order is fine).
 
         comment("0x0046f510",
             "Village msg 0xD8. Gated on LobbyManagerState==VillageEntered. Looks up a compound key (via FUN_004712e0) in the container at VillageServerConnection+0x178; on a match fires NotifyQueue_FireAndClear(this+0x74) then erases the entry via FUN_00462b90. [HYPOTHESIS] Shape (lookup+notify+erase) fits a \"member left\" event for whatever social construct lives at +0x178 (party/group -- unconfirmed which). Siblings: 0xD9 (join, assigns a NComm net id), 0xDA (create-or-get, no notify).");
