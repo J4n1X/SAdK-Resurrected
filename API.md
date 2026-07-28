@@ -517,11 +517,20 @@ messages below.
 | msg_type | Direction | Name |
 |---|---|---|
 | `1000` (`0x3E8`) | server → client | `EnterWorld` — **the** world-entry trigger |
+| `1001` (`0x3E9`) | server → client | `EntityCreate` — create-or-update another player's `AvatarProxy` **[TODO, spec only]** |
+| `1002` (`0x3EA`) | server → client | `EntityUpdate` — reserve a bare `AvatarProxy` id only; not a content update **[TODO, spec only]** |
+| `1003` (`0x3EB`) | server → client | `EntityRemove` — remove an `AvatarProxy` by id **[TODO, spec only]** |
+| `1004` (`0x3EC`) | server → client | `PlayerCreate` — spawn an NPC-shaped avatar [HYPOTHESIS: NPCs, not players — see below] **[TODO, spec only]** |
 | `1005` (`0x3ED`) | server → client | `WorldTick` — sim heartbeat, 64-byte MEMBLOCK |
 | `1006` (`0x3EE`) | server → client | `WorldLoginAck` `code=0xDEADBEEF` — the **logout** trigger |
 | `0xED7` (3799) | server → client | `PongCode` — echoes the ping token |
 | `0x27D2` (2002) | client → server | **LeaveVillage** request, `code=0xAFFEDEAD` |
 | `0x2ED6` (11990) | client → server | in-world `PingCode` keepalive |
+| `0xC1C`/`0xC1D`/`0xC1E` | server → client | avatar ActiveItems / Inventory / both, re-sync by `ownr` id **[TODO, spec only]** |
+| `0xC80`/`0xC81` | server → client | avatar level+exp / full stats, re-sync by `ownr` id **[TODO, spec only]** |
+| `0xE11`/`0xE1B`/`0xE25` | server → client | shop inventory data / two shop-action result acks **[TODO, spec only, secondary]** |
+| `0xF46`/`0xF5A` | both | trade request / trade offer detail (gold + 6 items per side) **[TODO, spec only, secondary]** |
+| `0xD8`/`0xD9`/`0xDA`/`0xDB`/`0xDC`/`0x12F` | server → client | party/relationship-shaped lifecycle family [HYPOTHESIS, low confidence — see `docs/SOURCEMAP.md` §5a] |
 
 `EnterWorld (1000)` body, ground-truthed from `HandleEnterWorld`:
 
@@ -537,6 +546,13 @@ MEMBLOCK 0x20   ChatChannelID
 `ChatChannelsCount` is a 32-byte MEMBLOCK, **not** a bare `u32` — reading it as a `u32` puts the
 channel loop out of phase. `SetState(9)` happens *before* the body is parsed, so even a minimal
 body enters the world.
+
+⚠️ **All of 1001-1004 and the 0xC1x/0xC8x family are a NAMED, BIT-PACKED stream** (`SelectField(name)`
++ `ReadBits(n)`, non-byte-aligned field widths, `names=1` i.e. bit 15 of the type word set) —
+structurally different from every message the stub currently sends (positional, `names=0`). A new
+writer is needed before any of these can go on the wire. Full field-level layout, the corrected
+"AvatarProxy = other players, PlayerCreate = NPCs" model, and a suggested implementation order:
+`docs/IN_WORLD_PRESENCE.md`.
 
 ### Referee messages (category 3)
 
@@ -578,8 +594,9 @@ STRING password, u8 protected, u8 persistent, u8 autodelete, u8 hidden, u32 crea
 
 | Area | State |
 |---|---|
-| Chat **text** | Channels, roster and join/leave work and are confirmed in the client's own `LobbyComm.log`. Typing produces **zero** wire traffic *and* no local echo, so the client's submit handler never runs — **not a server gap**. **[TODO]** |
-| In-world content | NPCs, entities and populated in-world browsers are not implemented. The world renders empty. |
+| Chat **text** | Channels, roster and join/leave work and are confirmed in the client's own `LobbyComm.log`. Typing produces **zero** wire traffic *and* no local echo, so the client's submit handler never runs — **not a server gap** in the sense of a missing ack, but the root cause is unconfirmed. **[HYPOTHESIS, 2026-07-28]** may share a root cause with in-world content below: the chat UI (`nUi::ChatSystem`) might gate input on the local player having a real `AvatarProxy`/entity in the world, which nothing currently sends. Untested — see `docs/IN_WORLD_PRESENCE.md` "Does this also explain the dead chat input?". **[TODO]** |
+| In-world content | NPCs, entities and populated in-world browsers are not implemented — the world renders empty. **Full protocol spec derived 2026-07-28** (EntityCreate/Update/Remove carrying an `AvatarProxy` player-profile payload, distinct from PlayerCreate's NPC-shaped payload) but **nothing has been sent to a live client yet**. `docs/IN_WORLD_PRESENCE.md`. **[TODO]** |
+| In-world shop / trade | Shop inventory + buy/sell result acks (`0xE11`/`0xE1B`/`0xE25`) and player-to-player trade (`0xF46`/`0xF5A`) are spec'd but unimplemented; secondary to player visibility. **[TODO]** |
 | In-match referee msgs | `0xDD4 GiveUpGame` / `0xDC0 FinishGame` / `0xDAC ClaimChest` are logged, not acked. **[TODO]** |
 | Room / slot / tribe / team | Rides the direct NComm host↔joiner session; only partially reversed (`docs/NCOMM_GAME_PROTOCOL.md`). |
 | Ranking / TAN | `ServerList::RequestTANConnectionResultReceived` and the ranking half of the referee API are unexplored. |
@@ -588,6 +605,8 @@ STRING password, u8 protected, u8 persistent, u8 autodelete, u8 hidden, u32 crea
 ## See also
 
 * `docs/LOBBY_PROTOCOL.md` — per-message prose reference, msgdefs-grounded
+* `docs/IN_WORLD_PRESENCE.md` — the entity/avatar/player presence protocol in depth (the "other
+  players visible" spec) plus the in-world chat-gating hypothesis
 * `docs/SOURCEMAP.md` — named functions, structs, vtable slots
 * `docs/MATCH_START.md`, `docs/MATCH_WORLD_LOGIN.md` — the referee chain in depth
 * `docs/NCOMM_GAME_PROTOCOL.md` — the in-match P2P session
