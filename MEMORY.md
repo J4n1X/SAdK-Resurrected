@@ -120,8 +120,25 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   statically.** `LeaveButton`(`SetupGameDialog this[0x2de]`) is a player ABORT, not the start. ~17 funcs
   renamed + plate-commented in Ghidra (`decomp/RENAME_LIST.md`). **Next: live test — does EManagerState ever
   leave 2 at all-ready?** (trace `0x40b410`+`0x433f60`, read `0x408430`).
-- **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
-  shows `<UNNAMED>`). Not implemented.
+- **In-world content `[TODO]` — full protocol spec derived 2026-07-28 (static, `sadk_noav.exe`),
+  nothing sent to a live client yet.** The rendered world is empty (no NPCs/entities; avatar shows
+  `<UNNAMED>`). `VillageServerConnection::HandleMessage` was surveyed end-to-end: **corrected model**
+  — `EntityCreate/Update/Remove (1001-1003)` carry an `AvatarProxy` player-profile payload
+  (name/tribe/colours/level/exp/gold/items) and are almost certainly **the "other players visible"
+  path**; `PlayerCreate (1004)`, despite its name, reads an NPC-shaped payload (`npcdesc`/`npctyp`/
+  `actChat`) and is `[HYPOTHESIS]` **NPCs, not players** — refutes the prior 2026-07-27 draft's "one
+  implementation covers both." All of it is a **named, bit-packed** LobbyMessage stream (`names=1`,
+  non-byte-aligned field widths) needing a new writer — the existing positional encoder can't send
+  it. Secondary subsystems also mapped on the same connection: avatar item/stat re-sync
+  (`0xC1C-0xC81`), NPC shop (`0xE11/0xE1B/0xE25`), player-to-player trade (`0xF46/0xF5A`), and a
+  low-confidence party/relationship-shaped family (`0xD8-0xDC`/`0x12F`, `[HYPOTHESIS]`, not renamed).
+  **[HYPOTHESIS]** the dead in-world chat-text-entry gap (`API.md` known gaps) may share this root
+  cause — one candidate world-screen controller is wired directly to the village connection; untested
+  whether chat input requires the local player's own `AvatarProxy` to exist first. Full writeup:
+  `docs/IN_WORLD_PRESENCE.md`; address table + confidence ratings: `docs/SOURCEMAP.md` §5a. Ghidra
+  renames applied to the **headless working copy only** — `checkin_program` failed ("file requires
+  merge, not supported in headless mode"); a GUI session must sync + re-checkin before they're on the
+  shared repo.
 
 ### RE-quality / tooling TODOs (per `HARNESS.md §6` / `decomp/RE_PRACTICES.md`)
 
