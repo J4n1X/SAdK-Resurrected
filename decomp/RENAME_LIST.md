@@ -1107,11 +1107,19 @@ that gap is real, not a mistake on this session's part. **Do not** work around i
 script against the project files (`HARNESS.md §1/§3` — project/version-control operations belong in
 the MCP, and this one is simply missing from the deployed backend build).
 
+**⚠️ Your GUI checkout and the headless MCP's checkout are two INDEPENDENT local copies** of the
+same shared repo (yours on your Windows machine, the headless one in
+`~/ghidra-mcp-projects/sadk-shared.gpr` on the Linux box). Doing **Update** in the GUI syncs *your*
+copy to the server's current HEAD — which never received these renames in the first place (the
+headless checkin never succeeded), so an Update/merge in the GUI has nothing to do with landing
+them; don't expect it to surface `HandleAvatarLevelExpUpdate` etc. automatically. Confirmed
+2026-07-28: after a GUI Update+merge, `0x0046c940` was still `FUN_0046c940`.
+
 **Two ways to land this:**
-1. **GUI session** (needs the SSH tunnel to `192.168.1.130:13100` working, or working directly on
-   the LAN) — open the shared repo project, get the file to the latest version normally
-   (checkout/merge/checkin has no headless restriction in the GUI), then either re-verify these
-   renames are already reflected or reapply the table below.
+1. **Run `tools/ghidra_scripts/ApplyVillageAvatarRenames.java` from your GUI session's Script
+   Manager** against your own checked-out `sadk_noav.exe`, then `File > Check In...` normally — no
+   headless merge restriction applies to a GUI checkin. This is the fast path and does the full
+   table below in one pass (idempotent, safe to re-run).
 2. **Extend the headless backend** with an `undo_checkout`/`update_checkout` endpoint — same shape
    as the existing `checkin_program` patch (`docs/HEADLESS_SETUP.md` §6: patch
    `HeadlessProgramProvider.java`, rebuild `~/ghidra-mcp` with `mvn -Pheadless`). This is a
