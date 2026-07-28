@@ -1094,41 +1094,27 @@ differ only by **CRLF vs LF** (`diff --strip-trailing-cr` → 0 lines): the file
 carry CRLF, the ones still from the git checkout carry LF. Deployed content is identical to master.
 Hash-compare across a Windows→Linux deploy is not a valid equality test — strip CR first.
 
-## 2026-07-28 — village/avatar protocol survey (`sadk_noav.exe`) — REAPPLY CHECKLIST, not yet on the shared repo
+## 2026-07-28 — village/avatar protocol survey (`sadk_noav.exe`) — landed via GUI script replay
 
-**Status: stuck in the headless working copy only.** Applied live to the `sadk-shared` project's
-`sadk_noav.exe` this session, but `checkin_program` failed — `"Checkin failed, file requires merge
-which is not supported in headless mode"` — meaning the server has a newer version than this
-project's checkout. Confirmed this isn't a stale-handle artifact: `close_program` +
-`load_program_from_project` reopen the **same** local checkout (renames still present, not reset to
-`FUN_`), and the checkin fails identically afterward. There is no `undo_checkout` /
-`update_checkout` tool in the current headless MCP backend to force a fresh checkout from here —
-that gap is real, not a mistake on this session's part. **Do not** work around it with a standalone
-script against the project files (`HARNESS.md §1/§3` — project/version-control operations belong in
-the MCP, and this one is simply missing from the deployed backend build).
+**Status: DONE.** The headless MCP's own `checkin_program` got stuck (`"Checkin failed, file
+requires merge which is not supported in headless mode"` — the headless backend's checkout of
+`~/ghidra-mcp-projects/sadk-shared.gpr` was behind the server's HEAD, and there is no
+`undo_checkout`/`update_checkout` tool in the deployed headless backend to force a fresh one; that
+gap is real, not fixable from a script per `HARNESS.md §1/§3` — project/version-control ops belong
+in the MCP). Landed instead via the **GUI path**: `tools/ghidra_scripts/ApplyVillageAvatarRenames.java`
+run from the user's own GUI Script Manager (a separate, independent local checkout from the
+headless one — a GUI **Update** does NOT pull in headless-only uncommitted changes, they're
+different local copies of the same repo; confirmed live when an Update+merge left `0x0046c940`
+still `FUN_0046c940` right up until the script ran), then a normal `File > Check In...` — no
+headless merge restriction applies there. All 21 renames + 8 plate comments below are checked in.
 
-**⚠️ Your GUI checkout and the headless MCP's checkout are two INDEPENDENT local copies** of the
-same shared repo (yours on your Windows machine, the headless one in
-`~/ghidra-mcp-projects/sadk-shared.gpr` on the Linux box). Doing **Update** in the GUI syncs *your*
-copy to the server's current HEAD — which never received these renames in the first place (the
-headless checkin never succeeded), so an Update/merge in the GUI has nothing to do with landing
-them; don't expect it to surface `HandleAvatarLevelExpUpdate` etc. automatically. Confirmed
-2026-07-28: after a GUI Update+merge, `0x0046c940` was still `FUN_0046c940`.
+**Follow-up, same path:** `tools/ghidra_scripts/ApplyVillageServerConnectionThisTypes.java` applies
+the `VillageServerConnection` this-typing for the 8 `Handle*` functions, following the documented
+"Class hygiene" procedure in `decomp/RE_PRACTICES.md` (locates the **existing** RTTI-proven
+`LobbyComm::VillageServerConnection` class rather than creating a duplicate bare-`Global` one — the
+exact trap that procedure exists to prevent, and which this project already hit once before).
 
-**Two ways to land this:**
-1. **Run `tools/ghidra_scripts/ApplyVillageAvatarRenames.java` from your GUI session's Script
-   Manager** against your own checked-out `sadk_noav.exe`, then `File > Check In...` normally — no
-   headless merge restriction applies to a GUI checkin. This is the fast path and does the full
-   table below in one pass (idempotent, safe to re-run).
-2. **Extend the headless backend** with an `undo_checkout`/`update_checkout` endpoint — same shape
-   as the existing `checkin_program` patch (`docs/HEADLESS_SETUP.md` §6: patch
-   `HeadlessProgramProvider.java`, rebuild `~/ghidra-mcp` with `mvn -Pheadless`). This is a
-   legitimate MCP capability gap (project version control, not RE/debugging circumvention), but it's
-   a build/ops change to the user's local backend clone — needs the user's go-ahead before touching it.
-
-Full rationale/evidence for every name below: `docs/SOURCEMAP.md` §5a, `docs/IN_WORLD_PRESENCE.md`
-(both **are** on the shared git repo — nothing about the underlying RE was lost, only the Ghidra
-project's symbol names/comments).
+Full rationale/evidence for every name below: `docs/SOURCEMAP.md` §5a, `docs/IN_WORLD_PRESENCE.md`.
 
 ### Step 1 — `set_function_this_type(addr, "VillageServerConnection *")`, 8 calls (do these FIRST —
 they move the function into the class namespace so the rename in step 2 doesn't need the `Class_`
