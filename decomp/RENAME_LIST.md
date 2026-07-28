@@ -1093,3 +1093,96 @@ I flagged `players/referee/registry/server.py` as differing between local and mi
 differ only by **CRLF vs LF** (`diff --strip-trailing-cr` → 0 lines): the files I scp'd from Windows
 carry CRLF, the ones still from the git checkout carry LF. Deployed content is identical to master.
 Hash-compare across a Windows→Linux deploy is not a valid equality test — strip CR first.
+
+## 2026-07-28 — village/avatar protocol survey (`sadk_noav.exe`) — REAPPLY CHECKLIST, not yet on the shared repo
+
+**Status: stuck in the headless working copy only.** Applied live to the `sadk-shared` project's
+`sadk_noav.exe` this session, but `checkin_program` failed — `"Checkin failed, file requires merge
+which is not supported in headless mode"` — meaning the server has a newer version than this
+project's checkout. Confirmed this isn't a stale-handle artifact: `close_program` +
+`load_program_from_project` reopen the **same** local checkout (renames still present, not reset to
+`FUN_`), and the checkin fails identically afterward. There is no `undo_checkout` /
+`update_checkout` tool in the current headless MCP backend to force a fresh checkout from here —
+that gap is real, not a mistake on this session's part. **Do not** work around it with a standalone
+script against the project files (`HARNESS.md §1/§3` — project/version-control operations belong in
+the MCP, and this one is simply missing from the deployed backend build).
+
+**Two ways to land this:**
+1. **GUI session** (needs the SSH tunnel to `192.168.1.130:13100` working, or working directly on
+   the LAN) — open the shared repo project, get the file to the latest version normally
+   (checkout/merge/checkin has no headless restriction in the GUI), then either re-verify these
+   renames are already reflected or reapply the table below.
+2. **Extend the headless backend** with an `undo_checkout`/`update_checkout` endpoint — same shape
+   as the existing `checkin_program` patch (`docs/HEADLESS_SETUP.md` §6: patch
+   `HeadlessProgramProvider.java`, rebuild `~/ghidra-mcp` with `mvn -Pheadless`). This is a
+   legitimate MCP capability gap (project version control, not RE/debugging circumvention), but it's
+   a build/ops change to the user's local backend clone — needs the user's go-ahead before touching it.
+
+Full rationale/evidence for every name below: `docs/SOURCEMAP.md` §5a, `docs/IN_WORLD_PRESENCE.md`
+(both **are** on the shared git repo — nothing about the underlying RE was lost, only the Ghidra
+project's symbol names/comments).
+
+### Step 1 — `set_function_this_type(addr, "VillageServerConnection *")`, 8 calls (do these FIRST —
+they move the function into the class namespace so the rename in step 2 doesn't need the `Class_`
+prefix)
+
+`0x0046c940 · 0x0046c9c0 · 0x0046e660 · 0x0046e6f0 · 0x0046e780 · 0x004706b0 · 0x0046d920 · 0x0046cd10`
+
+### Step 2 — `rename_function_by_address`, 21 calls
+
+| Address | New name | Confidence |
+|---|---|---|
+| `0x0046c940` | `HandleAvatarLevelExpUpdate` | H |
+| `0x0046c9c0` | `HandleAvatarStatsUpdate` | H |
+| `0x0046e660` | `HandleAvatarActiveItemsUpdate` | H |
+| `0x0046e6f0` | `HandleAvatarInventoryUpdate` | H |
+| `0x0046e780` | `HandleAvatarItemsFullSync` | H |
+| `0x004706b0` | `HandleShopInventoryData` | H |
+| `0x0046d920` | `HandleTradeRequest` | H |
+| `0x0046cd10` | `HandleTradeOffer` | H |
+| `0x00482c20` | `AvatarProxy_ReadDataBlocks` | H |
+| `0x0048f530` | `LobbyMessage_FinishRead` | M |
+| `0x004824b0` | `AvatarProxy_ReadLocationBlock` | H |
+| `0x004825f0` | `AvatarProxy_ReadStyleBlock` | H |
+| `0x0048abe0` | `AvatarProxy_ReadActiveItemsBlock` | H |
+| `0x0048ab40` | `AvatarProxy_ReadItemSlot` | H |
+| `0x00481da0` | `AvatarProxy_ReadStatsBlock` | H |
+| `0x00481d50` | `AvatarProxy_ReadLevelExpBlock` | H |
+| `0x0048ac20` | `AvatarProxy_ReadInventoryBlock` | H |
+| `0x00481d30` | `AvatarProxy_ReadActiveItemsShim` | H (thin forwarder to `0x0048abe0`) |
+| `0x00481d40` | `AvatarProxy_ReadInventoryShim` | H (thin forwarder to `0x0048ac20`) |
+| `0x00464300` | `NotifyQueue_FireAndClear` | M (generic: iterate a per-object callback list, fire each, clear+free it) |
+| `0x004780c0` | `LobbyManager_RegisterAvatar` | M |
+
+The project's naming validator rejects a few obvious short names on token-subset/vague-verb grounds
+(hit live this session) — that's why `0x0046e780` isn't `HandleAvatarItemsUpdate` and `0x004706b0`
+isn't `HandleShopData`; the table above already has the accepted names.
+
+### Step 3 — `set_plate_comment`, 8 calls (verbatim text, mechanics confirmed / exact game-feature
+label left as `[HYPOTHESIS]` — do not rename these 8 functions off a guess)
+
+**`0x0046f510`** (village msg `0xD8`):
+> Village msg 0xD8. Gated on LobbyManagerState==VillageEntered. Looks up a compound key (via FUN_004712e0) in the container at VillageServerConnection+0x178; on a match fires NotifyQueue_FireAndClear(this+0x74) then erases the entry via FUN_00462b90. [HYPOTHESIS] Shape (lookup+notify+erase) fits a "member left" event for whatever social construct lives at +0x178 (party/group -- unconfirmed which). Siblings: 0xD9 (join, assigns a NComm net id), 0xDA (create-or-get, no notify).
+
+**`0x0046f380`** (village msg `0xD9`):
+> Village msg 0xD9. Gated on VillageEntered. Calls NComm_TinCatNetwork_GetLocalNetId, looks up the same +0x178 container as 0xD8/0xDA; on match assigns a NComm net id to the entry (FUN_00471640/FUN_00471650) and fires NotifyQueue_FireAndClear TWICE (this+0x68 then this+0x80, the second gated on a further per-entry vtbl[0xc] field-read succeeding). [HYPOTHESIS] Shape fits a "member joined / accepted, network-addressable" event.
+
+**`0x0046eb70`** (village msg `0xDA`):
+> Village msg 0xDA. NOT state-gated (unlike 0xD8/0xD9). Looks up the +0x178 container by compound key; if absent, CREATES a new entry (FUN_00471300) and inserts it (FUN_00686550) -- get-or-create semantics, no NotifyQueue fan-out. [HYPOTHESIS] Fits a "request/invite" event that seeds the entry 0xD9 later upgrades and 0xD8 later removes.
+
+**`0x0046f4d0`** (village msg `0xDB`):
+> Village msg 0xDB. Zero-payload: flushes the stream (LobbyMessage_FinishRead) then fires the observer set at this+0x8c via FUN_004760c0. No fields read at all. [TODO] exact event unknown; bare-notify shape (compare 0xDC at this+0x98).
+
+**`0x0046f4f0`** (village msg `0xDC`):
+> Village msg 0xDC. Zero-payload: flushes the stream then fires the observer set at this+0x98 via FUN_004760c0. Same shape as 0xDB (this+0x8c). [TODO] exact event unknown.
+
+**`0x0046d380`** (village msg `0x12F`):
+> Village msg 0x12F. Reads "msgprt" (16-bit) + "rnid" (8-bit), looks up the +0x178 container by compound key; on match, drills through a nested sub-object (found_entry+0x10) to fetch a handler pointer via two chained vtable calls and, if non-null, forwards the raw message to it (FUN_00489410). [TODO/HYPOTHESIS] Looks like a generic "route this message to the entry's own sub-handler" envelope (e.g. per-party-member private message?) rather than a message with its own fixed payload.
+
+**`0x00470990`** (village msg `0xE1B`):
+> Village msg 0xE1B. Reads ShopID(32b) + Result(1-bit, via vtbl+0x28) then calls FUN_0045f620(this+0x134, shopId, result). Sibling of 0xE25 (same shape, this+0x140). [TODO] Which shop action (buy/sell/enter/exit) this acks vs 0xE25 is unconfirmed -- not renamed to avoid asserting a guess.
+
+**`0x00470a10`** (village msg `0xE25`):
+> Village msg 0xE25. Reads ShopID(32b) + Result(1-bit, via vtbl+0x28) then calls FUN_0045f620(this+0x140, shopId, result). Sibling of 0xE1B (same shape, this+0x134). [TODO] Which shop action this acks vs 0xE1B is unconfirmed.
+
+### Step 4 — `checkin_program(program="sadk_noav.exe", comment="...")` once all of the above is applied.
