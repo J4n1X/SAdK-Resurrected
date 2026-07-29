@@ -120,11 +120,62 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   statically.** `LeaveButton`(`SetupGameDialog this[0x2de]`) is a player ABORT, not the start. ~17 funcs
   renamed + plate-commented in Ghidra (`decomp/RENAME_LIST.md`). **Next: live test — does EManagerState ever
   leave 2 at all-ready?** (trace `0x40b410`+`0x433f60`, read `0x408430`).
-- **In-world content `[TODO]`.** The rendered world is empty (no NPCs/entities; avatar
-  shows `<UNNAMED>`). Not implemented.
+- **In-world content `[TODO]` — full protocol spec derived 2026-07-28 (static, `sadk_noav.exe`);
+  avatar spawn/despawn IMPLEMENTED + deployed 2026-07-27, but NEVER SEEN WORKING LIVE.**
+  `EntityCreate(1001)` with `dtblcks=1` and `EntityRemove(1003)` are driven off the player registry
+  on world entry/exit (`village.entity_create_body`, `dispatch._spawn_world_avatars`, pinned by
+  `tests/test_world_presence.py`); everything else below is spec only. The rendered world is
+  (last observed) empty — no NPCs/entities; avatar shows
+  `<UNNAMED>`. `VillageServerConnection::HandleMessage` was surveyed end-to-end: **corrected model**
+  — `EntityCreate/Update/Remove (1001-1003)` carry an `AvatarProxy` player-profile payload
+  (name/tribe/colours/level/exp/gold/items) and are almost certainly **the "other players visible"
+  path**; `PlayerCreate (1004)`, despite its name, reads an NPC-shaped payload (`npcdesc`/`npctyp`/
+  `actChat`) and is `[HYPOTHESIS]` **NPCs, not players** — refutes the prior 2026-07-27 draft's "one
+  implementation covers both." All of it is a **bit-packed, MSB-first** LobbyMessage stream
+  (non-byte-aligned field widths) sent via `village.BitWriter`. ⚠️ **OPEN CONTRADICTION** on the
+  `names` flag (bit 15 of the type word): the deployed `EntityCreate` sends `names=0` (name lookup is
+  conditional on the flag ⇒ positional reads), the 2026-07-28 survey asserts `names=1`. The `names=1`
+  claim traces to a pre-correction draft, not an independent derivation — the first live test settles
+  it for free. Secondary subsystems also mapped on the same connection: avatar item/stat re-sync
+  (`0xC1C-0xC81`), NPC shop (`0xE11/0xE1B/0xE25`), player-to-player trade (`0xF46/0xF5A`), and a
+  low-confidence party/relationship-shaped family (`0xD8-0xDC`/`0x12F`, `[HYPOTHESIS]`, not renamed).
+  **[HYPOTHESIS]** the dead in-world chat-text-entry gap (`API.md` known gaps) may share this root
+  cause — one candidate world-screen controller is wired directly to the village connection; untested
+  whether chat input requires the local player's own `AvatarProxy` to exist first. Full writeup:
+  `docs/IN_WORLD_PRESENCE.md`; address table + confidence ratings: `docs/SOURCEMAP.md` §5a. The
+  2026-07-28 renames/comments landed on the shared repo via a GUI script replay (see below); a
+  **follow-up headless session (same day) then found the this-typing step had actually created the
+  duplicate-bare-Global-class trap** (see next section) and fixed it, plus recovered a whole
+  parallel serialization family (`LobbyComm::IAvatarDataBlock` + 6 concrete `Avatar*BlockEx`
+  classes). Those follow-up fixes are again **headless-working-copy-only** (repo server still
+  unreachable from the headless backend even after an MCP transport reconnect) — replay via
+  `tools/ghidra_scripts/FixVillageServerConnectionDuplicateClass.java` then
+  `tools/ghidra_scripts/ApplyAvatarDataBlockVtables.java` from a GUI session, then File > Check In.
 
 ### RE-quality / tooling TODOs (per `HARNESS.md §6` / `decomp/RE_PRACTICES.md`)
 
+- **`LobbyComm::IAvatarDataBlock` family — vtable-bound 2026-07-28 (`sadk_noav.exe`).** Following
+  the user's own `VillageServerConnection_vftable` binding, recovered the RTTI-proven interface
+  `IAvatarDataBlock` (8-slot vtable: Destructor/ReadFromBuffer/WriteToBuffer/Deserialize/Serialize/
+  GetVariant/GetSize/Clear) and its 6 concrete subclasses `AvatarCreationBlockEx`,
+  `AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`, `AvatarActiveItemsBlockEx`,
+  `AvatarInventoryBlockEx` — the classes `docs/SOURCEMAP.md` flagged `[TODO — RTTI class hygiene]`.
+  **This is a separate, parallel avatar-cosmetics serialization path** (NComm::MemoryStream-based,
+  fixed 4-byte fields only, no strings) from the already-documented LobbyComm wire readers
+  (`AvatarProxy_ReadXBlock`) — most likely the avatar-appearance payload carried inside an NComm
+  `PlayerInformation`-style event during an actual match, not the village/lobby wire. Object struct
+  field COUNTS/WIDTHS are `[PROVEN]` (read directly off each class's own `Deserialize` body); field
+  NAMES are `[HYPOTHESIS]` (generic `fieldN`) since no cross-check against the LobbyComm-side names
+  was done (different wire, not provably the same field order). **`AvatarProxy` itself was found to
+  inherit `ActorProxy : IActor`** (a distinct, widely-shared actor interface referenced by 4+ other
+  class hierarchies) rather than this Block family via composition — deliberately **not** bound this
+  session to avoid half-reversing a shared interface; `[TODO]` follow-up. Same session also fixed a
+  live duplicate-bare-Global-class instance (see "C++-uniform class consolidation" below) that had
+  hit `LobbyComm::VillageServerConnection`'s 8 newly-this-typed avatar/shop/trade handlers, and a
+  stale vtable-slot name/signature (`SendWorldLoginReq_2002` → `SendLeaveVillageRequest_2002`,
+  matching the already-documented 2026-07-25 correction that had never actually been applied in
+  Ghidra). GUI-replay scripts: `tools/ghidra_scripts/FixVillageServerConnectionDuplicateClass.java`,
+  `tools/ghidra_scripts/ApplyAvatarDataBlockVtables.java`.
 - **Typed vtable structs — STARTED 2026-06-11.** Built `VillageServerConnection_vtable` (17 slots,
   named via the binary) and retyped `pVtable`; checked in (SADK.exe v3). **Important finding:** the doc's
   vtable **base `0x7dc8e0` was WRONG — real base `0x7dc8d4`** (RTTI COL ptr at base-4 `0x7dc8d0`; verified

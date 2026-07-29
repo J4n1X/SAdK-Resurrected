@@ -299,7 +299,66 @@ factory vtable @ **0x1004DE84**: `+0x04 Register · +0x08 Unregister · +0x0C Cr
 `1000 EnterWorld→0x46f470 · 1001→0x46ddf0 · 1002→0x46dfb0 · 1003→0x46e190 · 1004→0x46f6c0 ·
 1005→0x46f420 · 1006→0x46e8b0 · 0xED6/3798 SendWorldReadyAck(out) · 0xED7/3799 HandlePongCode→0x46be00`.
 
-**[TODO]** other switch cases (handlers not yet named): `0xD8-0xDC, 0x12F, 0xC1C-0xC1E,
-0xC80/0xC81, 0xE11/0xE1B/0xE25/0xF46/0xF5A`.
-
 See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md` for the current protocol flow.
+
+### 5a. Remaining switch cases — surveyed 2026-07-28 (`sadk_noav.exe` addresses; renamed + checked out
+in the shared Ghidra project, but the **checkin failed** — "file requires merge, not supported in
+headless mode" — so these renames are **local to this session's headless working copy only**. A
+GUI session needs to open the project, pull the latest, and re-apply/checkin before they land on the
+shared repo. Full field-level writeup: `docs/IN_WORLD_PRESENCE.md`.)
+
+| msg | id | handler (`sadk_noav.exe`) | role | confidence |
+|---|---|---|---|---|
+| 0xC1C | AvatarActiveItems? | `HandleAvatarActiveItemsUpdate@0x0046e660` | by `ownr` id: re-reads the 4-slot equipped-items block | H |
+| 0xC1D | AvatarInventory? | `HandleAvatarInventoryUpdate@0x0046e6f0` | by `ownr` id: re-reads the variable-length (`sltcnt`-prefixed) inventory block | H |
+| 0xC1E | — | `HandleAvatarItemsFullSync@0x0046e780` | by `ownr` id: both of the above in one message | H |
+| 0xC80 | — | `HandleAvatarLevelExpUpdate@0x0046c940` | by `ownr` id: `lvl`+`exp` only (partial stats) | H |
+| 0xC81 | — | `HandleAvatarStatsUpdate@0x0046c9c0` | by `ownr` id: full `lvl`/`exp`/`gold`/`glod` stats | H |
+| 0xE11 | ShopData? | `HandleShopInventoryData@0x004706b0` | `NPCID`/`ShopID`/`ShopName`/`SellMod`/`StockCount`+N item entries | H |
+| 0xE1B | — | `FUN_00470990` (not renamed) | `ShopID`+1-bit `Result` → `this+0x134`; sibling of 0xE25 | M (mechanics H, which shop action it acks unconfirmed) |
+| 0xE25 | — | `FUN_00470a10` (not renamed) | `ShopID`+1-bit `Result` → `this+0x140`; sibling of 0xE1B | M |
+| 0xF46 | TradeRequest? | `HandleTradeRequest@0x0046d920` | `tradeID`/`playerA`/`playerAName`; single-trade-in-progress guard (`this+0x274/0x275`) | H |
+| 0xF5A | TradeOffer? | `HandleTradeOffer@0x0046cd10` | `playerA`/`playerB`/`goldA`/`goldB`/`funniesA`/`funniesB` + 2×6-slot item vectors | H |
+| 0xD8 | — | `FUN_0046f510` (not renamed) | VillageEntered-gated; lookup+`NotifyQueue_FireAndClear`+erase on the `this+0x178` container | L — plate comment records the [HYPOTHESIS] (party/relationship "member left") |
+| 0xD9 | — | `FUN_0046f380` (not renamed) | VillageEntered-gated; assigns an NComm net id to a `this+0x178` entry, fires notify twice | L — [HYPOTHESIS] "member joined, network-addressable" |
+| 0xDA | — | `FUN_0046eb70` (not renamed) | NOT state-gated; get-or-create on `this+0x178`, no notify | L — [HYPOTHESIS] "request/invite" seed |
+| 0xDB | — | `FUN_0046f4d0` (not renamed) | zero-payload; fires observer set at `this+0x8c` | L |
+| 0xDC | — | `FUN_0046f4f0` (not renamed) | zero-payload; fires observer set at `this+0x98` | L |
+| 0x12F | — | `FUN_0046d380` (not renamed) | reads `msgprt`+`rnid`, routes the raw message to a per-entry sub-handler found via `this+0x178` | L |
+
+**AvatarProxy wire-format readers** (shared by 1001 EntityCreate / 1002 EntityUpdate and the 0xC1x/0xC8x
+cases above — this is the "other players visible" payload, distinct from 1004 PlayerCreate's NPC-shaped
+body; see `docs/IN_WORLD_PRESENCE.md` for the full field tables):
+
+| Addr (`sadk_noav.exe`) | Name | Role |
+|---|---|---|
+| 0x00482c20 | `AvatarProxy_ReadDataBlocks` | reads 4-bit `dtblcks` dirty-block mask, dispatches to the 4 sub-blocks below |
+| 0x004824b0 | `AvatarProxy_ReadLocationBlock` | `tick`+quantised pos/rot+`rnng`/`jmp` flags (self vs. remote branch) |
+| 0x004825f0 | `AvatarProxy_ReadStyleBlock` | `name`+`trbgndr`+hair/skin/shirt/trouser+4×`addColor` |
+| 0x0048abe0 | `AvatarProxy_ReadActiveItemsBlock` | 4 fixed equip slots, each via `AvatarProxy_ReadItemSlot@0x0048ab40` |
+| 0x00481da0 | `AvatarProxy_ReadStatsBlock` | `lvl`/`exp`/`gold`/`glod` |
+| 0x0048ac20 | `AvatarProxy_ReadInventoryBlock` | `sltcnt`-prefixed variable-length item list |
+| 0x00481d50 | `AvatarProxy_ReadLevelExpBlock` | `lvl`/`exp` only (used by 0xC80) |
+| 0x00481d30 / 0x00481d40 | `AvatarProxy_ReadActiveItemsShim` / `AvatarProxy_ReadInventoryShim` | thin forwarders used by 0xC1C-0xC1E |
+| 0x0048f530 | `LobbyMessage_FinishRead` | idempotent stream-finalize, called at the end of every reader above |
+| 0x00464300 | `NotifyQueue_FireAndClear` | generic: iterate a per-object callback list, fire each, then clear+free it |
+| 0x004780c0 | `LobbyManager_RegisterAvatar` | registers a newly-created AvatarProxy's id with the LobbyManager singleton |
+
+**RTTI class hygiene — DONE 2026-07-28 for 6 of 7; `AvatarProxy` deferred.** All 7 classes are
+RTTI-confirmed under `LobbyComm::` (`.?AVAvatarProxy@LobbyComm@@` etc.), plus an 8th discovered in the
+same pass: `LobbyComm::IAvatarDataBlock`, the shared base interface of `AvatarCreationBlockEx`,
+`AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`, `AvatarActiveItemsBlockEx`,
+`AvatarInventoryBlockEx`. **This is a separate, parallel serialization family from the
+`AvatarProxy_ReadXBlock` free functions above** — it uses `NComm::MemoryStream` (not the LobbyComm
+property-bag wire) via an 8-slot vtable (`Destructor`/`ReadFromBuffer`/`WriteToBuffer`/`Deserialize`/
+`Serialize`/`GetVariant`/`GetSize`/`Clear`), most likely the avatar-cosmetics payload inside an NComm
+`PlayerInformation`-style event during a match, not the village/lobby wire — so the "which reader
+matches which class" question above does not apply; they were never the same functions. Struct
+`IAvatarDataBlock` (8B) + `IAvatarDataBlock_vftable` (32B) created; all 27 member functions
+this-typed/namespaced/renamed. Field widths `[PROVEN]` (read directly off each class's own
+`Deserialize`), field names `[HYPOTHESIS]` (generic `fieldN`). Full slot table, per-class field
+layout, and evidence: `decomp/RENAME_LIST.md` "2026-07-28 (cont.)". **`AvatarProxy` itself is
+`[TODO]`, deferred on purpose:** its Class Hierarchy Descriptor shows it inherits
+`LobbyComm::ActorProxy : LobbyComm::IActor` (a distinct, widely-shared actor interface used by 4+
+other class hierarchies), not this Block family — its own 7-slot vtable (`0x007dd038`) needs a
+dedicated pass rather than a rushed partial binding.
