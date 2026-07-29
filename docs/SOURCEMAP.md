@@ -344,12 +344,21 @@ body; see `docs/IN_WORLD_PRESENCE.md` for the full field tables):
 | 0x00464300 | `NotifyQueue_FireAndClear` | generic: iterate a per-object callback list, fire each, then clear+free it |
 | 0x004780c0 | `LobbyManager_RegisterAvatar` | registers a newly-created AvatarProxy's id with the LobbyManager singleton |
 
-**[TODO — RTTI class hygiene]** The project already has (empty, unassociated) namespaces for the
-**real** engine class names: `AvatarProxy`, `AvatarCreationBlockEx`, `AvatarAppearanceBlockEx`,
-`AvatarStyleBlockEx`, `AvatarStatsBlockEx`, `AvatarInventoryBlockEx`, `AvatarActiveItemsBlockEx`
-(RTTI-sourced, e.g. `.?AVAvatarProxy@@` — see `search_data_types`/`list_namespaces`). The flat
-`AvatarProxy_ReadXBlock` names above describe confirmed field content but were **not** cross-checked
-against which reader corresponds to which of these 7 classes (there are two style/appearance-shaped
-classes and an unaccounted-for `AvatarCreationBlockEx`) — a follow-up session should locate each
-class's vtable via its RTTI Object Locator, `set_function_this_type` the readers onto them, and rename
-into the proper namespace instead of the flat prefix.
+**RTTI class hygiene — DONE 2026-07-28 for 6 of 7; `AvatarProxy` deferred.** All 7 classes are
+RTTI-confirmed under `LobbyComm::` (`.?AVAvatarProxy@LobbyComm@@` etc.), plus an 8th discovered in the
+same pass: `LobbyComm::IAvatarDataBlock`, the shared base interface of `AvatarCreationBlockEx`,
+`AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`, `AvatarActiveItemsBlockEx`,
+`AvatarInventoryBlockEx`. **This is a separate, parallel serialization family from the
+`AvatarProxy_ReadXBlock` free functions above** — it uses `NComm::MemoryStream` (not the LobbyComm
+property-bag wire) via an 8-slot vtable (`Destructor`/`ReadFromBuffer`/`WriteToBuffer`/`Deserialize`/
+`Serialize`/`GetVariant`/`GetSize`/`Clear`), most likely the avatar-cosmetics payload inside an NComm
+`PlayerInformation`-style event during a match, not the village/lobby wire — so the "which reader
+matches which class" question above does not apply; they were never the same functions. Struct
+`IAvatarDataBlock` (8B) + `IAvatarDataBlock_vftable` (32B) created; all 27 member functions
+this-typed/namespaced/renamed. Field widths `[PROVEN]` (read directly off each class's own
+`Deserialize`), field names `[HYPOTHESIS]` (generic `fieldN`). Full slot table, per-class field
+layout, and evidence: `decomp/RENAME_LIST.md` "2026-07-28 (cont.)". **`AvatarProxy` itself is
+`[TODO]`, deferred on purpose:** its Class Hierarchy Descriptor shows it inherits
+`LobbyComm::ActorProxy : LobbyComm::IActor` (a distinct, widely-shared actor interface used by 4+
+other class hierarchies), not this Block family — its own 7-slot vtable (`0x007dd038`) needs a
+dedicated pass rather than a rushed partial binding.

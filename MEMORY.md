@@ -135,13 +135,40 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   **[HYPOTHESIS]** the dead in-world chat-text-entry gap (`API.md` known gaps) may share this root
   cause — one candidate world-screen controller is wired directly to the village connection; untested
   whether chat input requires the local player's own `AvatarProxy` to exist first. Full writeup:
-  `docs/IN_WORLD_PRESENCE.md`; address table + confidence ratings: `docs/SOURCEMAP.md` §5a. Ghidra
-  renames applied to the **headless working copy only** — `checkin_program` failed ("file requires
-  merge, not supported in headless mode"); a GUI session must sync + re-checkin before they're on the
-  shared repo.
+  `docs/IN_WORLD_PRESENCE.md`; address table + confidence ratings: `docs/SOURCEMAP.md` §5a. The
+  2026-07-28 renames/comments landed on the shared repo via a GUI script replay (see below); a
+  **follow-up headless session (same day) then found the this-typing step had actually created the
+  duplicate-bare-Global-class trap** (see next section) and fixed it, plus recovered a whole
+  parallel serialization family (`LobbyComm::IAvatarDataBlock` + 6 concrete `Avatar*BlockEx`
+  classes). Those follow-up fixes are again **headless-working-copy-only** (repo server still
+  unreachable from the headless backend even after an MCP transport reconnect) — replay via
+  `tools/ghidra_scripts/FixVillageServerConnectionDuplicateClass.java` then
+  `tools/ghidra_scripts/ApplyAvatarDataBlockVtables.java` from a GUI session, then File > Check In.
 
 ### RE-quality / tooling TODOs (per `HARNESS.md §6` / `decomp/RE_PRACTICES.md`)
 
+- **`LobbyComm::IAvatarDataBlock` family — vtable-bound 2026-07-28 (`sadk_noav.exe`).** Following
+  the user's own `VillageServerConnection_vftable` binding, recovered the RTTI-proven interface
+  `IAvatarDataBlock` (8-slot vtable: Destructor/ReadFromBuffer/WriteToBuffer/Deserialize/Serialize/
+  GetVariant/GetSize/Clear) and its 6 concrete subclasses `AvatarCreationBlockEx`,
+  `AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`, `AvatarActiveItemsBlockEx`,
+  `AvatarInventoryBlockEx` — the classes `docs/SOURCEMAP.md` flagged `[TODO — RTTI class hygiene]`.
+  **This is a separate, parallel avatar-cosmetics serialization path** (NComm::MemoryStream-based,
+  fixed 4-byte fields only, no strings) from the already-documented LobbyComm wire readers
+  (`AvatarProxy_ReadXBlock`) — most likely the avatar-appearance payload carried inside an NComm
+  `PlayerInformation`-style event during an actual match, not the village/lobby wire. Object struct
+  field COUNTS/WIDTHS are `[PROVEN]` (read directly off each class's own `Deserialize` body); field
+  NAMES are `[HYPOTHESIS]` (generic `fieldN`) since no cross-check against the LobbyComm-side names
+  was done (different wire, not provably the same field order). **`AvatarProxy` itself was found to
+  inherit `ActorProxy : IActor`** (a distinct, widely-shared actor interface referenced by 4+ other
+  class hierarchies) rather than this Block family via composition — deliberately **not** bound this
+  session to avoid half-reversing a shared interface; `[TODO]` follow-up. Same session also fixed a
+  live duplicate-bare-Global-class instance (see "C++-uniform class consolidation" below) that had
+  hit `LobbyComm::VillageServerConnection`'s 8 newly-this-typed avatar/shop/trade handlers, and a
+  stale vtable-slot name/signature (`SendWorldLoginReq_2002` → `SendLeaveVillageRequest_2002`,
+  matching the already-documented 2026-07-25 correction that had never actually been applied in
+  Ghidra). GUI-replay scripts: `tools/ghidra_scripts/FixVillageServerConnectionDuplicateClass.java`,
+  `tools/ghidra_scripts/ApplyAvatarDataBlockVtables.java`.
 - **Typed vtable structs — STARTED 2026-06-11.** Built `VillageServerConnection_vtable` (17 slots,
   named via the binary) and retyped `pVtable`; checked in (SADK.exe v3). **Important finding:** the doc's
   vtable **base `0x7dc8e0` was WRONG — real base `0x7dc8d4`** (RTTI COL ptr at base-4 `0x7dc8d0`; verified
