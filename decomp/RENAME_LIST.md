@@ -1180,3 +1180,104 @@ label left as `[HYPOTHESIS]` — do not rename these 8 functions off a guess)
 > Village msg 0xE25. Reads ShopID(32b) + Result(1-bit, via vtbl+0x28) then calls FUN_0045f620(this+0x140, shopId, result). Sibling of 0xE1B (same shape, this+0x134). [TODO] Which shop action this acks vs 0xE1B is unconfirmed.
 
 ### Step 4 — `checkin_program(program="sadk_noav.exe", comment="...")` once all of the above is applied.
+
+## 2026-07-28 (cont.) — the this-typing step hit the duplicate-class trap; fixed + IAvatarDataBlock family recovered
+
+**Context:** `/mcp reconnect ghidra` restored the headless MCP's *transport* link this session, but the
+backend's own connection to the Ghidra Server repo (`sadk-shared`) stayed down (`server_status` →
+`connected: false`; `checkin_program` → `"Not connected to repository server"`) for the whole session —
+a different failure than the transport issue the reconnect fixed. Everything below is applied and saved
+to the **headless working copy only**; land it via the two new GUI-replay scripts (same pattern as
+`ApplyVillageAvatarRenames.java`), run from a GUI session, then a normal `File > Check In`.
+
+### 1. Duplicate-bare-Global-class trap, found and fixed `[PROVEN]`
+
+The "Step 1" `set_function_this_type(addr, "VillageServerConnection *")` calls this survey originally
+called for (see above) had in fact already been run, in a session before `ApplyVillageServerConnectionThisTypes.java`
+existed — via raw MCP calls, not the namespace-safe script — and hit exactly the trap
+`decomp/RE_PRACTICES.md`'s "Class hygiene" section warns about: it created a synthetic
+**`VillageServerConnection` class directly under Global**, distinct from the real RTTI-proven
+**`LobbyComm::VillageServerConnection`**, and parented all 8 avatar/shop/trade handlers to the wrong one.
+
+**Tell:** `HandleMessage`'s dispatcher called the other, already-correct handlers (`HandleEnterWorld`,
+`HandleEntityCreate`, …) as bare sibling calls, but called these 8 as `::VillageServerConnection::HandleX(...)`
+— the leading `::` is the decompiler disambiguating the bare-Global class from the more-nested one already
+in lexical scope. Confirmed directly by walking the symbol tree: `LobbyComm::VillageServerConnection`
+(id 51132, the RTTI-proven class — ctor, vtable, `HandleMessage`, etc.) vs a second `VillageServerConnection`
+(id 136624, parent = Global) holding exactly the 8 new handlers.
+
+**Fix:** moved all 8 functions' symbols into the real class (`Function.getSymbol().setNamespace(real)`),
+set `__thiscall`, then deleted the now-empty duplicate class. Verified: `HandleMessage`'s dispatcher now
+calls all 8 as unqualified sibling members, same as every other case in that switch.
+
+### 2. Stale vtable slot, found in the same pass `[PROVEN]`
+
+`VillageServerConnection_vftable` slot `+0x40` (function `0x0046bde0`) was still named/typed
+`LobbyManager_SendWorldLoginReq_2002` with a stray phantom second parameter — the pre-2026-07-25-correction
+name, even though `decomp/RENAME_LIST.md`'s own 2026-07-25 entry and `docs/SOURCEMAP.md` §2b already
+recorded the corrected name `SendLeaveVillageRequest_2002` and the "not dormant, it's the leave-village
+request" finding. The doc correction had never actually been applied in Ghidra. Fixed: renamed into
+`LobbyComm::VillageServerConnection::SendLeaveVillageRequest_2002`, dropped the redundant/unused second
+parameter (`this` alone covers it), restored `__thiscall`, rebuilt the vtable-struct field's function
+signature and plate comment to match, and removed the orphaned stale data type.
+
+### 3. Signature cleanup: the 8 handlers' message parameter `[PROVEN]`
+
+All 8 avatar/shop/trade handlers took a bare `int *param_1` for their message argument, unlike every
+sibling handler in the same dispatcher (`HandleEnterWorld` etc.), which take `NetMsgStream *msg`. Retyped
+all 8 to match (`void HandleX(NetMsgStream *msg)`, `__thiscall`).
+
+### 4. `LobbyComm::IAvatarDataBlock` family — recovered and vtable-bound `[PROVEN]` (fields) / `[HYPOTHESIS]` (names)
+
+Following the vtable-struct binding the user built by hand for `VillageServerConnection`, did the same for
+the 7 classes `docs/SOURCEMAP.md` flagged `[TODO — RTTI class hygiene]`: `AvatarProxy`,
+`AvatarCreationBlockEx`, `AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`,
+`AvatarActiveItemsBlockEx`, `AvatarInventoryBlockEx`. RTTI confirmed all 7 (plus a previously-unnoticed
+8th, `IAvatarDataBlock`) via their mangled type-descriptor strings, all under `LobbyComm::`:
+`.?AVAvatarProxy@LobbyComm@@`, `.?AVAvatarCreationBlockEx@LobbyComm@@`, etc.
+
+**`AvatarProxy` is NOT part of this family.** Its own Class Hierarchy Descriptor shows 3 base-class-array
+entries — self, `LobbyComm::ActorProxy`, `LobbyComm::IActor` — a single-inheritance chain unrelated to the
+Block classes. `IActor`'s own Base Class Descriptor is referenced from 4 distinct locations in `.rdata`,
+confirming it's a widely-shared actor interface used by other class hierarchies too. Its own vtable (7
+slots at `0x007dd038`, a different shape from the Block family's 8) was deliberately **not** bound this
+session — reversing a shared base interface properly needs its own dedicated pass, not a rushed partial
+binding off one implementor's view. `[TODO]` follow-up.
+
+**The other 6 (`AvatarCreationBlockEx` … `AvatarInventoryBlockEx`) all derive from `IAvatarDataBlock`**,
+an 8-slot interface, RTTI-confirmed and vtable-recovered:
+
+| Slot | Role | Evidence |
+|---|---|---|
+| +0x00 | Destructor (scalar deleting) | sets vtable ptr to `IAvatarDataBlock::vftable`, conditionally frees `this`; identical machine code shared/folded across all 7 (trivial dtor, no per-class cleanup) |
+| +0x04 | `ReadFromBuffer(void* buf, uint len)` | guards `len>=4`, wraps `buf` in an `NComm::MemoryStream`, calls `vtbl[0xc]` (Deserialize); shared/inherited unchanged |
+| +0x08 | `WriteToBuffer(void* buf, uint* len)` | guards `*len >= vtbl[0x18]()` (GetSize), wraps in a stream, calls `vtbl[0x10]` (Serialize); shared/inherited unchanged |
+| +0x0c | `Deserialize(NComm::MemoryStream*)` | **PER-CLASS.** Base default (`0x00486410`) reads only the 4-byte discriminator at `this+4`. Every concrete class overrides it to also read its own fields (see per-class table below) |
+| +0x10 | `Serialize(NComm::MemoryStream*)` | **PER-CLASS**, mirror of Deserialize; base default writes only `this+4` |
+| +0x14 | `GetVariant()` → `return *(this+4)` | shared/inherited unchanged by all 7 (not overridden anywhere) — **⚠️ same machine code (`0x004901e0`) as the unrelated, already-documented `NComm_Event_GetType`** (identical-code-folding, MSVC/linker ICF); do not confuse the two or rename either off this coincidence |
+| +0x18 | `GetSize()` → uint | **PER-CLASS**; base default (`0x004f2810`) returns the constant `4` (just the discriminator). Concrete overrides return a size that depends on `GetVariant()` (e.g. Style: 0x24 if variant!=0 else 0x14) |
+| +0x1c | `Clear()` → void | **PURE VIRTUAL** in the base (`__purecall`) — every subclass must supply its own (zeroes its own fields) |
+
+Struct `IAvatarDataBlock` (8 bytes: `pVftable` + `nVariant`) is the embedded base of every concrete class.
+Per-class field counts/widths, read directly off each `Deserialize` body (widths `[PROVEN]`, names
+`[HYPOTHESIS]` — generic `fieldN`, not cross-checked against the differently-shaped LobbyComm-side
+`AvatarProxy_ReadXBlock` fields since this is a different wire):
+
+| Class | Fixed fields (always read) | Conditional fields (gated on `GetVariant()`) | Total size |
+|---|---|---|---|
+| `AvatarCreationBlockEx` | 6× u32 | +4× u32 if `!=0` | 0x30 (48B) |
+| `AvatarAppearanceBlockEx` | 2× u32 | none | 0x10 (16B) |
+| `AvatarStyleBlockEx` | 4× u32 | +4× u32 if `!=0` | 0x28 (40B) |
+| `AvatarStatsBlockEx` | 3× u32 | +1× u32 if `!=0`; +4×u32 +2×u8 if `>1` (tiered) | 0x2a (42B) |
+| `AvatarActiveItemsBlockEx` | 4× 12-byte slots | none | 0x38 (56B) — matches the already-documented "4 fixed equip slots" |
+| `AvatarInventoryBlockEx` | `nCount` (u32) + up to 20× 12-byte slots (clamped) | none | 0xfc (252B) — matches the already-documented "sltcnt-prefixed variable-length list" |
+
+`AvatarStatsBlockEx`'s tiered shape (3 base fields → +1 if variant!=0 → +4 more +2 bytes if variant>1)
+lines up suggestively with the already-`[PROVEN]` tiered LobbyComm-side split (`0xC80` level+exp only vs
+`0xC81` full lvl/exp/gold/glod) — noted as a `[HYPOTHESIS]` corroboration, not asserted as the same fields.
+
+Created `IAvatarDataBlock_vftable` (32B, 8 typed slots) and applied it at all 7 vftable addresses
+(`0x007de3dc` interface + the 6 concrete, tightly packed 0x24 bytes apart in `.rdata`). This-typed and
+namespaced all 27 member functions (3 shared + `Deserialize`/`Serialize`/`GetSize`/`Clear` × 7). Verified:
+every class's `Deserialize` now decompiles with named field access (`this->field1`, `this->base.pVftable
+->pGetVariant()`, etc.) instead of raw offset arithmetic.
