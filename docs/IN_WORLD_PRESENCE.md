@@ -186,7 +186,7 @@ centred on the origin.
 mistake was made once already. The bounds at `0x87b7**` *are* 4-byte floats. These values are
 resolved; they do **not** need a live read.
 
-## ⚠️ Bit-packed stream — and one OPEN CONTRADICTION about field names
+## ⚠️ Bit-packed stream — and why `names = 0` is REQUIRED
 
 Every message on this page is **bit-packed, MSB-first** (`FUN_0048f0d0` consumes each byte MSB-first
 and assembles values MSB-first ⇒ a 32-bit field is exactly 4 big-endian bytes, the same convention as
@@ -195,21 +195,55 @@ must be a real bit-stream, and strings (`FUN_0048ffc0` = 8-bit length + 8-bit ch
 mid-stream, not byte-aligned. That much is agreed.
 
 The **names flag** is `*(LobbyMessage+0x20)`, set by `LobbyMessage_InitFromWire@0x0048fa50` from
-**bit 15 of the type word**: `typeWord = names<<15 | category<<12 | id`. Two sessions drew opposite
-conclusions from it and **this is not yet settled**:
+**bit 15 of the type word**: `typeWord = names<<15 | category<<12 | id`.
 
-- **`names = 0` (what the deployed stub sends).** `FUN_0048f5f0(msg, nbits, name)` is
-  `SelectField(name)` **then** `ReadBits(nbits)`, and the name lookup is *conditional on the flag*.
-  With the flag clear the name is skipped and N bits are read positionally, so widths alone suffice.
-  Derivation recorded at `sadk_lobby/village.py:127`.
-- **`names = 1` (asserted by the 2026-07-28 survey).** Same mechanism described, opposite
-  conclusion drawn.
+> **RESOLVED 2026-07-29, statically, from `sadk_noav.exe`.** An earlier draft of this file asserted
+> "these messages must be sent with `names = 1`" and that claim propagated into `API.md` and
+> `MEMORY.md`. **It is wrong.** `names = 0` is not just convenient — it is *required* by what we
+> actually send. Awaiting live confirmation only as part of the subsystem as a whole; the mechanism
+> below is unambiguous in the decompilation.
 
-⚠️ The `names = 1` claim traces back to an early draft of *this file* that predates the reading of
-`FUN_0048f5f0`, and was carried forward rather than re-derived — so it is the older and less-examined
-side, not independent corroboration. **[TODO]** re-derive from the binary. Cheap arbiter: the
-deployed code already sends `names = 0`, so the first live test settles it at no extra cost — a
-`Can't peek AvatarID` in the log points straight at this.
+`FUN_0048f5f0(msg, nbits, name)` gates **all** name handling on `msg+0x20` and then **always** tail-calls
+`FUN_0048f0d0(msg, nbits)`:
+
+```c
+bVar3 = *(char *)(this + 0x20) == '\0';       // names flag clear?
+if (!bVar3) { /* fold `name` into a hash at this+0x30 */ }
+if (!bVar3) { /* two more hash mixes */ }
+FUN_0048f0d0(this, param_1);                  // ReadBits(nbits) — UNCONDITIONAL
+```
+
+Three facts follow, each load-bearing:
+
+1. **`FUN_0048f0d0` is a pure positional bit reader** — it walks the byte buffer MSB-first
+   (`1 << (7 - (i & 7))`), assembles the value MSB-first, and does no name handling at all. It is the
+   only code that touches the bit cursor (`+0x14`/`+0x18`/`+0x1c`).
+2. **Field names never appear on the wire.** `name` is a *caller-supplied C string constant* — e.g.
+   `FUN_0048f5f0(msg, 4, "dtblcks")`. With the flag set it is folded into a running hash at
+   `msg+0x30` (init `FUN_00762320`, update `FUN_00762350`, mix `FUN_00762400`). That hash touches
+   neither the byte buffer nor the bit cursor, so it consumes **zero** wire bits.
+3. ⭐ **But the finalize does consume bits.** `FUN_0048f530`, called at the end of each block group
+   (e.g. the tail of `AvatarProxy_ReadDataBlocks`), is:
+
+```c
+if (*(char *)(msg + 0x2c) == '\0') {          // not already finalized
+    if (*(char *)(msg + 0x20) != '\0') {      // names flag SET
+        FUN_00762400(msg + 0x30);             // hash mix
+        FUN_00762400(msg + 0x30);
+        FUN_0048f0d0(msg, 0x20);              // <-- reads a trailing 32-bit word
+    }
+    *(undefined1 *)(msg + 0x2c) = 1;
+}
+```
+
+⇒ **`names = 1` obliges the sender to append a 32-bit hash trailer per message.** We do not send one,
+so `names = 1` would make the client read 32 bits past the end of every body — corrupting the next
+read with no distinct error of its own. `names = 0` makes the client read exactly the bits we write
+and stop. The deployed writer is therefore correct and self-consistent.
+
+(Note the trailer's *value* is read and discarded, not compared — so a `names = 1` sender would only
+need to append four arbitrary bytes. Irrelevant for us; recorded so nobody hunts for a checksum
+algorithm that isn't there.)
 
 ## Does this also explain the dead chat input?
 
@@ -244,8 +278,8 @@ present, before investing more static-RE time in the `ChatSystem` vtable.
       (`_spawn_spot`) so every observer agrees on where a player stands.
 - [x] `tests/test_world_presence.py` pins the bit layout and field offsets.
 - [x] Full block-level survey of the `AvatarProxy` payload + the `0xC1x`/`0xC8x` re-sync family.
+- [x] `names` flag settled — `names = 0` required; `names = 1` would need a 32-bit hash trailer.
 - [ ] **Live confirmation** — nothing here has been seen working.
-- [ ] `names` flag contradiction resolved (see above).
 - [ ] AvatarStyle block (`dtblcks |= 2`) — layout is known, writer is not written.
 - [ ] Movement (`1002` is not it; the real update path is unfound).
 - [ ] NPCs via `PlayerCreate(1004)` — a separate, lower-priority track. Do not conflate with player
@@ -258,7 +292,7 @@ Two clients into the lobby world, look around, then read `Documents/SAdK/dumps/L
 | observation | meaning | next move |
 |---|---|---|
 | avatars on a ring around the town square | 🎉 | retest chat typing, then movement, then NPCs |
-| `Can't peek AvatarID` | leading 32-bit id wrong/not first — **suspect the `names` flag first** | resolve names=0 vs 1 |
+| `Can't peek AvatarID` | leading 32-bit id wrong or not first | fix the header (the `names` flag is settled — not this) |
 | `Could not read AvatarLocation from message.` | location block malformed | re-check widths |
 | `Could not read tick from message.` | `tick` is not the first 16 bits of the block | |
 | **no error, no avatar** | it PARSED, nothing rendered | add AvatarStyle (`dtblcks \|= 2`) — **do not** re-check the location block |

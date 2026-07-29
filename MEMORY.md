@@ -132,11 +132,13 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   path**; `PlayerCreate (1004)`, despite its name, reads an NPC-shaped payload (`npcdesc`/`npctyp`/
   `actChat`) and is `[HYPOTHESIS]` **NPCs, not players** — refutes the prior 2026-07-27 draft's "one
   implementation covers both." All of it is a **bit-packed, MSB-first** LobbyMessage stream
-  (non-byte-aligned field widths) sent via `village.BitWriter`. ⚠️ **OPEN CONTRADICTION** on the
-  `names` flag (bit 15 of the type word): the deployed `EntityCreate` sends `names=0` (name lookup is
-  conditional on the flag ⇒ positional reads), the 2026-07-28 survey asserts `names=1`. The `names=1`
-  claim traces to a pre-correction draft, not an independent derivation — the first live test settles
-  it for free. Secondary subsystems also mapped on the same connection: avatar item/stat re-sync
+  (non-byte-aligned field widths) sent via `village.BitWriter`. ⭐ **`names` flag SETTLED 2026-07-29
+  (static, `sadk_noav.exe`) — must be 0**, correcting the 2026-07-28 survey's `names=1`: field names
+  are caller-side C string constants (`FUN_0048f5f0(msg,4,"dtblcks")`) that never ride the wire, and
+  `FUN_0048f5f0` always tail-calls the positional bit reader `FUN_0048f0d0` regardless of the flag.
+  Setting it makes the finalize `FUN_0048f530` read a **trailing 32-bit hash word** (value discarded,
+  not validated) that we do not send ⇒ every body over-read by 4 bytes, silently. Secondary
+  subsystems also mapped on the same connection: avatar item/stat re-sync
   (`0xC1C-0xC81`), NPC shop (`0xE11/0xE1B/0xE25`), player-to-player trade (`0xF46/0xF5A`), and a
   low-confidence party/relationship-shaped family (`0xD8-0xDC`/`0x12F`, `[HYPOTHESIS]`, not renamed).
   **[HYPOTHESIS]** the dead in-world chat-text-entry gap (`API.md` known gaps) may share this root
