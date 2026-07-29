@@ -1093,3 +1093,191 @@ I flagged `players/referee/registry/server.py` as differing between local and mi
 differ only by **CRLF vs LF** (`diff --strip-trailing-cr` → 0 lines): the files I scp'd from Windows
 carry CRLF, the ones still from the git checkout carry LF. Deployed content is identical to master.
 Hash-compare across a Windows→Linux deploy is not a valid equality test — strip CR first.
+
+## 2026-07-28 — village/avatar protocol survey (`sadk_noav.exe`) — landed via GUI script replay
+
+**Status: DONE.** The headless MCP's own `checkin_program` got stuck (`"Checkin failed, file
+requires merge which is not supported in headless mode"` — the headless backend's checkout of
+`~/ghidra-mcp-projects/sadk-shared.gpr` was behind the server's HEAD, and there is no
+`undo_checkout`/`update_checkout` tool in the deployed headless backend to force a fresh one; that
+gap is real, not fixable from a script per `HARNESS.md §1/§3` — project/version-control ops belong
+in the MCP). Landed instead via the **GUI path**: `tools/ghidra_scripts/ApplyVillageAvatarRenames.java`
+run from the user's own GUI Script Manager (a separate, independent local checkout from the
+headless one — a GUI **Update** does NOT pull in headless-only uncommitted changes, they're
+different local copies of the same repo; confirmed live when an Update+merge left `0x0046c940`
+still `FUN_0046c940` right up until the script ran), then a normal `File > Check In...` — no
+headless merge restriction applies there. All 21 renames + 8 plate comments below are checked in.
+
+**Follow-up, same path:** `tools/ghidra_scripts/ApplyVillageServerConnectionThisTypes.java` applies
+the `VillageServerConnection` this-typing for the 8 `Handle*` functions, following the documented
+"Class hygiene" procedure in `decomp/RE_PRACTICES.md` (locates the **existing** RTTI-proven
+`LobbyComm::VillageServerConnection` class rather than creating a duplicate bare-`Global` one — the
+exact trap that procedure exists to prevent, and which this project already hit once before).
+
+Full rationale/evidence for every name below: `docs/SOURCEMAP.md` §5a, `docs/IN_WORLD_PRESENCE.md`.
+
+### Step 1 — `set_function_this_type(addr, "VillageServerConnection *")`, 8 calls (do these FIRST —
+they move the function into the class namespace so the rename in step 2 doesn't need the `Class_`
+prefix)
+
+`0x0046c940 · 0x0046c9c0 · 0x0046e660 · 0x0046e6f0 · 0x0046e780 · 0x004706b0 · 0x0046d920 · 0x0046cd10`
+
+### Step 2 — `rename_function_by_address`, 21 calls
+
+| Address | New name | Confidence |
+|---|---|---|
+| `0x0046c940` | `HandleAvatarLevelExpUpdate` | H |
+| `0x0046c9c0` | `HandleAvatarStatsUpdate` | H |
+| `0x0046e660` | `HandleAvatarActiveItemsUpdate` | H |
+| `0x0046e6f0` | `HandleAvatarInventoryUpdate` | H |
+| `0x0046e780` | `HandleAvatarItemsFullSync` | H |
+| `0x004706b0` | `HandleShopInventoryData` | H |
+| `0x0046d920` | `HandleTradeRequest` | H |
+| `0x0046cd10` | `HandleTradeOffer` | H |
+| `0x00482c20` | `AvatarProxy_ReadDataBlocks` | H |
+| `0x0048f530` | `LobbyMessage_FinishRead` | M |
+| `0x004824b0` | `AvatarProxy_ReadLocationBlock` | H |
+| `0x004825f0` | `AvatarProxy_ReadStyleBlock` | H |
+| `0x0048abe0` | `AvatarProxy_ReadActiveItemsBlock` | H |
+| `0x0048ab40` | `AvatarProxy_ReadItemSlot` | H |
+| `0x00481da0` | `AvatarProxy_ReadStatsBlock` | H |
+| `0x00481d50` | `AvatarProxy_ReadLevelExpBlock` | H |
+| `0x0048ac20` | `AvatarProxy_ReadInventoryBlock` | H |
+| `0x00481d30` | `AvatarProxy_ReadActiveItemsShim` | H (thin forwarder to `0x0048abe0`) |
+| `0x00481d40` | `AvatarProxy_ReadInventoryShim` | H (thin forwarder to `0x0048ac20`) |
+| `0x00464300` | `NotifyQueue_FireAndClear` | M (generic: iterate a per-object callback list, fire each, clear+free it) |
+| `0x004780c0` | `LobbyManager_RegisterAvatar` | M |
+
+The project's naming validator rejects a few obvious short names on token-subset/vague-verb grounds
+(hit live this session) — that's why `0x0046e780` isn't `HandleAvatarItemsUpdate` and `0x004706b0`
+isn't `HandleShopData`; the table above already has the accepted names.
+
+### Step 3 — `set_plate_comment`, 8 calls (verbatim text, mechanics confirmed / exact game-feature
+label left as `[HYPOTHESIS]` — do not rename these 8 functions off a guess)
+
+**`0x0046f510`** (village msg `0xD8`):
+> Village msg 0xD8. Gated on LobbyManagerState==VillageEntered. Looks up a compound key (via FUN_004712e0) in the container at VillageServerConnection+0x178; on a match fires NotifyQueue_FireAndClear(this+0x74) then erases the entry via FUN_00462b90. [HYPOTHESIS] Shape (lookup+notify+erase) fits a "member left" event for whatever social construct lives at +0x178 (party/group -- unconfirmed which). Siblings: 0xD9 (join, assigns a NComm net id), 0xDA (create-or-get, no notify).
+
+**`0x0046f380`** (village msg `0xD9`):
+> Village msg 0xD9. Gated on VillageEntered. Calls NComm_TinCatNetwork_GetLocalNetId, looks up the same +0x178 container as 0xD8/0xDA; on match assigns a NComm net id to the entry (FUN_00471640/FUN_00471650) and fires NotifyQueue_FireAndClear TWICE (this+0x68 then this+0x80, the second gated on a further per-entry vtbl[0xc] field-read succeeding). [HYPOTHESIS] Shape fits a "member joined / accepted, network-addressable" event.
+
+**`0x0046eb70`** (village msg `0xDA`):
+> Village msg 0xDA. NOT state-gated (unlike 0xD8/0xD9). Looks up the +0x178 container by compound key; if absent, CREATES a new entry (FUN_00471300) and inserts it (FUN_00686550) -- get-or-create semantics, no NotifyQueue fan-out. [HYPOTHESIS] Fits a "request/invite" event that seeds the entry 0xD9 later upgrades and 0xD8 later removes.
+
+**`0x0046f4d0`** (village msg `0xDB`):
+> Village msg 0xDB. Zero-payload: flushes the stream (LobbyMessage_FinishRead) then fires the observer set at this+0x8c via FUN_004760c0. No fields read at all. [TODO] exact event unknown; bare-notify shape (compare 0xDC at this+0x98).
+
+**`0x0046f4f0`** (village msg `0xDC`):
+> Village msg 0xDC. Zero-payload: flushes the stream then fires the observer set at this+0x98 via FUN_004760c0. Same shape as 0xDB (this+0x8c). [TODO] exact event unknown.
+
+**`0x0046d380`** (village msg `0x12F`):
+> Village msg 0x12F. Reads "msgprt" (16-bit) + "rnid" (8-bit), looks up the +0x178 container by compound key; on match, drills through a nested sub-object (found_entry+0x10) to fetch a handler pointer via two chained vtable calls and, if non-null, forwards the raw message to it (FUN_00489410). [TODO/HYPOTHESIS] Looks like a generic "route this message to the entry's own sub-handler" envelope (e.g. per-party-member private message?) rather than a message with its own fixed payload.
+
+**`0x00470990`** (village msg `0xE1B`):
+> Village msg 0xE1B. Reads ShopID(32b) + Result(1-bit, via vtbl+0x28) then calls FUN_0045f620(this+0x134, shopId, result). Sibling of 0xE25 (same shape, this+0x140). [TODO] Which shop action (buy/sell/enter/exit) this acks vs 0xE25 is unconfirmed -- not renamed to avoid asserting a guess.
+
+**`0x00470a10`** (village msg `0xE25`):
+> Village msg 0xE25. Reads ShopID(32b) + Result(1-bit, via vtbl+0x28) then calls FUN_0045f620(this+0x140, shopId, result). Sibling of 0xE1B (same shape, this+0x134). [TODO] Which shop action this acks vs 0xE1B is unconfirmed.
+
+### Step 4 — `checkin_program(program="sadk_noav.exe", comment="...")` once all of the above is applied.
+
+## 2026-07-28 (cont.) — the this-typing step hit the duplicate-class trap; fixed + IAvatarDataBlock family recovered
+
+**Context:** `/mcp reconnect ghidra` restored the headless MCP's *transport* link this session, but the
+backend's own connection to the Ghidra Server repo (`sadk-shared`) stayed down (`server_status` →
+`connected: false`; `checkin_program` → `"Not connected to repository server"`) for the whole session —
+a different failure than the transport issue the reconnect fixed. Everything below is applied and saved
+to the **headless working copy only**; land it via the two new GUI-replay scripts (same pattern as
+`ApplyVillageAvatarRenames.java`), run from a GUI session, then a normal `File > Check In`.
+
+### 1. Duplicate-bare-Global-class trap, found and fixed `[PROVEN]`
+
+The "Step 1" `set_function_this_type(addr, "VillageServerConnection *")` calls this survey originally
+called for (see above) had in fact already been run, in a session before `ApplyVillageServerConnectionThisTypes.java`
+existed — via raw MCP calls, not the namespace-safe script — and hit exactly the trap
+`decomp/RE_PRACTICES.md`'s "Class hygiene" section warns about: it created a synthetic
+**`VillageServerConnection` class directly under Global**, distinct from the real RTTI-proven
+**`LobbyComm::VillageServerConnection`**, and parented all 8 avatar/shop/trade handlers to the wrong one.
+
+**Tell:** `HandleMessage`'s dispatcher called the other, already-correct handlers (`HandleEnterWorld`,
+`HandleEntityCreate`, …) as bare sibling calls, but called these 8 as `::VillageServerConnection::HandleX(...)`
+— the leading `::` is the decompiler disambiguating the bare-Global class from the more-nested one already
+in lexical scope. Confirmed directly by walking the symbol tree: `LobbyComm::VillageServerConnection`
+(id 51132, the RTTI-proven class — ctor, vtable, `HandleMessage`, etc.) vs a second `VillageServerConnection`
+(id 136624, parent = Global) holding exactly the 8 new handlers.
+
+**Fix:** moved all 8 functions' symbols into the real class (`Function.getSymbol().setNamespace(real)`),
+set `__thiscall`, then deleted the now-empty duplicate class. Verified: `HandleMessage`'s dispatcher now
+calls all 8 as unqualified sibling members, same as every other case in that switch.
+
+### 2. Stale vtable slot, found in the same pass `[PROVEN]`
+
+`VillageServerConnection_vftable` slot `+0x40` (function `0x0046bde0`) was still named/typed
+`LobbyManager_SendWorldLoginReq_2002` with a stray phantom second parameter — the pre-2026-07-25-correction
+name, even though `decomp/RENAME_LIST.md`'s own 2026-07-25 entry and `docs/SOURCEMAP.md` §2b already
+recorded the corrected name `SendLeaveVillageRequest_2002` and the "not dormant, it's the leave-village
+request" finding. The doc correction had never actually been applied in Ghidra. Fixed: renamed into
+`LobbyComm::VillageServerConnection::SendLeaveVillageRequest_2002`, dropped the redundant/unused second
+parameter (`this` alone covers it), restored `__thiscall`, rebuilt the vtable-struct field's function
+signature and plate comment to match, and removed the orphaned stale data type.
+
+### 3. Signature cleanup: the 8 handlers' message parameter `[PROVEN]`
+
+All 8 avatar/shop/trade handlers took a bare `int *param_1` for their message argument, unlike every
+sibling handler in the same dispatcher (`HandleEnterWorld` etc.), which take `NetMsgStream *msg`. Retyped
+all 8 to match (`void HandleX(NetMsgStream *msg)`, `__thiscall`).
+
+### 4. `LobbyComm::IAvatarDataBlock` family — recovered and vtable-bound `[PROVEN]` (fields) / `[HYPOTHESIS]` (names)
+
+Following the vtable-struct binding the user built by hand for `VillageServerConnection`, did the same for
+the 7 classes `docs/SOURCEMAP.md` flagged `[TODO — RTTI class hygiene]`: `AvatarProxy`,
+`AvatarCreationBlockEx`, `AvatarAppearanceBlockEx`, `AvatarStyleBlockEx`, `AvatarStatsBlockEx`,
+`AvatarActiveItemsBlockEx`, `AvatarInventoryBlockEx`. RTTI confirmed all 7 (plus a previously-unnoticed
+8th, `IAvatarDataBlock`) via their mangled type-descriptor strings, all under `LobbyComm::`:
+`.?AVAvatarProxy@LobbyComm@@`, `.?AVAvatarCreationBlockEx@LobbyComm@@`, etc.
+
+**`AvatarProxy` is NOT part of this family.** Its own Class Hierarchy Descriptor shows 3 base-class-array
+entries — self, `LobbyComm::ActorProxy`, `LobbyComm::IActor` — a single-inheritance chain unrelated to the
+Block classes. `IActor`'s own Base Class Descriptor is referenced from 4 distinct locations in `.rdata`,
+confirming it's a widely-shared actor interface used by other class hierarchies too. Its own vtable (7
+slots at `0x007dd038`, a different shape from the Block family's 8) was deliberately **not** bound this
+session — reversing a shared base interface properly needs its own dedicated pass, not a rushed partial
+binding off one implementor's view. `[TODO]` follow-up.
+
+**The other 6 (`AvatarCreationBlockEx` … `AvatarInventoryBlockEx`) all derive from `IAvatarDataBlock`**,
+an 8-slot interface, RTTI-confirmed and vtable-recovered:
+
+| Slot | Role | Evidence |
+|---|---|---|
+| +0x00 | Destructor (scalar deleting) | sets vtable ptr to `IAvatarDataBlock::vftable`, conditionally frees `this`; identical machine code shared/folded across all 7 (trivial dtor, no per-class cleanup) |
+| +0x04 | `ReadFromBuffer(void* buf, uint len)` | guards `len>=4`, wraps `buf` in an `NComm::MemoryStream`, calls `vtbl[0xc]` (Deserialize); shared/inherited unchanged |
+| +0x08 | `WriteToBuffer(void* buf, uint* len)` | guards `*len >= vtbl[0x18]()` (GetSize), wraps in a stream, calls `vtbl[0x10]` (Serialize); shared/inherited unchanged |
+| +0x0c | `Deserialize(NComm::MemoryStream*)` | **PER-CLASS.** Base default (`0x00486410`) reads only the 4-byte discriminator at `this+4`. Every concrete class overrides it to also read its own fields (see per-class table below) |
+| +0x10 | `Serialize(NComm::MemoryStream*)` | **PER-CLASS**, mirror of Deserialize; base default writes only `this+4` |
+| +0x14 | `GetVariant()` → `return *(this+4)` | shared/inherited unchanged by all 7 (not overridden anywhere) — **⚠️ same machine code (`0x004901e0`) as the unrelated, already-documented `NComm_Event_GetType`** (identical-code-folding, MSVC/linker ICF); do not confuse the two or rename either off this coincidence |
+| +0x18 | `GetSize()` → uint | **PER-CLASS**; base default (`0x004f2810`) returns the constant `4` (just the discriminator). Concrete overrides return a size that depends on `GetVariant()` (e.g. Style: 0x24 if variant!=0 else 0x14) |
+| +0x1c | `Clear()` → void | **PURE VIRTUAL** in the base (`__purecall`) — every subclass must supply its own (zeroes its own fields) |
+
+Struct `IAvatarDataBlock` (8 bytes: `pVftable` + `nVariant`) is the embedded base of every concrete class.
+Per-class field counts/widths, read directly off each `Deserialize` body (widths `[PROVEN]`, names
+`[HYPOTHESIS]` — generic `fieldN`, not cross-checked against the differently-shaped LobbyComm-side
+`AvatarProxy_ReadXBlock` fields since this is a different wire):
+
+| Class | Fixed fields (always read) | Conditional fields (gated on `GetVariant()`) | Total size |
+|---|---|---|---|
+| `AvatarCreationBlockEx` | 6× u32 | +4× u32 if `!=0` | 0x30 (48B) |
+| `AvatarAppearanceBlockEx` | 2× u32 | none | 0x10 (16B) |
+| `AvatarStyleBlockEx` | 4× u32 | +4× u32 if `!=0` | 0x28 (40B) |
+| `AvatarStatsBlockEx` | 3× u32 | +1× u32 if `!=0`; +4×u32 +2×u8 if `>1` (tiered) | 0x2a (42B) |
+| `AvatarActiveItemsBlockEx` | 4× 12-byte slots | none | 0x38 (56B) — matches the already-documented "4 fixed equip slots" |
+| `AvatarInventoryBlockEx` | `nCount` (u32) + up to 20× 12-byte slots (clamped) | none | 0xfc (252B) — matches the already-documented "sltcnt-prefixed variable-length list" |
+
+`AvatarStatsBlockEx`'s tiered shape (3 base fields → +1 if variant!=0 → +4 more +2 bytes if variant>1)
+lines up suggestively with the already-`[PROVEN]` tiered LobbyComm-side split (`0xC80` level+exp only vs
+`0xC81` full lvl/exp/gold/glod) — noted as a `[HYPOTHESIS]` corroboration, not asserted as the same fields.
+
+Created `IAvatarDataBlock_vftable` (32B, 8 typed slots) and applied it at all 7 vftable addresses
+(`0x007de3dc` interface + the 6 concrete, tightly packed 0x24 bytes apart in `.rdata`). This-typed and
+namespaced all 27 member functions (3 shared + `Deserialize`/`Serialize`/`GetSize`/`Clear` × 7). Verified:
+every class's `Deserialize` now decompiles with named field access (`this->field1`, `this->base.pVftable
+->pGetVariant()`, etc.) instead of raw offset arithmetic.

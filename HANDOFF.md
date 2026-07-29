@@ -79,6 +79,18 @@ Spec: `docs/IN_WORLD_PRESENCE.md`. Code: `village.BitWriter` / `entity_create_bo
 `entity_remove_body`, `dispatch._spawn_world_avatars` + despawn in `on_conn_closed`.
 Tests: `tests/test_world_presence.py`. Deployed on `stub_avatars.out`. **Never seen working.**
 
+**Merged in 2026-07-28 research** (a parallel session, `origin/master`): the full `AvatarProxy` block
+survey — **AvatarStyle / ActiveItems / Stats / Inventory layouts are now known**, so the "add
+AvatarStyle" next step below is ready to write rather than needing more RE. Also the `0xC1x`/`0xC8x`
+re-sync family, shop/trade/party, and a testable hypothesis that in-world **chat text may be gated on
+the local player having an AvatarProxy** — i.e. retest typing the moment an avatar appears.
+
+⚠️ **OPEN CONTRADICTION — the `names` flag** (bit 15 of the type word). The deployed code sends
+`names=0` (name lookup is conditional on the flag ⇒ positional reads, derived at `village.py:127`);
+the 2026-07-28 survey asserts `names=1`. That assertion traces back to a *pre-correction* draft of
+the doc rather than an independent derivation, so it is the weaker side — but it is not disproven.
+**The first live test settles it for free**: `Can't peek AvatarID` in the log points straight here.
+
 - ⭐ **1001 EntityCreate** puts a VISIBLE body in the world (AvatarProxy → `+0x170`).
   ⛔ **1004 PlayerCreate is a player RECORD** (`+0x174`), not a body — an earlier draft got this
   wrong. ⛔ **1002 EntityUpdate is NOT movement** (bare proxy, no payload). Movement is **unfound**.
