@@ -85,11 +85,13 @@ AvatarStyle" next step below is ready to write rather than needing more RE. Also
 re-sync family, shop/trade/party, and a testable hypothesis that in-world **chat text may be gated on
 the local player having an AvatarProxy** — i.e. retest typing the moment an avatar appears.
 
-⚠️ **OPEN CONTRADICTION — the `names` flag** (bit 15 of the type word). The deployed code sends
-`names=0` (name lookup is conditional on the flag ⇒ positional reads, derived at `village.py:127`);
-the 2026-07-28 survey asserts `names=1`. That assertion traces back to a *pre-correction* draft of
-the doc rather than an independent derivation, so it is the weaker side — but it is not disproven.
-**The first live test settles it for free**: `Can't peek AvatarID` in the log points straight here.
+⭐ **`names` flag — SETTLED 2026-07-29 (static): it must be 0, which is what we send.** The
+2026-07-28 survey's `names=1` is wrong and has been corrected everywhere. Field names are
+caller-side C string constants that never ride the wire; `FUN_0048f5f0` always tail-calls the
+positional bit reader `FUN_0048f0d0` either way. The catch: with the flag SET, the finalize
+`FUN_0048f530` reads a **trailing 32-bit hash word** off the stream — which we do not send, so
+`names=1` would over-read every body by 4 bytes with no error of its own. Full chain in
+`docs/IN_WORLD_PRESENCE.md`; the constraint is now comment-pinned at `village.py:127`.
 
 - ⭐ **1001 EntityCreate** puts a VISIBLE body in the world (AvatarProxy → `+0x170`).
   ⛔ **1004 PlayerCreate is a player RECORD** (`+0x174`), not a body — an earlier draft got this

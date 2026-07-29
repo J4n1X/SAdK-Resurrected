@@ -127,6 +127,18 @@ def world_tick_body():
 # Field NAMES are only looked up when the LobbyMessage "names" flag is set (bit 15 of the type
 # word). We send names=0, so FUN_0048f5f0 skips the name entirely and reads N bits positionally —
 # which is why this writer only needs widths, in order.
+#
+# names=0 IS REQUIRED, not merely convenient (settled statically 2026-07-29, sadk_noav.exe):
+#   FUN_0048f5f0(msg, nbits, name)  gates ALL name handling on msg+0x20, then always tail-calls
+#                                   FUN_0048f0d0(msg, nbits) — the pure positional bit read.
+#   The name is a CALLER-SUPPLIED C string (e.g. "dtblcks"); it is never read from the wire. With
+#   the flag set it is folded into a running hash at msg+0x30 (init 0x00762320 / update 0x00762350
+#   / mix 0x00762400) — that hash is bookkeeping and consumes no bits.
+#   BUT the finalize FUN_0048f530, called at the end of each block group, does this when the flag
+#   is set:   FUN_0048f0d0(msg, 0x20)   <-- consumes a trailing 32-bit hash word off the stream.
+# So sending names=1 would oblige us to append a 32-bit trailer per message; with names=0 the
+# client reads exactly the bits we write and stops. Do not "fix" this to names=1 — a stale draft
+# of docs/IN_WORLD_PRESENCE.md claimed that, and it would silently over-read every body by 4 bytes.
 class BitWriter:
     """MSB-first bit packer. `write(value, nbits)` appends the low nbits of value, MSB first."""
 

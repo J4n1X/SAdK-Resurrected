@@ -549,10 +549,11 @@ body enters the world.
 
 ⚠️ **All of 1001-1004 and the 0xC1x/0xC8x family are a BIT-PACKED stream** (`SelectField(name)` +
 `ReadBits(n)`, MSB-first, non-byte-aligned field widths) — structurally different from every other
-message the stub sends, and needing the dedicated `village.BitWriter`. ⚠️ **Whether the `names` flag
-(bit 15 of the type word) must be SET is an open contradiction**: the deployed `EntityCreate` sends
-`names=0` on the reading that the name lookup is conditional on that flag, while the 2026-07-28
-survey asserts `names=1`. The first live test settles it — see `docs/IN_WORLD_PRESENCE.md`. Full
+message the stub sends, and needing the dedicated `village.BitWriter`. ⭐ **They must be sent with the
+`names` flag CLEAR (`names=0`, bit 15 of the type word)** — settled statically 2026-07-29, correcting
+an earlier draft that said `names=1`. Field names are caller-side C strings that never appear on the
+wire; setting the flag only makes the client hash them *and* makes the finalize `FUN_0048f530`
+consume a **trailing 32-bit word** we do not send, over-reading every body by 4 bytes. Full
 field-level layout, the corrected
 "AvatarProxy = other players, PlayerCreate = NPCs" model, and a suggested implementation order:
 `docs/IN_WORLD_PRESENCE.md`.
