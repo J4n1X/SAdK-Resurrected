@@ -345,20 +345,33 @@ effectively unreachable.
   (`visual+0x760`) and rebuilds the 3D model on change — the pipeline consumes exactly the
   AvatarStyle data we send. An empty/missing template table returns `0` with **no log**.
 
-### Where that leaves the wall
+### ✅ ROOT CAUSE — 2026-08-01, TTD trace `avatar_spawn_diag.run`. **The chain works; the POSITION was wrong.**
 
-Every link from the wire to `UpdateAvatar` is now either proven live or statically unconditional,
-and none of the error paths fired. The break must be in the **shared visual stage** (template table
-/ scene attach — would kill own AND remote avatars identically) or in something narrower on the
-remote path only. The cheap discriminator: **is the OWN settler visible in our stub village?**
+The maintainer confirmed the own settler is visible, and one TTD recording (VM as second client,
+both spawn paths exercised) closed the case. Verbatim from the trace: `HandleEntityCreate` ×2 →
+`CLobbyClient_UpdateAvatar` ×2 → `CLobby_CreateAvatarObjFromProxy` ×2 (non-null CLobbyObjs) →
+template `"settler"` resolved (same pointer as the own spawn) → visual ctor `FUN_00519c10` ×2
+(non-null) → **`AvatarVisual_RefreshStyleModel` long-span call = the styled 3D model was built.**
+Every stage of delivery, parse, queue, drain, observer fan-out, creation and styling worked on
+every test that ever ran.
 
-- **Own settler visible** ⇒ templates, CLobbyObj, scene and style pipeline all work ⇒ the remote
-  path breaks in a narrow spot (`UpdateAvatar` not firing or its obj misplaced) → TTD/breakpoint
-  on `CLobbyClient_UpdateAvatar@0x00503620` is the decisive next measurement.
-- **Own settler NOT visible** ⇒ the shared visual stage is dead in the stub-lobby context (most
-  plausibly the `CLobby+0x134` template table is populated by data/flow we never trigger) → dig at
-  `CLobby_FindObjTemplateByName` / the table builder, with a debugger on
-  `CLobby_CreateOwnAvatarObj@0x004f6fd0`.
+The defect: the visual-ctor position argument (read via `!tt` + `dd poi(esp+8)`):
+
+| avatar | position at the visual ctor |
+|---|---|
+| own (visible) | **(-31.24, 2.71, +8.28)** — x/y = the binary's default-spawn constants `DAT_007dd028/2c` exactly |
+| remote (never seen) | **(0.0, 0.0, 6.0)** — our `_spawn_spot(2)` ring around world origin, byte-exact through quantise→wire→dequantise |
+
+The remote settler stood **~31 units from the village square, ~2.7 units below its ground level** —
+fully spawned, modelled, styled, and outside anyone's view, in every test since the feature shipped.
+The wire position pipeline is proven **pass-through-correct** (we sent (0,0,6); the ctor received
+(0,0,6)), so the wire value alone decides where an avatar stands.
+
+**Fix:** `_spawn_spot` now rings around `VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)`
+(`dispatch.py`; deliberately not `config.py` — the deploy server's config is local-only). ER:
+`engagement_records/2026-08-01_spawn-at-village-square.md`. Open cosmetic notes: the own path's
+z-sign flip vs the static default (−8.28 vs observed +8.28) is unexplained but irrelevant to the
+remote path; ring radius 6.0 may need tuning if it clips buildings.
 
 ## Does this also explain the dead chat input?
 

@@ -111,16 +111,29 @@ def on_conn_closed(conn):
         village.send_world_login_ack(v, force=True)
 
 
+# The village spawn square, [PROVEN] 2026-08-01 by TTD trace `avatar_spawn_diag.run`: the client's
+# OWN avatar visual is constructed at (-31.24, 2.71, +8.28) (x/y equal the binary's default-spawn
+# constants DAT_007dd028/2c exactly; z is the observed value — the static default DAT_007dd06c is
+# -8.28, sign-flipped somewhere on the own path, but the REMOTE path is proven pass-through: we sent
+# (0,0,6) on the wire and the visual ctor received (0,0,6) verbatim). Ring-spawning around world
+# origin put remote avatars ~31 units away from the square and ~2.7 below its ground level — fully
+# spawned, modelled and styled, just standing where nobody looks. NOT in config.py on purpose: the
+# deploy server's config.py is local-only and must never be overwritten (see HANDOFF.md).
+VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)
+
+
 def _spawn_spot(perm_id):
-    """A deterministic, non-overlapping spot on a small ring around the world origin.
+    """A deterministic, non-overlapping spot on a small ring around the village spawn square.
 
     Avatars need SOME position, and we do not yet know where players actually are (the client's own
     position reports are unreversed). Keying the spot on perm_id keeps it stable across time and
     identical for every observer, so two clients agree on where each other stand.
-    World origin is (0,0,0); bounds are x/z ±150, y −10..30 (see village.WORLD_BOUNDS)."""
+    Centered on VILLAGE_SPAWN_POINT — the spot the client's own avatar provably spawns at — so
+    remote players appear right beside the observer instead of at the distant world origin."""
     ang = (perm_id % 8) * (math.pi / 4.0)
     r = config.AVATAR_SPAWN_SPREAD
-    return (math.cos(ang) * r, 0.0, math.sin(ang) * r)
+    cx, cy, cz = VILLAGE_SPAWN_POINT
+    return (cx + math.cos(ang) * r, cy, cz + math.sin(ang) * r)
 
 
 def _avatar_style(player):
