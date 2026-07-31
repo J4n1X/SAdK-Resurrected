@@ -127,6 +127,39 @@ an unproven spawn makes a failure impossible to attribute.
 - `GameSeed` is the constant `0x5eed1234` (fine — all clients get the same one).
 - Unknown chat-magic ids now hex-dump themselves; `id=11` is solved (StatusReply).
 
+## ⛔ Deploy hazards — five ways the server silently runs code you did not write (2026-07-31)
+
+All five bit in one session, and together they cost a live test window with a second player.
+
+1. ⭐ **Unpushed local commits get REVERTED by anyone else's deploy.** The in-world avatar work sat
+   local-only for four days; a parallel session deployed from its own `origin/master` checkout and
+   overwrote `village.py`/`dispatch.py`/`config.py` with the pre-avatar versions. The tell was that
+   `chat.py`/`referee.py` still hash-matched (they were pushed) while the other three did not.
+   **Push before anyone else deploys, and grep the server for a symbol you expect** —
+   `grep -c entity_create_body` beats any hash comparison for answering "is my feature there at all".
+2. ⭐ **`config.py` on the server carries LOCAL-ONLY settings — never blind-copy it.** It holds the
+   real deployment's `ADVERTISED_IP` (a *public* IP for internet tests) and a different `WORLD_PORT`
+   (5477, not 5479). Copying local `config.py` over it silently reverts the operator's setup.
+   **Diff before overwriting, and copy only the modules you actually changed.**
+3. ⭐ **A hash match proves nothing about the RUNNING process.** Python imports at startup, so a file
+   written *after* launch is not loaded. Compare `ps -o lstart -p PID` against `stat -c %y file` —
+   this session had a process 46 s older than the code it was supposed to be running.
+4. **`SADK_ADVERTISE_IP` in the launch command OVERRIDES the config default** (`os.environ.get`).
+   Passing the LAN IP out of habit makes the server hand a remote player an unreachable address.
+   Launch with **no** env override unless you mean it.
+5. **Launch with `python3 -u`.** Without it stdout is block-buffered into the log file, so a healthy
+   server looks identical to a dead one (0-byte log) for a long time.
+
+Restart, verify in this order:
+```bash
+ssh linux-server "pkill -f '[s]adk_lobby'"                       # separate invocation!
+timeout 12 ssh linux-server "cd ~/projects/sadk-resurrected && \
+  setsid nohup python3 -u -m sadk_lobby > stub.out 2>&1 </dev/null & disown; sleep 3"
+ssh linux-server "ss -ltn | grep -E ':(7070|7071|5477|5481)'; \
+  ps -o pid,lstart,cmd -C python3 | grep sadk; head -20 ~/projects/sadk-resurrected/stub.out"
+```
+⚠️ Backgrounding over ssh without `timeout`/`disown` **hangs the ssh channel** until the server dies.
+
 ## Environment
 Stub deployed to `linux-server:~/projects/sadk-resurrected` **by file copy, not git** — the
 remote checkout is an old commit with a dirty tree, so **verify by content hash, not `git log`**:
