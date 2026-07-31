@@ -318,9 +318,22 @@ Two clients into the lobby world, look around, then read `Documents/SAdK/dumps/L
 > - **H1** — the handler ran, parsed fine, and nothing rendered (no model ⇒ needs AvatarStyle).
 > - **H2** — the handler never ran; the frame was not routed to the world switch at all.
 >
-> **Do not choose between them from the log.** The decisive query is `ttd_calls 0x0046e1d0` — did
-> `HandleEntityCreate` execute? That is a retrospective read off a TTD trace and needs the Ghidra MCP.
-> (`EnterWorld` proves 1000 routes correctly through `SendGameData(74)`; it does not prove 1001 does.)
+> ### ✅ SETTLED the same day — **H2 is REFUTED, the fault is RENDERING**
+> A negative-control probe (one deliberately malformed 2-byte `EntityCreate`) **crashed the client**:
+> game window gone, no error dialog, every connection dropping 1.1 s after the frame
+> (`stub_probe.out` 22:47:16 → 22:47:17, reproduced 3×).
+>
+> **An undelivered frame cannot crash anything.** So msg 1001 *is* routed to
+> `HandleEntityCreate@0x0046e1d0` and *is* executed — routing works, exactly as for 1000. It follows
+> that the well-formed 13-byte frame is delivered and parsed too (it produces no error), and what
+> remains is **H1: it parses, and nothing renders.** Next lever: the **AvatarStyle** block
+> (`dtblcks |= 2`), writer already built and tested.
+>
+> ⛔ **Never send a truncated body to this subsystem.** The peek at stream vtbl+0x18 does **not**
+> bounds-check the buffer — it ran off the end rather than returning false, so `Can't peek AvatarID`
+> fires on some other condition and "too short" is a **crash**, not an error path. Future probes must
+> stay well-formed and vary only field VALUES.
+> ER: `engagement_records/2026-07-31_entitycreate-negative-control.md`
 
 NPCs are deliberately NOT implemented yet — they will likely need AvatarStyle too, and stacking a
 second unproven block on an unproven spawn makes a failure impossible to attribute.
