@@ -110,7 +110,14 @@ Two clients into the lobby world, then read `Documents/SAdK/dumps/LobbyComm.log`
 | avatars on a ring around the town square | 🎉 | movement, then NPCs |
 | `Can't peek AvatarID` | leading 32-bit id wrong/not first | fix the header |
 | `Could not read AvatarLocation from message.` | location block malformed | re-check widths |
-| **no error, no avatar** | it PARSED, nothing rendered | add AvatarStyle (`dtblcks \|= 2`) — **do not** re-check the location block |
+| **no error, no avatar** | ⛔ AMBIGUOUS — this is what actually happened 2026-07-31 | `ttd_calls 0x0046e1d0` (see below) |
+
+⛔ **The "silence means it parsed" rule was WRONG and is retracted.** Live 2026-07-31: two clients
+in-world, both `EntityCreate(1001)` frames sent (22:29:25, 22:34:07), client logged nothing, no
+avatar. Control: **`HandleEnterWorld` does not appear in `LobbyComm.log` either** and EnterWorld
+works — **no `Handle*` method is instrumented**. The error strings only fire if the handler ran *and*
+failed, so silence fits both "ran and parsed" and "never ran". Decide it with `ttd_calls 0x0046e1d0`,
+not the log. Full correction: `docs/IN_WORLD_PRESENCE.md`.
 
 That last row is the point: unlike the referee, silence here is *informative*. NPCs are deliberately
 NOT implemented yet — they will likely need AvatarStyle too, and stacking a second unproven block on
