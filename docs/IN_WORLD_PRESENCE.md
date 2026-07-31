@@ -295,12 +295,31 @@ Two clients into the lobby world, look around, then read `Documents/SAdK/dumps/L
 | `Can't peek AvatarID` | leading 32-bit id wrong or not first | fix the header (the `names` flag is settled — not this) |
 | `Could not read AvatarLocation from message.` | location block malformed | re-check widths |
 | `Could not read tick from message.` | `tick` is not the first 16 bits of the block | |
-| **no error, no avatar** | it PARSED, nothing rendered | add AvatarStyle (`dtblcks \|= 2`) — **do not** re-check the location block |
+| **no error, no avatar** | AMBIGUOUS — see below | discriminate with `ttd_calls 0x0046e1d0` |
 
-That last row is the point: unlike the referee, silence here is *informative*, because this subsystem
-logs when it is wrong. NPCs are deliberately NOT implemented yet — they will likely need AvatarStyle
-too, and stacking a second unproven block on an unproven spawn makes a failure impossible to
-attribute.
+> ### ⛔ CORRECTION 2026-07-31 — silence is NOT as informative as this document claimed
+> An earlier revision said the "no error, no avatar" row meant *"the message PARSED, nothing
+> rendered — add AvatarStyle"*. **That was wrong**, and it was tested live: two clients were in-world
+> together, both `EntityCreate(1001)` frames went out (server log `stub_avatars2.out`, 22:29:25 and
+> again 22:34:07), and **the client logged absolutely nothing** — no error, and no avatar appeared.
+>
+> The control that settles the interpretation: **`HandleEnterWorld` does not appear in `LobbyComm.log`
+> either**, and EnterWorld demonstrably works. In fact **no `Handle*` method appears at all** — the
+> instrumented set in that log is `System::*`, `BaseConnection::*`, `UserCommConnection::*`,
+> `ServerList::*`, `CharacterManager::*` and `VillageServerConnection::LoggedIn`. The world-message
+> handlers carry **no log-scope prologue**.
+>
+> ⇒ The `LobbyAvatarProxy.cpp` error strings only fire if the handler **ran AND parsing failed**.
+> So "no error" is consistent with BOTH of:
+> - **H1** — the handler ran, parsed fine, and nothing rendered (no model ⇒ needs AvatarStyle).
+> - **H2** — the handler never ran; the frame was not routed to the world switch at all.
+>
+> **Do not choose between them from the log.** The decisive query is `ttd_calls 0x0046e1d0` — did
+> `HandleEntityCreate` execute? That is a retrospective read off a TTD trace and needs the Ghidra MCP.
+> (`EnterWorld` proves 1000 routes correctly through `SendGameData(74)`; it does not prove 1001 does.)
+
+NPCs are deliberately NOT implemented yet — they will likely need AvatarStyle too, and stacking a
+second unproven block on an unproven spawn makes a failure impossible to attribute.
 
 ⚠️ Every failure mode in the referee subsystem was silent, and the *render* half of this one has the
 same shape (an observer fan-out that simply does not fire). If the log is silent, prefer
