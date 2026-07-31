@@ -63,6 +63,44 @@ was a *parse* over-read, which this design avoids.
 - Reversible: `_avatar_style` returns the block; passing `style=None` restores the 13-byte form,
   which is still pinned bit-identical by `test_default_spawn_is_unchanged_by_the_style_option`.
 
-## Result
+## Result — RUN 2026-07-31 23:08. **Style parses cleanly. Still no avatar. H1 narrowed, not solved.**
 
-*(to be filled in after the run)*
+Both styled frames went out at 23:08:09.154 (30 B body / 44 B frame, `dtblcks=location+style`,
+`stub_style.out` lines 462-463) with two clients in-world.
+
+Client side — and this time the negative is trustworthy:
+
+- **Zero error lines**, from a block that logs **every one of its ten fields separately**. If the
+  string encoding, `trbgndr`, any colour or any `addColor` were wrong, that field would have named
+  itself. It did not.
+- The log was **live**, not unflushed — last written 23:08:51, well after the 23:08:09 frames.
+- `SADK.exe` **still running** — no crash this time (the layout verification paid off).
+- No avatar visible.
+
+⇒ Combined with the probe's proof of delivery: the frame **arrives, is dispatched to
+`HandleEntityCreate`, parses completely (location AND style), and the AvatarProxy is allocated and
+registered** — and nothing is drawn. **The message side is now fully accounted for. The fault is in
+the client's render/observer path.**
+
+### Where it goes next — a precise address, not a guess
+
+Tracing what `HandleEntityCreate` does *after* parsing:
+
+1. `FUN_0066c640(&this->field_0x1ac, &pAvatarProxy)` is **not** an observer notify — it is a chunked
+   **deque push_back** (chunk array `+4`, head `+0xc`, count `+0x10`). The avatar is *enqueued*.
+2. `pTickInWorld` (vtbl+0x28) = `VillageServerConnection::TickInWorld@0x00471110`, which guards on
+   LobbyManager **state == 9** (we are in state 9 — that is what renders the world) and calls
+   `DrainEventQueues@0x0046fde0`.
+3. `DrainEventQueues` drains **8** ring buffers (records at `+0x184`, `+0x198`, **`+0x1ac`**,
+   `+0x1c0`, `+0x1d4`, `+0x1e8`, `+0x1fc`, `+0x210`; stride `0x14`). The `+0x1ac` queue — ours —
+   fires `NotifyQueue_FireAndClear(&this->field_0xbc, this, item)`.
+
+⭐ **So an EntityCreate renders only if something is registered as an observer at
+`VillageServerConnection+0xbc`.** Fire-and-clear over an empty observer list is a silent no-op —
+which is exactly the symptom, and explains why no amount of fixing the *payload* changes anything.
+
+**Next step:** find who subscribes at `+0xbc`. The prime candidate is the world-screen sub-controller
+that `LobbyMenu_WorldScreen_OnShow` builds with the `VillageServerConnection*` passed in directly:
+factory `FUN_0042b7b0` → constructor **`FUN_00445ac0`** (0xC58-byte object). Decompile that and look
+for a registration against `+0xbc`. If nothing anywhere registers there, the subscriber is created by
+a path we never trigger — and *that* is the real gap, not the wire.

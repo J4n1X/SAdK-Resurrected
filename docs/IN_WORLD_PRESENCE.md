@@ -249,6 +249,59 @@ and stop. The deployed writer is therefore correct and self-consistent.
 need to append four arbitrary bytes. Irrelevant for us; recorded so nobody hunts for a checksum
 algorithm that isn't there.)
 
+## ⭐ THE CURRENT WALL — the render path needs an observer at `VillageServerConnection+0xbc`
+
+**Status 2026-07-31: the message side is FULLY ACCOUNTED FOR and is not the problem.** Proven live:
+
+| fact | how it was established |
+|---|---|
+| msg 1001 is **routed and executed** | a malformed probe **crashed the client** — an undelivered frame cannot crash anything |
+| the good frame **parses completely** | location + style both sent (30 B); the style block logs **each of its ten fields separately** and logged nothing |
+| the AvatarProxy is **allocated and registered** | `HandleEntityCreate` has only two failure exits, both logging; a silent run is a successful run |
+| **nothing renders** | observed directly, twice, with two clients in-world |
+
+### What happens after parsing — traced end to end
+
+1. `FUN_0066c640(&this->field_0x1ac, &pAvatarProxy)` is **not an observer notify** — it is a chunked
+   **deque push_back** (chunk array `+4`, head `+0xc`, count `+0x10`). The avatar is *enqueued*.
+2. `pTickInWorld` (vtbl+0x28) = `TickInWorld@0x00471110` — guards on LobbyManager **state == 9**
+   (satisfied; that is what makes the world render) then calls `DrainEventQueues@0x0046fde0`.
+3. `DrainEventQueues` drains **eight** ring buffers — records at `+0x184`, `+0x198`, **`+0x1ac`**,
+   `+0x1c0`, `+0x1d4`, `+0x1e8`, `+0x1fc`, `+0x210`, stride `0x14`, each
+   `{bufPtr, cap, capacity, count, cursor}`. Ours (`+0x1ac`) fires:
+
+```c
+NotifyQueue_FireAndClear(&this->field_0xbc, this, <the AvatarProxy>)
+```
+
+⇒ **An EntityCreate renders only if something is registered as an observer at `+0xbc`.**
+`FireAndClear` over an empty observer list is a **silent no-op** — no log, no error, no avatar. That
+is the symptom exactly, and it explains why improving the *payload* changes nothing.
+
+**Queue → observer-list map** (from `DrainEventQueues`, useful for every 1001-1006 message):
+
+| queue record | buffer | count | observer list |
+|---|---|---|---|
+| `+0x184` | `+0x188` | `+0x194` | `+0xa4` |
+| `+0x198` | `+0x19c` | `+0x1a8` | `+0xb0` |
+| **`+0x1ac`** | `+0x1b0` | `+0x1bc` | **`+0xbc`** ← EntityCreate/avatars |
+| `+0x1c0` | `+0x1c4` | `+0x1d0` | `+0xc8` |
+| `+0x1d4` | `+0x1d8` | `+0x1e4` | `+0xd4` |
+| `+0x1e8` | `+0x1ec` | `+0x1f8` | `+0xe0` |
+| `+0x1fc` | `+0x200` | `+0x20c` | `+0xec` |
+| `+0x210` | `+0x214` | `+0x220` | `+0xf8` |
+
+### Next step
+
+Find who subscribes at `+0xbc`. Prime candidate: the world-screen sub-controller that
+`LobbyMenu_WorldScreen_OnShow` builds with the `VillageServerConnection*` passed in **directly** —
+factory `FUN_0042b7b0` (allocates 0xC58, inserts into a list at `+0x3b0`) → constructor
+**`FUN_00445ac0`**. Decompile that and look for a registration against `+0xbc`.
+
+If nothing anywhere registers at `+0xbc`, the subscriber is created by a path we never trigger, and
+*that* is the real gap — an "is the game waiting for something earlier?" situation
+(`HARNESS.md §2`), not a wire problem.
+
 ## Does this also explain the dead chat input?
 
 In-world chat channels/roster/join work, but **typing produces zero wire traffic and no local echo** —
