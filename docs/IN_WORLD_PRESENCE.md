@@ -222,6 +222,10 @@ Three facts follow, each load-bearing:
    `FUN_0048f5f0(msg, 4, "dtblcks")`. With the flag set it is folded into a running hash at
    `msg+0x30` (init `FUN_00762320`, update `FUN_00762350`, mix `FUN_00762400`). That hash touches
    neither the byte buffer nor the bit cursor, so it consumes **zero** wire bits.
+   Corroborated independently by `LobbyMessage_SelectField@0x0048f490`, which handlers and block
+   readers call *unconditionally* (e.g. `HandleEntityCreate` does `SelectField(msg, "id", 0)` before
+   peeking): it is a **no-op whenever the flag is clear**, so with `names = 0` every such call
+   collapses to a positional read. Field selection cannot fail on us.
 3. ⭐ **But the finalize does consume bits.** `FUN_0048f530`, called at the end of each block group
    (e.g. the tail of `AvatarProxy_ReadDataBlocks`), is:
 
