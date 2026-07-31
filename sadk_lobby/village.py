@@ -356,7 +356,7 @@ def send_world_tick(conn, magic=None):
 
 
 def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
-                       label=""):
+                       label="", style=None):
     """Spawn a visible avatar in the recipient's lobby world (msg 1001). See entity_create_body.
 
     ⚠️ UNPROVEN ON THE WIRE — spec is static-only (docs/IN_WORLD_PRESENCE.md). Unlike the referee
@@ -365,10 +365,12 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
     means success."""
     if not conn.alive:
         return
-    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick)
+    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style)
+    blocks = "location+style" if style else "location"
     _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
                   f"EntityCreate(1001) avatar id={avatar_id} {label}"
                   f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
+                  f" dtblcks={blocks} {len(body)}B"
                   f" — HandleEntityCreate → AvatarProxy into +0x170")
 
 

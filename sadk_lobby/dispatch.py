@@ -123,6 +123,22 @@ def _spawn_spot(perm_id):
     return (math.cos(ang) * r, 0.0, math.sin(ang) * r)
 
 
+def _avatar_style(player):
+    """AvatarStyle block (dtblcks bit1) for a player — the appearance the client draws.
+
+    Layout VERIFIED against `AvatarProxy_ReadStyleBlock@0x004825f0` (2026-07-31): a `name` STRING via
+    reader vtbl+0x34, then NINE 8-bit values landing in consecutive bytes AvatarProxy+0x48..+0x50 —
+    `trbgndr`, `hrclr`, `sknclr`, `shrtclr`, `trsrclr`, `addColor1..4`. Each has its own error string
+    in LobbyAvatarProxy.cpp, so a wrong field names ITSELF in the client's LobbyComm.log
+    ("Could not read skin color from stream." etc.) rather than failing silently.
+
+    Values are conservative defaults: colour 0 on every slot, tribe/gender 0. `trbgndr` packs tribe
+    and gender into one byte and the packing is **[TODO]** — 0 is the safest first guess. The name is
+    the real character name, so a rendered avatar should also be labelled correctly.
+    """
+    return {"name": player.char_name, "tribe_gender": 0, "colours": (0,) * 8}
+
+
 def _spawn_world_avatars(conn):
     """Mutual avatar spawn on world entry: show this client everyone already in-world, and show
     this client TO everyone already in-world.
@@ -143,9 +159,11 @@ def _spawn_world_avatars(conn):
     for other in others:
         op = _player(other)
         village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
-                                   label=f"[{op.char_name!r} shown to {me.char_name!r}]")
+                                   label=f"[{op.char_name!r} shown to {me.char_name!r}]",
+                                   style=_avatar_style(op))
         village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),
-                                   label=f"[{me.char_name!r} shown to {op.char_name!r}]")
+                                   label=f"[{me.char_name!r} shown to {op.char_name!r}]",
+                                   style=_avatar_style(me))
     log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
 
