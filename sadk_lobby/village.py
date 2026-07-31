@@ -286,10 +286,11 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
 # It also corrects an RE assumption: the peek at stream vtbl+0x18 does **not** bounds-check against
 # the buffer length, so `Can't peek AvatarID` fires on some other condition, not on "buffer too
 # short". Any future probe must stay well-formed and vary only field VALUES.
-def _send_village(conn, msg_type, body, magic, tag):
+def _send_village(conn, msg_type, body, magic, tag, quiet=False):
     payload = gamedata_frame(msg_type, body, magic=(magic or config.VILLAGE_PAYLOAD_MAGIC))
     conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))
-    log(f"  → [VILLAGE] {tag} (msg {msg_type}/0x{msg_type:x}) in SendGameData(74) on conn #{conn.id} ({len(payload)}B)")
+    if not quiet:
+        log(f"  → [VILLAGE] {tag} (msg {msg_type}/0x{msg_type:x}) in SendGameData(74) on conn #{conn.id} ({len(payload)}B)")
 
 
 def send_enter_world(conn, magic=None, force=False):
@@ -356,13 +357,18 @@ def send_world_tick(conn, magic=None):
 
 
 def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
-                       label="", style=None):
-    """Spawn a visible avatar in the recipient's lobby world (msg 1001). See entity_create_body.
+                       label="", style=None, quiet=False):
+    """Spawn OR refresh a visible avatar in the recipient's lobby world (msg 1001).
 
-    ⚠️ UNPROVEN ON THE WIRE — spec is static-only (docs/IN_WORLD_PRESENCE.md). Unlike the referee
-    subsystem this one REPORTS its parse failures, so check the client's LobbyComm.log for
-    'Can't peek AvatarID' / 'Could not read AvatarLocation from message.' before assuming silence
-    means success."""
+    PROVEN ON THE WIRE 2026-08-01 (TTD traces avatar_spawn_diag.run / avatar_vanish_diag.run):
+    the first 1001 for an id creates the avatar (CLobbyObj + visual + styled model); every LATER
+    1001 for the same id takes `CLobbyClient_UpdateAvatar`'s update path, whose location block
+    pushes a WAYPOINT (pos+rot+rnng/jmp, stamped tick+2000 ms) into the visual's 8-slot movement
+    ring (`FUN_00519b20`). ⚠️ The per-frame interpolator (`FUN_00519d50`) positions the avatar
+    EXCLUSIVELY from that ring — without periodic refreshes the ring is empty and the avatar snaps
+    to (0,0,0) one frame after spawning. `tick` is the low 16 bits of an advancing ms clock; the
+    client re-anchors it against its own local clock (`FUN_004f4d10`), so no absolute sync is
+    needed. Waypoints with pos ≈ (0,0,0) are REJECTED by the push — never park an avatar there."""
     if not conn.alive:
         return
     body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style)
@@ -371,7 +377,7 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
                   f"EntityCreate(1001) avatar id={avatar_id} {label}"
                   f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
                   f" dtblcks={blocks} {len(body)}B"
-                  f" — HandleEntityCreate → AvatarProxy into +0x170")
+                  f" — HandleEntityCreate → AvatarProxy into +0x170", quiet=quiet)
 
 
 def entity_remove_body(avatar_id):

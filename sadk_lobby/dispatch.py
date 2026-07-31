@@ -152,15 +152,70 @@ def _avatar_style(player):
     return {"name": player.char_name, "tribe_gender": 0, "colours": (0,) * 8}
 
 
+# Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
+# the client positions every remote avatar from a ring buffer of timestamped WAYPOINTS that only
+# location UPDATES feed (`FUN_00519b20`, reached via `CLobbyClient_UpdateAvatar`'s update path on a
+# repeat 1001). The spawn frame paints exactly one frame; from the next frame the interpolator
+# (`FUN_00519d50`) snaps an empty-ringed avatar to (0,0,0). So the server must STREAM location
+# refreshes — this is the real protocol, not a workaround. 1 Hz is ample: each waypoint says
+# "be here at tick+2000 ms" and the avatar holds position past the last waypoint.
+AVATAR_REFRESH_SECS = 1.0
+_avatar_ticker_lock = threading.Lock()
+_avatar_ticker_started = False
+
+
+def _now_tick16():
+    """Low 16 bits of an advancing millisecond clock — the wire `tick` timebase. The client
+    reconstructs the full timestamp against its OWN local clock (`FUN_004f4d10` picks the nearest
+    interpretation), so only the relative advance matters, not the absolute value."""
+    return int(time.monotonic() * 1000) & 0xFFFF
+
+
+def _avatar_location_ticker():
+    cycles = 0
+    while True:
+        time.sleep(AVATAR_REFRESH_SECS)
+        cycles += 1
+        tick = _now_tick16()
+        in_world = _find_live(lambda c: getattr(c, "is_village", False)
+                              and getattr(c, "_enter_world_sent", False))
+        sent = 0
+        for conn in in_world:
+            me = _player(conn)
+            for other in in_world:
+                op = _player(other)
+                if other is conn or op.perm_id == me.perm_id:
+                    continue
+                try:
+                    village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+                                               tick=tick, quiet=True)
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                    log(f"  [WORLD] avatar refresh to conn #{conn.id} failed: {exc}")
+        if sent and cycles % 30 == 0:
+            log(f"  [WORLD] avatar location refresh running: {sent} update(s)/cycle every "
+                f"{AVATAR_REFRESH_SECS:.0f}s, tick={tick} (logged 1-in-30 cycles)")
+
+
+def _ensure_avatar_ticker():
+    global _avatar_ticker_started
+    with _avatar_ticker_lock:
+        if _avatar_ticker_started:
+            return
+        _avatar_ticker_started = True
+        threading.Thread(target=_avatar_location_ticker, daemon=True).start()
+        log(f"  [WORLD] avatar location ticker started — {AVATAR_REFRESH_SECS:.0f}s waypoint "
+            f"refresh per remote avatar (ER 2026-08-01_avatar-location-refresh)")
+
+
 def _spawn_world_avatars(conn):
     """Mutual avatar spawn on world entry: show this client everyone already in-world, and show
     this client TO everyone already in-world.
 
-    ⚠️ UNPROVEN ON THE WIRE — the EntityCreate(1001) layout is static-only
-    (docs/IN_WORLD_PRESENCE.md). Unlike the referee subsystem, this one REPORTS parse failures, so
-    the client's LobbyComm.log is the place to look: "Can't peek AvatarID" or
-    "Could not read AvatarLocation from message." mean the body is wrong. Silence + no avatar means
-    the message was accepted but something downstream (observer / render) did not fire."""
+    PROVEN ON THE WIRE 2026-08-01: the spawn itself works end-to-end (TTD-verified chain, see
+    docs/IN_WORLD_PRESENCE.md). The avatar only STAYS visible while the location ticker above
+    streams waypoint refreshes — the spawn paints one frame, the ring does the rest."""
+    _ensure_avatar_ticker()
     me = _player(conn)
     others = _find_live(lambda c: getattr(c, "is_village", False)
                         and c is not conn
@@ -169,14 +224,26 @@ def _spawn_world_avatars(conn):
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
         return
+    tick = _now_tick16()
     for other in others:
         op = _player(other)
-        village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+        village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id), tick=tick,
                                    label=f"[{op.char_name!r} shown to {me.char_name!r}]",
                                    style=_avatar_style(op))
-        village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),
+        village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id), tick=tick,
                                    label=f"[{me.char_name!r} shown to {op.char_name!r}]",
                                    style=_avatar_style(me))
+        # Prime the movement ring so the avatar never flickers: the create paints ONE frame, but the
+        # interpolator (FUN_00519d50) positions the avatar only from waypoint BRACKETS. A waypoint is
+        # stamped wire-tick+2000 ms client-side, so tick-2000 lands a waypoint at "now" and tick
+        # lands one at "now+2000" — a valid bracket from the very first tick, holding until the 1 Hz
+        # ticker takes over. Without this the avatar drops to (0,0,0) for the ~2-3 s the ring needs
+        # to fill (the "visible for one frame" symptom, TTD-proven in avatar_vanish_diag.run).
+        for prime in ((tick - 2000) & 0xFFFF, tick):
+            village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+                                       tick=prime, quiet=True)
+            village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),
+                                       tick=prime, quiet=True)
     log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
 
