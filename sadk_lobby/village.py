@@ -273,6 +273,19 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
     return w.bytes()
 
 
+# ⛔ NEVER send a short/truncated EntityCreate(1001) body — IT CRASHES THE CLIENT.
+# Established 2026-07-31 by a negative-control probe (ER
+# engagement_records/2026-07-31_entitycreate-negative-control.md): a 2-byte body, sent to make the
+# 32-bit `id` peek fail loudly, instead killed the game process ~1.1 s later (server saw every
+# connection drop at once; the player saw the window vanish with no error).
+#
+# ⭐ It answered the question anyway, and definitively: **an undelivered frame cannot crash
+# anything**, so msg 1001 IS routed to `VillageServerConnection::HandleEntityCreate@0x0046e1d0` and
+# IS parsed. Routing is NOT the problem — rendering is.
+#
+# It also corrects an RE assumption: the peek at stream vtbl+0x18 does **not** bounds-check against
+# the buffer length, so `Can't peek AvatarID` fires on some other condition, not on "buffer too
+# short". Any future probe must stay well-formed and vary only field VALUES.
 def _send_village(conn, msg_type, body, magic, tag):
     payload = gamedata_frame(msg_type, body, magic=(magic or config.VILLAGE_PAYLOAD_MAGIC))
     conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))

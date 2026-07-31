@@ -64,6 +64,54 @@ costs one frame and no gameplay time.
 - **Legit wait-state ruled out?** Yes — this does not substitute for something the client is waiting
   for; it is a probe, and the client's own reaction is the measurement.
 
-## Result
+## Result — RUN 2026-07-31 22:46–22:47. **H2 is dead: the frame IS delivered.**
 
-*(to be filled in after the run)*
+**Neither predicted outcome occurred. The probe CRASHED THE CLIENT** — the game window vanished with
+no error dialog, shortly after world entry, on every client that received it.
+
+Server log (`stub_probe.out`), the third and cleanest instance:
+
+```
+22:47:16.008  → [VILLAGE] PROBE EntityCreate(1001) — 2-byte body ... on conn #9  (16B)
+22:47:17.131    DISCONNECTED #8 [uc :7071]
+22:47:17.132    DISCONNECTED #9 [world :5477]
+```
+
+**1.1 s from probe to every connection dropping at once** — the signature of process death, not a
+clean disconnect. Reproduced three times (22:46:04 conn #4, 22:46:05 conn #6, 22:47:16 conn #9).
+
+### What it proves — and it is exactly what we needed
+
+⭐ **An undelivered frame cannot crash anything.** For a 2-byte body to kill the process, msg 1001
+must have been routed to `VillageServerConnection::HandleEntityCreate@0x0046e1d0` and executed
+against that buffer. Therefore:
+
+- **H2 (never delivered) is REFUTED.** Routing works; `SendGameData(74)` carries 1001 to the world
+  switch exactly as it carries 1000.
+- **⇒ the well-formed EntityCreate is also delivered and parsed** (it is 13 bytes, complete, and
+  produces no error), and **H1 is what remains: the fault is RENDERING, not the wire.**
+
+The next lever is the **AvatarStyle** block (`dtblcks |= 2`) — writer already built and tested
+(`village.avatar_style_block`), on the theory that the client has no model to draw without it.
+
+### A second, unplanned finding — corrects an RE assumption
+
+The peek at stream **vtbl+0x18 does NOT bounds-check** against the buffer length; it ran off the end
+of a 2-byte buffer instead of returning false. So `Can't peek AvatarID` fires on some *other*
+condition, and **"buffer too short" is a crash, not an error path**.
+
+⛔ **Rule adopted:** never send a truncated body to this subsystem. Any future probe must stay
+well-formed and vary only field **values**. Pinned as a comment above `_send_village` in
+`village.py`.
+
+### Cost and cleanup
+
+Cost: the maintainer's game crashed on world entry until it was reverted (~4 min). The probe was
+removed from `village.py` + `dispatch.py`, redeployed and the server restarted crash-free at
+22:48:58 — verified probe-free in the running build.
+
+**Honest assessment:** the design was wrong. I reasoned that a short buffer would take the documented
+`Can't peek AvatarID` branch, but never checked whether that branch is reached by a length check —
+the decompilation shows a `bool` return, and I assumed the bounds test behind it. The safer probe was
+always a **well-formed body with an absurd field value**. The experiment still answered its question,
+but by luck of interpretation rather than by design, and at the maintainer's expense.
