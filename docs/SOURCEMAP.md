@@ -362,3 +362,30 @@ layout, and evidence: `decomp/RENAME_LIST.md` "2026-07-28 (cont.)". **`AvatarPro
 `LobbyComm::ActorProxy : LobbyComm::IActor` (a distinct, widely-shared actor interface used by 4+
 other class hierarchies), not this Block family — its own 7-slot vtable (`0x007dd038`) needs a
 dedicated pass rather than a rushed partial binding.
+
+**Avatar render/observer chain — named 2026-07-31 (late), all `sadk_noav.exe`, applied in Ghidra:**
+
+| Addr | Name | Role |
+|---|---|---|
+| 0x00458860 | `NotifyList_Subscribe` | generic observer-list subscribe; caller pushes a `{object, fn}` functor |
+| 0x004324e0 | `NotifyList_Unsubscribe` | its mirror |
+| 0x00503d00 | `CLobbyClient_SubscribeVillageConnObservers` | subscribes the CLobbyClient to ALL 18 village-conn lists (incl. `+0xbc`); only caller = `LobbyVillageEnterAction_Trigger`, right after conn creation |
+| 0x00503ab0 | `CLobbyClient_UnsubscribeVillageConnObservers` | mirror; only caller = action `_Tick` on `bDone(+0x10)` |
+| 0x00503620 | `CLobbyClient_UpdateAvatar` | dev name `Lobby::CLobbyClient::UpdateAvatar` — the `+0xbc` EntityCreate callback; creates/updates the avatar CLobbyObj |
+| 0x00503940 | `CLobbyClient_OnEnterWorld_SpawnOwnAvatar` | `+0x104` callback (fired directly by `HandleEnterWorld`); spawns own avatar, sets run-mode 3 |
+| 0x00503800 | `CLobbyClient_OnVillageLoginResult_RetryOrFail` | `+0x10` callback; silent retry when `bServerAssigned`, else `!LOGIN_FAILED_TEXT` dialog; sets `bDone` |
+| 0x00503280 | `CLobbyClient_OnVillageLoggedOut` | `+0x1c`/`+0x28` callback; village-left teardown; sets `bDone` |
+| 0x00503590 | `CLobbyClient_OnWorldTick_Throttled` | `+0x11c` callback (msg 1005), 250 ms-throttled time sync |
+| 0x004704e0 | `VillageConn_OnUserCommLoggedIn_BuildOwnAvatarProxy` | one-shot on `UC+0x4`; fired value = **own avatar ID**; CharacterManager lookup ("WTF?! There is no avatar with that id…" on miss) → own proxy → `LM+0x554`, world login via `conn+0x34 vtbl+0x10`, `SetState(EnteringVillage=8)`, **`LM+0x54c = id` (PermID == own avatar ID)** |
+| 0x00470660 | `VillageConn_OnUserCommLoginFailed` | one-shot on `UC+0x10`; fires conn `+0x10` with −1 |
+| 0x0046c100 | `VillageConn_GetOwnAvatarProxy` | returns `LM(+0x158)→+0x554` |
+| 0x004626c0 | `LobbyManager_SetOwnAvatarProxy` | builds a 0xE0 AvatarProxy from character data into `LM+0x554` (+ registry `+0x558`) |
+| 0x004f6fd0 | `CLobby_CreateOwnAvatarObj` | CLobby vtbl+0xec; ⚠️ silent gate: needs `LM+0x554` set OR `CLobby+0x270 != 3` |
+| 0x004f6de0 | `CLobby_CreateAvatarObjFromProxy` | remote path; template `"settler"`; logs "Could not create CLobbyObj." only on failed `new` |
+| 0x004f6ca0 | `CLobby_CreateLobbyObj` | allocates 0x94 CLobbyObj, ctor, appends to `CLobby+0xa4` vector |
+| 0x00502e60 | `CLobbyObj_Construct` | resolves the template's TYPE string: `"customize"`/`"character"`/`"none"` → visual object (or **none, silently**) |
+| 0x004ffa80 | `CLobby_FindObjTemplateByName` | linear search of the template table at `CLobby+0x134 → +0x20/+0x28` (stride 0x60); **returns 0 silently if empty/missing** |
+| 0x00508090 | `AvatarVisual_RefreshStyleModel` | rebuilds the avatar 3D model from proxy style bytes (`visual+0x760`) |
+| 0x00445ac0 | `MiniGameMatchMakingDialog_Construct` | (bust of the old `+0xbc` candidate — it is the minigame dialog, not the avatar observer) |
+
+Full narrative + the wall fork ("is the OWN settler visible?"): `docs/IN_WORLD_PRESENCE.md`.

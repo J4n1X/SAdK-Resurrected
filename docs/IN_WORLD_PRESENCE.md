@@ -291,16 +291,74 @@ is the symptom exactly, and it explains why improving the *payload* changes noth
 | `+0x1fc` | `+0x200` | `+0x20c` | `+0xec` |
 | `+0x210` | `+0x214` | `+0x220` | `+0xf8` |
 
-### Next step
+### ✅ RESOLVED 2026-07-31 (late) — the `+0xbc` subscriber EXISTS and is subscribed in our flow
 
-Find who subscribes at `+0xbc`. Prime candidate: the world-screen sub-controller that
-`LobbyMenu_WorldScreen_OnShow` builds with the `VillageServerConnection*` passed in **directly** —
-factory `FUN_0042b7b0` (allocates 0xC58, inserts into a list at `+0x3b0`) → constructor
-**`FUN_00445ac0`**. Decompile that and look for a registration against `+0xbc`.
+The prior candidate was wrong: `FUN_00445ac0` is the **MiniGameMatchMakingDialog** constructor
+(`lobbyMiniGameMatchMakingDialog.xml`) and registers nothing. A whole-binary scan of every call to
+the subscribe helper (`NotifyList_Subscribe@0x00458860`, 165 call sites) found **exactly one** that
+targets `+0xbc`:
 
-If nothing anywhere registers at `+0xbc`, the subscriber is created by a path we never trigger, and
-*that* is the real gap — an "is the game waiting for something earlier?" situation
-(`HARNESS.md §2`), not a wire problem.
+**`CLobbyClient_SubscribeVillageConnObservers@0x00503d00`** — the dev unit is `LobbyClient.cpp`
+(`Lobby::CLobbyClient`), the object we had been calling the *LobbyVillageEnterAction*. It subscribes
+the CLobbyClient to **18** village-conn observer lists in one shot: `+0x10 +0x1c +0x28 +0x38 +0x44
++0x50 +0x5c +0x68 +0x74 +0x80 +0xa4 +0xb0 +0xbc +0xc8 +0xe0 +0x104 +0x110 +0x11c`. Its only caller
+is `LobbyVillageEnterAction_Trigger@0x00503f50`, **immediately after**
+`CreateVillageServerConnection@0x00463850` — which is the **only** village-conn factory in the
+binary (xref count = 1). ⇒ *every* village connection that exists has these observers from birth.
+Teardown (`CLobbyClient_UnsubscribeVillageConnObservers@0x00503ab0`) happens only from the action's
+`_Tick` when `bDone(+0x10)` is set, and every setter of `bDone` is accounted for: login-fail (shows
+an error dialog — not seen), the silent bServerAssigned retry (would re-dial our world port — one
+connection per client in the logs, so it didn't), and village-left/logged-out (the match-start
+teardown, not the idle case).
+
+**The `+0xbc` callback is the developers' own `Lobby::CLobbyClient::UpdateAvatar@0x00503620`**
+(log-scope string, `LobbyClient.cpp:0x101`): `proxy+0x84 == 0` → create a **CLobbyObj** from the
+template named `"settler"` (`CLobby_CreateAvatarObjFromProxy@0x004f6de0` →
+`CLobby_CreateLobbyObj@0x004f6ca0`), attach it to the proxy (`+0x84`); else → position-update path.
+Its only failure log ("Could not create CLobbyObj.") fires only on a failed `new(0x94)` —
+effectively unreachable.
+
+### The full avatar architecture (all static addresses verified this session)
+
+- **Own avatar ≠ EntityCreate.** The own AvatarProxy is built **client-side** at UC-LoggedIn:
+  `OpenUserComm@0x00470d50` one-shot-subscribes
+  `VillageConn_OnUserCommLoggedIn_BuildOwnAvatarProxy@0x004704e0` on `UC+0x4`. The fired value is
+  the **own avatar ID**; it is looked up in the **CharacterManager** (miss ⇒ dev log `"WTF?! There
+  is no avatar with that id in the CharacterManager"` + login-fail), the proxy is stored at
+  **`LobbyManager+0x554`** (`LobbyManager_SetOwnAvatarProxy@0x004626c0`), the world login is sent
+  via `conn+0x34 vtbl+0x10`, state is set to **EnteringVillage(8)**, and the ID is stored at
+  **`LobbyManager+0x54c` — i.e. PermID == own avatar ID.** Our flow provably reaches state 8, so
+  this ran and succeeded on every observed run.
+- **Own spawn:** `HandleEnterWorld@0x0046f670` (msg 1000) fires the conn `+0x104` list **directly**
+  (not queued) → `CLobbyClient_OnEnterWorld_SpawnOwnAvatar@0x00503940` →
+  `CLobby_CreateOwnAvatarObj@0x004f6fd0` (CLobby vtbl+0xec). ⚠️ **Silent gate:** spawns only if
+  `LM+0x554` holds the own proxy **or** `CLobby+0x270 != 3` (non-online mode; `+0x274 == 2` falls
+  back to a static default proxy — the SP path). Also sets run-mode 3 and propagates.
+- **Remote spawn:** queued (`+0x1ac` → `+0xbc`), drained by `TickInWorld` which
+  `LobbyManager::StatePump_Tick@0x00464ee0` calls **unconditionally every frame** whenever
+  `pVillageConnection != 0`.
+- **Visuals:** `CLobbyObj_Construct@0x00502e60` resolves the template
+  (`CLobby_FindObjTemplateByName@0x004ffa80` over the table at `CLobby+0x134` → `+0x20/+0x28`,
+  stride 0x60) and branches on the template's **type string** — `"customize"` / `"character"`
+  (two variants) / `"none"` (→ **no visual, silently**). Style rendering:
+  `AvatarVisual_RefreshStyleModel@0x00508090` reads the 8 colour bytes + tribe/gender off the proxy
+  (`visual+0x760`) and rebuilds the 3D model on change — the pipeline consumes exactly the
+  AvatarStyle data we send. An empty/missing template table returns `0` with **no log**.
+
+### Where that leaves the wall
+
+Every link from the wire to `UpdateAvatar` is now either proven live or statically unconditional,
+and none of the error paths fired. The break must be in the **shared visual stage** (template table
+/ scene attach — would kill own AND remote avatars identically) or in something narrower on the
+remote path only. The cheap discriminator: **is the OWN settler visible in our stub village?**
+
+- **Own settler visible** ⇒ templates, CLobbyObj, scene and style pipeline all work ⇒ the remote
+  path breaks in a narrow spot (`UpdateAvatar` not firing or its obj misplaced) → TTD/breakpoint
+  on `CLobbyClient_UpdateAvatar@0x00503620` is the decisive next measurement.
+- **Own settler NOT visible** ⇒ the shared visual stage is dead in the stub-lobby context (most
+  plausibly the `CLobby+0x134` template table is populated by data/flow we never trigger) → dig at
+  `CLobby_FindObjTemplateByName` / the table builder, with a debugger on
+  `CLobby_CreateOwnAvatarObj@0x004f6fd0`.
 
 ## Does this also explain the dead chat input?
 
