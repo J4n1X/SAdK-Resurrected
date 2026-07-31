@@ -202,8 +202,38 @@ def quantise_rot(degrees):
     return int(round((float(degrees) % 360.0) / 360.0 * ROT_STEPS)) % ROT_STEPS
 
 
+#: Field order of the AvatarStyle block (`FUN_004825f0`, dtblcks bit1). Widths are FULL BYTES here,
+#: unlike PlayerCreate(1004)'s 4-bit colour nibbles — the two are different formats for different
+#: kinds of entity, so do not copy widths across.
+AVATAR_STYLE_COLOURS = ("hrclr", "sknclr", "shrtclr", "trsrclr",
+                        "addColor1", "addColor2", "addColor3", "addColor4")
+
+
+def avatar_style_block(w, name, tribe_gender=0, colours=()):
+    """Append the AvatarStyle block (dtblcks bit1) to an in-progress BitWriter.
+
+    `FUN_004825f0`, in wire order:
+        name STRING · trbgndr 8 · hrclr 8 · sknclr 8 · shrtclr 8 · trsrclr 8 · addColor1..4 8 each
+
+    `colours` supplies the eight byte-wide slots in AVATAR_STYLE_COLOURS order; short sequences are
+    zero-filled. Failure to parse is reported by the client as "Could not read AvatarStyle from
+    message." in LobbyComm.log.
+
+    NOT YET SENT — `entity_create_body` still defaults to dtblcks=1 (location only). This exists so
+    that adding it is a one-line change once the location-only spawn has been observed live; adding
+    it before then would make a silent failure impossible to attribute to one block or the other.
+    """
+    vals = list(colours) + [0] * (len(AVATAR_STYLE_COLOURS) - len(colours))
+    w.write_string(name)                           # "name"
+    w.write(tribe_gender, 8)                       # "trbgndr" — tribe + gender packed in one byte
+    for value in vals[:len(AVATAR_STYLE_COLOURS)]:
+        w.write(value, 8)                          # hrclr/sknclr/shrtclr/trsrclr/addColor1..4
+    return w
+
+
 def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
-                       zone=0, ghost_zone=0, running=False, jumping=False):
+                       zone=0, ghost_zone=0, running=False, jumping=False,
+                       style=None):
     """Body for EntityCreate (msg 1001) — the message that puts a visible AVATAR in the world.
 
     `HandleEntityCreate@0x0046e1d0` reads `id` (32 bits), allocates an AvatarProxy (0xE0 bytes) into
@@ -218,10 +248,15 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
 
     AvatarLocation for a REMOTE avatar (FUN_004824b0, the `this+0xc != GetCommSystem()` branch):
         tick 16 · posx 11 · posy 11 · posz 11 · rot 7 · zone 4 · ghstzne 4 · rnng 1 · jmp 1
+
+    `style`, when given, is a dict passed through to `avatar_style_block` and sets dtblcks bit1. It
+    is OFF by default on purpose — see that function. Blocks are written in dtblcks BIT ORDER
+    (location, then style), which is the order FUN_00482c20 reads them.
     """
+    dtblcks = 1 | (2 if style else 0)
     w = BitWriter()
     w.write(avatar_id, 32)                     # "id"       — peeked by HandleEntityCreate
-    w.write(1, 4)                              # "dtblcks"  — AvatarLocation only
+    w.write(dtblcks, 4)                        # "dtblcks"  — AvatarLocation [+ AvatarStyle]
     w.write(tick, 16)                          # "tick"
     w.write(quantise_axis(pos[0], "x"), 11)    # "posx"
     w.write(quantise_axis(pos[1], "y"), 11)    # "posy"
@@ -231,6 +266,10 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
     w.write(ghost_zone, 4)                     # "ghstzne"
     w.write_bool(running)                      # "rnng"
     w.write_bool(jumping)                      # "jmp"
+    if style:
+        avatar_style_block(w, style.get("name", ""),
+                           style.get("tribe_gender", 0),
+                           style.get("colours", ()))
     return w.bytes()
 
 

@@ -104,6 +104,40 @@ def test_entity_create_id_is_first_four_bytes():
     assert body[:4] == bytes.fromhex("01020304")
 
 
+# ── 3b. AvatarStyle block (dtblcks bit1) — written, NOT yet sent ─────────────
+def test_default_spawn_is_unchanged_by_the_style_option():
+    # The live experiment is "does dtblcks=1 alone render?". Adding the style writer must not
+    # perturb the default body by a single bit, or that experiment silently changes meaning.
+    body = village.entity_create_body(0x11223344, pos=(0.0, 0.0, 0.0))
+    assert len(body) == 13                                   # 102 bits -> 13 bytes
+    assert _bits(body)[32:36] == "0001"                      # dtblcks == 1, location only
+
+
+def test_style_sets_dtblcks_bit1_and_appends_after_location():
+    style = {"name": "ab", "tribe_gender": 0x12,
+             "colours": (1, 2, 3, 4, 5, 6, 7, 8)}
+    body = village.entity_create_body(0x11223344, style=style)
+    bits = _bits(body)
+    assert bits[32:36] == "0011"                             # dtblcks == 3 (location | style)
+    # The style block starts right after the 102-bit location body, with no re-alignment.
+    tail = bits[102:]
+    assert int(tail[0:8], 2) == 2                            # name length
+    assert int(tail[8:16], 2) == ord("a")
+    assert int(tail[16:24], 2) == ord("b")
+    assert int(tail[24:32], 2) == 0x12                       # trbgndr
+    for i, expected in enumerate((1, 2, 3, 4, 5, 6, 7, 8)):  # hrclr..addColor4, byte-wide
+        assert int(tail[32 + i * 8:40 + i * 8], 2) == expected
+
+
+def test_style_colours_are_zero_filled_when_short():
+    body = village.entity_create_body(1, style={"name": "", "colours": (9,)})
+    tail = _bits(body)[102:]
+    assert int(tail[0:8], 2) == 0                            # empty name
+    assert int(tail[8:16], 2) == 0                           # trbgndr default
+    assert int(tail[16:24], 2) == 9                          # hrclr
+    assert int(tail[24:32], 2) == 0                          # sknclr zero-filled
+
+
 # ── 4. String encoding (used by PlayerCreate npcdesc / actChat) ───────────────
 def test_write_string_is_len8_plus_chars():
     w = village.BitWriter()
