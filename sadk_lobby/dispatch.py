@@ -123,17 +123,38 @@ VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)
 
 
 def _spawn_spot(perm_id):
-    """A deterministic, non-overlapping spot on a small ring around the village spawn square.
+    """A deterministic ring spot around the village spawn square — the PLACEHOLDER position, used
+    only until the client's first real location report arrives (see `_live_pose`).
 
-    Avatars need SOME position, and we do not yet know where players actually are (the client's own
-    position reports are unreversed). Keying the spot on perm_id keeps it stable across time and
-    identical for every observer, so two clients agree on where each other stand.
-    Centered on VILLAGE_SPAWN_POINT — the spot the client's own avatar provably spawns at — so
-    remote players appear right beside the observer instead of at the distant world origin."""
+    Keying it on perm_id keeps it stable and identical for every observer. Centered on
+    VILLAGE_SPAWN_POINT — the spot the client's own avatar provably spawns at — so a just-spawned
+    remote player appears beside the observer rather than at the distant world origin.
+
+    ⚠️ Placeholder positions are necessarily INCONSISTENT between machines: each client places its
+    own avatar itself (client-side default spawn) while we place the remote one on this ring, so
+    the two machines disagree about the pair's relative geometry. Real reported positions
+    (`_live_pose`) fix that — they are one shared truth, relayed to everyone."""
     ang = (perm_id % 8) * (math.pi / 4.0)
     r = config.AVATAR_SPAWN_SPREAD
     cx, cy, cz = VILLAGE_SPAWN_POINT
     return (cx + math.cos(ang) * r, cy, cz + math.sin(ang) * r)
+
+
+#: perm_id → the player's last reported pose, from their own msg 2000 (village.parse_avatar_location).
+#: This is the world's single source of truth for where each avatar is; the refresh/relay path feeds
+#: it straight back out as 1001 waypoints, so every client sees everyone where they actually stand.
+_poses = {}
+_poses_lock = threading.Lock()
+
+
+def _live_pose(perm_id):
+    """(pos, rot_deg, running, jumping) for a player: their last REPORTED pose, or the placeholder
+    ring spot if they have not reported yet (the window between world entry and the first 2000)."""
+    with _poses_lock:
+        loc = _poses.get(perm_id)
+    if loc is None:
+        return _spawn_spot(perm_id), 0.0, False, False
+    return loc["pos"], loc["rot_deg"], loc["running"], loc["jumping"]
 
 
 def _avatar_style(player):
@@ -212,7 +233,9 @@ def _avatar_location_ticker():
                 if other is conn or op.perm_id == me.perm_id:
                     continue
                 try:
-                    village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+                    pos, rot, running, jumping = _live_pose(op.perm_id)
+                    village.send_entity_create(conn, op.perm_id, pos=pos, rot_deg=rot,
+                                               running=running, jumping=jumping,
                                                tick=tick, quiet=True)
                     sent += 1
                 except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
@@ -257,12 +280,17 @@ def _spawn_world_avatars(conn):
         village.send_world_tick(other, _now_ms(), quiet=True)
     tick_base = _now_tick16()
     tick = (tick_base - 1000) & 0xFFFF
+    my_pos, my_rot, _r, _j = _live_pose(me.perm_id)
     for other in others:
         op = _player(other)
-        village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id), tick=tick,
+        # Spawn each side at the other's LAST REPORTED position (msg 2000) — a player who has been
+        # walking around is already somewhere; only a player who has not reported yet falls back to
+        # the placeholder ring spot.
+        op_pos, op_rot, _r2, _j2 = _live_pose(op.perm_id)
+        village.send_entity_create(conn, op.perm_id, pos=op_pos, rot_deg=op_rot, tick=tick,
                                    label=f"[{op.char_name!r} shown to {me.char_name!r}]",
                                    style=_avatar_style(op))
-        village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id), tick=tick,
+        village.send_entity_create(other, me.perm_id, pos=my_pos, rot_deg=my_rot, tick=tick,
                                    label=f"[{me.char_name!r} shown to {op.char_name!r}]",
                                    style=_avatar_style(me))
         # Prime the movement ring so the avatar is bracketed from the very first tick: waypoint
@@ -271,9 +299,9 @@ def _spawn_world_avatars(conn):
         # the 1 Hz ticker takes over. Without waypoints the interpolator hides the avatar
         # (render-node bit 0x20) one frame after the create paints it (TTD: avatar_vanish_diag.run).
         for prime in ((tick_base - 3000) & 0xFFFF, (tick_base - 1000) & 0xFFFF):
-            village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
+            village.send_entity_create(conn, op.perm_id, pos=op_pos, rot_deg=op_rot,
                                        tick=prime, quiet=True)
-            village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),
+            village.send_entity_create(other, me.perm_id, pos=my_pos, rot_deg=my_rot,
                                        tick=prime, quiet=True)
     log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
@@ -977,8 +1005,51 @@ def _h_send_game_data(conn, fields, ticket):
         # little-endian, so the client's `if (code == 0xDEADBEEF)` never matched and the whole handler
         # body was skipped. Fixing the byte order (village.world_login_ack_body) exposed it immediately.
         # 1006 is now sent ONLY as the answer to a leave request (msg 2002), above.
+    elif msg_type == config.VILLAGE_AVATAR_LOCATION_MSGTYPE:   # 0x27D0 — msg 2000 AVATAR LOCATION
+        _h_avatar_location(conn, data)
     else:
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on conn #{conn.id} — logged, no in-world handler)")
+
+
+def _h_avatar_location(conn, data):
+    """The client telling us where its player actually IS (msg 2000) — the inbound half of the
+    presence protocol. Store the pose, then RELAY it to every other in-world client as a 1001
+    location refresh, which is how a waypoint reaches their movement ring.
+
+    Relay timing: we re-stamp with OUR clock (`_now_ms() - 1000`) rather than forwarding the
+    sender's `tick`. The client turns a wire tick into a waypoint stamped `reconstruct(tick) +
+    2000 ms`, and the interpolator needs waypoints straddling "now" — forwarding the sender's own
+    (current) tick would put every stamp ~2 s in the FUTURE, which underflows the staleness check
+    and hides the avatar (proven the hard way in round 2, ER 2026-08-01_avatar-location-refresh).
+    Position/rotation/animation flags are relayed verbatim; only the timebase is ours.
+
+    Arrival rate is ~3/s per client, so this is the real movement stream; the 1 Hz ticker stays as
+    a keepalive for anyone who has stopped reporting."""
+    try:
+        loc = village.parse_avatar_location(data)
+    except Exception as exc:  # noqa: BLE001 — a malformed report must not kill the conn
+        log(f"  [WORLD] avatar location (msg 2000) from conn #{conn.id} unparseable: {exc} "
+            f"({len(data)}B: {data[:16].hex()})")
+        return
+    me = _player(conn)
+    with _poses_lock:
+        _poses[me.perm_id] = loc
+    if not getattr(conn, "_loc_seen", False):
+        conn._loc_seen = True
+        x, y, z = loc["pos"]
+        log(f"  [WORLD] {me.char_name!r} is reporting its position (msg 2000, ~3/s) — first fix "
+            f"({x:.1f}, {y:.1f}, {z:.1f}) rot={loc['rot_deg']:.0f}°; relaying live to the others")
+    tick = (_now_tick16() - 1000) & 0xFFFF
+    for other in _find_live(lambda c: getattr(c, "is_village", False)
+                            and c is not conn
+                            and getattr(c, "_enter_world_sent", False)
+                            and _player(c).perm_id != me.perm_id):
+        try:
+            village.send_entity_create(other, me.perm_id, pos=loc["pos"], rot_deg=loc["rot_deg"],
+                                       running=loc["running"], jumping=loc["jumping"],
+                                       tick=tick, quiet=True)
+        except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the relay
+            log(f"  [WORLD] avatar location relay to conn #{other.id} failed: {exc}")
 
 
 # ── Chat over lobby magic ─────────────────────────────────────────────────────

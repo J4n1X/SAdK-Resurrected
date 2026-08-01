@@ -189,6 +189,76 @@ class BitWriter:
         return len(self._bits)
 
 
+class BitReader:
+    """MSB-first bit reader — the exact inverse of `BitWriter`, and of the client's own
+    `LobbyMessage_ReadBitsCore@0x0048f050` (each byte consumed bit 7 → bit 0, value assembled
+    MSB-first). Used to decode the client's inbound avatar location reports."""
+
+    def __init__(self, data):
+        self._data = data
+        self._pos = 0
+
+    def read(self, nbits):
+        value = 0
+        for _ in range(nbits):
+            byte_i, bit_i = divmod(self._pos, 8)
+            if byte_i >= len(self._data):
+                raise ValueError(f"bit stream exhausted after {self._pos} bits "
+                                 f"({len(self._data)}B body)")
+            value = (value << 1) | ((self._data[byte_i] >> (7 - bit_i)) & 1)
+            self._pos += 1
+        return value
+
+    def read_bool(self):
+        return bool(self.read(1))
+
+
+def dequantise_axis(raw, axis):
+    """Inverse of `quantise_axis` — matches `LobbyMessage_ReadLocationBlock@0x0048f670`:
+    `value = raw * (max - min) * (1/2048) + min`."""
+    lo, hi = WORLD_BOUNDS[axis]
+    return raw / float(POS_STEPS) * (hi - lo) + lo
+
+
+def dequantise_rot(raw):
+    """Inverse of `quantise_rot`: `degrees = raw * 360.0 * (1/128)`."""
+    return raw * 360.0 / ROT_STEPS
+
+
+def parse_avatar_location(data):
+    """Decode the client's OWN avatar location report — village msg **2000** (wire msg_type 0x27D0).
+
+    [PROVEN 2026-08-01 static] `VillageServerConnection_SendAvatarLocation_2000@0x0046ca40` builds
+    a category-2 LobbyMessage id 2000 and writes, in order:
+        tick 16 (`LobbyMessage_WriteShort`, value `tick | 1` — bit 0 forced set, so a tick is never 0)
+        posx 11 · posy 11 · posz 11 · rot 7 · zone 4   (`LobbyMessage_WriteLocationBlock@0x0048f7e0`)
+        ghstzne 4                                      (`LobbyMessage_WriteGhostZone@0x0048f980`)
+        rnng 1 · jmp 1
+    — i.e. **exactly the AvatarLocation block we already WRITE in `entity_create_body`**, minus the
+    `id`/`dtblcks` header (the server knows the sender from the connection). Same quantisation
+    constants: the writer's scaling is the mirror of `LobbyMessage_ReadLocationBlock@0x0048f670`.
+
+    Driven by `LobbyPlayerController_Update@0x0051ace0` (the local player controller, which also
+    reads the Lobby/ControllerMode·FirstPerson·TurnSpeed settings) →
+    `CLobbyClient_ReportOwnAvatarLocation@0x005034e0` → this message, ~3/s while in-world.
+
+    Returns a dict ready to hand to `send_entity_create` (`pos`, `rot_deg`, `running`, `jumping`).
+    The client's own `tick` is deliberately NOT reused for the relay: waypoint stamps must straddle
+    the receiver's clock, so the relay re-stamps from our own clock (see dispatch)."""
+    r = BitReader(data)
+    tick = r.read(16)
+    pos = (dequantise_axis(r.read(11), "x"),
+           dequantise_axis(r.read(11), "y"),
+           dequantise_axis(r.read(11), "z"))
+    rot_deg = dequantise_rot(r.read(7))
+    zone = r.read(4)
+    ghost_zone = r.read(4)
+    running = r.read_bool()
+    jumping = r.read_bool()
+    return {"tick": tick, "pos": pos, "rot_deg": rot_deg, "zone": zone,
+            "ghost_zone": ghost_zone, "running": running, "jumping": jumping}
+
+
 # World bounds + quantisation, read from the binary (FUN_0048f670 / 2026-07-27):
 #   x = posx/2048 * (BOUND_MAX_X - BOUND_MIN_X) + BOUND_MIN_X      etc.
 #   rot_degrees = rot7 * 360.0 / 128
@@ -383,7 +453,7 @@ def send_world_tick(conn, tick_ms, magic=None, quiet=False):
 
 
 def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
-                       label="", style=None, quiet=False):
+                       label="", style=None, quiet=False, running=False, jumping=False):
     """Spawn OR refresh a visible avatar in the recipient's lobby world (msg 1001).
 
     PROVEN ON THE WIRE 2026-08-01 (TTD traces avatar_spawn_diag.run / avatar_vanish_diag.run):
@@ -394,10 +464,14 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
     EXCLUSIVELY from that ring — without periodic refreshes the ring is empty and the avatar snaps
     to (0,0,0) one frame after spawning. `tick` is the low 16 bits of an advancing ms clock; the
     client re-anchors it against its own local clock (`FUN_004f4d10`), so no absolute sync is
-    needed. Waypoints with pos ≈ (0,0,0) are REJECTED by the push — never park an avatar there."""
+    needed. Waypoints with pos ≈ (0,0,0) are REJECTED by the push — never park an avatar there.
+
+    `running`/`jumping` ride the same location block and drive the remote avatar's animation state;
+    they come straight from the mover's own report (`parse_avatar_location`)."""
     if not conn.alive:
         return
-    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style)
+    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style,
+                              running=running, jumping=jumping)
     blocks = "location+style" if style else "location"
     _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
                   f"EntityCreate(1001) avatar id={avatar_id} {label}"
