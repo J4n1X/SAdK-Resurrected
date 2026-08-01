@@ -148,13 +148,23 @@ _poses_lock = threading.Lock()
 
 
 def _live_pose(perm_id):
-    """(pos, rot_deg, running, jumping) for a player: their last REPORTED pose, or the placeholder
-    ring spot if they have not reported yet (the window between world entry and the first 2000)."""
+    """The kwargs describing where a player is, ready to splat into `village.send_entity_create`:
+    their last REPORTED pose, or the placeholder ring spot if they have not reported yet (the ~1 s
+    window between world entry and their first msg 2000).
+
+    ⭐ `zone`/`ghost_zone` are relayed VERBATIM. They are the sub-zone the player is standing in —
+    the minigame rooms and the hall of fame are separate zones — and hardcoding 0 told everyone
+    else that a player who had walked into a side room was still out on the square. The client is
+    the authority on its own zone; the server's job is to pass it on. (`FUN_0045fd30`, the minimap
+    renderer, gates on own `zone == 0 && ghstzne == 0x0F`, which also shows **15**, not 0, is the
+    neutral outdoor ghost-zone value — so 0/0 was never a harmless placeholder.)"""
     with _poses_lock:
         loc = _poses.get(perm_id)
     if loc is None:
-        return _spawn_spot(perm_id), 0.0, False, False
-    return loc["pos"], loc["rot_deg"], loc["running"], loc["jumping"]
+        return {"pos": _spawn_spot(perm_id), "rot_deg": 0.0}
+    return {"pos": loc["pos"], "rot_deg": loc["rot_deg"],
+            "running": loc["running"], "jumping": loc["jumping"],
+            "zone": loc["zone"], "ghost_zone": loc["ghost_zone"]}
 
 
 def _avatar_style(player):
@@ -233,10 +243,8 @@ def _avatar_location_ticker():
                 if other is conn or op.perm_id == me.perm_id:
                     continue
                 try:
-                    pos, rot, running, jumping = _live_pose(op.perm_id)
-                    village.send_entity_create(conn, op.perm_id, pos=pos, rot_deg=rot,
-                                               running=running, jumping=jumping,
-                                               tick=tick, quiet=True)
+                    village.send_entity_create(conn, op.perm_id, tick=tick, quiet=True,
+                                               **_live_pose(op.perm_id))
                     sent += 1
                 except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
                     log(f"  [WORLD] avatar refresh to conn #{conn.id} failed: {exc}")
@@ -280,29 +288,27 @@ def _spawn_world_avatars(conn):
         village.send_world_tick(other, _now_ms(), quiet=True)
     tick_base = _now_tick16()
     tick = (tick_base - 1000) & 0xFFFF
-    my_pos, my_rot, _r, _j = _live_pose(me.perm_id)
+    my_pose = _live_pose(me.perm_id)
     for other in others:
         op = _player(other)
-        # Spawn each side at the other's LAST REPORTED position (msg 2000) — a player who has been
-        # walking around is already somewhere; only a player who has not reported yet falls back to
-        # the placeholder ring spot.
-        op_pos, op_rot, _r2, _j2 = _live_pose(op.perm_id)
-        village.send_entity_create(conn, op.perm_id, pos=op_pos, rot_deg=op_rot, tick=tick,
+        # Spawn each side at the other's LAST REPORTED pose (msg 2000) — position, facing AND zone.
+        # A player who has been walking around is already somewhere, possibly inside a side room;
+        # only a player who has not reported yet falls back to the placeholder ring spot.
+        op_pose = _live_pose(op.perm_id)
+        village.send_entity_create(conn, op.perm_id, tick=tick,
                                    label=f"[{op.char_name!r} shown to {me.char_name!r}]",
-                                   style=_avatar_style(op))
-        village.send_entity_create(other, me.perm_id, pos=my_pos, rot_deg=my_rot, tick=tick,
+                                   style=_avatar_style(op), **op_pose)
+        village.send_entity_create(other, me.perm_id, tick=tick,
                                    label=f"[{me.char_name!r} shown to {op.char_name!r}]",
-                                   style=_avatar_style(me))
+                                   style=_avatar_style(me), **my_pose)
         # Prime the movement ring so the avatar is bracketed from the very first tick: waypoint
         # stamp = reconstruct(wire tick)+2000 ms, so wire now-3000 lands a stamp at ≈now-1000 and
         # wire now-1000 lands one at ≈now+1000 — a bracket STRADDLING "now" immediately, held until
         # the 1 Hz ticker takes over. Without waypoints the interpolator hides the avatar
         # (render-node bit 0x20) one frame after the create paints it (TTD: avatar_vanish_diag.run).
         for prime in ((tick_base - 3000) & 0xFFFF, (tick_base - 1000) & 0xFFFF):
-            village.send_entity_create(conn, op.perm_id, pos=op_pos, rot_deg=op_rot,
-                                       tick=prime, quiet=True)
-            village.send_entity_create(other, me.perm_id, pos=my_pos, rot_deg=my_rot,
-                                       tick=prime, quiet=True)
+            village.send_entity_create(conn, op.perm_id, tick=prime, quiet=True, **op_pose)
+            village.send_entity_create(other, me.perm_id, tick=prime, quiet=True, **my_pose)
     log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
 
@@ -1033,21 +1039,28 @@ def _h_avatar_location(conn, data):
         return
     me = _player(conn)
     with _poses_lock:
+        prev = _poses.get(me.perm_id)
         _poses[me.perm_id] = loc
-    if not getattr(conn, "_loc_seen", False):
-        conn._loc_seen = True
-        x, y, z = loc["pos"]
+    x, y, z = loc["pos"]
+    if prev is None:
         log(f"  [WORLD] {me.char_name!r} is reporting its position (msg 2000, ~3/s) — first fix "
-            f"({x:.1f}, {y:.1f}, {z:.1f}) rot={loc['rot_deg']:.0f}°; relaying live to the others")
+            f"({x:.1f}, {y:.1f}, {z:.1f}) rot={loc['rot_deg']:.0f}° "
+            f"zone={loc['zone']} ghstzne={loc['ghost_zone']}; relaying live to the others")
+    elif (prev["zone"], prev["ghost_zone"]) != (loc["zone"], loc["ghost_zone"]):
+        # Sub-zone transition (minigame room / hall of fame). Logged loudly because it is exactly
+        # the case that used to break: we relayed zone 0 regardless, so a player who walked into a
+        # side room stayed advertised as standing outside.
+        log(f"  [WORLD] {me.char_name!r} ZONE CHANGE "
+            f"{prev['zone']}/{prev['ghost_zone']} → {loc['zone']}/{loc['ghost_zone']} "
+            f"at ({x:.1f}, {y:.1f}, {z:.1f}) — relaying the new zone")
     tick = (_now_tick16() - 1000) & 0xFFFF
     for other in _find_live(lambda c: getattr(c, "is_village", False)
                             and c is not conn
                             and getattr(c, "_enter_world_sent", False)
                             and _player(c).perm_id != me.perm_id):
         try:
-            village.send_entity_create(other, me.perm_id, pos=loc["pos"], rot_deg=loc["rot_deg"],
-                                       running=loc["running"], jumping=loc["jumping"],
-                                       tick=tick, quiet=True)
+            village.send_entity_create(other, me.perm_id, tick=tick, quiet=True,
+                                       **_live_pose(me.perm_id))
         except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the relay
             log(f"  [WORLD] avatar location relay to conn #{other.id} failed: {exc}")
 
