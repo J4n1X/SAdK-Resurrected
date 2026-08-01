@@ -453,7 +453,8 @@ def send_world_tick(conn, tick_ms, magic=None, quiet=False):
 
 
 def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
-                       label="", style=None, quiet=False, running=False, jumping=False):
+                       label="", style=None, quiet=False, running=False, jumping=False,
+                       zone=0, ghost_zone=0):
     """Spawn OR refresh a visible avatar in the recipient's lobby world (msg 1001).
 
     PROVEN ON THE WIRE 2026-08-01 (TTD traces avatar_spawn_diag.run / avatar_vanish_diag.run):
@@ -467,16 +468,20 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
     needed. Waypoints with pos ≈ (0,0,0) are REJECTED by the push — never park an avatar there.
 
     `running`/`jumping` ride the same location block and drive the remote avatar's animation state;
-    they come straight from the mover's own report (`parse_avatar_location`)."""
+    they come straight from the mover's own report (`parse_avatar_location`).
+
+    `zone`/`ghost_zone` say WHICH sub-zone the avatar is in (the minigame rooms and the hall of
+    fame are separate zones). Relay the mover's own reported values — see `dispatch._live_pose`."""
     if not conn.alive:
         return
     body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style,
-                              running=running, jumping=jumping)
+                              running=running, jumping=jumping,
+                              zone=zone, ghost_zone=ghost_zone)
     blocks = "location+style" if style else "location"
     _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
                   f"EntityCreate(1001) avatar id={avatar_id} {label}"
                   f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
-                  f" dtblcks={blocks} {len(body)}B"
+                  f" zone={zone}/{ghost_zone} dtblcks={blocks} {len(body)}B"
                   f" — HandleEntityCreate → AvatarProxy into +0x170", quiet=quiet)
 
 
