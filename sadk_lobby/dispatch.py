@@ -91,9 +91,7 @@ def on_conn_closed(conn):
     # in-world, or they are left staring at a ghost that never moves.
     if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
         gone = _player(conn)
-        for other in _find_live(lambda c: getattr(c, "is_village", False) and c is not conn
-                                and getattr(c, "_enter_world_sent", False)
-                                and _player(c).perm_id != gone.perm_id):
+        for other in _in_world_conns(exclude_player=gone.perm_id, exclude_conn=conn):
             village.send_entity_remove(other, gone.perm_id,
                                        label=f"[{gone.char_name!r} left the world]")
     if not getattr(conn, "is_chat", False):
@@ -148,6 +146,25 @@ def _spawn_spot(perm_id):
 #: it straight back out as 1001 waypoints, so every client sees everyone where they actually stand.
 _poses = {}
 _poses_lock = threading.Lock()
+
+
+def _in_world_conns(exclude_player=None, exclude_conn=None):
+    """Live village connections that have entered the world — **ONE per player**.
+
+    Same stale-socket hazard as the chat roster (see `chat._live_one_per_player`, and the Win7
+    "double send" bug it caused): a relog opens a fresh village connection while the previous one
+    is still live, so iterating sockets would send every spawn, waypoint and clock sync twice to
+    that client — and count the same player twice as an occupant of the world. Newest wins."""
+    by_player = {}
+    for c in _find_live(lambda c: getattr(c, "is_village", False)
+                        and getattr(c, "_enter_world_sent", False)):
+        if c is exclude_conn:
+            continue
+        pid = _player(c).perm_id
+        if exclude_player is not None and pid == exclude_player:
+            continue
+        by_player[pid] = c
+    return list(by_player.values())
 
 
 def _live_pose(perm_id):
@@ -228,8 +245,7 @@ def _avatar_location_ticker():
         # With plain "now" the stamps sit +2000 ahead and live behaviour showed the avatar hidden
         # (stale/no-bracket path latching render-node bit 0x20).
         tick = (_now_tick16() - 1000) & 0xFFFF
-        in_world = _find_live(lambda c: getattr(c, "is_village", False)
-                              and getattr(c, "_enter_world_sent", False))
+        in_world = _in_world_conns()
         sent = 0
         for conn in in_world:
             # World-clock sync FIRST, every cycle (see village.send_world_tick): keeps each
@@ -276,10 +292,7 @@ def _spawn_world_avatars(conn):
     streams waypoint refreshes — the spawn paints one frame, the ring does the rest."""
     _ensure_avatar_ticker()
     me = _player(conn)
-    others = _find_live(lambda c: getattr(c, "is_village", False)
-                        and c is not conn
-                        and getattr(c, "_enter_world_sent", False)
-                        and _player(c).perm_id != me.perm_id)
+    others = _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn)
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
         return
@@ -1057,10 +1070,7 @@ def _h_avatar_location(conn, data):
             f"{prev['zone']}/{prev['ghost_zone']} → {loc['zone']}/{loc['ghost_zone']} "
             f"at ({x:.1f}, {y:.1f}, {z:.1f}) — relaying the new zone")
     tick = (_now_tick16() - 1000) & 0xFFFF
-    for other in _find_live(lambda c: getattr(c, "is_village", False)
-                            and c is not conn
-                            and getattr(c, "_enter_world_sent", False)
-                            and _player(c).perm_id != me.perm_id):
+    for other in _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn):
         try:
             village.send_entity_create(other, me.perm_id, tick=tick, quiet=True,
                                        **_live_pose(me.perm_id))
