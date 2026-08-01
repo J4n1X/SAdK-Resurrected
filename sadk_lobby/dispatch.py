@@ -134,8 +134,11 @@ def _spawn_spot(perm_id):
     own avatar itself (client-side default spawn) while we place the remote one on this ring, so
     the two machines disagree about the pair's relative geometry. Real reported positions
     (`_live_pose`) fix that — they are one shared truth, relayed to everyone."""
-    ang = (perm_id % 8) * (math.pi / 4.0)
-    r = config.AVATAR_SPAWN_SPREAD
+    # Golden-angle placement so ANY number of players spreads out instead of colliding every
+    # 8th id (the old `perm_id % 8` ring): each successive id lands ~137.5° round, and the
+    # radius grows a little each full turn.
+    ang = perm_id * 2.39996322972865332
+    r = config.AVATAR_SPAWN_SPREAD * (1.0 + (perm_id // 8) * 0.3)
     cx, cy, cz = VILLAGE_SPAWN_POINT
     return (cx + math.cos(ang) * r, cy, cz + math.sin(ang) * r)
 
