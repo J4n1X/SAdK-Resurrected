@@ -46,31 +46,54 @@ def gamedata_frame(msg_type, data, magic=None):
 
 
 def enter_world_body(worldname=None, server_perm=None, channels=None):
-    """Positional TinCat-PropertySet body for EnterWorld (msg 1000), ground-truthed from
-    VillageServerConnection::HandleEnterWorld @0x46f470 (each name is seek'd, then read via the reader
-    vtable: +0x30 ReadString / +0x18 ReadMemBlock(dst,0x20)):
-        Worldname          : STRING         (str_field; empty => client uses "<UNNAMED>")
-        ServerPerm         : MEMBLOCK 0x20   (32-byte world admission token; stored, not validated)
-        ChatChannelsCount  : MEMBLOCK 0x20   (read as a 32-byte block; FIRST DWORD = N = channel count)
-        repeat N times:
-          ChatChannelZone  : MEMBLOCK 0x20
-          ChatChannelID    : MEMBLOCK 0x20
-    HandleEnterWorld calls SetState(VillageEntered=9) BEFORE parsing, so even a minimal body enters; the
-    RE recommends N>=1, so we default to one zero-filled (zone,id) pair. ChatChannelsCount is a 32-byte
-    MEMBLOCK (first dword = N) — NOT a bare u32 (that earlier mis-read put the channel loop out of phase)."""
-    worldname = config.ENTER_WORLD_WORLDNAME if worldname is None else worldname
-    if channels is None:
-        channels = [(b"\x00" * 32, b"\x00" * 32)]   # one dummy (zone,id) pair — HandleEnterWorld wants N>=1
-    server_perm = b"\x00" * 32 if server_perm is None else (server_perm + b"\x00" * 32)[:32]
-    count_blk = struct.pack("<I", len(channels)) + b"\x00" * 28   # 32-byte MEMBLOCK, first dword = N
+    """Body for EnterWorld (msg 1000) — a **BIT-PACKED LobbyMessage**, not a PropertySet.
 
-    body = str_field(worldname)                       # Worldname          : STRING
-    body += bytes_field(server_perm)                  # ServerPerm         : MEMBLOCK 0x20
-    body += bytes_field(count_blk)                    # ChatChannelsCount  : MEMBLOCK 0x20 (first dword=N)
-    for zone, cid in channels:
-        body += bytes_field((zone + b"\x00" * 32)[:32])   # ChatChannelZone : MEMBLOCK 0x20
-        body += bytes_field((cid + b"\x00" * 32)[:32])    # ChatChannelID   : MEMBLOCK 0x20
-    return body
+    ⭐ CORRECTED 2026-08-01 (this was silently wrong since the message was first implemented, and it
+    is what broke chat). `HandleEnterWorld@0x0046f670` reads through the LobbyMessage reader vtable
+    (`InitFromWire@0x0048fa50` installs vftable 0x007db594) — the SAME bit-packed reader as the
+    avatar messages, so there are NO u32 length prefixes anywhere in this body:
+        Worldname         : reader +0x30 = `FUN_004900a0` → **8-bit length + that many 8-bit chars**
+        ServerPerm        : reader +0x18 = `FUN_0048f300(dst, 0x20)` → **32 BITS** (0x20 is a BIT
+                            count, not a byte count — the old "MEMBLOCK 0x20" reading was wrong)
+        ChatChannelsCount : **32 bits**
+        repeat N times:
+          ChatChannelZone : **32 bits** — the map key is its **LOW BYTE** (disasm 0x0046f7d6:
+                            `MOV AL, byte ptr [ESP+0x20]`)
+          ChatChannelID   : **32 bits** — the chat cell id stored as the map value
+
+    What the client does with them (all [PROVEN] static, `VillageServerConnection+0x164` is a
+    `std::map<byte zone, u32 cellId>`):
+      * inserts each pair, then immediately looks up key **0xFF** and calls
+        `UserCommConnection::JoinChannel(map[0xFF])` — the GLOBAL channel, joined on world entry;
+      * `FUN_0046d5d0(conn, tabId)` maps a chat TAB to a cell: tab 1 GLOBAL → key **0xFF**,
+        tab 2 LOCAL → key = the player's current zone byte (`conn+0x225`), tab 3 MINIGAME → key
+        **0xFE**;
+      * `SetLocalChatZone@0x0046e860` leaves the old zone's channel and joins the new one on every
+        zone change, through the same map.
+
+    ⛔ **A cell id of 0 means INVALID** (`DAT_007db53c` = 0). The chat submit handler
+    (`FUN_00436860`) does `if (cellId == 0) return;` — **silently**, with no wire traffic and no
+    local echo. That is exactly the long-standing "chat text is blocked client-side" symptom: our
+    old PropertySet-shaped body made the client parse ChatChannelsCount as **0**, leaving the map
+    empty so every lookup default-inserted 0. (It also explains the client joining "cell 0": it was
+    not asking the server to assign, it was joining the id we advertised.)
+
+    `channels` is a list of `(zone_key, cell_id)` ints; defaults to `config.WORLD_CHAT_CHANNELS`."""
+    worldname = config.ENTER_WORLD_WORLDNAME if worldname is None else worldname
+    channels = list(config.WORLD_CHAT_CHANNELS if channels is None else channels)
+    server_perm = 0 if server_perm is None else int(server_perm)
+    bad = [c for c in channels if not (c[1] & 0xFFFFFFFF)]
+    if bad:
+        raise ValueError(f"chat cell id 0 is the INVALID sentinel — would silently kill chat: {bad}")
+
+    w = BitWriter()
+    w.write_string(worldname)                  # "Worldname"          8-bit len + chars
+    w.write(server_perm, 32)                   # "ServerPerm"         32 bits
+    w.write(len(channels), 32)                 # "ChatChannelsCount"  32 bits
+    for zone_key, cell_id in channels:
+        w.write(zone_key, 32)                  # "ChatChannelZone"    32 bits (low byte = map key)
+        w.write(cell_id, 32)                   # "ChatChannelID"      32 bits (cell id, non-zero)
+    return w.bytes()
 
 
 def world_login_ack_body(code=None):

@@ -106,6 +106,25 @@ DEFAULT_CHANNELS = [
     (2, "Lobby",  "Lobby Channel",  "Admin", 0, True),
 ]
 
+# ── In-world chat channels, advertised in EnterWorld(1000) ────────────────────
+# [PROVEN 2026-08-01] The client keeps a std::map<byte zoneKey, u32 cellId> at
+# VillageServerConnection+0x164, built ONLY from the (ChatChannelZone, ChatChannelID) pairs in
+# EnterWorld. Chat tab → key (FUN_0046d5d0@0x0046d5d0):
+#     tab 1 GLOBAL   → key 0xFF   (also auto-joined at world entry by HandleEnterWorld)
+#     tab 2 LOCAL    → key = the player's CURRENT ZONE byte (conn+0x225), re-joined on every zone
+#                      change by SetLocalChatZone@0x0046e860
+#     tab 3 MINIGAME → key 0xFE   (tab is disabled in the UI, listed for completeness)
+# ⛔ cell id 0 = INVALID (DAT_007db53c): the submit handler drops the message SILENTLY — no wire
+# traffic, no local echo. Every id here MUST be non-zero.
+# Zones seen live 2026-08-01: 0 = village square, 1 and 3 = side rooms (hall of fame / minigame).
+# The zone field is 4 bits, so 0..15 is the complete space — we advertise all of it so LOCAL chat
+# works in every room without needing to know which id is which.
+GLOBAL_CHAT_CELL   = 1                     # matches DEFAULT_CHANNELS[0] ("System")
+MINIGAME_CHAT_CELL = 2                     # matches DEFAULT_CHANNELS[1] ("Lobby")
+LOCAL_CHAT_CELL_BASE = 16                  # zone N → cell 16+N (16..31), all non-zero
+WORLD_CHAT_CHANNELS = ([(0xFF, GLOBAL_CHAT_CELL), (0xFE, MINIGAME_CHAT_CELL)]
+                       + [(z, LOCAL_CHAT_CELL_BASE + z) for z in range(16)])
+
 # ── Village / world-entry protocol ────────────────────────────────────────────
 # World entry [PROVEN, s39 screenshot-confirmed on the clean build]: leaving char-select
 # into the 3D world is driven ENTIRELY by the SERVER pushing inbound EnterWorld (msg 1000).
