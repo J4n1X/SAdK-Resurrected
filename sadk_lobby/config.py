@@ -141,6 +141,14 @@ VILLAGE_MSG_WORLD_LOGIN_ACK = 1006        # 0x3EE — HandleWorldLoginAck; sends
 WORLD_LOGIN_ACK_CODE = 0xDEADBEEF         # the value the client compares in msg 1006
 VILLAGE_MSG_PONG = 0xED7                   # 3799 — HandlePongCode; our reply to the client's in-world PingCode
 VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world keepalive PingCode (SendGameData 74)
+VILLAGE_AVATAR_LOCATION_MSGTYPE = 0x27D0   # 10192 = (cat 2 << 12) | 0x7d0 → NETMSG **2000, AVATAR LOCATION**
+#   [PROVEN 2026-08-01] The client's OWN position report — where the player actually IS. Sent ~3/s by
+#   VillageServerConnection_SendAvatarLocation_2000@0x0046ca40, driven by the local player controller
+#   (LobbyPlayerController_Update@0x0051ace0 → CLobbyClient_ReportOwnAvatarLocation@0x005034e0). Body is
+#   the same bit-packed AvatarLocation block we send in 1001, minus the id/dtblcks header:
+#   tick 16 · posx/posy/posz 11 · rot 7 · zone 4 · ghstzne 4 · rnng 1 · jmp 1 (village.parse_avatar_location).
+#   Long dismissed as unhandled keepalive spam (connection._is_quiet_frame names it) — it is the OTHER
+#   HALF of the presence protocol: the server relays it to the other clients as a 1001 refresh.
 
 # RETIRED 2026-07-26 — `ANSWER_WORLD_LOGIN_REQUEST` / `WORLD_LOGIN_MAX_ANSWERS` are gone.
 # They gated answering the client's 0x27D2 with a fresh EnterWorld(1000). BOTH settings were wrong
