@@ -1281,3 +1281,28 @@ Created `IAvatarDataBlock_vftable` (32B, 8 typed slots) and applied it at all 7 
 namespaced all 27 member functions (3 shared + `Deserialize`/`Serialize`/`GetSize`/`Clear` × 7). Verified:
 every class's `Deserialize` now decompiles with named field access (`this->field1`, `this->base.pVftable
 ->pGetVariant()`, etc.) instead of raw offset arithmetic.
+
+## 2026-08-01 — WorldClock module + avatar movement ring (root cause of the avatar die-off)
+
+Applied on `sadk_noav.exe` (session: WorldTick clock-sync discovery, ER
+`engagement_records/2026-08-01_worldtick-clock-sync.md`):
+
+| Address | New name | Note |
+|---|---|---|
+| 0x0057b810 | `WorldClock_FrameUpdate` | per-frame raw-ms sample + frame delta |
+| 0x0057b840 | `WorldClock_GetRawMs` | |
+| 0x0057b8a0 | `WorldClock_GetRawSeconds` | |
+| 0x0057b8d0 | `WorldClock_GetMs` | THE world clock: raw − offset |
+| 0x0057b8e0 | `WorldClock_GetSeconds` | |
+| 0x0057b910 | `WorldClock_SlewToTick16` | syncs clock phase to a wire tick16; tolerance param; sole caller = OnWorldTick (250 ms) |
+| 0x0057b990 | `WorldClock_Reset` | |
+| 0x004f4d10 | `WorldClock_ReconstructTick16` | was FUN_004f4d10 (tick16 → u64 ms, nearest-anchor) |
+| 0x00519b20 | `AvatarMovement_PushWaypoint` | was FUN_00519b20 |
+| 0x00519d50 | `AvatarMovement_Tick` | was FUN_00519d50; plate comment = full bracket/staleness spec |
+| 0x0048f380 | `LobbyMessage_ReadBits64` | reader vtbl+0x20 (64-bit field read) |
+| 0x0048f050 | `LobbyMessage_ReadBitsCore` | ⚠️ plate comment documents the shipped 32-bit-SHL aliasing bug for >32-bit reads |
+| 0x0088a610 | `g_dwWorldClock_TimerProcAddr` | global (uint) |
+| 0x0088a620 | `g_dwWorldClock_RawMs` | global (uint) |
+| 0x0088a624 | `g_dwWorldClock_PrevRawMs` | global (uint) |
+| 0x0088a628 | `g_dwWorldClock_FrameDeltaMs` | global (uint) |
+| 0x0088a62c | `g_dwWorldClock_Offset` | global (uint) — the slew target |
