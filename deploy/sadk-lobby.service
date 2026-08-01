@@ -1,0 +1,50 @@
+# SAdK lobby stub — systemd USER service.
+#
+# Installed as a *user* service (not system-wide) because the mini server has no passwordless
+# sudo, and because the stub must run as `user` from the repo working directory anyway — the
+# village/world side-logs and data/msgdefs.ini are all resolved relative to it.
+#
+# `loginctl enable-linger user` is what makes a user service start at boot and keep running
+# with nobody logged in. It is already enabled; it survives reboots, but if the service ever
+# fails to come up after a fresh install, check it first (`loginctl show-user user | grep -i
+# linger`).
+#
+# Install:
+#     scp deploy/sadk-lobby.service linux-server:~/.config/systemd/user/
+#     ssh linux-server 'systemctl --user daemon-reload && systemctl --user enable --now sadk-lobby'
+#
+# Operate:
+#     systemctl --user status sadk-lobby
+#     systemctl --user restart sadk-lobby        # after deploying new code
+#     journalctl --user -u sadk-lobby -f         # live log (replaces `tail -f stub.out`)
+#     journalctl --user -u sadk-lobby --since -1h
+
+[Unit]
+Description=Die Siedler: Aufbruch der Kulturen — lobby stub server
+Documentation=https://github.com/J4n1X/sadk-resurrected
+After=network-online.target
+Wants=network-online.target
+# Never stop trying: a game night is exactly when nobody is at a terminal to nurse it.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/sadk-resurrected
+# -u keeps stdout unbuffered so the journal shows lines as they happen rather than in 4 KB
+# bursts (a buffered stub is indistinguishable from a dead one).
+ExecStart=/usr/bin/python3 -u -m sadk_lobby
+Restart=always
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sadk-lobby
+
+NoNewPrivileges=yes
+
+# ⛔ Do NOT set SADK_ADVERTISE_IP here. It OVERRIDES config.ADVERTISED_IP, and the deployed
+# config.py is local-only — it already carries the correct public address and world port for
+# this box. Setting it "helpfully" to a LAN address hands remote players an unreachable one.
+
+[Install]
+WantedBy=default.target
