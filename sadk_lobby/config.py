@@ -32,21 +32,20 @@ WORLD_PORT = 5479   # village/world third connection
 ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.130")
 
 # ── Player accounts ───────────────────────────────────────────────────────────
-# Multiple clients can log in as DISTINCT players (host + joiner). PLAYERS[0] is the
-# default/test identity and the fallback for unknown logins. Any other username
-# auto-registers as a fresh player on first login (players.py). Appearance is shared
-# (NICKNAME_DATA) for now — [TODO] per-player appearance.
-TEST_USERNAME  = "test"
-TEST_PASSWORD  = "test"     # raw, SHA-512 hashed on use
-TEST_PERM_ID   = 1
-TEST_CHAR_ID   = 1
-TEST_CHAR_NAME = "Testler"
-
-PLAYERS = [
-    {"username": TEST_USERNAME, "perm_id": TEST_PERM_ID,
-     "char_id": TEST_CHAR_ID, "char_name": TEST_CHAR_NAME},   # PLAYERS[0] = default
-    {"username": "test2", "perm_id": 2, "char_id": 2, "char_name": "Siedler"},
-]
+# ⭐ There is NO account table. Any number of clients may log in at once, and the USERNAME each
+# one types in the game's login box becomes that player's identity AND character name — the name
+# over their settler, in the chat roster and on their hosted games (players.py). perm_ids are
+# issued sequentially from 1 in first-seen order and stay stable per name for the life of the
+# process (the client's own avatar id IS its PermID, so a changing id would orphan its avatar).
+#
+# Passwords, serials and CD-keys are NOT validated anywhere — they are decoded for logging only
+# (crypto.decode_login_blob) and never compared against anything. Testers just need to pick
+# DIFFERENT usernames from each other; anything at all works for the other fields.
+#
+# Appearance is still shared (NICKNAME_DATA) — [TODO] per-player appearance.
+TEST_USERNAME  = "test"     # only the suggested name in the startup banner
+TEST_PASSWORD  = "test"     # only the suggested password in the startup banner
+TEST_PERM_ID   = 1          # defensive fallback owner id for stub-injected server entries
 
 # Avatar data blob from the AdK emulator (LobbyProcessor._nicknameData).
 NICKNAME_DATA = bytes.fromhex(

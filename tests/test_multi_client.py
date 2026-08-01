@@ -68,38 +68,66 @@ def _add_game(conn, **over):
 
 
 # ── 1. Player resolution ───────────────────────────────────────────────────────
-def test_player_resolution_predefined_and_auto():
-    p1 = players.resolve_by_username("test")
-    p2 = players.resolve_by_username("test2")
-    assert (p1.perm_id, p1.char_name) == (config.TEST_PERM_ID, config.TEST_CHAR_NAME)
-    assert (p2.perm_id, p2.char_name) == (2, "Siedler")
-    assert p1.perm_id != p2.perm_id
-    # case-insensitive match to the same predefined player
-    assert players.resolve_by_username("TEST2").perm_id == 2
-    # unknown username auto-registers a fresh, distinct perm_id
-    auto = players.resolve_by_username("alice")
-    assert auto.perm_id >= 1000 and auto.perm_id not in (1, 2)
-    assert auto.username == "alice"
+def test_username_is_the_identity_and_the_character_name():
+    """Any username works, and it IS the character name — no account table."""
+    a = players.resolve_by_username("J4n1X")
+    b = players.resolve_by_username("Kevin")
+    assert a.char_name == "J4n1X" and a.username == "J4n1X"
+    assert b.char_name == "Kevin"
+    assert a.perm_id != b.perm_id
+    # the same name is the same identity, case-insensitively, so a reconnect keeps its perm_id
+    # (the client's own avatar id IS its PermID — a changing id would orphan its avatar)
+    assert players.resolve_by_username("JANICK").perm_id == a.perm_id
+    assert players.resolve_by_username("J4n1X").perm_id == a.perm_id
     # UC/village conns resolve by the token perm_id back to the same players
-    assert players.resolve_by_perm(2).char_name == "Siedler"
-    assert players.resolve_by_perm(auto.perm_id).username == "alice"
-    # unknown perm_id falls back to the default player (defensive)
-    assert players.resolve_by_perm(0xDEAD).perm_id == config.TEST_PERM_ID
+    assert players.resolve_by_perm(a.perm_id).char_name == "J4n1X"
+    assert players.resolve_by_perm(b.perm_id).char_name == "Kevin"
 
 
-def test_empty_username_falls_back_to_default():
-    assert players.resolve_by_username("").perm_id == config.TEST_PERM_ID
-    assert players.resolve_by_username(None).perm_id == config.TEST_PERM_ID
+def test_arbitrary_player_count_gets_distinct_identities():
+    """A whole lobby's worth of players, all distinct — the multiuser-test requirement."""
+    names = [f"tester{i}" for i in range(32)]
+    ps = [players.resolve_by_username(n) for n in names]
+    assert len({p.perm_id for p in ps}) == len(names), "perm_ids must be unique per player"
+    assert [p.char_name for p in ps] == names
+    assert all(p.perm_id > 0 for p in ps)
+    # and they stay stable on re-resolution
+    assert [players.resolve_by_username(n).perm_id for n in names] == [p.perm_id for p in ps]
+
+
+def test_missing_username_never_collapses_two_clients_into_one_player():
+    """An undecodable/empty login must NOT share one identity — that would make every such
+    client the same settler in the world."""
+    g1 = players.resolve_by_username("")
+    g2 = players.resolve_by_username(None)
+    assert g1.perm_id != g2.perm_id
+    assert g1.char_name != g2.char_name
+
+
+def test_unknown_perm_id_keeps_its_id():
+    """A stale token (e.g. reconnect after a server restart) must keep the client's own id, or
+    our avatar id and the client's disagree."""
+    p = players.resolve_by_perm(0xDEAD)
+    assert p.perm_id == 0xDEAD
+    assert players.resolve_by_perm(0xDEAD) is p
+
+
+def test_long_username_is_clamped_for_the_wire():
+    p = players.resolve_by_username("x" * 200)
+    assert len(p.char_name) <= players.MAX_NAME_LEN
 
 
 # ── 2. Cross-client visibility + join resolution ───────────────────────────────
 def test_hosted_game_visible_and_joinable_cross_client():
     registry.games.clear()
     try:
+        # perm_ids are issued in first-seen order, so read them back rather than assuming.
         host = FakeConn(1, addr=("10.0.0.5", 4444))
-        host.player = players.resolve_by_username("test")          # perm 1
+        host.player = players.resolve_by_username("hostplayer")
         joiner = FakeConn(2, addr=("10.0.0.9", 5555))
-        joiner.player = players.resolve_by_username("test2")        # perm 2
+        joiner.player = players.resolve_by_username("joinplayer")
+        host_perm, join_perm = host.player.perm_id, joiner.player.perm_id
+        assert host_perm != join_perm
 
         # Host advertises its IP via 168 (ip="" → falls back to the conn's address).
         sid = _add_game(host, name="Steinfjord Duell", ip="", port=5479)
@@ -110,17 +138,17 @@ def test_hosted_game_visible_and_joinable_cross_client():
         assert any(g["name"] == "Steinfjord Duell" for g in games), [g["name"] for g in games]
         g = next(g for g in games if g["name"] == "Steinfjord Duell")
         assert g["server_id"] == sid
-        assert g["owner_id"] == 1                  # owned by the host player
+        assert g["owner_id"] == host_perm          # owned by the host player
         assert g["server_subtype"] == 1            # game list (BrowseGameDialog)
         assert g["ip"] == "10.0.0.5"               # host's real address, not advertised default
 
         # Joiner clicks Join → 221 → 222 carries the host's address (P2P handoff).
         joiner.sent.clear()
-        dispatch._h_connection_data(joiner, {"perm_id": 2, "server_id": sid}, TICKET)
+        dispatch._h_connection_data(joiner, {"perm_id": join_perm, "server_id": sid}, TICKET)
         cd = joiner.sent_of(222)[0]
         assert cd["server_id"] == sid
         assert cd["ip"] == "10.0.0.5" and cd["port"] == 5479
-        assert cd["perm_id"] == 2                   # the joiner's perm_id
+        assert cd["perm_id"] == join_perm           # the joiner's perm_id
         assert cd["errorcode"] == 0
     finally:
         registry.games.clear()
