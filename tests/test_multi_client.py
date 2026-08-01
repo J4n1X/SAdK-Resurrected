@@ -19,7 +19,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from sadk_lobby import codec, config, dispatch, players, registry  # noqa: E402
+import struct  # noqa: E402
+
+from sadk_lobby import chat, codec, config, dispatch, players, registry  # noqa: E402
 
 TICKET = 0x0BADF00D
 
@@ -115,6 +117,57 @@ def test_unknown_perm_id_keeps_its_id():
 def test_long_username_is_clamped_for_the_wire():
     p = players.resolve_by_username("x" * 200)
     assert len(p.char_name) <= players.MAX_NAME_LEN
+
+
+# ── 1b. Relog must not duplicate chat (the Win7 "double send") ─────────────────
+class _ChatConn:
+    """Minimal connection that just records chat frames."""
+    def __init__(self, conn_id, player):
+        self.id = conn_id
+        self.alive = True
+        self.player = player
+        self.chat_sent = []
+
+    def send_chat(self, frame):
+        self.chat_sent.append(frame)
+
+
+def _chat_body(cell_id, text=b"hello"):
+    return (struct.pack("<HHI", 0, 2, 0) + struct.pack("<I", len(text)) + text
+            + struct.pack("<I", cell_id))
+
+
+def test_relog_does_not_double_deliver_chat():
+    """A relog leaves the previous UC socket in the roster, still flagged alive. Serving both
+    made the client print every line twice — observed live on the Win7 VM, which had relogged
+    more often than the Win11 box, so it looked OS-specific."""
+    cell = config.GLOBAL_CHAT_CELL
+    chat._roster.clear()
+    try:
+        vm, pc = players.resolve_by_username("VM-User"), players.resolve_by_username("J4n1X")
+        vm_old, vm_new, pc_conn = _ChatConn(1, vm), _ChatConn(2, vm), _ChatConn(3, pc)
+        for c in (vm_old, vm_new, pc_conn):
+            chat._roster_join(cell, c)
+
+        members = chat._roster_members(cell)
+        assert len(members) == 2 and vm_old not in members, "one membership per player"
+
+        chat._handle_message(vm_new, _chat_body(cell))
+        assert len(vm_new.chat_sent) == 1, "author sees their own line exactly once"
+        assert len(vm_old.chat_sent) == 0, "the stale socket must get nothing"
+        assert len(pc_conn.chat_sent) == 1, "the other player sees it exactly once"
+
+        # A stale socket closing must not announce a leave — the player is still present.
+        pc_conn.chat_sent.clear()
+        vm_old.alive = False
+        chat.on_conn_closed(vm_old)
+        assert pc_conn.chat_sent == []
+        # …but a genuine departure still is announced.
+        vm_new.alive = False
+        chat.on_conn_closed(vm_new)
+        assert len(pc_conn.chat_sent) == 1
+    finally:
+        chat._roster.clear()
 
 
 # ── 2. Cross-client visibility + join resolution ───────────────────────────────

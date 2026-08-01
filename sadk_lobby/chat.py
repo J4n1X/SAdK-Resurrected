@@ -25,32 +25,61 @@ _roster_lock = threading.Lock()
 _roster: dict = {}          # cell_id -> list[Conn]  (UC/chat connections)
 
 
+# ⛔ A cell roster holds one entry per PLAYER, not per socket. [PROVEN 2026-08-01 live, the
+# Win7 "double send" bug] A relog opens a fresh UC connection while the previous one is still in
+# the list and still flagged alive — the join log showed "3 existing members" with two players
+# present. Delivering the relay once per socket makes the client print every line twice, and the
+# machine that had relogged most doubled first (Win7 VM), which is why it looked OS-specific.
+def _live_one_per_player(members, exclude=None):
+    """Live connections from `members`, at most ONE per player, newest winning."""
+    by_player = {}
+    for c in members:
+        if c is exclude or not getattr(c, "alive", False):
+            continue
+        by_player[players.of(c).perm_id] = c        # a later conn replaces an earlier one
+    return list(by_player.values())
+
+
 def _roster_join(cell_id, conn):
-    """Add conn to the cell; return the OTHER live members."""
+    """Add conn to the cell; return the OTHER live members (one per player)."""
     with _roster_lock:
         members = _roster.setdefault(cell_id, [])
+        me = players.of(conn).perm_id
+        for stale in [c for c in members if c is not conn and players.of(c).perm_id == me]:
+            members.remove(stale)                   # this player's previous socket
         if conn not in members:
             members.append(conn)
-        return [c for c in members if c is not conn and getattr(c, "alive", False)]
+        return _live_one_per_player(members, exclude=conn)
 
 
 def _roster_members(cell_id):
     with _roster_lock:
-        return [c for c in _roster.get(cell_id, []) if getattr(c, "alive", False)]
+        return _live_one_per_player(_roster.get(cell_id, []))
 
 
 def on_conn_closed(conn):
-    """A UC socket went away: drop it from every cell and tell the remaining members."""
-    left = []
+    """A UC socket went away: drop it from every cell and tell the remaining members.
+
+    Only announce the leave if the player has no OTHER live connection in that cell — when a
+    stale socket from a previous login finally closes, the player is still standing there, and
+    telling everyone they left would drop them from the roster while they are present."""
+    left, still_here = [], set()
     with _roster_lock:
         for cell_id, members in _roster.items():
             if conn in members:
                 members.remove(conn)
                 left.append(cell_id)
+                if any(getattr(c, "alive", False) and players.of(c).perm_id == players.of(conn).perm_id
+                       for c in members):
+                    still_here.add(cell_id)
     if not left:
         return
     p = players.of(conn)
     for cell_id in left:
+        if cell_id in still_here:
+            log(f"  [CHAT] {p.char_name!r} dropped a stale socket in cell {cell_id} "
+                f"— still present on another connection, no leave announced")
+            continue
         inner = inner_user_left(p.perm_id, cell_id)
         others = _roster_members(cell_id)
         for c in others:
@@ -190,9 +219,9 @@ def _handle_message(conn, body):
             f"data={data[:64]!r} — raw {len(body)}B:")
         log(hex_dump(body))
     p = players.of(conn)
-    targets = _roster_members(cell_id)
-    if conn not in targets:            # not rostered (never joined / stale) — still show the author
-        targets.append(conn)
+    targets = _roster_members(cell_id)              # already one per player
+    if not any(players.of(c).perm_id == p.perm_id for c in targets):
+        targets.append(conn)           # author not rostered — still echo their own line back
     # ⚠️ from_id was FROM_SERVER here until 2026-07-27. Using the SPEAKER's perm_id is the natural
     # reading of the field and is what lets the client attribute the line, but it is INFERRED —
     # if lines show up unattributed or as the wrong player, put FROM_SERVER back and carry the
