@@ -149,7 +149,7 @@ VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world kee
 # forever. The stub now completes the leave the genuine way — by closing the village connection
 # (dispatch._h_send_game_data → conn.close_graceful). No flag: working behaviour is the default
 # (HARNESS §5). ER: engagement_records/2026-07-26_village-leave-close-connection.md
-VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
+VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick@0x46f620: WORLD-CLOCK SYNC (64-BIT tick, slews client clock; see village.send_world_tick)
 
 # ── In-world presence (docs/IN_WORLD_PRESENCE.md) ────────────────────────────
 # Bit-packed avatar/entity messages. 1001 is the one that makes a body VISIBLE: it allocates an

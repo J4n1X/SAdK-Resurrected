@@ -108,11 +108,21 @@ def pong_body(token=b"\x00\x00\x00\x00"):
     return (bytes(token) + b"\x00\x00\x00\x00")[:4]       # bare u32 echo, no prefix
 
 
-def world_tick_body():
-    """Body for WorldTick (msg 1005): a 64-byte "tick" MEMBLOCK (HandleWorldTick @0x46f420 reads via the
-    reader's WIDE slot vtable+0x20, len 0x40). A zero clock is fine for a stub heartbeat. OPTIONAL — held
-    OFF for the first isolated drive of the 1006 gate (see dispatch._h_send_game_data)."""
-    return bytes_field(b"\x00" * 64)
+def world_tick_body(tick_ms):
+    """Body for WorldTick (msg 1005): ONE positional field, "tick", read as a **64-BIT scalar**
+    (NOT a 64-byte MEMBLOCK — that was a mis-read of the 0x40 argument, which is a BIT count).
+
+    [PROVEN 2026-08-01 static] `HandleWorldTick@0x0046f620` does SelectField("tick") then reader
+    vtbl+0x20 = `FUN_0048f380` → `FUN_0048f050(this, 0x40)` — the positional MSB-first bit reader
+    pulling 64 bits into an 8-byte stack local. So the wire form is 8 raw big-endian bytes, no
+    length prefix (same scalar rule as the proven big-endian u32s).
+
+    ⚠️ CLIENT ENGINE BUG (shipped): `FUN_0048f050` assembles bits with a 32-bit `SHL EAX,CL` (x86
+    masks CL & 0x1f) + CDQ, so for a 64-bit read the two 32-bit halves ALIAS into the low dword
+    (`lo = hi_half | lo_half`) and the high dword becomes a sign-smear. Consequence: the high
+    dword on the wire MUST be zero or it corrupts the value — hence `tick_ms & 0xFFFFFFFF`.
+    Only the low 16 bits are consumed anyway (the clock slew, see send_world_tick)."""
+    return struct.pack(">Q", int(tick_ms) & 0xFFFFFFFF)
 
 
 # ── In-world presence: bit-packed LobbyMessage bodies (msgs 1001-1004) ────────────────────────
@@ -347,13 +357,29 @@ def send_pong(conn, token=b"\x00\x00\x00\x00", magic=None):
     _send_village(conn, config.VILLAGE_MSG_PONG, pong_body(token), magic, "Pong(0xED7) keepalive")
 
 
-def send_world_tick(conn, magic=None):
-    """Send a WorldTick (msg 1005) — the in-world sim heartbeat (NOT one-shot; call periodically). OPTIONAL:
-    held OFF for the first isolated drive of the 1006 gate so a render-gate failure isn't conflated with a
-    missing clock. Enable once 1006 is confirmed to dismiss the loading screen."""
+def send_world_tick(conn, tick_ms, magic=None, quiet=False):
+    """Send a WorldTick (msg 1005) — **the world-clock SYNC**, not an optional heartbeat.
+
+    [PROVEN 2026-08-01 static + trace avatar_refresh_diag2.run] The chain:
+      `HandleWorldTick@0x0046f620` (village msg 1005) reads the 64-bit "tick" field and fires the
+      conn's +0x11c notify list → `CLobbyClient_OnWorldTick_Throttled@0x00503590` (subscribed at
+      conn birth) → `FUN_0057b910(tick & 0xFFFF, 250)`: if the client WORLD CLOCK
+      (`FUN_0057b8d0` = raw timer − offset @0x88a62c) differs in phase from the wire tick by
+      ≥250 ms (shorter direction mod 65536), the offset is slewed so the clock's low 16 bits
+      EQUAL the tick. That world clock is the anchor `FUN_004f4d10` reconstructs every avatar
+      location tick16 against, AND the `t` the movement-ring interpolator `FUN_00519d50` runs on
+      (trace-proven: Tick param == 0x88a620−0x88a62c at the call).
+
+    So WITHOUT this message the phase between our EntityCreate tick stream and the client clock is
+    ARBITRARY per machine/boot (up to ±32.7 s) — waypoint stamps land far past (>3.0 s stale →
+    hidden) or far future (u64 underflow → instantly hidden). This was the round-2/3 die-off and
+    the PC-vs-VM asymmetry. `tick_ms` MUST come from the same clock as the location ticks
+    (dispatch._now_ms) so the slew aligns the client to OUR timebase. Call periodically; after the
+    first slew the 250 ms tolerance makes further sends client-side no-ops."""
     if not conn.alive:
         return
-    _send_village(conn, config.VILLAGE_MSG_WORLD_TICK, world_tick_body(), magic, "WorldTick(1005)")
+    _send_village(conn, config.VILLAGE_MSG_WORLD_TICK, world_tick_body(tick_ms), magic,
+                  f"WorldTick(1005) tick_ms={int(tick_ms) & 0xFFFFFFFF} — world-clock sync", quiet=quiet)
 
 
 def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,

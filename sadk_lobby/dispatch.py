@@ -164,11 +164,23 @@ _avatar_ticker_lock = threading.Lock()
 _avatar_ticker_started = False
 
 
+def _now_ms():
+    """THE wire timebase: an advancing millisecond clock. Every tick we send — the WorldTick(1005)
+    clock sync AND the EntityCreate location tick16s — must come from THIS one clock, because the
+    client slews its world clock to the 1005 ticks and then reconstructs every location tick16
+    against that slewed clock (`FUN_004f4d10`, nearest-anchor mod 65536)."""
+    return int(time.monotonic() * 1000)
+
+
 def _now_tick16():
-    """Low 16 bits of an advancing millisecond clock — the wire `tick` timebase. The client
-    reconstructs the full timestamp against its OWN local clock (`FUN_004f4d10` picks the nearest
-    interpretation), so only the relative advance matters, not the absolute value."""
-    return int(time.monotonic() * 1000) & 0xFFFF
+    """Low 16 bits of `_now_ms()` — the wire `tick` field of avatar location blocks.
+
+    ⚠️ CORRECTED MODEL 2026-08-01: the client does NOT tolerate an arbitrary absolute phase. The
+    nearest-anchor reconstruction is anchored on the client WORLD CLOCK, which the real server
+    kept slewed to ITS tick stream via WorldTick(1005). Without 1005 the phase error is arbitrary
+    (up to ±32.7 s, per machine/boot) — that was the round-2/3 avatar die-off. With 1005 flowing
+    from the same clock, reconstruction is phase-true."""
+    return _now_ms() & 0xFFFF
 
 
 def _avatar_location_ticker():
@@ -185,6 +197,14 @@ def _avatar_location_ticker():
         in_world = _find_live(lambda c: getattr(c, "is_village", False)
                               and getattr(c, "_enter_world_sent", False))
         sent = 0
+        for conn in in_world:
+            # World-clock sync FIRST, every cycle (see village.send_world_tick): keeps each
+            # client's world clock slewed to the same clock the location tick16s below are cut
+            # from. After the first slew the client's 250 ms tolerance makes this a no-op.
+            try:
+                village.send_world_tick(conn, _now_ms(), quiet=True)
+            except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                log(f"  [WORLD] WorldTick(1005) to conn #{conn.id} failed: {exc}")
         for conn in in_world:
             me = _player(conn)
             for other in in_world:
@@ -229,6 +249,12 @@ def _spawn_world_avatars(conn):
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
         return
+    # Sync each client's world clock to OUR timebase BEFORE any waypoint lands: waypoint stamps
+    # are absolute u64s cut against the clock at parse time and are NOT re-anchored by a later
+    # slew, so the slew must happen first. First 1005 ⇒ phase error ≥250 ms ⇒ immediate slew.
+    village.send_world_tick(conn, _now_ms())
+    for other in others:
+        village.send_world_tick(other, _now_ms(), quiet=True)
     tick_base = _now_tick16()
     tick = (tick_base - 1000) & 0xFFFF
     for other in others:

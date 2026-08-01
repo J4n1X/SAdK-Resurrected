@@ -180,7 +180,7 @@ Read-only context: `0x462700 SetState`, `0x4626f0 GetState`, `0x4625e0 LobbyMana
 | 0x46dfb0 | `VillageServerConnection::HandleEntityUpdate` | msg 1002 |
 | 0x46e190 | `VillageServerConnection::HandleEntityRemove` | msg 1003 |
 | 0x46f6c0 | `VillageServerConnection::HandlePlayerCreate` | msg 1004 (0x120 player/settler) |
-| 0x46f420 | `VillageServerConnection::HandleWorldTick` | msg 1005 |
+| 0x46f420 | `VillageServerConnection::HandleWorldTick` | **msg 1005 = WORLD-CLOCK SYNC** — reads 64-BIT field "tick" (reader vtbl+0x20, 0x40 BITS not bytes), fires notify list `+0x11c` → `CLobbyClient_OnWorldTick_Throttled` → `WorldClock_SlewToTick16(tick&0xFFFF, 250ms)`. Clean-build addr **0x46f620**. [PROVEN 2026-08-01] |
 | 0x46e8b0 | `VillageServerConnection::HandleWorldLoginAck` | msg 1006; accepts iff `code==0xDEADBEEF` |
 | 0x46bd00 | `VillageServerConnection::SendWorldReadyAck` | sends **msg 0xED6 (3798) "PingCode"**, body PropertySet{PingCode:32B} |
 | 0x46be00 | `VillageServerConnection::HandlePongCode` | msg 0xED7 (3799); RTT/quality |
@@ -389,3 +389,26 @@ dedicated pass rather than a rushed partial binding.
 | 0x00445ac0 | `MiniGameMatchMakingDialog_Construct` | (bust of the old `+0xbc` candidate — it is the minigame dialog, not the avatar observer) |
 
 Full narrative + the wall fork ("is the OWN settler visible?"): `docs/IN_WORLD_PRESENCE.md`.
+
+### World clock + avatar movement ring (clean base `sadk_noav.exe`) [PROVEN 2026-08-01]
+
+The clock the whole avatar-movement system runs on, and how the server's tick stream drives it.
+Root-caused the avatar 3-second die-off: the stub never sent WorldTick(1005), so the client
+world clock free-ran at an arbitrary phase (±32.7 s per machine/boot) vs our location tick16s.
+ER: `engagement_records/2026-08-01_worldtick-clock-sync.md`.
+
+| Addr | Name | Role |
+|---|---|---|
+| 0x0057b810 | `WorldClock_FrameUpdate` | per-frame: samples `g_dwWorldClock_RawMs` via `g_dwWorldClock_TimerProcAddr`, updates `g_dwWorldClock_FrameDeltaMs` |
+| 0x0057b840 | `WorldClock_GetRawMs` | returns the raw sample |
+| 0x0057b8d0 | `WorldClock_GetMs` | **the WORLD CLOCK**: `g_dwWorldClock_RawMs − g_dwWorldClock_Offset` |
+| 0x0057b8e0 | `WorldClock_GetSeconds` | same, as float seconds |
+| 0x0057b910 | `WorldClock_SlewToTick16` | `(tick16, tolMs)` — if phase error ≥ tol (shorter dir mod 65536), adjusts `g_dwWorldClock_Offset` so `GetMs() & 0xFFFF == tick16`; returns "slewed" |
+| 0x0057b990 | `WorldClock_Reset` | zeroes; clock restarts at 0 |
+| 0x00503590 | `CLobbyClient_OnWorldTick_Throttled` | `+0x11c` cb: `SlewToTick16(*tick, 0xFA=250 ms)`; on slew notifies `CLobbyClient+0x4` subject vtbl+0x18 with the new clock |
+| 0x004f4d10 | `WorldClock_ReconstructTick16` | expands a wire tick16 to u64 ms: value ≡ tick16 (mod 65536) NEAREST `GetMs()` (hi dword 0) |
+| 0x00519b20 | `AvatarMovement_PushWaypoint` | ring push (8 slots @ visual+0x28, stride 0x28); stamp = reconstructed+2000 ms; ONLY guard = null-position reject (no dedup, no monotonicity) |
+| 0x00519d50 | `AvatarMovement_Tick` | per-frame (vtbl+4 of vtable 0x007e70c4): bracket search over the 7 ADJACENT ring pairs, `prev < t <= next`; bracket ⇒ VISIBLE (smooth unless gap > 2.0 s `DAT_007d435c` / dist ≥ 10.0 `DAT_007fa8d8` / prev pos null ⇒ snap-to-next); no bracket ⇒ snap to newest, HIDE iff `t − newest > 3.0 s` (`DAT_007d4360`; u64 ⇒ future-only stamps underflow = instantly hidden). Clock param = `WorldClock_GetMs` (trace-proven) |
+| 0x0048f380 | `LobbyMessage_ReadBits64` | reader vtbl+0x20: reads N bits into a u64 (skips name reads when names flag set) |
+| 0x0048f050 | `LobbyMessage_ReadBitsCore` | MSB-first positional bit reader. ⚠️ **SHIPPED BUG for >32-bit reads**: 32-bit `SHL` (CL masked &0x1f) + `CDQ` ⇒ the two halves ALIAS into the low dword, hi = sign-smear ⇒ 64-bit wire fields MUST carry a zero high dword (the stub masks the 1005 tick to u32) |
+| 0x0088a610–0x62c | `g_dwWorldClock_*` | TimerProcAddr / RawMs / PrevRawMs (+0x624) / FrameDeltaMs (+0x628) / **Offset (+0x62c — the slew target)** |
