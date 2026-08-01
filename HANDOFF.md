@@ -157,23 +157,43 @@ All five bit in one session, and together they cost a live test window with a se
 5. **Launch with `python3 -u`.** Without it stdout is block-buffered into the log file, so a healthy
    server looks identical to a dead one (0-byte log) for a long time.
 
-Restart, verify in this order:
+## ▶ The stub runs as a systemd service (2026-08-02) — do NOT start it by hand
+
+⛔ **The old `pkill` + `setsid nohup` recipe is obsolete and now actively misleading**: with
+`Restart=always`, killing the process just makes systemd start a new one ~3 s later, so a manual
+`pkill` looks like it "did nothing" and a hand-started second copy would fight the service for
+the ports.
+
 ```bash
-ssh linux-server "pkill -f '[s]adk_lobby'"                       # separate invocation!
-timeout 12 ssh linux-server "cd ~/projects/sadk-resurrected && \
-  setsid nohup python3 -u -m sadk_lobby > stub.out 2>&1 </dev/null & disown; sleep 3"
-ssh linux-server "ss -ltn | grep -E ':(7070|7071|5477|5481)'; \
-  ps -o pid,lstart,cmd -C python3 | grep sadk; head -20 ~/projects/sadk-resurrected/stub.out"
+# after deploying new code (scp as usual), restart the service:
+ssh linux-server 'systemctl --user restart sadk-lobby'
+
+ssh linux-server 'systemctl --user status sadk-lobby --no-pager'
+ssh linux-server 'journalctl --user -u sadk-lobby -f'        # live log (replaces tail -f stub.out)
+ssh linux-server 'journalctl --user -u sadk-lobby --since -1h'
 ```
-⚠️ Backgrounding over ssh without `timeout`/`disown` **hangs the ssh channel** until the server dies.
+
+Unit lives in the repo at `deploy/sadk-lobby.service` and is installed to
+`~/.config/systemd/user/sadk-lobby.service`. It is a **user** service (no passwordless sudo on
+that box) with `loginctl enable-linger user` set, so it starts at boot with nobody logged in
+and restarts on crash — verified by `kill -9`, back up on all four ports in <6 s.
+
+⚠️ Stdout now goes to the **journal**, not `stub.out`. The app's own `tincat_server.log` /
+`tincat_lobby_unhandled.log` still land in the working directory, and are now size-capped
+(32 MB, one `.1` generation; `SADK_LOG_MAX_MB` overrides) — the unhandled log had reached
+251 MB in a single day of two-player testing.
+
+⚠️ Do NOT put `SADK_ADVERTISE_IP` in the unit: it overrides `config.ADVERTISED_IP`, and the
+deployed `config.py` is local-only and already carries the right public address.
 
 ## Environment
 Stub deployed to `linux-server:~/projects/sadk-resurrected` **by file copy, not git** — the
 remote checkout is an old commit with a dirty tree, so **verify by content hash, not `git log`**:
 `tr -d '\r' < f | md5sum` on both sides (local checkout is CRLF, remote is LF — a raw md5 differs
-even when the content is identical; that nearly caused a false alarm). Restart with
-`ssh linux-server "pkill -f '[s]adk_lobby'"` then `ssh -f … setsid nohup …`; note
-`pkill -f sadk_lobby` **self-matches the ssh command line** and kills your own session.
+even when the content is identical; that nearly caused a false alarm). ⚠️ Hash the files with
+**python/md5sum on raw bytes**, not PowerShell `Get-Content` — in PS 5.1 that decodes UTF-8
+without a BOM as ANSI and mangles every non-ASCII character, producing a mismatch that is not
+real. Restart via `systemctl --user restart sadk-lobby` (see above), never by hand.
 
 ## Housekeeping
 All work is committed. **Several commits are unpushed** — the remote

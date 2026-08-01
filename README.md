@@ -198,6 +198,18 @@ pip install -r requirements.txt          # cryptography, twofish
 python -m sadk_lobby                       # or: python tincat_server.py
 ```
 
+**Running it for other people?** Install it as a service instead of babysitting a terminal —
+the unit is in `deploy/sadk-lobby.service` (systemd *user* service, no root needed):
+
+```bash
+scp deploy/sadk-lobby.service <host>:~/.config/systemd/user/
+ssh <host> 'loginctl enable-linger $USER'      # so it runs with nobody logged in
+ssh <host> 'systemctl --user daemon-reload && systemctl --user enable --now sadk-lobby'
+ssh <host> 'journalctl --user -u sadk-lobby -f'
+```
+
+It restarts on crash and comes back after a reboot.
+
 The server opens four listeners:
 
 | Port | Role                                        |
@@ -207,8 +219,10 @@ The server opens four listeners:
 | 5479 | village / world (3rd conn)                  |
 | 5481 | referee / match-arbiter (dialled at match start) |
 
-Then point your game install at the stub (see the checklist above) and log in with
-`test` / `test` / `test`. Binding `7070` may require running elevated. The stub pushes
+Then point your game install at the stub (see the checklist above) and log in with **any
+username you like** — the username becomes your character name in the lobby, and the password
+and serial are not checked at all. Several people can play at once; they only need to pick
+**different usernames** from each other. Binding `7070` may require running elevated. The stub pushes
 `EnterWorld(1000)` automatically once the village connection logs in (no flags). Reaching the 3D
 world still requires launching the game elevated on Win10/11 (SecuROM). **It is fragile and
 environment-dependent.**
