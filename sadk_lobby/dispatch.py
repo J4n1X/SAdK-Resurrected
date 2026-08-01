@@ -176,7 +176,12 @@ def _avatar_location_ticker():
     while True:
         time.sleep(AVATAR_REFRESH_SECS)
         cycles += 1
-        tick = _now_tick16()
+        # Geometry experiment 2026-08-01 (round 3): send now-1000 so the client-side waypoint stamp
+        # (reconstruct(tick)+2000) lands ≈now+1000 — each 1 Hz push then brackets "now" between the
+        # push from 1-2 s ago and the fresh one, and the newest stamp is never behind the clock.
+        # With plain "now" the stamps sit +2000 ahead and live behaviour showed the avatar hidden
+        # (stale/no-bracket path latching render-node bit 0x20).
+        tick = (_now_tick16() - 1000) & 0xFFFF
         in_world = _find_live(lambda c: getattr(c, "is_village", False)
                               and getattr(c, "_enter_world_sent", False))
         sent = 0
@@ -224,7 +229,8 @@ def _spawn_world_avatars(conn):
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
         return
-    tick = _now_tick16()
+    tick_base = _now_tick16()
+    tick = (tick_base - 1000) & 0xFFFF
     for other in others:
         op = _player(other)
         village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id), tick=tick,
@@ -233,13 +239,12 @@ def _spawn_world_avatars(conn):
         village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id), tick=tick,
                                    label=f"[{me.char_name!r} shown to {op.char_name!r}]",
                                    style=_avatar_style(me))
-        # Prime the movement ring so the avatar never flickers: the create paints ONE frame, but the
-        # interpolator (FUN_00519d50) positions the avatar only from waypoint BRACKETS. A waypoint is
-        # stamped wire-tick+2000 ms client-side, so tick-2000 lands a waypoint at "now" and tick
-        # lands one at "now+2000" — a valid bracket from the very first tick, holding until the 1 Hz
-        # ticker takes over. Without this the avatar drops to (0,0,0) for the ~2-3 s the ring needs
-        # to fill (the "visible for one frame" symptom, TTD-proven in avatar_vanish_diag.run).
-        for prime in ((tick - 2000) & 0xFFFF, tick):
+        # Prime the movement ring so the avatar is bracketed from the very first tick: waypoint
+        # stamp = reconstruct(wire tick)+2000 ms, so wire now-3000 lands a stamp at ≈now-1000 and
+        # wire now-1000 lands one at ≈now+1000 — a bracket STRADDLING "now" immediately, held until
+        # the 1 Hz ticker takes over. Without waypoints the interpolator hides the avatar
+        # (render-node bit 0x20) one frame after the create paints it (TTD: avatar_vanish_diag.run).
+        for prime in ((tick_base - 3000) & 0xFFFF, (tick_base - 1000) & 0xFFFF):
             village.send_entity_create(conn, op.perm_id, pos=_spawn_spot(op.perm_id),
                                        tick=prime, quiet=True)
             village.send_entity_create(other, me.perm_id, pos=_spawn_spot(me.perm_id),

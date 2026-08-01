@@ -74,3 +74,32 @@ Immediately after the styled create, send two quiet location refreshes stamped `
 `tick`. Client-side these become waypoints at ≈now and ≈now+2000 — a valid bracket from the first
 tick, eliminating the flicker window entirely. Implemented in `_spawn_world_avatars`; the 1 Hz
 ticker then takes over seamlessly.
+
+### Round 2 + Round 3 results (02:12 / 02:36) — mechanism NAILED, one open question remains
+
+- **Round 2** (priming, stamps at ≈now/+2000): still one visible frame, then gone for good
+  (15-second stare test). Explained below.
+- **Round 3** (all ticks shifted −1000 so stamps straddle "now"): **the avatar now survives
+  2–3 seconds, then hides.** Also: stands still (expected — we send constant positions), default
+  appearance (expected — zero colours), and slightly longer-lived when the PC re-logged than the
+  VM (unexplained, minor).
+
+With the two constants read from the binary this timeline decodes exactly:
+
+- `DAT_007d4360 = 3.0` — the **staleness threshold is 3.0 s**: on the no-bracket (snap) path, the
+  avatar is hidden (`FUN_00504100`: render-node `+0x98 |= 0x20`) once `now − newest_waypoint`
+  exceeds it. Round 3's "2–3 seconds" is this constant, observed live.
+- Round 2's instant hide: with all stamps in the FUTURE (+2000), the u64 gap `now − newest`
+  underflows → huge → instantly "stale". Future-only waypoints are *worse* than none.
+- `DAT_0088f1b0` is a **const zero-vector with no writers** — the push-guard is a genuine
+  null-position check, NOT a dedup; identical-position refreshes are not skipped.
+
+**Open question (the next Ghidra session's agenda):** the 01:52 trace shows the 1 Hz stream landing
+81/81 waypoint pushes with perfect ~1001 ms stamp spacing — under the recorder's slowdown. At full
+speed the avatar dies at exactly 3.0 s, i.e. **the steady-state stream fails to sustain a bracket
+(or its pushes fail to land) at real frame rates**, while the priming pair works. The recorder
+cannot observe this (sub-1 fps forces the stale path by construction — TTD is structurally blind
+to this system's healthy state; positions alone do not distinguish bracket from snap since a
+full ring snaps to the correct spot). Static targets: the Tick's caller (who computes the `param_1`
+clock), `FUN_00510af0`/`FUN_00510c80` (bracket interpolators), the ring-search wrap/edge cases in
+`FUN_00519d50`, and what sustained STATIONARY avatars on the real server.
