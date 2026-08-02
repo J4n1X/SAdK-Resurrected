@@ -412,3 +412,47 @@ ER: `engagement_records/2026-08-01_worldtick-clock-sync.md`.
 | 0x0048f380 | `LobbyMessage_ReadBits64` | reader vtbl+0x20: reads N bits into a u64 (skips name reads when names flag set) |
 | 0x0048f050 | `LobbyMessage_ReadBitsCore` | MSB-first positional bit reader. ⚠️ **SHIPPED BUG for >32-bit reads**: 32-bit `SHL` (CL masked &0x1f) + `CDQ` ⇒ the two halves ALIAS into the low dword, hi = sign-smear ⇒ 64-bit wire fields MUST carry a zero high dword (the stub masks the 1005 tick to u32) |
 | 0x0088a610–0x62c | `g_dwWorldClock_*` | TimerProcAddr / RawMs / PrevRawMs (+0x624) / FrameDeltaMs (+0x628) / **Offset (+0x62c — the slew target)** |
+
+### In-world chat: render chain + tincat3 CellManager (clean base `sadk_noav.exe`) [PROVEN 2026-08-02]
+
+The full inbound path of a chat line, wire → pixels, mapped root-causing the LOCAL-chat black hole
+(fix: `d07f437` — publish the zone cells as ChannelInfo). All claims live-verified (read-only
+attach, ring-buffer dump) unless marked.
+
+**SADK.exe side** (observer this = the village screen; chat widget EMBEDDED at `screen+0x1f0`):
+
+| Address | Name | Note |
+|---|---|---|
+| 0x00480e30 | `UserCommConnection_ChatReceived` | dev name `LobbyComm::UserCommConnection::ChatReceived`; vtbl slot 4 of the `IChatChannelObserver` secondary vftable (`0x7dce94`) on the sub-object at `UC+0x38`. ⚠️ **Logs its scope BEFORE the `(cell, sender, text) != NULL` checks** — the log line does NOT prove processing. Then `LobbyManager_RegisterAvatar(senderId, name)` + fan-out on `UC+0x3c` |
+| 0x00480990 | `UserComm_NotifyChatReceivedObservers` | copies the `UC+0x3c` notify list, calls every functor `(name, senderId, cell, text)`; UNCONDITIONAL — no cell gate |
+| 0x00436180 | `VillageScreen_OnChatReceived_AppendToTab` | the only screen observer on `UC+0x3c` in-world. Drops iff ignore-list verdict == 2 or `VillageConn_ChatCellToTabId` == 0; `senderId == conn+0x160` ⇒ "[SYSTEM]" + popup path; else "[name] !LOBBY_CHAT_FROM : text" → AppendLine |
+| 0x0046d170 | `VillageConn_ChatCellToTabId` | walks the `conn+0x164` map for value == cell: key 0xFF→tab 1, 0xFE→tab 3, **key < 0x0E→tab 2**; ⚠️ zone keys 14/15 fall through (LOCAL unreachable for them); no match ⇒ 0 = drop |
+| 0x0046c600 | `VillageConn_GetSystemSenderId` | returns `conn+0x160` (live: 0) |
+| 0x004389d0 | `VillageScreen_OnEnter_SubscribeAndBuildChatTabs` | subscribes `{screen,0x436180}`→`UC+0x3c` (+ siblings 0x432930→`+0x48`, 0x432c60→`+0x54`); AddTab 1=GLOBAL 2=LOCAL 3=MINIGAME 4=SETTLERS, DisableTab(3,4), **SelectTab(2)** = LOCAL is entry-active; welcome/help lines land in the ACTIVE tab |
+| 0x00439410 | `VillageScreen_OnLeave_UnsubscribeAll` | exact mirror (verified in asm — the `villageConn+0x128` functor is `0x4323d0`, NOT the chat observer) |
+| 0x004ae200 | `ChatWidget_AppendLine` | (widget, tabId, senderId, str, color): 0=drop, −1=all tabs, −2/active=active ctx, else find-by-id needing `ctx != 0`; NO enabled check |
+| 0x004ae450 | `ChatWidget_AddTab` | entry `{id, ctx, button, enabled@+0xc}` ×0x10 in vector @`widget+0x3338/+0x333c`; first added becomes active (`+0x32d8` ctx, `+0x32dc` id) |
+| 0x004ac200 | `ChatWidget_DisableTab` | clears entry `+0xc`; clears active if it was active |
+| 0x004ac290 | `ChatWidget_SelectTab` | (id, force): needs `ctx != 0` && (`enabled` \|\| force) |
+| 0x004adb20 | `ChatTabCtx_AppendWordWrapped` | wraps via widget fonts, one RING SLOT per segment. Ring (ctx): `+8` slot-ptr array, `+0xc` cap (live: 8), `+0x10` head, `+0x14` count. Slot (0x24 B, heap): `{senderId@+0, color@+4, string@+8: SSO buf@+0xc, size@+0x1c, cap@+0x20}` — layout live-verified |
+| 0x004354d0 | `Chat_ParseSlashCommand` | only acts on texts starting `/`; command table @`0x0087a08c` (stride 0x28); ret 4 = emote (ids > 5 append an EMPTY string = invisible); ret 0 = plain text |
+| 0x004624b0 | `LobbyManager_GetCharacterManager` | returns `LM+0x140` (embedded) |
+| 0x004780c0 | `LobbyManager_RegisterAvatar` | (already named) upserts `CharMgr+0x1a0` id→name and `+0x1ac` lc-name→id |
+
+**tincat3.dll side** (`TinCatModules::CellManager` — the chat-cell wire module):
+
+| Address | Name | Note |
+|---|---|---|
+| 0x1000aa80 | `Handler_DispatchPayloadByMagic` | payload magic 0x62 → registry at `handler+0x34` keyed by the 2nd u16 (our "type" field, 0) → observer vtbl+0x20 |
+| 0x1000ef30 | `CellManager_DispatchInboundMessage` | logs "CellManager: Received message: %d"; switch on chat id: 0=PublishCell 2=Message 3=Reply 9/10=Joined/Left 11=StatusReply |
+| 0x1000ee30 | `CellManager_ProcessPublishCell` | our ChannelInfo: unknown cell id ⇒ CREATE cell record (insert into the registry); known ⇒ update props + event 4 |
+| 0x1000e4a0 | `CellManager_OnChannelJoinedLeft_RequireKnownCell` | ⭐ **THE LOCAL-CHAT GATE**: looks the cell up in the registry (`this+8`) FIRST; miss ⇒ `StatusReply(status=2)` + NO joined-event. **A cell must be published via ChannelInfo before its join can succeed** — EnterWorld(1000) pairs feed only the SADK-side map, not this registry |
+| 0x1000df60 | `CellManager_OnReply_QueueChatEvent` | our chat relay: queues event 0xd `{from, cell, msgid, data, ispropset}` with NO cell lookup — the null args reaching ChatReceived for an unknown cell are built downstream in the event drain [HYPOTHESIS — drain site not yet decompiled; everything else in this section is PROVEN] |
+| 0x10038fa0 | `CellManager_FindCellById` | registry lookup used by the join handler |
+| 0x1000da20 | `CellManager_QueueEvent` | event-queue append (types seen: 4, 0xd chat, 10/11 joined/left, 0xe status) |
+| 0x1000e250 | `CellManager_GetNextEvent` | the drain's pull ("no event was in queue" string) |
+
+⚠️ Two-layer join-confirmation trap: the stub answers a join with ChannelJoined(9) **and** StatusReply(11).
+When the manager rejected the 9 (unknown cell), the 11 still queued its own event 0xe — which is what
+latched SADK's `conn+0x225` zone byte and made the join LOOK confirmed at the upper layer while the
+manager had no cell. "Join confirmed" at the SADK layer therefore proves nothing about the CellManager.
