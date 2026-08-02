@@ -105,6 +105,22 @@ DEFAULT_CHANNELS = [
     (2, "Lobby",  "Lobby Channel",  "Admin", 0, True),
 ]
 
+# [PROVEN 2026-08-02] The tincat3 CellManager only accepts a channel JOIN for a cell it already
+# has in its registry (this+8): the ChannelJoined handler (tincat3 FUN_1000e4a0) looks the cell up
+# FIRST and answers StatusReply(status=2) on a miss — without queuing the joined-event. The
+# registry is populated ONLY by inbound ChannelInfo/PublishCell frames (dispatcher case 0 →
+# FUN_1000ee30 → cell-record insert). Advertising a cell in EnterWorld(1000) feeds a DIFFERENT,
+# SADK-side map (VillageServerConnection+0x164) and does NOT register it here — so every joinable
+# cell must ALSO be published on the chat connection. Cells 16..31 are the per-zone LOCAL channels
+# (WORLD_CHAT_CHANNELS below); before 2026-08-02 they were never published, the client rejected
+# its own local-zone join (seen live: "StatusReply from client: cell=16 → REJECTED (status=2)"),
+# and every LOCAL chat line was silently discarded by the client's null-check in
+# UserCommConnection::ChatReceived@0x00480e30 (which logs its scope BEFORE that check).
+ZONE_CHANNELS = [
+    (16 + z, f"Zone {z}", f"Local chat, zone {z}", "Admin", 0, True)
+    for z in range(16)
+]
+
 # ── In-world chat channels, advertised in EnterWorld(1000) ────────────────────
 # [PROVEN 2026-08-01] The client keeps a std::map<byte zoneKey, u32 cellId> at
 # VillageServerConnection+0x164, built ONLY from the (ChatChannelZone, ChatChannelID) pairs in

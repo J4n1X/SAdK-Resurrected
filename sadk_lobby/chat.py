@@ -153,14 +153,21 @@ def inner_user_left(perm_id, cell_id):
 
 # ── Handlers (operate on a Conn) ──────────────────────────────────────────────
 def send_initial_reply(conn):
-    """Push the default channel list the instant the chat handshake completes."""
-    for cell_id, name, subject, creator, creator_id, protected in config.DEFAULT_CHANNELS:
+    """Push the channel list the instant the chat handshake completes.
+
+    The zone cells (16..31) MUST be published here even though nobody browses them: the client's
+    tincat3 CellManager rejects a join of any cell missing from its ChannelInfo-fed registry with
+    StatusReply(status=2) and then silently discards every chat line relayed on that cell — the
+    LOCAL-chat black hole root-caused 2026-08-02 (see config.ZONE_CHANNELS)."""
+    channels = config.DEFAULT_CHANNELS + config.ZONE_CHANNELS
+    for cell_id, name, subject, creator, creator_id, protected in channels:
         blob = channel_data_blob(
             name=name, subject=subject, creator=creator, password=None,
             protected=protected, persistent=True, autodelete=False,
             hidden=False, creator_pid=creator_id)
         conn.send_chat(channel_info(cell_id, blob, ticket=0))
-    log(f"  → [CHAT] pushed {len(config.DEFAULT_CHANNELS)} ChannelInfo on connect")
+    log(f"  → [CHAT] pushed {len(channels)} ChannelInfo on connect "
+        f"({len(config.DEFAULT_CHANNELS)} lobby + {len(config.ZONE_CHANNELS)} zone)")
 
 
 def handle_frame(conn, payload):
