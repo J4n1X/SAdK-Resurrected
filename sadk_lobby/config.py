@@ -6,9 +6,10 @@ a binary address and live read-only evidence; values tagged [TODO] are unverifie
 Anything that affects the wire format must be re-validated against the real client
 before it is changed.
 
-There are NO feature flags here. Everything the stub knows how to do, it does by
-default. (Historically half of this file was `⛔ off-by-default` toggles; that bloat
-is gone — see HARNESS.md.)
+There are NO feature flags here, with ONE user-authorised exception
+(`VILLAGE_NPCS_ENABLED`, see below). Everything else the stub knows how to do, it
+does by default. (Historically half of this file was `⛔ off-by-default` toggles;
+that bloat is gone — see HARNESS.md §5.)
 """
 import os
 
@@ -30,6 +31,22 @@ WORLD_PORT = 5479   # village/world third connection
 # Same machine -> 127.0.0.1. For a VM test (game in the VM, stub on the host) set
 # SADK_ADVERTISE_IP to the host's IP as seen FROM the VM. Listeners always bind 0.0.0.0.
 ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.130")
+
+# ── Ambient village NPCs ──────────────────────────────────────────────────────
+# ⚠️ THE ONE FEATURE FLAG IN THIS FILE, and it exists by EXPLICIT USER INSTRUCTION
+# (J4n1X, 2026-08-02: "let's move NPC spawning behind a flag and disable it in the
+# config for now, I wanna pursue something else"). HARNESS.md §5 forbids an agent
+# adding a flag on its own initiative — it does NOT forbid the maintainer asking for
+# one. Recorded here so a later session reads this as authorised, not as drift.
+#
+# The NPC subsystem itself is NOT broken and NOT abandoned: msg 1004 spawns them,
+# they render with per-npcidx models, they speak their actChat lines, and the wire
+# format is documented in docs/SOURCEMAP.md §"The NPC system". It is parked because
+# two questions need answers that the binary cannot give (npcidx→appearance lives in
+# the encrypted game data; the OpenShop click path needs a live trace).
+#
+# Set back to True to bring the whole cast back — nothing else needs changing.
+VILLAGE_NPCS_ENABLED = False
 
 # ── Player accounts ───────────────────────────────────────────────────────────
 # ⭐ There is NO account table. Any number of clients may log in at once, and the USERNAME each

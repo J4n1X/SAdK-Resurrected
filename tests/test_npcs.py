@@ -18,9 +18,25 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from sadk_lobby import npcs, village  # noqa: E402
+from sadk_lobby import config, npcs, village  # noqa: E402
 
 CENTER = (-31.24, 2.71, 8.28)         # dispatch.VILLAGE_SPAWN_POINT
+
+
+# ── The NPC gate (user-requested flag, 2026-08-02) ───────────────────────────
+def test_npc_flag_gates_the_cast_dispatch_builds():
+    # The cast itself must stay intact and testable regardless of the flag — the flag only
+    # decides whether dispatch instantiates it. Everything downstream keys off an empty list.
+    assert npcs.make_village_npcs(CENTER), "the cast must survive being switched off"
+    from sadk_lobby import dispatch
+    if config.VILLAGE_NPCS_ENABLED:
+        assert dispatch._npcs, "flag is on but dispatch built no NPCs"
+    else:
+        assert dispatch._npcs == [], "flag is off but dispatch built NPCs anyway"
+        # The no-op path: every consumer must tolerate the empty list without a special case.
+        assert npcs.record_npcs(dispatch._npcs) == []
+        assert npcs.walker_npcs(dispatch._npcs) == []
+        npcs.advance_all(dispatch._npcs, 1.0)      # must not raise
 
 
 def _cast():
