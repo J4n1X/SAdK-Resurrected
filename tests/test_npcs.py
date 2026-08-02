@@ -98,6 +98,40 @@ def test_cast_split_covers_everyone():
     assert all(n.npctyp is None for n in walkers)
 
 
+def test_record_npc_actions_are_valid_lobby_actions():
+    # The v2 bug: emote ids were sent as `act`, and 2..6 all map to MinigameMatchmaking, so
+    # every NPC opened the minigame dialog. Pin the real enum (FUN_004325b0) and assert no NPC
+    # lands in the minigame band unless it is meant to.
+    valid = {npcs.ACT_NONE, npcs.ACT_HAIRCOLOR, npcs.ACT_MINIGAME, npcs.ACT_MAILBOX,
+             npcs.ACT_HOST_GAME, npcs.ACT_LIST_GAMES, npcs.ACT_HALL_OF_FAME,
+             npcs.ACT_OPEN_SHOP}
+    minigame_npcs = set()
+    for npc in npcs.record_npcs(_cast()):
+        for act, _text in npc.actions:
+            assert act in valid, f"{npc.name}: act {act} is not a known LobbyAction"
+            if 2 <= act <= 6:
+                minigame_npcs.add(npc.name)
+    assert minigame_npcs == {"Spielmeister Silas"}, \
+        f"only the minigame master should open matchmaking, got {minigame_npcs}"
+
+
+def test_record_npcs_have_distinct_model_indices():
+    # npcidx IS the model selector for type-2 NPCProxy objects; identical values are why the
+    # first cast all looked the same.
+    persons = [n for n in npcs.record_npcs(_cast()) if n.npctyp == npcs.NPCTYP_SETTLER]
+    idxs = [n.npcidx for n in persons]
+    assert len(idxs) == len(set(idxs)), f"duplicate npcidx across settler NPCs: {idxs}"
+
+
+def test_walkers_have_distinct_trbgndr_nibbles():
+    # trbgndr 0 on everyone == body part 0 / gender 0 == the identical default avatar.
+    walkers = npcs.walker_npcs(_cast())
+    assert len({n.tribe_gender for n in walkers}) == len(walkers), "walkers share a trbgndr"
+    for npc in walkers:
+        assert (npc.tribe_gender >> 4) < 3, "body part must be < 3 or the model math clamps"
+        assert 0 <= npc.tribe_gender <= 0xFF
+
+
 def test_record_npcs_encode_and_fit_the_nibble_fields():
     for npc in npcs.record_npcs(_cast()):
         kwargs = npc.record_kwargs()

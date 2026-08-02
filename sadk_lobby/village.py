@@ -319,16 +319,22 @@ def avatar_style_block(w, name, tribe_gender=0, colours=()):
         name STRING · trbgndr 8 · hrclr 8 · sknclr 8 · shrtclr 8 · trsrclr 8 · addColor1..4 8 each
 
     `colours` supplies the eight byte-wide slots in AVATAR_STYLE_COLOURS order; short sequences are
-    zero-filled. Failure to parse is reported by the client as "Could not read AvatarStyle from
-    message." in LobbyComm.log.
+    zero-filled. They land in AvatarProxy+0x49..+0x50 and tint the model
+    (`AvatarVisual_RefreshStyleModel@0x00508090`). Failure to parse is reported by the client as
+    "Could not read AvatarStyle from message." in LobbyComm.log.
 
-    NOT YET SENT — `entity_create_body` still defaults to dtblcks=1 (location only). This exists so
-    that adding it is a one-line change once the location-only spawn has been observed live; adding
-    it before then would make a silent failure impossible to attribute to one block or the other.
+    ⭐ **`trbgndr` packing RESOLVED** [PROVEN 2026-08-02, same function]: HIGH nibble = body part
+    (`+0x48 >> 4`, `FUN_0046b5c0`; the model math clamps it to < 3), LOW nibble = gender
+    (`+0x48 & 0xF`, `FUN_0046b5d0`, used as a boolean). The avatar model index is
+    `bodypart + (tribe − 1) × 3`, tribe from vtbl+0x18 clamped to 1..5. Sending 0 pins every
+    avatar to body part 0 / gender 0 — i.e. the identical default look on everyone.
+
+    Sent live since 2026-08-01 (`dispatch._spawn_world_avatars` passes `style=`), so a rendered
+    avatar carries its real character name as the label.
     """
     vals = list(colours) + [0] * (len(AVATAR_STYLE_COLOURS) - len(colours))
     w.write_string(name)                           # "name"
-    w.write(tribe_gender, 8)                       # "trbgndr" — tribe + gender packed in one byte
+    w.write(tribe_gender, 8)                       # "trbgndr" — hi nibble bodypart, lo nibble gender
     for value in vals[:len(AVATAR_STYLE_COLOURS)]:
         w.write(value, 8)                          # hrclr/sknclr/shrtclr/trsrclr/addColor1..4
     return w
@@ -534,10 +540,17 @@ def player_create_body(npc_id, npcdesc, pos=(0.0, 0.0, 0.0), rot_deg=0.0, zone=0
     **2 = "letterbox" template**, anything else = NO visual (0 is a real-player record — their
     body arrives via EntityCreate 1001 instead).
 
-    `actions` = up to 3 (act_id, chat_line) pairs; the record stores 3 slots. [HYPOTHESIS]
-    `act` shares the emote id space seen in the chat parser (0 laugh · 1 dance · 2 applaus ·
-    3 crying · 4 bow · 5 monkey) and actChat is the line the NPC speaks on interaction —
-    the consumer side of the action slots is not yet reversed.
+    ⭐ **`npcidx` is the MODEL selector** [PROVEN 2026-08-02]: the record is a
+    `LobbyComm::NPCProxy` (type 2 at +8), and `AvatarVisual_RefreshStyleModel@0x00508090` takes
+    the model index for type-2 objects straight from vtbl+0x1c (`FUN_006ab260` → +0xc0 =
+    npcidx), skipping the avatar tribe/gender/bodypart math. `bdyprt` lands in +0x48, the
+    AVATAR tribe/gender byte, which that branch never reads — it does not affect an NPC's look.
+    Colours land in +0x49..+0x4c (hrclr/sknclr/shrtclr/trsrclr) and tint the chosen model.
+
+    `actions` = up to 3 (act_id, act_text) pairs filling the record's 3 slots. ⭐ **`act` is a
+    LobbyAction id** [PROVEN, `FUN_004325b0`], NOT an emote: 0/19 None · 1 HairColor · 2..6
+    MinigameMatchmaking · 7 Mailbox · 8/18 HostGame · 9 ListGames · 10 HallOfFame · 11 OpenShop.
+    [TODO] whether `actChat` is the button label or a spoken line.
     """
     vals = list(colours) + [0] * (4 - len(colours))
     w = BitWriter()
