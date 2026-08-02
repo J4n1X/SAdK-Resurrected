@@ -119,11 +119,15 @@ def on_conn_closed(conn):
 # deploy server's config.py is local-only and must never be overwritten (see HANDOFF.md).
 VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)
 
-#: The ambient NPC cast, placed around the square above. On the wire each is just a
-#: styled EntityCreate(1001) avatar with an id from npcs.NPC_ID_BASE (see npcs.py) —
-#: spawned to every entrant in _spawn_world_avatars and kept alive/walking by the
-#: 1 Hz location ticker, exactly like a remote player.
-_npcs = npcs.make_village_npcs(VILLAGE_SPAWN_POINT)
+#: The ambient NPC cast, placed around the square above: record NPCs via PlayerCreate(1004)
+#: and walkers via EntityCreate(1001) (see npcs.py). Spawned to every entrant in
+#: _spawn_world_avatars; the walkers are kept alive and moving by the 1 Hz location ticker.
+#:
+#: ⚠️ Gated on `config.VILLAGE_NPCS_ENABLED`, currently OFF by explicit user instruction
+#: (2026-08-02 — see the flag's comment in config.py; HARNESS §5 permits a maintainer-requested
+#: flag). An empty list makes every downstream site — record_npcs/walker_npcs/advance_all and
+#: both refresh loops — a natural no-op, so no other code needs a condition.
+_npcs = npcs.make_village_npcs(VILLAGE_SPAWN_POINT) if config.VILLAGE_NPCS_ENABLED else []
 
 
 def _spawn_spot(perm_id):
@@ -345,6 +349,8 @@ def _spawn_world_avatars(conn):
     if _npcs:
         log(f"  [WORLD] spawned {len(npcs.record_npcs(_npcs))} record NPC(s) + "
             f"{len(npcs.walker_npcs(_npcs))} walker(s) for {me.char_name!r}")
+    else:
+        log("  [WORLD] NPCs are OFF (config.VILLAGE_NPCS_ENABLED=False) — none spawned")
     others = _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn)
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet")
