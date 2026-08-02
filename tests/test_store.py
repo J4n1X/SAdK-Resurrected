@@ -25,7 +25,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from sadk_lobby import npcs, players, store  # noqa: E402
+from sadk_lobby import config, npcs, players, store  # noqa: E402
+
+# The store is gated behind config.PERSISTENT_CHARACTERS_ENABLED, currently OFF after the
+# "login attempt failed" regression (2026-08-02). These tests exercise the store itself, so
+# they turn it ON explicitly — otherwise they would pass while testing the legacy path and
+# quietly stop covering the thing they are named after.
+config.PERSISTENT_CHARACTERS_ENABLED = True
 
 
 def _fresh_store():
@@ -34,6 +40,7 @@ def _fresh_store():
     store.reset_for_tests(path)
     players._by_perm.clear()
     players._by_user.clear()
+    players._next_perm = 1
     return path
 
 
@@ -252,6 +259,30 @@ def test_corrupt_store_is_preserved_not_silently_overwritten():
     _simulate_restart()
     players.resolve_by_username("Survivor")        # must not raise
     assert os.path.exists(path + ".bad"), "the unreadable store must be kept for inspection"
+
+
+# ── The rollback path ────────────────────────────────────────────────────────
+def test_legacy_path_restores_the_pre_persistence_shape():
+    """With persistence OFF the identity must look EXACTLY as it did before the store landed:
+    sequential in-memory perm_id, char_id == perm_id == user_id, shared NICKNAME_DATA blob.
+    This is the behaviour the "login attempt failed" rollback restores, so it is pinned."""
+    _fresh_store()
+    config.PERSISTENT_CHARACTERS_ENABLED = False
+    try:
+        a = players.resolve_by_username("LegacyOne")
+        b = players.resolve_by_username("LegacyTwo")
+        assert a.perm_id == 1 and b.perm_id == 2, "sequential ids from 1"
+        for p in (a, b):
+            assert p.char_id == p.perm_id == p.user_id, "the three ids collapse into one"
+            assert p.data == config.NICKNAME_DATA, "the shared appearance blob comes back"
+            assert p.has_character, "a legacy player always has its implicit character"
+        ghost = players.resolve_by_perm(777)
+        assert ghost.perm_id == ghost.char_id == 777
+        assert ghost.data == config.NICKNAME_DATA
+        # Nothing may reach the store while the flag is off.
+        assert store.list_characters("LegacyOne") == []
+    finally:
+        config.PERSISTENT_CHARACTERS_ENABLED = True
 
 
 def _run():

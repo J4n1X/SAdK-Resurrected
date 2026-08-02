@@ -48,6 +48,31 @@ ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.130")
 # Set back to True to bring the whole cast back — nothing else needs changing.
 VILLAGE_NPCS_ENABLED = False
 
+# ── Persistent characters ─────────────────────────────────────────────────────
+# ⚠️ Second user-authorised feature flag (J4n1X, 2026-08-02: "on avatar selection the message
+# is 'login attempt failed'. We have to roll back this avatar feature behind a flag once more").
+# Same standing as VILLAGE_NPCS_ENABLED — HARNESS §5 permits a maintainer-requested flag.
+#
+# ⛔ THIS ONE MARKS A LIVE REGRESSION, not a parked experiment. Turning persistent characters ON
+# broke character selection: the client reports "login attempt failed" after picking an avatar.
+# OFF restores exactly the behaviour that worked all session: one implicit character per account,
+# char_id == perm_id == an in-memory sequential id, appearance = the shared NICKNAME_DATA blob.
+#
+# Prime suspects for the regression, in order (none yet verified — see docs/SOURCEMAP.md):
+#   1. char_id != perm_id. The client's own avatar id IS its PermID and the CharacterManager is
+#      keyed by char_id; if the post-selection login presents the ACCOUNT id while the character
+#      lives under a 100_000-range id (or vice versa), the own-avatar lookup misses and the
+#      village login fails — the "WTF?! There is no avatar with that id in the CharacterManager"
+#      path. This is the flaw the dual lookup in players.resolve_by_perm was meant to survive,
+#      and it is the first thing to check in the client's LobbyComm.log.
+#   2. The stored blob. A character created through the client's own flow may be incomplete if
+#      creation never fully succeeded, leaving a character that lists but cannot be logged in as.
+#   3. An empty character list on a fresh account taking a path the old code never exercised.
+#
+# The store, its schema and its tests are all intact and unused while this is False — the
+# understanding is kept; only the wire behaviour reverts.
+PERSISTENT_CHARACTERS_ENABLED = False
+
 # ── Player accounts ───────────────────────────────────────────────────────────
 # ⭐ There is NO account table. Any number of clients may log in at once, and the USERNAME each
 # one types in the game's login box becomes that player's identity AND character name — the name
