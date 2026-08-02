@@ -30,7 +30,7 @@ over the first player's perm_id, and the world cannot tell them apart.
 import threading
 from dataclasses import dataclass
 
-from . import config
+from . import config, store
 
 #: msgdefs character-name fields are `STRING 32`; leave room for the terminator. The name also
 #: rides the bit-packed AvatarStyle block (`village.avatar_style_block`), whose length prefix is
@@ -41,16 +41,23 @@ MAX_NAME_LEN = 31
 @dataclass
 class Player:
     perm_id: int
-    char_id: int
+    char_id: int        # ⭐ ALWAYS == perm_id; the client's own avatar id is its PermID and the
+                        # CharacterManager is keyed by char_id (see store.py's docstring).
     username: str       # account / login name (the auth-blob username)
-    char_name: str      # in-lobby character name — same thing, length-clamped
-    data: bytes         # appearance blob (shared NICKNAME_DATA — [TODO] per-player appearance)
+    char_name: str      # in-lobby character name — the created character's name, else the login
+    data: bytes         # the character blob the CLIENT authored, or b"" if none exists yet
+
+    @property
+    def has_character(self):
+        """False until the player has been through character creation. A player without a
+        character is a normal state — `dispatch` answers RequestCharacters with an empty list
+        and the client opens its creation flow."""
+        return bool(self.data)
 
 
 _lock = threading.RLock()
 _by_perm = {}                       # perm_id           -> Player
 _by_user = {}                       # username.lower()  -> Player
-_next_perm = 1                      # first player logging in becomes perm_id 1
 _guest_seq = 0                      # for logins that arrive without a usable username
 
 
@@ -60,18 +67,35 @@ def _clean(name):
     return name[:MAX_NAME_LEN]
 
 
-def _create(name):
-    """Register a brand-new identity under `name`. Caller holds `_lock`."""
-    global _next_perm
-    while _next_perm in _by_perm:          # never reuse an id already handed out
-        _next_perm += 1
-    perm = _next_perm
-    _next_perm += 1
-    p = Player(perm_id=perm, char_id=perm, username=name, char_name=name,
-               data=config.NICKNAME_DATA)
+def _from_store(name):
+    """Build (or rebuild) the in-memory Player for `name` from the persistent store.
+
+    The perm_id comes from the store and never changes across restarts — that is a protocol
+    requirement, not a nicety: char_id == perm_id, and a returning player issued a fresh id
+    would no longer match their own stored character (store.py docstring). Caller holds `_lock`.
+    """
+    rec = store.get_or_create_player(name)
+    perm = int(rec["perm_id"])
+    char = store.get_character(name)
+    p = Player(perm_id=perm, char_id=perm, username=name,
+               char_name=(char["name"] if char else name),
+               data=(char["data"] if char else b""))
     _by_perm[perm] = p
     _by_user[name.lower()] = p
     return p
+
+
+def refresh_from_store(username):
+    """Re-read a player's character after creation/change/deletion, so the live Player object
+    stops disagreeing with the disk."""
+    with _lock:
+        p = _by_user.get((username or "").lower())
+        if p is None:
+            return _from_store(username)
+        char = store.get_character(username)
+        p.char_name = char["name"] if char else p.username
+        p.data = char["data"] if char else b""
+        return p
 
 
 def resolve_by_username(username):
@@ -86,7 +110,7 @@ def resolve_by_username(username):
             global _guest_seq
             _guest_seq += 1
             name = f"Guest {_guest_seq}"
-        return _by_user.get(name.lower()) or _create(name)
+        return _by_user.get(name.lower()) or _from_store(name)
 
 
 def resolve_by_perm(perm_id):
@@ -99,10 +123,17 @@ def resolve_by_perm(perm_id):
         p = _by_perm.get(perm_id)
         if p is not None:
             return p
-        p = Player(perm_id=perm_id, char_id=perm_id, username=f"Player {perm_id}",
-                   char_name=f"Player {perm_id}", data=config.NICKNAME_DATA)
+        # Not in memory: the store may still know this id (a client reconnecting across a
+        # restart presents the perm_id it was issued last time — that is the whole point of
+        # persisting it). Reserve it either way so it is never handed to someone else.
+        rec = store.reserve_perm_id(perm_id)
+        username = rec.get("username") or f"Player {perm_id}"
+        char = store.get_character(username)
+        p = Player(perm_id=perm_id, char_id=perm_id, username=username,
+                   char_name=(char["name"] if char else username),
+                   data=(char["data"] if char else b""))
         _by_perm[perm_id] = p
-        _by_user.setdefault(p.username.lower(), p)
+        _by_user.setdefault(username.lower(), p)
         return p
 
 

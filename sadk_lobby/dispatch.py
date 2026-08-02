@@ -18,7 +18,8 @@ import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, npcs, players, referee, registry, village
+from . import (chat, codec, config, crypto, msgdefs, npcs, players, referee, registry, store,
+               village)
 from .log import log
 
 HANDLERS = {}
@@ -580,23 +581,104 @@ def _char_values(conn, ticket):
 
 @handler(55)  # RequestUserCharList -> UserCharConn
 def _h_player_info(conn, fields, ticket):
-    conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
+    # Same rule as RequestCharacters(72): a player who has not created a character has an empty
+    # list, not a stand-in one. Announcing a character here that 72 then fails to produce would
+    # leave the two lists disagreeing about who this account is.
+    p = _player(conn)
+    if p.has_character:
+        conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
     conn.ok(ticket)
 
 
 @handler(72)  # RequestCharacters -> CharacterData
-def _h_select_nickname(conn, fields, ticket):
-    conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
+def _h_request_characters(conn, fields, ticket):
+    """Answer with the player's PERSISTED character, or with nothing at all.
+
+    ⭐ Sending ZERO CharacterData frames is a first-class, supported client path, not a failure:
+    `CharacterManager::CharacterObserverListener::CharacterDataReceived@0x00474910` branches on
+    the aggregated count and, at count==0, logs "No characters found." at INFO severity, sets the
+    parent's loaded flag (+0x88) and refreshes the UI — which is what opens character creation.
+    That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
+    character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
+    p = _player(conn)
+    if p.has_character:
+        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
+        log(f"  → CharacterData: {p.char_name!r} (char_id {p.char_id}, {len(p.data)}B blob)")
+    else:
+        log(f"  → RequestCharacters: {p.username!r} has NO character yet — replying with an "
+            f"empty list so the client opens character creation")
     conn.ok(ticket)
 
 
+def _store_character(conn, fields, ticket, what):
+    """Shared body of the three character-creating messages (77/79/86).
+
+    The `data` blob is stored EXACTLY as the client sent it. We do not parse or regenerate it:
+    the client authors the character (name in UTF-16LE plus appearance/stat fields, split into
+    six sub-blocks by `CommLayer::Character::GetData`), and replaying its own bytes is both the
+    correct store behaviour and the only way to avoid corrupting a format we have not fully
+    reversed."""
+    p = _player(conn)
+    name = fields.get("name") or p.username
+    data = fields.get("data") or b""
+    if not data:
+        # Storing an empty blob would leave the player permanently character-less in a way that
+        # LOOKS created — better to refuse loudly than to persist a broken record.
+        log(f"  ⚠ {what} for {p.username!r} carried NO data blob — refusing to store an empty "
+            f"character; the client will be told the creation failed.")
+        conn.status_with_id(1, 0, ticket)
+        return
+    store.save_character(p.username, name, data)
+    players.refresh_from_store(p.username)
+    log(f"  ✅ {what}: {name!r} stored for {p.username!r} → char_id {p.char_id} "
+        f"({len(data)}B). It will survive restarts.")
+    conn.status_with_id(0, p.perm_id, ticket)
+
+
 @handler(77)  # CreateCharacterFromPreview
-def _h_register_nickname(conn, fields, ticket):
-    log(f"  CreateCharacter name={fields.get('name')!r}")
-    conn.status_with_id(0, _player(conn).perm_id, ticket)
+def _h_create_character(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "CreateCharacterFromPreview")
 
 
-@handler(86, 88, 94)  # AddCharacter / ChangeUser(confirm) / RemoveCharacter
+@handler(79)  # AddCharacterFromPreview
+def _h_add_character_preview(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "AddCharacterFromPreview")
+
+
+@handler(86)  # AddCharacter
+def _h_add_character(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "AddCharacter")
+
+
+@handler(90)  # ChangeCharacter
+def _h_change_character(conn, fields, ticket):
+    """Persist an edit. `property_mask` says which fields the client considers changed; we store
+    whatever it actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
+    p = _player(conn)
+    name = fields.get("name") or p.char_name
+    data = fields.get("data")
+    if data:
+        store.save_character(p.username, name, data)
+        players.refresh_from_store(p.username)
+        log(f"  ✅ ChangeCharacter: {name!r} updated for {p.username!r} ({len(data)}B, "
+            f"mask=0x{fields.get('property_mask', 0):x})")
+    else:
+        log(f"  ChangeCharacter for {p.username!r} carried no data blob "
+            f"(mask=0x{fields.get('property_mask', 0):x}) — nothing to persist")
+    conn.ok(ticket)
+
+
+@handler(94)  # RemoveCharacter
+def _h_remove_character(conn, fields, ticket):
+    p = _player(conn)
+    if store.delete_character(p.username):
+        players.refresh_from_store(p.username)
+        log(f"  ✅ RemoveCharacter: {p.username!r} is character-less again — the next "
+            f"RequestCharacters will re-open creation")
+    conn.ok(ticket)
+
+
+@handler(88)  # ChangeUser (confirm)
 def _h_char_ack(conn, fields, ticket):
     conn.ok(ticket)
 
@@ -1208,9 +1290,12 @@ def _h_chat_message(conn, fields, ticket):
 # account/social login replies. connection.py routes their full per-message decode to
 # tincat_lobby_unhandled.log (file only) so the main view stays focused on auth, server-list,
 # AssignServer, village/world and chat. Genuinely UNKNOWN types (no handler) STAY in the main log.
+# ⭐ The CHARACTER handlers (72/77/79/86/90/94) were quiet while they were boilerplate that
+# echoed one hardcoded stand-in character. They are now the persistence path — creation,
+# storage and replay of a real player's character — so they belong in the main log.
 QUIET_HANDLERS = frozenset({
     _h_ack, _h_char_ack, _h_ignore_list, _h_user_info, _h_player_info,
-    _h_select_nickname, _h_cdkeys, _h_property_get, _h_motd,
+    _h_cdkeys, _h_property_get, _h_motd,
 })
 
 
