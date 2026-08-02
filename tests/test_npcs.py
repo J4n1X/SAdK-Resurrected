@@ -1,11 +1,10 @@
 """
 Offline tests for the ambient village NPCs (sadk_lobby/npcs.py).
 
-No live game, no sockets. NPCs are ordinary EntityCreate(1001) avatars with synthetic
-ids, so these tests pin (1) the id-space separation from real players, (2) the walker
-math against the client interpolator's snap thresholds (>=10 units or >2.0 s gaps
-snap instead of walking — AvatarMovement_Tick), and (3) that every NPC style encodes
-cleanly through the bit-packed style block, umlauts included (ISO-8859-15 wire chars).
+No live game, no sockets. Record NPCs ride PlayerCreate(1004) — layout pinned here
+against the record reader FUN_0047b5c0 + LobbyMessage_ReadLocationBlock@0x0048f670 —
+and walkers ride EntityCreate(1001) exactly like remote players. The walker math is
+tested against the client interpolator's snap thresholds (>=10 units or >2.0 s gaps).
 
 Run directly:   python tests/test_npcs.py
 Or with pytest: pytest tests/test_npcs.py
@@ -27,30 +26,103 @@ def _cast():
     return npcs.make_village_npcs(CENTER)
 
 
+def _bits(data):
+    return "".join(f"{b:08b}" for b in data)
+
+
+# ── PlayerCreate(1004) wire layout ────────────────────────────────────────────
+def test_player_create_bit_layout():
+    body = village.player_create_body(
+        0x01020304, "ab", pos=(0.0, 0.0, 0.0), rot_deg=90.0, zone=0,
+        colours=(1, 2, 3, 4), npcidx=5, bdyprt=6, npctyp=1,
+        actions=((4, "hi"),))
+    b = _bits(body)
+    off = 0
+
+    def take(n):
+        nonlocal off
+        v = int(b[off:off + n], 2)
+        off += n
+        return v
+
+    assert take(32) == 0x01020304    # id
+    assert take(8) == 2              # npcdesc length
+    assert take(8) == ord("a")
+    assert take(8) == ord("b")
+    assert take(11) == 1024          # posx — world centre
+    assert take(11) == 512           # posy — ground
+    assert take(11) == 1024          # posz
+    assert take(7) == 32             # rot — 90 degrees
+    assert take(4) == 0              # zone (no ghost-zone in this block)
+    assert take(4) == 1              # hrclr   — 4-bit NIBBLES, not bytes
+    assert take(4) == 2              # sknclr
+    assert take(4) == 3              # shrtclr
+    assert take(4) == 4              # trsrclr
+    assert take(4) == 5              # npcidx
+    assert take(4) == 6              # bdyprt
+    assert take(2) == 1              # npctyp — settler person
+    assert take(8) == 1              # actcnt
+    assert take(8) == 4              # act — bow
+    assert take(8) == 2              # actChat length
+    assert take(8) == ord("h")
+    assert take(8) == ord("i")
+    # Nothing after the last action but zero padding to the byte boundary.
+    assert off <= len(b) < off + 8
+    assert all(bit == "0" for bit in b[off:])
+
+
+def test_player_create_no_actions_is_actcnt_zero():
+    body = village.player_create_body(7, "x", npctyp=2)
+    b = _bits(body)
+    # id 32 + npcdesc(8+8) + loc 44 + colours 16 + npcidx 4 + bdyprt 4 = 116, then
+    # npctyp 2 @ 116, actcnt 8 @ 118.
+    assert int(b[116:118], 2) == 2   # npctyp — letterbox
+    assert int(b[118:126], 2) == 0   # actcnt
+
+
+# ── The cast ──────────────────────────────────────────────────────────────────
 def test_npc_ids_are_unique_and_far_above_player_perm_ids():
     cast = _cast()
     ids = [n.perm_id for n in cast]
     assert len(ids) == len(set(ids)), "duplicate NPC ids"
     assert all(i >= npcs.NPC_ID_BASE for i in ids)
-    # players.py hands out perm_ids sequentially from 1; a million players in one
-    # stub session is not a thing, so the spaces can never meet.
     assert npcs.NPC_ID_BASE >= 1_000_000
 
 
-def test_static_npcs_hold_position():
-    cast = [n for n in _cast() if not n.path]
-    assert cast, "expected at least one static NPC"
-    for npc in cast:
-        before = npc.pose()
-        npc.advance(1.0)
-        assert npc.pose()["pos"] == before["pos"]
-        assert npc.pose()["rot_deg"] == before["rot_deg"]
+def test_cast_split_covers_everyone():
+    cast = _cast()
+    records, walkers = npcs.record_npcs(cast), npcs.walker_npcs(cast)
+    assert records and walkers
+    assert len(records) + len(walkers) == len(cast)
+    assert all(n.npctyp in (1, 2) for n in records)
+    assert all(n.npctyp is None for n in walkers)
 
 
+def test_record_npcs_encode_and_fit_the_nibble_fields():
+    for npc in npcs.record_npcs(_cast()):
+        kwargs = npc.record_kwargs()
+        assert all(0 <= c <= 15 for c in kwargs["colours"]), "1004 colours are nibbles"
+        assert 0 <= kwargs["npcidx"] <= 15 and 0 <= kwargs["bdyprt"] <= 15
+        assert len(kwargs["actions"]) <= 3, "the record stores at most 3 action slots"
+        body = village.player_create_body(npc.perm_id, npc.name, **kwargs)
+        assert body[:4] == npc.perm_id.to_bytes(4, "big")
+        assert npc.name.encode("iso-8859-15", "strict"), "name not encodable"
+        for _act, line in kwargs["actions"]:
+            assert line.encode("iso-8859-15", "strict"), "actChat not encodable"
+
+
+def test_walkers_encode_through_the_avatar_style_block():
+    for npc in npcs.walker_npcs(_cast()):
+        body = village.entity_create_body(npc.perm_id, style=npc.style(), **npc.pose())
+        assert body[:4] == npc.perm_id.to_bytes(4, "big")
+        assert (body[4] >> 4) == 3          # dtblcks == location | style
+        pose = npc.pose()
+        assert pose["zone"] == 0 and pose["ghost_zone"] == 15
+
+
+# ── Walker math vs the client interpolator ────────────────────────────────────
 def test_walkers_step_below_the_snap_threshold():
-    # The client interpolator snaps (teleports) at >=10 units between waypoints; a
-    # walker must stay far below that per 1 s ticker step or it will jitter-teleport.
-    cast = [n for n in _cast() if n.path]
+    cast = npcs.walker_npcs(_cast())
     assert cast, "expected at least one walking NPC"
     for npc in cast:
         prev = npc.pose()["pos"]
@@ -62,34 +134,19 @@ def test_walkers_step_below_the_snap_threshold():
             prev = cur
 
 
-def test_walkers_stay_near_the_square_and_loop():
+def test_walkers_stay_near_the_square_and_records_hold_still():
     cx, cy, cz = CENTER
-    for npc in [n for n in _cast() if n.path]:
-        for _ in range(600):                      # 10 simulated minutes
+    for npc in npcs.walker_npcs(_cast()):
+        for _ in range(600):                  # 10 simulated minutes
             npc.advance(1.0)
             x, y, z = npc.pose()["pos"]
             assert y == cy, "walkers keep the proven ground height"
             assert abs(x - cx) < 20 and abs(z - cz) < 20, \
                 f"{npc.name} wandered off the square: {(x, z)}"
-
-
-def test_every_npc_encodes_through_the_style_block():
-    for npc in _cast():
-        body = village.entity_create_body(npc.perm_id, style=npc.style(),
-                                          **{k: v for k, v in npc.pose().items()})
-        # id is the leading big-endian dword (peeked by HandleEntityCreate).
-        assert body[:4] == npc.perm_id.to_bytes(4, "big")
-        # dtblcks (bits 32..35) must be 3: location | style.
-        assert (body[4] >> 4) == 3
-        # The name must survive the 8-bit ISO-8859-15 wire chars — umlauts included.
-        assert npc.name.encode("iso-8859-15", "strict"), "name not encodable"
-
-
-def test_pose_uses_outdoor_zone_values():
-    for npc in _cast():
-        pose = npc.pose()
-        assert pose["zone"] == 0, "NPCs stand on the square (zone 0)"
-        assert pose["ghost_zone"] == 15, "15 is the neutral no-ghost-zone sentinel"
+    for npc in npcs.record_npcs(_cast()):
+        before = npc.anchor
+        npc.advance(1.0)
+        assert npc.anchor == before
 
 
 def _run():

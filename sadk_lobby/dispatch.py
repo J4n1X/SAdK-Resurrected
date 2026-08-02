@@ -277,7 +277,7 @@ def _avatar_location_ticker():
                     sent += 1
                 except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
                     log(f"  [WORLD] avatar refresh to conn #{conn.id} failed: {exc}")
-            for npc in _npcs:
+            for npc in npcs.walker_npcs(_npcs):
                 try:
                     village.send_entity_create(conn, npc.perm_id, tick=tick, quiet=True,
                                                **npc.pose())
@@ -309,23 +309,29 @@ def _spawn_world_avatars(conn):
     streams waypoint refreshes — the spawn paints one frame, the ring does the rest."""
     _ensure_avatar_ticker()
     me = _player(conn)
-    # Ambient NPCs first — they exist for every entrant, players or not. Same proven
-    # pattern as the player exchange below: one styled spawn plus two ring-priming
-    # location pushes so the movement ring brackets "now" from the very first tick.
+    # Ambient NPCs first — they exist for every entrant, players or not.
     # World-clock sync MUST precede the first waypoint: stamps are cut against the
     # client's slewed clock at parse time and a later slew does not re-anchor them
     # (ER 2026-08-01_worldtick-clock-sync). The others-branch resend below is a no-op
     # client-side once the clock is slewed (250 ms tolerance).
     village.send_world_tick(conn, _now_ms())
+    # Record NPCs (PlayerCreate 1004): one message each — the consumer builds the
+    # object from its template immediately, no waypoint stream involved.
+    for npc in npcs.record_npcs(_npcs):
+        village.send_player_create(conn, npc.perm_id, npc.name, quiet=True,
+                                   **npc.record_kwargs())
+    # Walkers (EntityCreate 1001 avatars): the proven remote-player pattern — one
+    # styled spawn plus two ring-priming pushes so the movement ring brackets "now".
     npc_tick_base = _now_tick16()
-    for npc in _npcs:
+    for npc in npcs.walker_npcs(_npcs):
         pose = npc.pose()
         village.send_entity_create(conn, npc.perm_id, tick=(npc_tick_base - 1000) & 0xFFFF,
                                    quiet=True, style=npc.style(), **pose)
         for prime in ((npc_tick_base - 3000) & 0xFFFF, (npc_tick_base - 1000) & 0xFFFF):
             village.send_entity_create(conn, npc.perm_id, tick=prime, quiet=True, **pose)
     if _npcs:
-        log(f"  [WORLD] spawned {len(_npcs)} NPC(s) for {me.char_name!r}")
+        log(f"  [WORLD] spawned {len(npcs.record_npcs(_npcs))} record NPC(s) + "
+            f"{len(npcs.walker_npcs(_npcs))} walker(s) for {me.char_name!r}")
     others = _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn)
     if not others:
         log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet")
