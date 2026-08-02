@@ -67,12 +67,31 @@ _lock = threading.RLock()
 _by_perm = {}                       # perm_id           -> Player
 _by_user = {}                       # username.lower()  -> Player
 _guest_seq = 0                      # for logins that arrive without a usable username
+_next_perm = 1                      # LEGACY path only: first player logging in becomes perm_id 1
 
 
 def _clean(name):
     """A login name reduced to something safe to show and to put on the wire."""
     name = "".join(ch for ch in (name or "") if ch.isprintable()).strip()
     return name[:MAX_NAME_LEN]
+
+
+def _create_legacy(name):
+    """The pre-persistence identity: an in-memory sequential perm_id, char_id == perm_id, and
+    the shared `NICKNAME_DATA` appearance. Used while `config.PERSISTENT_CHARACTERS_ENABLED` is
+    False — this is the exact shape that was working before persistent characters landed, kept
+    verbatim so the rollback restores known-good behaviour rather than an approximation of it.
+    Caller holds `_lock`."""
+    global _next_perm
+    while _next_perm in _by_perm:          # never reuse an id already handed out
+        _next_perm += 1
+    perm = _next_perm
+    _next_perm += 1
+    p = Player(perm_id=perm, char_id=perm, user_id=perm, username=name,
+               char_name=name, data=config.NICKNAME_DATA)
+    _by_perm[perm] = p
+    _by_user[name.lower()] = p
+    return p
 
 
 def _from_store(name):
@@ -129,7 +148,11 @@ def resolve_by_username(username):
             global _guest_seq
             _guest_seq += 1
             name = f"Guest {_guest_seq}"
-        return _by_user.get(name.lower()) or _from_store(name)
+        existing = _by_user.get(name.lower())
+        if existing is not None:
+            return existing
+        return (_from_store(name) if config.PERSISTENT_CHARACTERS_ENABLED
+                else _create_legacy(name))
 
 
 def resolve_by_perm(perm_id):
@@ -141,6 +164,15 @@ def resolve_by_perm(perm_id):
     with _lock:
         p = _by_perm.get(perm_id)
         if p is not None:
+            return p
+        if not config.PERSISTENT_CHARACTERS_ENABLED:
+            # LEGACY: an id we never issued keeps its value, so the client's avatar id and ours
+            # stay in agreement instead of silently becoming a different player.
+            p = Player(perm_id=perm_id, char_id=perm_id, user_id=perm_id,
+                       username=f"Player {perm_id}", char_name=f"Player {perm_id}",
+                       data=config.NICKNAME_DATA)
+            _by_perm[perm_id] = p
+            _by_user.setdefault(p.username.lower(), p)
             return p
         # ⭐ DUAL LOOKUP. A token's perm_id may name either a CHARACTER or an ACCOUNT, and which
         # one the client sends is the open question (store.py docstring): the own-avatar id is

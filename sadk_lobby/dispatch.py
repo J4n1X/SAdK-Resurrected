@@ -592,7 +592,7 @@ def _h_player_info(conn, fields, ticket):
     # list, not a stand-in one. Announcing a character here that 72 then fails to produce would
     # leave the two lists disagreeing about who this account is.
     p = _player(conn)
-    if p.has_character:
+    if not config.PERSISTENT_CHARACTERS_ENABLED or p.has_character:
         conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
     conn.ok(ticket)
 
@@ -608,6 +608,11 @@ def _h_request_characters(conn, fields, ticket):
     That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
     character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
     p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        # LEGACY (rollback path): one implicit character, char_id == perm_id, shared appearance.
+        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
+        conn.ok(ticket)
+        return
     chars = store.list_characters(p.username)
     for char in chars:
         conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char)))
@@ -631,6 +636,12 @@ def _store_character(conn, fields, ticket, what):
     p = _player(conn)
     name = fields.get("name") or p.username
     data = fields.get("data") or b""
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        # LEGACY (rollback path): acknowledge the creation with the account's own id and store
+        # nothing — the client then plays the single implicit character, as it did all session.
+        log(f"  {what} name={name!r} — persistence is OFF, acknowledging without storing")
+        conn.status_with_id(0, p.perm_id, ticket)
+        return
     if not data:
         # Storing an empty blob would leave a character that LOOKS created but has no body —
         # better to refuse loudly than to persist a broken record.
@@ -669,6 +680,9 @@ def _h_change_character(conn, fields, ticket):
     `property_mask` says which fields the client considers changed; we update only what it
     actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
     p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        conn.ok(ticket)                       # LEGACY: bare ack, nothing persisted
+        return
     char_id = fields.get("char_id") or p.char_id
     mask = fields.get("property_mask", 0)
     if not char_id:
@@ -692,6 +706,9 @@ def _h_remove_character(conn, fields, ticket):
     With several characters on an account, deleting by account would remove the wrong one; the
     message carries the id precisely so the client can say which."""
     p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        conn.ok(ticket)                       # LEGACY: bare ack, nothing to delete
+        return
     char_id = fields.get("char_id") or p.char_id
     if not char_id:
         log(f"  ⚠ RemoveCharacter from {p.username!r} named no char_id — refusing to guess "
