@@ -18,7 +18,7 @@ import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, players, referee, registry, village
+from . import chat, codec, config, crypto, msgdefs, npcs, players, referee, registry, village
 from .log import log
 
 HANDLERS = {}
@@ -118,6 +118,12 @@ def on_conn_closed(conn):
 # spawned, modelled and styled, just standing where nobody looks. NOT in config.py on purpose: the
 # deploy server's config.py is local-only and must never be overwritten (see HANDOFF.md).
 VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)
+
+#: The ambient NPC cast, placed around the square above. On the wire each is just a
+#: styled EntityCreate(1001) avatar with an id from npcs.NPC_ID_BASE (see npcs.py) —
+#: spawned to every entrant in _spawn_world_avatars and kept alive/walking by the
+#: 1 Hz location ticker, exactly like a remote player.
+_npcs = npcs.make_village_npcs(VILLAGE_SPAWN_POINT)
 
 
 def _spawn_spot(perm_id):
@@ -255,6 +261,10 @@ def _avatar_location_ticker():
                 village.send_world_tick(conn, _now_ms(), quiet=True)
             except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
                 log(f"  [WORLD] WorldTick(1005) to conn #{conn.id} failed: {exc}")
+        # NPC walkers take one step per cycle; the step size (speed × 1 s) stays far
+        # under the interpolator's 10-unit snap threshold, so the client walks the
+        # model smoothly between waypoints.
+        npcs.advance_all(_npcs, AVATAR_REFRESH_SECS)
         for conn in in_world:
             me = _player(conn)
             for other in in_world:
@@ -267,6 +277,13 @@ def _avatar_location_ticker():
                     sent += 1
                 except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
                     log(f"  [WORLD] avatar refresh to conn #{conn.id} failed: {exc}")
+            for npc in _npcs:
+                try:
+                    village.send_entity_create(conn, npc.perm_id, tick=tick, quiet=True,
+                                               **npc.pose())
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                    log(f"  [WORLD] NPC refresh to conn #{conn.id} failed: {exc}")
         if sent and cycles % 30 == 0:
             log(f"  [WORLD] avatar location refresh running: {sent} update(s)/cycle every "
                 f"{AVATAR_REFRESH_SECS:.0f}s, tick={tick} (logged 1-in-30 cycles)")
@@ -292,9 +309,26 @@ def _spawn_world_avatars(conn):
     streams waypoint refreshes — the spawn paints one frame, the ring does the rest."""
     _ensure_avatar_ticker()
     me = _player(conn)
+    # Ambient NPCs first — they exist for every entrant, players or not. Same proven
+    # pattern as the player exchange below: one styled spawn plus two ring-priming
+    # location pushes so the movement ring brackets "now" from the very first tick.
+    # World-clock sync MUST precede the first waypoint: stamps are cut against the
+    # client's slewed clock at parse time and a later slew does not re-anchor them
+    # (ER 2026-08-01_worldtick-clock-sync). The others-branch resend below is a no-op
+    # client-side once the clock is slewed (250 ms tolerance).
+    village.send_world_tick(conn, _now_ms())
+    npc_tick_base = _now_tick16()
+    for npc in _npcs:
+        pose = npc.pose()
+        village.send_entity_create(conn, npc.perm_id, tick=(npc_tick_base - 1000) & 0xFFFF,
+                                   quiet=True, style=npc.style(), **pose)
+        for prime in ((npc_tick_base - 3000) & 0xFFFF, (npc_tick_base - 1000) & 0xFFFF):
+            village.send_entity_create(conn, npc.perm_id, tick=prime, quiet=True, **pose)
+    if _npcs:
+        log(f"  [WORLD] spawned {len(_npcs)} NPC(s) for {me.char_name!r}")
     others = _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn)
     if not others:
-        log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet, nothing to spawn")
+        log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet")
         return
     # Sync each client's world clock to OUR timebase BEFORE any waypoint lands: waypoint stamps
     # are absolute u64s cut against the clock at parse time and are NOT re-anchored by a later
