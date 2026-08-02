@@ -508,6 +508,65 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
                   f" — HandleEntityCreate → AvatarProxy into +0x170", quiet=quiet)
 
 
+#: Village msg id for PlayerCreate — the NPC/record spawn (client: HandlePlayerCreate@0x0046f8c0).
+#: Deliberately NOT in config.py: the deploy server's config.py is local-only (see HANDOFF.md).
+VILLAGE_MSG_PLAYER_CREATE = 1004
+
+
+def player_create_body(npc_id, npcdesc, pos=(0.0, 0.0, 0.0), rot_deg=0.0, zone=0,
+                       colours=(), npcidx=0, bdyprt=0, npctyp=1, actions=()):
+    """Body for PlayerCreate (msg 1004) — the real NPC mechanism.
+
+    Layout from the record reader `FUN_0047b5c0` (record alloc 0x120 in `HandlePlayerCreate
+    @0x0046f8c0`, container VillageServerConnection+0x174 — DISTINCT from the 1001 avatar
+    container at +0x170):
+
+        id 32 · npcdesc STRING · [LobbyMessage_ReadLocationBlock@0x0048f670:
+        posx 11 · posy 11 · posz 11 · rot 7 · zone 4] · hrclr 4 · sknclr 4 · shrtclr 4 ·
+        trsrclr 4 · npcidx 4 · bdyprt 4 · npctyp 2 · actcnt 8 · actcnt × (act 8 · actChat STRING)
+
+    Unlike the avatar location block there is NO tick, ghost-zone or running/jumping — NPC
+    records are static placements. Colours are 4-bit NIBBLES here (the avatar style block's
+    are full bytes — do not copy widths across; test_world_presence.py pins both).
+
+    `npctyp` selects the visual in the consumer (`FUN_005031a0` → `FUN_004f6ea0`, subscribed
+    on villageConn+0x38): **1 = "settler" template person** (labelled with npcdesc),
+    **2 = "letterbox" template**, anything else = NO visual (0 is a real-player record — their
+    body arrives via EntityCreate 1001 instead).
+
+    `actions` = up to 3 (act_id, chat_line) pairs; the record stores 3 slots. [HYPOTHESIS]
+    `act` shares the emote id space seen in the chat parser (0 laugh · 1 dance · 2 applaus ·
+    3 crying · 4 bow · 5 monkey) and actChat is the line the NPC speaks on interaction —
+    the consumer side of the action slots is not yet reversed.
+    """
+    vals = list(colours) + [0] * (4 - len(colours))
+    w = BitWriter()
+    w.write(npc_id, 32)                        # "id"
+    w.write_string(npcdesc)                    # "npcdesc" — the label (reader vtbl+0x34)
+    w.write(quantise_axis(pos[0], "x"), 11)    # "posx"
+    w.write(quantise_axis(pos[1], "y"), 11)    # "posy"
+    w.write(quantise_axis(pos[2], "z"), 11)    # "posz"
+    w.write(quantise_rot(rot_deg), 7)          # "rot"
+    w.write(zone, 4)                           # "zone" — single nibble, no ghost-zone
+    for value in vals[:4]:
+        w.write(value, 4)                      # hrclr/sknclr/shrtclr/trsrclr — NIBBLES
+    w.write(npcidx, 4)                         # "npcidx"
+    w.write(bdyprt, 4)                         # "bdyprt"
+    w.write(npctyp, 2)                         # "npctyp" — 1 settler person, 2 letterbox
+    w.write(len(actions), 8)                   # "actcnt"
+    for act_id, chat_line in actions:
+        w.write(act_id, 8)                     # "act"
+        w.write_string(chat_line)              # "actChat" (reader vtbl+0x30)
+    return w.bytes()
+
+
+def send_player_create(conn, npc_id, npcdesc, magic=None, quiet=False, **kwargs):
+    """Send PlayerCreate (msg 1004) — spawn an NPC record — on the village conn."""
+    body = player_create_body(npc_id, npcdesc, **kwargs)
+    _send_village(conn, VILLAGE_MSG_PLAYER_CREATE, body, magic,
+                  f"PlayerCreate NPC {npcdesc!r} id={npc_id}", quiet=quiet)
+
+
 def entity_remove_body(avatar_id):
     """Body for EntityRemove (msg 1003) — despawn an avatar.
 
