@@ -1342,3 +1342,23 @@ Applied on `sadk_noav.exe` (session: WorldTick clock-sync discovery, ER
 | 0x10038fa0 | `CellManager_FindCellById` | registry (`this+8`) lookup |
 | 0x1000da20 | `CellManager_QueueEvent` | |
 | 0x1000e250 | `CellManager_GetNextEvent` | |
+
+## 2026-08-02 (b) — NPC system: NPCProxy record, model selection, LobbyAction enum
+
+`sadk_noav.exe`:
+
+| Address | New name | Note |
+|---|---|---|
+| 0x0047b4d0 | `NPCProxy_ctor` | `LobbyComm::NPCProxy`, vftable **0x7dc7d8**; ActorID type field = **2** |
+| 0x0047b5c0 | `NPCProxy_ReadRecord` | the msg-1004 payload reader (npcdesc, location, colours, npcidx, bdyprt, npctyp, 3× act/actChat) |
+| 0x006ab260 | `NPCProxy_GetModelIndex_npcidx` | vtbl+0x1c → +0xc0 — ⭐ THE model selector for NPCs |
+| 0x0047b200 | `NPCProxy_GetActionSlots` | vtbl+0x14 → the 3 act ids at +0xa8/+0xac/+0xb0 (+ parallel array at +0xb4) |
+| 0x004325b0 | `VillageScreen_SetActionButtonToLobbyAction` | ⭐ THE LobbyAction enum: 0/19 None · 1 HairColor · 2..6 MinigameMatchmaking · 7 Mailbox · 8/18 HostGame · 9 ListGames · 10 HoF · 11 OpenShop |
+| 0x00433f60 | `VillageScreen_UpdateActionButtons` | per-frame fill of the 3 buttons (+0x3560/+0x3564/+0x3568) from the selected object; ⚠️ decompiles unreliably (register tracking) — not fully reversed |
+| 0x005031a0 | `CLobbyClient_OnPlayerCreate_SpawnNpcObj` | the villageConn+0x38 observer: builds the NPC object if the record has none (+0x84) |
+| 0x004f6ea0 | `CLobby_CreateNpcObjFromRecord_byNpcTyp` | npctyp 1 → "settler" template, 2 → "letterbox", else NULL (no visual) |
+| 0x0046b5c0 | `ActorProxy_GetBodyPart_hiNibble48` | `+0x48 >> 4` — body part (model math clamps to < 3) |
+| 0x0046b5d0 | `ActorProxy_GetGender_loNibble48` | `+0x48 & 0xF` — gender (used as a bool) ⇒ **trbgndr packing resolved** |
+| 0x00695a20 / 0x0046b5e0 / 0x0046b5f0 / 0x0046b600 | `ActorProxy_Get{Hair,Skin,Shirt,Trouser}Colour` | +0x49 / +0x4a / +0x4b / +0x4c |
+| 0x0046b6c0 | `ActorProxy_AsAvatarOrNull_type1` | returns the object iff `+8 == 1` (AvatarProxy) |
+| 0x0046b6d0 | `ActorProxy_AsNpcOrNull_type2` | returns the object iff `+8 == 2` (NPCProxy) |

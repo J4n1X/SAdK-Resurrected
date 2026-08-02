@@ -456,3 +456,70 @@ attach, ring-buffer dump) unless marked.
 When the manager rejected the 9 (unknown cell), the 11 still queued its own event 0xe — which is what
 latched SADK's `conn+0x225` zone byte and made the join LOOK confirmed at the upper layer while the
 manager had no cell. "Join confirmed" at the SADK layer therefore proves nothing about the CellManager.
+
+### The NPC system — PlayerCreate(1004) / NPCProxy [PROVEN 2026-08-02]
+
+⛔ **msg 1004 is not "the player record" — it is the NPC spawn.** `HandlePlayerCreate@0x0046f8c0`
+allocates a **`LobbyComm::NPCProxy`** (0x120 B, vftable `0x7dc7d8`, ctor `NPCProxy_ctor@0x0047b4d0`)
+into the container at `VillageServerConnection+0x174` (distinct from the avatar container +0x170),
+parses it with `NPCProxy_ReadRecord@0x0047b5c0`, then fires the `+0x38` observer —
+`CLobbyClient_OnPlayerCreate_SpawnNpcObj@0x005031a0` — which builds the visible object at once.
+No waypoint stream is involved (contrast the 1001 avatar path).
+
+**Wire layout** (`NPCProxy_ReadRecord`, bit-packed like every LobbyMessage):
+
+    id 32 · npcdesc STRING · [LobbyMessage_ReadLocationBlock@0x0048f670: posx 11 · posy 11 ·
+    posz 11 · rot 7 · zone 4] · hrclr 4 · sknclr 4 · shrtclr 4 · trsrclr 4 · npcidx 4 ·
+    bdyprt 4 · npctyp 2 · actcnt 8 · actcnt × (act 8 · actChat STRING)
+
+⚠️ No tick / ghost-zone / running / jumping — that is the 1001 AvatarLocation block, not this one.
+⚠️ Colours are 4-bit NIBBLES here; the 1001 AvatarStyle block writes the same fields as full BYTES.
+
+**Field semantics:**
+
+| Field | Lands at | Meaning |
+|---|---|---|
+| `npcdesc` | +0x88, +0x10, lowercased +0x2c | the label / display name |
+| `npcidx` | +0xc0 | ⭐ **THE model index for NPCs** — `NPCProxy_GetModelIndex_npcidx` (vtbl+0x1c) |
+| `bdyprt` | +0x48 | the AVATAR tribe/gender byte; **the NPC branch never reads it** ⇒ no effect on an NPC's look |
+| `npctyp` | +0xc4 | `CLobby_CreateNpcObjFromRecord_byNpcTyp@0x004f6ea0`: **1 = "settler"** person, **2 = "letterbox"**, else **NULL (invisible)** |
+| `hrclr`/`sknclr`/`shrtclr`/`trsrclr` | +0x49..+0x4c | model tint (see the style refresh below) |
+| `act`×3 | +0xa8/+0xac/+0xb0 | ⭐ **a LobbyAction id** (table below) — the dialog the NPC's button opens |
+| `actChat`×3 | +0xc8 + i×0x1c | [TODO] button label or spoken line — `VillageScreen_UpdateActionButtons@0x00433f60` decompiles unreliably and was NOT guessed at |
+
+**⭐ The LobbyAction enum** (`VillageScreen_SetActionButtonToLobbyAction@0x004325b0` — the string
+table IS the enum; it fills one of the three village-screen buttons at screen+0x3560/+0x3564/+0x3568):
+
+| `act` | Action | | `act` | Action |
+|---|---|---|---|---|
+| 0, 19 | `LobbyAction_None` (hidden) | | 8, 18 | `LobbyAction_HostGame` |
+| 1 | `LobbyAction_HairColor` | | 9 | `LobbyAction_ListGames` |
+| **2–6** | **`LobbyAction_MinigameMatchmaking`** | | 10 | `LobbyAction_HoF` |
+| 7 | `LobbyAction_Mailbox` | | 11 | `LobbyAction_OpenShop` |
+
+(Everything else falls through to `None`. Sending emote ids 2/4 as `act` is what made every NPC in
+the stub's first cast open the minigame dialog — live-observed 2026-08-02.)
+
+### Actor model + colour selection — `AvatarVisual_RefreshStyleModel@0x00508090` [PROVEN 2026-08-02]
+
+The visual reads its owning proxy (`visual+0x760`) through a shared accessor family and branches on
+the **ActorID type discriminator at proxy+8**: **1 = AvatarProxy** (`ActorProxy_AsAvatarOrNull_type1
+@0x0046b6c0`), **2 = NPCProxy** (`ActorProxy_AsNpcOrNull_type2@0x0046b6d0`).
+
+- **NPC (type 2):** model index = `npcidx` verbatim (vtbl+0x1c); gender forced 0; the
+  tribe/bodypart math is skipped entirely.
+- **Avatar (type 1):** `bodypart = proxy+0x48 >> 4` (`ActorProxy_GetBodyPart_hiNibble48`),
+  `gender = proxy+0x48 & 0xF` (`ActorProxy_GetGender_loNibble48`, boolean), `tribe` = vtbl+0x18
+  clamped to 1..5, then **model = bodypart + (tribe − 1) × 3** (bodypart ≥ 3 ⇒ `(tribe−1)×3 + 2`).
+  ⇒ **`trbgndr` packing RESOLVED: high nibble = body part, low nibble = gender.** Sending 0 pins
+  every avatar to the same default model — which is exactly what the stub did until now.
+- **Colours (8 slots)** feed the tinting calls `FUN_004fcc90`/`FUN_004fcc10`:
+  +0x49 hair · +0x4a skin · +0x4b shirt · +0x4c trouser · +0x4d..+0x50 addColor1..4.
+  ⚠️ `NPCProxy_ctor` initialises only +0x48..+0x4c, and 1004 carries no addColor fields, so an
+  NPC's +0x4d..+0x50 are whatever the raw `malloc(0x120)` left there. [TODO] whether the NPC model
+  path consumes those four slots at all.
+- The whole refresh is skipped unless the model index, gender or one of the 8 colours CHANGED
+  (compared against the cached copy at visual+0x698/+0x69c..+0x6b8).
+
+[TODO] npcidx→appearance and the colour palette indices are not derivable from code — they live in
+the (encrypted) game data. Eyeball or asset-decrypt territory.
