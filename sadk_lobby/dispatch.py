@@ -320,13 +320,19 @@ def _spawn_world_avatars(conn):
     for npc in npcs.record_npcs(_npcs):
         village.send_player_create(conn, npc.perm_id, npc.name, quiet=True,
                                    **npc.record_kwargs())
-        # A shop NPC needs its wares pushed too: clicking it sends NOTHING on the wire
-        # (live-verified 2026-08-02), so the client is waiting for ShopInventoryData the same
-        # way it waits for EnterWorld(1000) — provide it through the real mechanism.
-        if npc.shop:
-            shop_id, shop_name, sell_mod, items = npc.shop
-            village.send_shop_inventory(conn, npc.perm_id, shop_id, shop_name,
-                                        sell_mod=sell_mod, items=items, quiet=True)
+        # ⛔ Do NOT push the NPC's shop here. ShopInventoryData(0xE11) is not a stock cache —
+        # its ARRIVAL OPENS THE DIALOG: the villageConn+0x128 observer `FUN_004323d0` hands the
+        # data to the ShopDialog (screen+0x35d4) and then calls its vtbl+0x2c *show* method
+        # [PROVEN 2026-08-02]. Pushing it at world entry made the shop pop open unbidden the
+        # moment the NPC spawned (live-observed) and did nothing on a later click — a result
+        # that LOOKS like a working shop but is really the server forcing a dialog. The real
+        # server can only have sent 0xE11 as the REPLY to a shop-open request.
+        # ⏳ The blocker: clicking a shop NPC puts NOTHING on the wire (live-verified twice via
+        # the stub journal), so the client's request path is not being reached. Finding out why
+        # needs a live trace of the OpenShop button handler — static analysis of
+        # `VillageScreen_UpdateActionButtons@0x00433f60` bottoms out in unreliable
+        # decompilation. `village.send_shop_inventory` is ready for that reply when we get
+        # there; `npc.shop` carries the stock.
     # Walkers (EntityCreate 1001 avatars): the proven remote-player pattern — one
     # styled spawn plus two ring-priming pushes so the movement ring brackets "now".
     npc_tick_base = _now_tick16()

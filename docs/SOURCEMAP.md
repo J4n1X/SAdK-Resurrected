@@ -553,11 +553,20 @@ the chat nick, so probably yes; unproven, so unchanged.
     NPCID 32 · ShopID 32 · ShopName STRING · SellMod 32(byte-swapped float) ·
     StockCount 16 · StockCount × { ItemID 32 · Buy 32 · Sell 32 }     (item reader FUN_0046b360)
 
-⭐ **SERVER-PUSHED.** Clicking a shop NPC sends **nothing** on the wire (live-verified 2026-08-02:
-the stub journal shows only keepalive Pongs across a shop click), so the client sits waiting for
-this exactly as it waits for `EnterWorld(1000)`. `NPCID` binds the stock to an NPC record, so the
-push must follow the NPC's PlayerCreate(1004). [TODO] `ItemID` values live in the encrypted item
-tables and are not derivable from the binary.
+⭐ **Its ARRIVAL OPENS THE DIALOG — it is a reply, not a stock cache.** The `villageConn+0x128`
+observer `FUN_004323d0` (subscribed by `VillageScreen_OnEnter`) builds an `ActorID{type 2, NPCID}`,
+passes it with ShopID/ShopName to the ShopDialog at `screen+0x35d4` (`FUN_0045d580`), and on success
+calls the dialog's **vtbl+0x2c show** method, snapshots the camera and enables `screen+0x3584`.
+⇒ Pushing 0xE11 at world entry pops the shop open unbidden (live-observed 2026-08-02) — a
+false-looking "working shop". The real server sent it only in reply to a shop-open request.
+
+⏳ **OPEN BLOCKER:** clicking a shop NPC puts **nothing** on the wire (live-verified twice from the
+stub journal — only keepalive Pongs across a click, and one lone leave-village msg 2002 in the whole
+session). So the client's request path is never reached, and no server reply can be triggered.
+Resolving it needs a LIVE trace of the OpenShop button handler: static reading of
+`VillageScreen_UpdateActionButtons@0x00433f60` bottoms out in unreliable decompilation (the
+selection-type branches use registers Ghidra cannot track). [TODO] `ItemID` values live in the
+encrypted item tables and are not derivable from the binary.
 
 **Hall of Fame is a WEB VIEW, not a protocol feature**: `HallOfFameDialog` reads the config keys
 `HallOfFameURL%d`, `HallOfFameURL%d_AppendPermID`, `HallOfFameURL%d_AppendCharname` and opens the
