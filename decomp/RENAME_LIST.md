@@ -1306,3 +1306,39 @@ Applied on `sadk_noav.exe` (session: WorldTick clock-sync discovery, ER
 | 0x0088a624 | `g_dwWorldClock_PrevRawMs` | global (uint) |
 | 0x0088a628 | `g_dwWorldClock_FrameDeltaMs` | global (uint) |
 | 0x0088a62c | `g_dwWorldClock_Offset` | global (uint) — the slew target |
+
+## 2026-08-02 — In-world chat render chain + tincat3 CellManager (LOCAL-chat root cause)
+
+`sadk_noav.exe`:
+
+| Address | New name | Note |
+|---|---|---|
+| 0x00480e30 | `UserCommConnection_ChatReceived` | dev log scope `LobbyComm::UserCommConnection::ChatReceived`; ⚠️ logs BEFORE its null-checks |
+| 0x00480990 | `UserComm_NotifyChatReceivedObservers` | fan-out on `UC+0x3c`, unconditional |
+| 0x00436180 | `VillageScreen_OnChatReceived_AppendToTab` | the in-world screen chat observer |
+| 0x0046d170 | `VillageConn_ChatCellToTabId` | 0xFF→1, 0xFE→3, key<0x0E→2, else 0 |
+| 0x0046c600 | `VillageConn_GetSystemSenderId` | returns `conn+0x160` |
+| 0x004389d0 | `VillageScreen_OnEnter_SubscribeAndBuildChatTabs` | tabs 1–4, DisableTab(3,4), SelectTab(2) |
+| 0x00439410 | `VillageScreen_OnLeave_UnsubscribeAll` | mirror of OnEnter |
+| 0x004ae200 | `ChatWidget_AppendLine` | by-id / −1 all / −2 active |
+| 0x004ae450 | `ChatWidget_AddTab` | entries {id, ctx, button, enabled} ×0x10 @ widget+0x3338 |
+| 0x004ac200 | `ChatWidget_DisableTab` | |
+| 0x004ac290 | `ChatWidget_SelectTab` | (id, force) |
+| 0x004adb20 | `ChatTabCtx_AppendWordWrapped` | ring slots 0x24 B, string @+0x8 (SSO @+0xC) |
+| 0x004354d0 | `Chat_ParseSlashCommand` | `/`-commands only; table @ 0x0087a08c |
+| 0x00480560 | `UserCommConnection_dtor` | 7 notify lists @ +0x3c..+0x84; secondary vftable @ +0x38 |
+| 0x00480750 | `UserCommConnection_ctor` | |
+| 0x004624b0 | `LobbyManager_GetCharacterManager` | returns `LM+0x140` (embedded) |
+
+`tincat3.dll`:
+
+| Address | New name | Note |
+|---|---|---|
+| 0x1000aa80 | `Handler_DispatchPayloadByMagic` | 0x62 → registry @ handler+0x34 → observer vtbl+0x20 |
+| 0x1000ef30 | `CellManager_DispatchInboundMessage` | switch on chat id 0..11 |
+| 0x1000ee30 | `CellManager_ProcessPublishCell` | ChannelInfo → cell-registry insert |
+| 0x1000e4a0 | `CellManager_OnChannelJoinedLeft_RequireKnownCell` | ⭐ unknown cell ⇒ StatusReply(status=2), no event — the LOCAL-chat root cause |
+| 0x1000df60 | `CellManager_OnReply_QueueChatEvent` | queues event 0xd, no cell lookup |
+| 0x10038fa0 | `CellManager_FindCellById` | registry (`this+8`) lookup |
+| 0x1000da20 | `CellManager_QueueEvent` | |
+| 0x1000e250 | `CellManager_GetNextEvent` | |
