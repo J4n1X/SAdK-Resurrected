@@ -89,3 +89,7 @@ tincat_server.log
 
 # Ghidra project (SFTP'd in; embeds the copyrighted game binary)
 sadk/
+
+# Persistent player/character store (per-deployment data, not source)
+sadk_players.json
+sadk_players.json.bad

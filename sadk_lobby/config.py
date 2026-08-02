@@ -59,12 +59,19 @@ VILLAGE_NPCS_ENABLED = False
 # (crypto.decode_login_blob) and never compared against anything. Testers just need to pick
 # DIFFERENT usernames from each other; anything at all works for the other fields.
 #
-# Appearance is still shared (NICKNAME_DATA) — [TODO] per-player appearance.
+# ⭐ Identity and appearance are now PERSISTENT (store.py, 2026-08-02): the perm_id and the
+# character blob live in sadk_players.json, keyed by login name, and survive restarts. The
+# perm_id MUST be stable — char_id == perm_id and the client's own avatar id is its PermID.
 TEST_USERNAME  = "test"     # only the suggested name in the startup banner
 TEST_PASSWORD  = "test"     # only the suggested password in the startup banner
 TEST_PERM_ID   = 1          # defensive fallback owner id for stub-injected server entries
 
-# Avatar data blob from the AdK emulator (LobbyProcessor._nicknameData).
+# ⛔ LEGACY / NO LONGER SENT. The AdK emulator's hardcoded character blob
+# (LobbyProcessor._nicknameData). Every player used to wear this — its zlib payload contains the
+# name "tester" in UTF-16LE, so everyone was literally the same character. Superseded by real
+# per-player characters (store.py); a player without one now gets an EMPTY character list, which
+# is what makes the client open its creation flow. Kept only as a decoding reference for the
+# blob format: {u32 ?, u32 0x39, u32×4 zeros, u32 uncompressed_len, zlib stream}.
 NICKNAME_DATA = bytes.fromhex(
     "000000003900000000000000000000000000000000000000"
     "a2000000785edbc9c8800cd880b8842195a1184c1631e000"
