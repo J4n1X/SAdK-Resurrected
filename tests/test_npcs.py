@@ -11,6 +11,7 @@ Or with pytest: pytest tests/test_npcs.py
 """
 import math
 import os
+import struct
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -96,6 +97,78 @@ def test_cast_split_covers_everyone():
     assert len(records) + len(walkers) == len(cast)
     assert all(n.npctyp in (1, 2) for n in records)
     assert all(n.npctyp is None for n in walkers)
+
+
+def test_strings_are_utf8_on_the_wire():
+    # [PROVEN 2026-08-02] the reader (vtbl+0x30 FUN_004900a0 -> FUN_00487620) runs
+    # MultiByteToWideChar(CP_UTF8). ISO-8859-15 put a bare 0xE4 on the wire for "ä", which is
+    # invalid UTF-8 and rendered as "H?ndler" in-game.
+    w = village.BitWriter()
+    w.write_string("Händler")
+    raw = w.bytes()
+    assert raw[0] == len("Händler".encode("utf-8")), "the length prefix counts BYTES, not chars"
+    assert raw[1:] == "Händler".encode("utf-8")
+    assert b"\xc3\xa4" in raw, "ä must be the two-byte UTF-8 sequence, not 0xE4"
+
+
+def test_every_npc_name_and_line_survives_the_utf8_round_trip():
+    for npc in _cast():
+        w = village.BitWriter()
+        w.write_string(npc.name)
+        raw = w.bytes()
+        assert raw[1:].decode("utf-8") == npc.name
+        assert raw[0] <= 255, f"{npc.name}: name exceeds the 8-bit length prefix"
+        for _act, text in npc.actions:
+            w2 = village.BitWriter()
+            w2.write_string(text)
+            assert w2.bytes()[1:].decode("utf-8") == text
+
+
+# ── ShopInventoryData(0xE11) ─────────────────────────────────────────────────
+def test_shop_inventory_bit_layout():
+    items = ((7, 700, 350), (9, 900, 450))
+    body = village.shop_inventory_body(1000001, 1, "AB", sell_mod=1.0, items=items)
+    b = _bits(body)
+    off = 0
+
+    def take(n):
+        nonlocal off
+        v = int(b[off:off + n], 2)
+        off += n
+        return v
+
+    assert take(32) == 1000001        # NPCID — binds the shop to the NPC record
+    assert take(32) == 1              # ShopID
+    assert take(8) == 2               # ShopName length
+    assert take(8) == ord("A")
+    assert take(8) == ord("B")
+    # SellMod: 32 bits that the client BYTE-REVERSES before reading as a float.
+    raw = take(32).to_bytes(4, "big")
+    assert struct.unpack("<f", raw)[0] == 1.0
+    assert take(16) == 2              # StockCount — 16 bits, not 32
+    for item_id, buy, sell in items:
+        assert take(32) == item_id
+        assert take(32) == buy
+        assert take(32) == sell
+
+
+def test_shop_sell_mod_round_trips_non_trivial_floats():
+    for value in (0.5, 1.0, 2.25, 0.8):
+        body = village.shop_inventory_body(1, 1, "", sell_mod=value)
+        raw = _bits(body)[72:104]                 # 32+32+8(empty name) = 72 bits in
+        got = struct.unpack("<f", int(raw, 2).to_bytes(4, "big"))[0]
+        # Compare against the float32 round-trip: the wire field is 32-bit, so 0.8 comes back
+        # as 0.800000011920929 by definition, not by any fault of the encoder.
+        assert got == struct.unpack("<f", struct.pack("<f", value))[0]
+
+
+def test_exactly_one_npc_carries_a_shop_and_it_is_the_trader():
+    shops = [n for n in _cast() if n.shop]
+    assert len(shops) == 1 and shops[0].name.startswith("Händler")
+    _shop_id, name, sell_mod, items = shops[0].shop
+    assert name and items, "a shop with no wares would open empty"
+    assert all(len(it) == 3 for it in items), "items are (ItemID, Buy, Sell)"
+    assert sell_mod > 0
 
 
 def test_record_npc_actions_are_valid_lobby_actions():

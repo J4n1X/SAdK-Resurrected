@@ -523,3 +523,43 @@ the **ActorID type discriminator at proxy+8**: **1 = AvatarProxy** (`ActorProxy_
 
 [TODO] npcidx→appearance and the colour palette indices are not derivable from code — they live in
 the (encrypted) game data. Eyeball or asset-decrypt territory.
+
+### Lobby string encoding = UTF-8, and the shop [PROVEN 2026-08-02]
+
+⭐ **Every LobbyMessage string on the wire is UTF-8.** The string reader at LobbyMessage
+vtbl+0x30 (`FUN_004900a0`: 8-bit length + N chars) passes its bytes to `FUN_00487620`, which is
+exactly `MultiByteToWideChar(0xFDE9 = CP_UTF8, …)` → `WideCharToMultiByte(CP_ACP, …)`. The same
+converter is applied to the NPC `npcdesc`, the avatar `name` (`AvatarProxy_ReadStyleBlock`) and
+BOTH chat strings (`UserCommConnection_ChatReceived`). Sending ISO-8859-15 put a bare `0xE4` on
+the wire for "ä" — invalid UTF-8 ⇒ U+FFFD ⇒ rendered **"H?ndler Hinnerk"** in-game
+(live-observed, screenshot 2026-08-02). The 8-bit length prefix counts **bytes**, so multi-byte
+characters eat into the 255 limit. [TODO] whether the tincat PropertySet string path
+(`tincat.str_field`, still ISO-8859-15) wants UTF-8 too — same converter is applied downstream on
+the chat nick, so probably yes; unproven, so unchanged.
+
+**LobbyMessage reader vtable (`0x7db594`) — slots identified so far:**
+
+| Slot | Function | Reads |
+|---|---|---|
+| +0x10 | `FUN_0048f280` | N bits → **u16** (used for `StockCount`, 16 bits) |
+| +0x18 | `FUN_0048f300` | N bits → u32 (the workhorse) |
+| +0x20 | `LobbyMessage_ReadBits64` | N bits → u64 (⚠️ shipped >32-bit aliasing bug) |
+| +0x30 | `FUN_004900a0` | STRING: 8-bit len + chars, **then the UTF-8→ANSI conversion** |
+| +0x34 | `FUN_0048ffc0` | STRING (raw; the caller converts — e.g. npcdesc, avatar name) |
+| +0x40 | `FUN_0048ff50` | 32 bits, **then REVERSES the 4 bytes** ⇒ a little-endian **float** inside the big-endian bit stream |
+
+**ShopInventoryData — msg `0xE11`, `HandleShopInventoryData@0x004706b0`:**
+
+    NPCID 32 · ShopID 32 · ShopName STRING · SellMod 32(byte-swapped float) ·
+    StockCount 16 · StockCount × { ItemID 32 · Buy 32 · Sell 32 }     (item reader FUN_0046b360)
+
+⭐ **SERVER-PUSHED.** Clicking a shop NPC sends **nothing** on the wire (live-verified 2026-08-02:
+the stub journal shows only keepalive Pongs across a shop click), so the client sits waiting for
+this exactly as it waits for `EnterWorld(1000)`. `NPCID` binds the stock to an NPC record, so the
+push must follow the NPC's PlayerCreate(1004). [TODO] `ItemID` values live in the encrypted item
+tables and are not derivable from the binary.
+
+**Hall of Fame is a WEB VIEW, not a protocol feature**: `HallOfFameDialog` reads the config keys
+`HallOfFameURL%d`, `HallOfFameURL%d_AppendPermID`, `HallOfFameURL%d_AppendCharname` and opens the
+resulting URL. The official URLs are dead, hence the blank/broken panel — nothing the lobby
+protocol can fix; it needs those config keys pointed at a live page.

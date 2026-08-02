@@ -189,8 +189,16 @@ class BitWriter:
 
     def write_string(self, s):
         """8-bit length + one 8-bit char each (FUN_0048ffc0). No NUL, no 32-bit prefix, and NOT
-        byte-aligned — it rides the same bit stream."""
-        raw = (s or "").encode("iso-8859-15", "replace")[:255]
+        byte-aligned — it rides the same bit stream.
+
+        ⭐ **The wire encoding is UTF-8** [PROVEN 2026-08-02]: the string reader at LobbyMessage
+        vtbl+0x30 (`FUN_004900a0`) hands its bytes to `FUN_00487620`, which is
+        `MultiByteToWideChar(0xFDE9 = CP_UTF8, …)` → `WideCharToMultiByte(CP_ACP, …)`. The same
+        converter is applied to the NPC `npcdesc`, the avatar `name`, and both chat strings.
+        We sent ISO-8859-15, so "Händler" put a bare 0xE4 on the wire — invalid UTF-8, decoded to
+        U+FFFD and displayed as "H?ndler" (live-observed). The length prefix counts BYTES, so a
+        multi-byte character costs more than one of the 255 available."""
+        raw = (s or "").encode("utf-8", "replace")[:255]
         self.write(len(raw), 8)
         for ch in raw:
             self.write(ch, 8)
@@ -578,6 +586,60 @@ def send_player_create(conn, npc_id, npcdesc, magic=None, quiet=False, **kwargs)
     body = player_create_body(npc_id, npcdesc, **kwargs)
     _send_village(conn, VILLAGE_MSG_PLAYER_CREATE, body, magic,
                   f"PlayerCreate NPC {npcdesc!r} id={npc_id}", quiet=quiet)
+
+
+#: Village msg id for ShopInventoryData — the shop's wares (client: HandleShopInventoryData
+#: @0x004706b0). SERVER-PUSHED: clicking a shop NPC sends NOTHING on the wire (live-verified
+#: 2026-08-02 — the journal shows only keepalive Pongs), so the client is waiting for this the
+#: way it waits for EnterWorld(1000).
+VILLAGE_MSG_SHOP_INVENTORY = 0xE11
+
+
+def shop_inventory_body(npc_id, shop_id, shop_name, sell_mod=1.0, items=()):
+    """Body for ShopInventoryData (msg 0xE11) — binds a stock list to a shop NPC.
+
+    Layout from `HandleShopInventoryData@0x004706b0`:
+
+        NPCID 32 · ShopID 32 · ShopName STRING · SellMod 32(byte-swapped float) ·
+        StockCount 16 · StockCount × { ItemID 32 · Buy 32 · Sell 32 }
+
+    (the per-item reader is `FUN_0046b360`.)
+
+    ⚠️ `SellMod` is read through LobbyMessage vtbl+0x40 (`FUN_0048ff50`), which reads 32 bits and
+    then REVERSES the four bytes before storing — i.e. it is a little-endian float inside our
+    otherwise big-endian bit stream. `_swapped_float` below does that flip, so callers pass a
+    normal Python float (1.0 = sell at face value).
+
+    ⚠️ `StockCount` is read through vtbl+0x10 (`FUN_0048f280`), a 16-BIT read — not 32.
+
+    [TODO] `ItemID` values are game-data ids (the encrypted item tables), not derivable from the
+    binary. The defaults in `npcs.SHOP_STOCK` are a low-id probe: whichever ids render as real
+    wares identify themselves, and unknown ids are expected to show as blanks/placeholders.
+    """
+    w = BitWriter()
+    w.write(npc_id, 32)                        # "NPCID"  — binds the shop to an NPC record
+    w.write(shop_id, 32)                       # "ShopID"
+    w.write_string(shop_name)                  # "ShopName"
+    w.write(_swapped_float(sell_mod), 32)      # "SellMod" — byte-reversed float
+    w.write(len(items), 16)                    # "StockCount" — 16 bits
+    for item_id, buy, sell in items:
+        w.write(item_id, 32)                   # "ItemID"
+        w.write(buy, 32)                       # "Buy"
+        w.write(sell, 32)                      # "Sell"
+    return w.bytes()
+
+
+def _swapped_float(value):
+    """The u32 to put on the wire so the client's byte-reversing reader recovers `value`."""
+    return struct.unpack(">I", struct.pack("<f", float(value)))[0]
+
+
+def send_shop_inventory(conn, npc_id, shop_id, shop_name, magic=None, quiet=False, **kwargs):
+    """Send ShopInventoryData (msg 0xE11) on the village conn."""
+    body = shop_inventory_body(npc_id, shop_id, shop_name, **kwargs)
+    _send_village(conn, VILLAGE_MSG_SHOP_INVENTORY, body, magic,
+                  f"ShopInventoryData {shop_name!r} npc={npc_id} "
+                  f"({kwargs.get('items') and len(kwargs['items']) or 0} item(s))", quiet=quiet)
 
 
 def entity_remove_body(avatar_id):

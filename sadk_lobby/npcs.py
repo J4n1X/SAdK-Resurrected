@@ -66,6 +66,12 @@ NPCTYP_LETTERBOX = 2
 #     10    → LobbyAction_HoF             (hall of fame)
 #     11    → LobbyAction_OpenShop
 #     else  → LobbyAction_None
+#: Probe stock for the shop: (ItemID, Buy, Sell). [TODO] ItemIDs are game-data ids from the
+#: encrypted item tables and are NOT derivable from the binary, so this is a deliberate low-id
+#: sweep — whichever ids come back as real wares identify themselves, and unknown ids should show
+#: as blanks. Prices are arbitrary until the id space is known.
+SHOP_STOCK = tuple((item_id, 100 * item_id, 50 * item_id) for item_id in range(1, 9))
+
 ACT_NONE = 0
 ACT_HAIRCOLOR = 1
 ACT_MINIGAME = 2
@@ -104,6 +110,10 @@ class Npc:
     #: was left unreversed rather than guessed. Keep the strings short and label-like until a
     #: live look settles it.
     actions: tuple = ()
+    #: Shop NPCs only: (shop_id, shop_name, sell_mod, ((item_id, buy, sell), ...)). When set, the
+    #: server pushes a ShopInventoryData(0xE11) bound to this NPC's id at world entry — clicking
+    #: the NPC sends nothing, so the wares must already be there.
+    shop: tuple = None
     #: 1001 walkers only — the `trbgndr` byte. ⭐ PACKING RESOLVED [PROVEN 2026-08-02]:
     #: HIGH nibble = body part (`+0x48 >> 4`, `FUN_0046b5c0`, must be < 3 or the model math
     #: clamps), LOW nibble = gender (`+0x48 & 0xF`, `FUN_0046b5d0`, used as a boolean).
@@ -199,7 +209,8 @@ def make_village_npcs(center):
         # ── Record NPCs (1004) — labelled, model-varied, each opening a real lobby dialog.
         Npc(NPC_ID_BASE + 1, "Händler Hinnerk", npctyp=NPCTYP_SETTLER,
             anchor=at(3.5, 2.0), rot_deg=225.0, colours=(2, 1, 3, 1), npcidx=1,
-            actions=((ACT_OPEN_SHOP, "Zum Laden"),)),
+            actions=((ACT_OPEN_SHOP, "Zum Laden"),),
+            shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
         Npc(NPC_ID_BASE + 2, "Magd Mathilde", npctyp=NPCTYP_SETTLER,
             anchor=at(-4.0, 3.0), rot_deg=135.0, colours=(1, 0, 4, 2), npcidx=2,
             actions=((ACT_HAIRCOLOR, "Neue Frisur"),)),

@@ -320,6 +320,13 @@ def _spawn_world_avatars(conn):
     for npc in npcs.record_npcs(_npcs):
         village.send_player_create(conn, npc.perm_id, npc.name, quiet=True,
                                    **npc.record_kwargs())
+        # A shop NPC needs its wares pushed too: clicking it sends NOTHING on the wire
+        # (live-verified 2026-08-02), so the client is waiting for ShopInventoryData the same
+        # way it waits for EnterWorld(1000) — provide it through the real mechanism.
+        if npc.shop:
+            shop_id, shop_name, sell_mod, items = npc.shop
+            village.send_shop_inventory(conn, npc.perm_id, shop_id, shop_name,
+                                        sell_mod=sell_mod, items=items, quiet=True)
     # Walkers (EntityCreate 1001 avatars): the proven remote-player pattern — one
     # styled spawn plus two ring-priming pushes so the movement ring brackets "now".
     npc_tick_base = _now_tick16()
