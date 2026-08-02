@@ -8,30 +8,40 @@ meant a new you.
 
 This module is the store behind `players.py` and the character handlers in `dispatch.py`.
 
-## What is persisted, and why exactly this
+## The model: an ACCOUNT owns MANY CHARACTERS
 
-* **`perm_id` per username.** ⭐ NOT an implementation detail: the client's own avatar id IS
-  its PermID, and `CharacterManager::CharacterObserverListener::CharacterDataReceived
-  @0x00474910` keys characters by `char_id`. The own-avatar lookup then searches the
-  CharacterManager by avatar id — the failure path logs *"WTF?! There is no avatar with that
-  id in the CharacterManager"* and fails the village login. So **`char_id` must equal the
-  perm_id we issue**, and a persisted character is therefore only coherent if the perm_id is
-  persisted with it. A returning player who got a fresh perm_id would orphan their own
-  character.
-* **The character's `data` blob, verbatim.** The CLIENT authors this at creation
-  (`CreateCharacterFromPreview`, msg 77) — it is a zlib-wrapped record carrying the name in
-  UTF-16LE plus appearance/stat fields, and `CommLayer::Character::GetData(i)` shows the
-  client splits it into **six** sub-blocks. We deliberately do NOT parse or synthesise it:
-  the server's job here is to be a store, and replaying the client's own bytes is both the
-  correct protocol behaviour and the only way to be certain we are not corrupting a format
-  we have not fully reversed. [TODO] the six-slot inner layout is unreversed.
+`msgdefs.ini` is explicit — `CharacterData(75)` carries **both** `char_id` and `owner_id`, so
+these are two different namespaces, and the stub used to conflate them (both = perm_id), which
+only held together while every account had exactly one character.
+
+* **account** — keyed by login name, has a stable `user_id` (the `owner_id` on the wire).
+* **character** — has its own globally unique `char_id`, allocated from `CHAR_ID_BASE` so the
+  two id spaces never overlap in a log or a lookup. Kept below `npcs.NPC_ID_BASE` (1e6) because
+  a character id also travels as an **avatar id** in the world, where NPCs live.
+
+⭐ **Which id becomes the session identity?** The client's own avatar id IS its PermID, and
+`CharacterDataReceived@0x00474910` keys the CharacterManager by `char_id`; the own-avatar
+lookup then searches that manager by avatar id (miss ⇒ *"WTF?! There is no avatar with that id
+in the CharacterManager"* ⇒ failed village login). That says the token's perm_id is the
+**selected character's** id, not the account's. [TODO] not yet observed live with a
+character id that differs from the account id — so `players.resolve_by_perm` looks up
+**characters first, then accounts**, and logs which kind it matched. One live login with two
+characters settles it either way without a guess baked into the wire.
+
+* **The character's `data` blob is stored verbatim.** The CLIENT authors it at creation
+  (`CreateCharacterFromPreview`, msg 77) — a zlib-wrapped record carrying the name in UTF-16LE
+  plus appearance/stat fields, which `CommLayer::Character::GetData(i)` splits into **six**
+  sub-blocks. We deliberately do NOT parse or synthesise it: replaying the client's own bytes
+  is both correct store behaviour and the only way to be sure we are not corrupting a format we
+  have not fully reversed. [TODO] the six-slot inner layout.
 
 ## Format
 
 A single JSON file (default `sadk_players.json` beside the log, override with
 `SADK_STORE_PATH`). Written atomically — temp file + `os.replace` — so a crash or a
 concurrent read never sees a half-written file. Blobs are stored hex-encoded because JSON
-has no byte type.
+has no byte type. A v1 store (one character per account, char_id == user_id) is migrated
+forward automatically on load.
 
 ⚠️ Deliberately NOT in `config.py`: the deploy server's `config.py` is local-only and must be
 merged by hand (see HANDOFF.md), so keeping the path here means deploying this file is a
@@ -50,10 +60,15 @@ from .log import log
 STORE_PATH = os.environ.get("SADK_STORE_PATH",
                             os.path.join(config.REPO_DIR, "sadk_players.json"))
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Character ids start well clear of account user_ids (which count from 1) so the two are
+#: instantly distinguishable in a log, and stay well below npcs.NPC_ID_BASE (1_000_000)
+#: because a char_id also travels as an AVATAR id in the world, where NPC ids live.
+CHAR_ID_BASE = 100_000
 
 _lock = threading.RLock()
-_state = None          # lazily loaded: {"version", "next_perm_id", "players": {...}}
+_state = None          # lazily loaded: {"version", "next_user_id", "next_char_id", "players"}
 
 
 def _now():
@@ -61,7 +76,37 @@ def _now():
 
 
 def _empty():
-    return {"version": SCHEMA_VERSION, "next_perm_id": 1, "players": {}}
+    return {"version": SCHEMA_VERSION, "next_user_id": 1,
+            "next_char_id": CHAR_ID_BASE, "players": {}}
+
+
+def _migrate_v1(doc):
+    """v1 (one character per account, char_id == perm_id) → v2 (accounts own character lists).
+
+    Preserves the account's id as `user_id` and re-homes its single character onto a fresh
+    char_id, because in v2 the two namespaces are separate."""
+    next_char = CHAR_ID_BASE
+    players_out = {}
+    for key, rec in (doc.get("players") or {}).items():
+        char = rec.get("character")
+        chars = []
+        if char:
+            chars.append({"char_id": next_char, "name": char.get("name"),
+                          "data_hex": char.get("data_hex") or "",
+                          "created": char.get("created") or _now(),
+                          "modified": char.get("modified") or _now()})
+            next_char += 1
+        players_out[key] = {"user_id": int(rec.get("perm_id", 0)) or 1,
+                            "username": rec.get("username") or key,
+                            "characters": chars,
+                            "created": rec.get("created") or _now(),
+                            "last_login": rec.get("last_login") or _now()}
+    out = {"version": SCHEMA_VERSION,
+           "next_user_id": int(doc.get("next_perm_id", 1)),
+           "next_char_id": next_char, "players": players_out}
+    log(f"  [STORE] migrated store v1 → v2: {len(players_out)} account(s), "
+        f"{next_char - CHAR_ID_BASE} character(s) re-homed onto the new char_id space")
+    return out
 
 
 def _load_locked():
@@ -75,14 +120,21 @@ def _load_locked():
         if not isinstance(data, dict) or "players" not in data:
             raise ValueError("not a store document")
         version = data.get("version")
-        if version != SCHEMA_VERSION:
-            # No migration exists yet; refusing beats silently reinterpreting someone's
-            # characters under the wrong schema.
+        if version == 1:
+            data = _migrate_v1(data)
+            _state = data
+            _save_locked()
+        elif version != SCHEMA_VERSION:
+            # Refusing beats silently reinterpreting someone's characters under a schema this
+            # build does not understand (e.g. a store written by a NEWER version).
             raise ValueError(f"unsupported store version {version!r} "
                              f"(this build writes {SCHEMA_VERSION})")
-        data.setdefault("next_perm_id", 1)
+        data.setdefault("next_user_id", 1)
+        data.setdefault("next_char_id", CHAR_ID_BASE)
         _state = data
-        log(f"  [STORE] loaded {len(data['players'])} player(s) from {STORE_PATH}")
+        total = sum(len(r.get("characters") or []) for r in data["players"].values())
+        log(f"  [STORE] loaded {len(data['players'])} account(s), {total} character(s) "
+            f"from {STORE_PATH}")
     except FileNotFoundError:
         _state = _empty()
         log(f"  [STORE] no store yet at {STORE_PATH} — starting empty")
@@ -129,108 +181,151 @@ def _key(username):
 
 
 # ── Identity ─────────────────────────────────────────────────────────────────
-def get_or_create_player(username):
-    """The persistent record for `username`, creating (and saving) it on first sight.
+def get_or_create_account(username):
+    """The persistent account record for `username`, creating it on first sight.
 
-    Returns a dict: {"perm_id", "username", "character": {...} | None, "created", "last_login"}.
-    The perm_id is allocated once and never changes — see the module docstring for why that is
-    a protocol requirement and not a convenience."""
+    Returns {"user_id", "username", "characters": [...], "created", "last_login"}. The user_id
+    is allocated once and never changes."""
     with _lock:
         state = _load_locked()
         key = _key(username)
         rec = state["players"].get(key)
         if rec is None:
-            perm_id = int(state.get("next_perm_id", 1))
-            # Never hand out an id already in use, even if the counter was tampered with.
-            used = {int(r["perm_id"]) for r in state["players"].values()}
-            while perm_id in used:
-                perm_id += 1
-            rec = {"perm_id": perm_id, "username": username,
-                   "character": None, "created": _now(), "last_login": _now()}
+            user_id = int(state.get("next_user_id", 1))
+            used = {int(r["user_id"]) for r in state["players"].values()}
+            while user_id in used:            # never reuse, even if the counter was tampered with
+                user_id += 1
+            rec = {"user_id": user_id, "username": username, "characters": [],
+                   "created": _now(), "last_login": _now()}
             state["players"][key] = rec
-            state["next_perm_id"] = perm_id + 1
+            state["next_user_id"] = user_id + 1
             _save_locked()
-            log(f"  [STORE] new player {username!r} → perm_id {perm_id} (no character yet)")
+            log(f"  [STORE] new account {username!r} → user_id {user_id} (no characters yet)")
         else:
             rec["last_login"] = _now()
             rec["username"] = username or rec.get("username")   # keep original capitalisation
             _save_locked()
-        return dict(rec)
+        return _account_copy(rec)
 
 
-def reserve_perm_id(perm_id, username=None):
-    """Record a perm_id we did not allocate (a stale token, or a client reconnecting across a
-    restart) so it is never handed to somebody else. Returns the stored record."""
+def reserve_user_id(user_id, username=None):
+    """Record an id we did not allocate (a stale token, or a client reconnecting across a
+    restart) so it is never handed to somebody else."""
     with _lock:
         state = _load_locked()
         for rec in state["players"].values():
-            if int(rec["perm_id"]) == int(perm_id):
-                return dict(rec)
-        name = username or f"Player {perm_id}"
-        rec = {"perm_id": int(perm_id), "username": name,
-               "character": None, "created": _now(), "last_login": _now()}
+            if int(rec["user_id"]) == int(user_id):
+                return _account_copy(rec)
+        name = username or f"Player {user_id}"
+        rec = {"user_id": int(user_id), "username": name, "characters": [],
+               "created": _now(), "last_login": _now()}
         state["players"][_key(name)] = rec
-        state["next_perm_id"] = max(int(state.get("next_perm_id", 1)), int(perm_id) + 1)
+        state["next_user_id"] = max(int(state.get("next_user_id", 1)), int(user_id) + 1)
         _save_locked()
-        return dict(rec)
+        return _account_copy(rec)
+
+
+def _decode(ch):
+    out = dict(ch)
+    out["data"] = bytes.fromhex(ch.get("data_hex") or "")
+    return out
+
+
+def _account_copy(rec):
+    out = dict(rec)
+    out["characters"] = [_decode(c) for c in (rec.get("characters") or [])]
+    return out
+
+
+def account_of(username):
+    with _lock:
+        rec = _load_locked()["players"].get(_key(username))
+        return _account_copy(rec) if rec else None
 
 
 # ── Characters ───────────────────────────────────────────────────────────────
-def get_character(username):
-    """The stored character for `username`, or None if they have not created one.
-
-    None is a normal, supported state: the client's `CharacterDataReceived@0x00474910` has an
-    explicit count==0 branch ("No characters found.", info severity) which drives the
-    character-creation flow."""
+def list_characters(username):
+    """Every character on this account, in creation order. An EMPTY list is a normal, supported
+    state: `CharacterDataReceived@0x00474910` has an explicit count==0 branch ("No characters
+    found.", info severity) which is what drives the client's creation flow."""
     with _lock:
         rec = _load_locked()["players"].get(_key(username))
-        if not rec or not rec.get("character"):
-            return None
-        ch = dict(rec["character"])
-        ch["data"] = bytes.fromhex(ch.get("data_hex") or "")
-        ch["char_id"] = int(rec["perm_id"])       # char_id IS the perm_id — see module docstring
-        return ch
+        return [_decode(c) for c in (rec.get("characters") or [])] if rec else []
 
 
-def save_character(username, name, data):
-    """Store the character the CLIENT authored. `data` is its blob, kept verbatim."""
+def find_character(char_id):
+    """(character, owning-account) for a char_id, or (None, None). The dual lookup in
+    `players.resolve_by_perm` uses this to decide whether a token's perm_id names a character."""
+    with _lock:
+        for rec in _load_locked()["players"].values():
+            for ch in rec.get("characters") or []:
+                if int(ch["char_id"]) == int(char_id):
+                    return _decode(ch), _account_copy(rec)
+    return None, None
+
+
+def create_character(username, name, data):
+    """Append a NEW character the client authored, with a freshly allocated char_id."""
+    with _lock:
+        get_or_create_account(username)                     # ensure the account exists
+        state = _load_locked()
+        rec = state["players"][_key(username)]
+        char_id = int(state.get("next_char_id", CHAR_ID_BASE))
+        used = {int(c["char_id"]) for r in state["players"].values()
+                for c in (r.get("characters") or [])}
+        while char_id in used:
+            char_id += 1
+        ch = {"char_id": char_id, "name": name, "data_hex": bytes(data or b"").hex(),
+              "created": _now(), "modified": _now()}
+        rec.setdefault("characters", []).append(ch)
+        state["next_char_id"] = char_id + 1
+        _save_locked()
+        log(f"  [STORE] created character {name!r} on {username!r} → char_id {char_id} "
+            f"({len(data or b'')}B blob); account now has {len(rec['characters'])}")
+        return _decode(ch)
+
+
+def update_character(char_id, name=None, data=None):
+    """Update a character in place, by id. Only the fields actually supplied are touched."""
     with _lock:
         state = _load_locked()
-        rec = state["players"].get(_key(username))
-        if rec is None:
-            rec = get_or_create_player(username)
-            state = _load_locked()
-            rec = state["players"][_key(username)]
-        existing = rec.get("character") or {}
-        rec["character"] = {
-            "name": name,
-            "data_hex": bytes(data or b"").hex(),
-            "created": existing.get("created") or _now(),
-            "modified": _now(),
-        }
-        _save_locked()
-        log(f"  [STORE] saved character {name!r} for {username!r} "
-            f"(char_id {rec['perm_id']}, {len(data or b'')}B blob)")
-        return dict(rec["character"])
+        for rec in state["players"].values():
+            for ch in rec.get("characters") or []:
+                if int(ch["char_id"]) != int(char_id):
+                    continue
+                if name:
+                    ch["name"] = name
+                if data:
+                    ch["data_hex"] = bytes(data).hex()
+                ch["modified"] = _now()
+                _save_locked()
+                log(f"  [STORE] updated character {ch['name']!r} (char_id {char_id})")
+                return _decode(ch)
+    return None
 
 
-def delete_character(username):
+def delete_character(char_id):
+    """Delete a character BY ID. Returns the deleted record, or None if there was no such id."""
     with _lock:
         state = _load_locked()
-        rec = state["players"].get(_key(username))
-        if not rec or not rec.get("character"):
-            return False
-        gone = rec["character"].get("name")
-        rec["character"] = None
-        _save_locked()
-        log(f"  [STORE] deleted character {gone!r} for {username!r}")
-        return True
+        for rec in state["players"].values():
+            chars = rec.get("characters") or []
+            for i, ch in enumerate(chars):
+                if int(ch["char_id"]) == int(char_id):
+                    gone = chars.pop(i)
+                    _save_locked()
+                    log(f"  [STORE] deleted character {gone.get('name')!r} "
+                        f"(char_id {char_id}) from {rec.get('username')!r}; "
+                        f"{len(chars)} left on that account")
+                    return _decode(gone)
+    log(f"  [STORE] delete requested for unknown char_id {char_id} — nothing removed")
+    return None
 
 
 # ── Diagnostics / tests ──────────────────────────────────────────────────────
 def all_players():
     with _lock:
-        return [dict(r) for r in _load_locked()["players"].values()]
+        return [_account_copy(r) for r in _load_locked()["players"].values()]
 
 
 def reset_for_tests(path=None):

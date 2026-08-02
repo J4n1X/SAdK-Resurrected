@@ -569,13 +569,20 @@ def _h_user_info(conn, fields, ticket):
     conn.ok(ticket)
 
 
-def _char_values(conn, ticket):
+def _char_values(conn, ticket, char=None):
+    """CharacterData(75)/UserCharConn(60) field values for ONE character.
+
+    ⭐ `char_id` and `owner_id` are DIFFERENT namespaces (msgdefs.ini gives both fields): the
+    character has its own id, the account owns it. They used to be the same number here, which
+    only worked while an account could hold exactly one character."""
     p = _player(conn)
     return {
-        "char_id": p.char_id, "name": p.char_name,
-        "owner_id": p.perm_id, "owner_name": p.username,
+        "char_id": int(char["char_id"]) if char else p.char_id,
+        "name": (char.get("name") if char else p.char_name) or p.username,
+        "owner_id": p.user_id, "owner_name": p.username,
         "guild_id": 0, "guild_name": None, "guild_role": 0, "status": 1,
-        "server_id": 0, "server_name": None, "data": p.data,
+        "server_id": 0, "server_name": None,
+        "data": (char.get("data") if char else p.data) or b"",
         "ticket_id": ticket}
 
 
@@ -601,11 +608,14 @@ def _h_request_characters(conn, fields, ticket):
     That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
     character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
     p = _player(conn)
-    if p.has_character:
-        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
-        log(f"  → CharacterData: {p.char_name!r} (char_id {p.char_id}, {len(p.data)}B blob)")
+    chars = store.list_characters(p.username)
+    for char in chars:
+        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char)))
+    if chars:
+        log(f"  → CharacterData ×{len(chars)} for {p.username!r}: "
+            + ", ".join(f"{c['name']!r}(id {c['char_id']}, {len(c['data'])}B)" for c in chars))
     else:
-        log(f"  → RequestCharacters: {p.username!r} has NO character yet — replying with an "
+        log(f"  → RequestCharacters: {p.username!r} has NO characters yet — replying with an "
             f"empty list so the client opens character creation")
     conn.ok(ticket)
 
@@ -622,17 +632,19 @@ def _store_character(conn, fields, ticket, what):
     name = fields.get("name") or p.username
     data = fields.get("data") or b""
     if not data:
-        # Storing an empty blob would leave the player permanently character-less in a way that
-        # LOOKS created — better to refuse loudly than to persist a broken record.
+        # Storing an empty blob would leave a character that LOOKS created but has no body —
+        # better to refuse loudly than to persist a broken record.
         log(f"  ⚠ {what} for {p.username!r} carried NO data blob — refusing to store an empty "
             f"character; the client will be told the creation failed.")
         conn.status_with_id(1, 0, ticket)
         return
-    store.save_character(p.username, name, data)
-    players.refresh_from_store(p.username)
-    log(f"  ✅ {what}: {name!r} stored for {p.username!r} → char_id {p.char_id} "
-        f"({len(data)}B). It will survive restarts.")
-    conn.status_with_id(0, p.perm_id, ticket)
+    char = store.create_character(p.username, name, data)
+    existing = store.list_characters(p.username)
+    log(f"  ✅ {what}: {name!r} stored for {p.username!r} → char_id {char['char_id']} "
+        f"({len(data)}B); the account now has {len(existing)} character(s), surviving restarts.")
+    # ⭐ Answer with the NEW character's id, not the account's — this is the id the client will
+    # refer to that character by from now on (and, on selection, present as its token perm_id).
+    conn.status_with_id(0, int(char["char_id"]), ticket)
 
 
 @handler(77)  # CreateCharacterFromPreview
@@ -652,29 +664,49 @@ def _h_add_character(conn, fields, ticket):
 
 @handler(90)  # ChangeCharacter
 def _h_change_character(conn, fields, ticket):
-    """Persist an edit. `property_mask` says which fields the client considers changed; we store
-    whatever it actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
+    """Persist an edit to the character the client NAMES by char_id.
+
+    `property_mask` says which fields the client considers changed; we update only what it
+    actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
     p = _player(conn)
-    name = fields.get("name") or p.char_name
-    data = fields.get("data")
-    if data:
-        store.save_character(p.username, name, data)
-        players.refresh_from_store(p.username)
-        log(f"  ✅ ChangeCharacter: {name!r} updated for {p.username!r} ({len(data)}B, "
-            f"mask=0x{fields.get('property_mask', 0):x})")
+    char_id = fields.get("char_id") or p.char_id
+    mask = fields.get("property_mask", 0)
+    if not char_id:
+        log(f"  ⚠ ChangeCharacter from {p.username!r} named no char_id — ignoring")
+        conn.ok(ticket)
+        return
+    updated = store.update_character(char_id, name=fields.get("name"), data=fields.get("data"))
+    if updated is None:
+        log(f"  ⚠ ChangeCharacter: no character with char_id {char_id} — nothing updated")
     else:
-        log(f"  ChangeCharacter for {p.username!r} carried no data blob "
-            f"(mask=0x{fields.get('property_mask', 0):x}) — nothing to persist")
+        players.refresh_from_store(p.username)
+        log(f"  ✅ ChangeCharacter: char_id {char_id} is now {updated['name']!r} "
+            f"({len(updated['data'])}B, mask=0x{mask:x})")
     conn.ok(ticket)
 
 
 @handler(94)  # RemoveCharacter
 def _h_remove_character(conn, fields, ticket):
+    """Delete the character the client NAMES by char_id — not 'whatever this account has'.
+
+    With several characters on an account, deleting by account would remove the wrong one; the
+    message carries the id precisely so the client can say which."""
     p = _player(conn)
-    if store.delete_character(p.username):
+    char_id = fields.get("char_id") or p.char_id
+    if not char_id:
+        log(f"  ⚠ RemoveCharacter from {p.username!r} named no char_id — refusing to guess "
+            f"which character to delete")
+        conn.ok(ticket)
+        return
+    gone = store.delete_character(char_id)
+    if gone is None:
+        log(f"  ⚠ RemoveCharacter: no character with char_id {char_id} — nothing deleted")
+    else:
         players.refresh_from_store(p.username)
-        log(f"  ✅ RemoveCharacter: {p.username!r} is character-less again — the next "
-            f"RequestCharacters will re-open creation")
+        left = store.list_characters(p.username)
+        log(f"  ✅ RemoveCharacter: {gone['name']!r} (char_id {char_id}) deleted; "
+            f"{p.username!r} has {len(left)} character(s) left"
+            + (" — the next RequestCharacters re-opens creation" if not left else ""))
     conn.ok(ticket)
 
 

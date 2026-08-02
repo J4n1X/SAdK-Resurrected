@@ -31,6 +31,7 @@ import threading
 from dataclasses import dataclass
 
 from . import config, store
+from .log import log
 
 #: msgdefs character-name fields are `STRING 32`; leave room for the terminator. The name also
 #: rides the bit-packed AvatarStyle block (`village.avatar_style_block`), whose length prefix is
@@ -40,19 +41,26 @@ MAX_NAME_LEN = 31
 
 @dataclass
 class Player:
-    perm_id: int
-    char_id: int        # ⭐ ALWAYS == perm_id; the client's own avatar id is its PermID and the
-                        # CharacterManager is keyed by char_id (see store.py's docstring).
+    """One identity in play on a set of connections.
+
+    A player resolved from a LOGIN NAME is the ACCOUNT (perm_id == user_id, no character bound
+    yet — the client has not chosen one). A player resolved from a TOKEN perm_id that names a
+    character is that CHARACTER (perm_id == char_id), because the client's own avatar id is its
+    PermID. Both shapes carry the owning account's `user_id`, which is the `owner_id` on the
+    wire."""
+    perm_id: int        # the id THIS connection is identified by (user_id or char_id)
+    char_id: int        # the bound character's id, or 0 when none is bound
+    user_id: int        # the owning ACCOUNT id — CharacterData's `owner_id`
     username: str       # account / login name (the auth-blob username)
-    char_name: str      # in-lobby character name — the created character's name, else the login
-    data: bytes         # the character blob the CLIENT authored, or b"" if none exists yet
+    char_name: str      # bound character's name, else the login name
+    data: bytes         # the character blob the CLIENT authored, or b"" when none is bound
 
     @property
     def has_character(self):
-        """False until the player has been through character creation. A player without a
-        character is a normal state — `dispatch` answers RequestCharacters with an empty list
-        and the client opens its creation flow."""
-        return bool(self.data)
+        """Whether a specific character is bound to this identity. False is a normal state —
+        a fresh account has none, and `dispatch` then answers RequestCharacters with an empty
+        list so the client opens its creation flow."""
+        return bool(self.char_id)
 
 
 _lock = threading.RLock()
@@ -68,33 +76,44 @@ def _clean(name):
 
 
 def _from_store(name):
-    """Build (or rebuild) the in-memory Player for `name` from the persistent store.
+    """Build (or rebuild) the in-memory ACCOUNT-level Player for `name`.
 
-    The perm_id comes from the store and never changes across restarts — that is a protocol
-    requirement, not a nicety: char_id == perm_id, and a returning player issued a fresh id
-    would no longer match their own stored character (store.py docstring). Caller holds `_lock`.
-    """
-    rec = store.get_or_create_player(name)
-    perm = int(rec["perm_id"])
-    char = store.get_character(name)
-    p = Player(perm_id=perm, char_id=perm, username=name,
-               char_name=(char["name"] if char else name),
-               data=(char["data"] if char else b""))
-    _by_perm[perm] = p
+    The user_id comes from the store and never changes across restarts — a returning player
+    issued a fresh id would no longer own their own characters. No character is bound yet: the
+    client has not chosen one at login time. Caller holds `_lock`."""
+    rec = store.get_or_create_account(name)
+    user_id = int(rec["user_id"])
+    p = Player(perm_id=user_id, char_id=0, user_id=user_id, username=name,
+               char_name=name, data=b"")
+    _by_perm[user_id] = p
     _by_user[name.lower()] = p
     return p
 
 
+def bind_character(player, char):
+    """Bind a stored character to a live identity (or unbind it when `char` is None)."""
+    with _lock:
+        if char:
+            player.char_id = int(char["char_id"])
+            player.char_name = char.get("name") or player.username
+            player.data = char.get("data") or b""
+        else:
+            player.char_id = 0
+            player.char_name = player.username
+            player.data = b""
+        return player
+
+
 def refresh_from_store(username):
-    """Re-read a player's character after creation/change/deletion, so the live Player object
-    stops disagreeing with the disk."""
+    """Re-read the bound character after a create/change/delete, so the live Player object
+    stops disagreeing with the disk. A player whose bound character was deleted is unbound."""
     with _lock:
         p = _by_user.get((username or "").lower())
         if p is None:
             return _from_store(username)
-        char = store.get_character(username)
-        p.char_name = char["name"] if char else p.username
-        p.data = char["data"] if char else b""
+        if p.char_id:
+            char, _acct = store.find_character(p.char_id)
+            bind_character(p, char)          # char is None if it was just deleted → unbind
         return p
 
 
@@ -123,15 +142,34 @@ def resolve_by_perm(perm_id):
         p = _by_perm.get(perm_id)
         if p is not None:
             return p
-        # Not in memory: the store may still know this id (a client reconnecting across a
-        # restart presents the perm_id it was issued last time — that is the whole point of
-        # persisting it). Reserve it either way so it is never handed to someone else.
-        rec = store.reserve_perm_id(perm_id)
-        username = rec.get("username") or f"Player {perm_id}"
-        char = store.get_character(username)
-        p = Player(perm_id=perm_id, char_id=perm_id, username=username,
-                   char_name=(char["name"] if char else username),
-                   data=(char["data"] if char else b""))
+        # ⭐ DUAL LOOKUP. A token's perm_id may name either a CHARACTER or an ACCOUNT, and which
+        # one the client sends is the open question (store.py docstring): the own-avatar id is
+        # the PermID and the CharacterManager is keyed by char_id, which says character — but
+        # that has not been observed live with the two ids differing. Characters are checked
+        # first, and the match KIND is logged, so one login with two characters settles it
+        # without a guess having been baked into the wire.
+        char, acct = store.find_character(perm_id)
+        if char is not None:
+            username = acct.get("username") or f"Player {perm_id}"
+            p = Player(perm_id=perm_id, char_id=int(char["char_id"]),
+                       user_id=int(acct["user_id"]), username=username,
+                       char_name=char.get("name") or username, data=char.get("data") or b"")
+            log(f"  [PLAYER] token perm_id {perm_id} matched a CHARACTER "
+                f"({p.char_name!r} on account {username!r}, user_id {p.user_id})")
+        else:
+            # Not a character: treat it as an account id, reserving it if we have never issued
+            # it (a stale token, or a client reconnecting across a restart).
+            rec = store.reserve_user_id(perm_id)
+            username = rec.get("username") or f"Player {perm_id}"
+            chars = rec.get("characters") or []
+            bound = chars[0] if len(chars) == 1 else None
+            p = Player(perm_id=perm_id, char_id=int(bound["char_id"]) if bound else 0,
+                       user_id=int(rec["user_id"]), username=username,
+                       char_name=(bound.get("name") if bound else username) or username,
+                       data=(bound.get("data") if bound else b"") or b"")
+            log(f"  [PLAYER] token perm_id {perm_id} matched an ACCOUNT ({username!r}, "
+                f"{len(chars)} character(s))"
+                + (f" — auto-bound its only character {p.char_name!r}" if bound else ""))
         _by_perm[perm_id] = p
         _by_user.setdefault(username.lower(), p)
         return p
