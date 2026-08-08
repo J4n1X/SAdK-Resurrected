@@ -189,6 +189,58 @@ def test_referee_assign_unaffected():
         config.REPLY_REFEREE_ASSIGN = saved
 
 
+# ── 5. The 192 must be sent once per UC CONNECTION, not once per assign ────────
+def test_192_suppressed_once_a_uc_conn_is_live():
+    """Regression: the 60 s referee retry must not re-dial the UC/chat server.
+
+    tincat3's CommLayer 0xc0 handler (FUN_10030420) dials the advertised ip:port on EVERY 192 it
+    sees, without checking for an existing UserComm connection. SetRefereeServerAddress arms
+    LM+0x588, so the client re-sends AssignServer(189 type4/sub4) every 60 s for the whole session
+    — correct and expected. Replying 192 to each retry therefore stood up a new UC socket a minute
+    that the client never closed (live 2026-08-08: 48 UC logins for one player, 41 still open), and
+    a 32-bit client ends that exactly one way: `operator new`@0x006f2524 throws the static
+    std::bad_alloc at DAT_0088f5b0. See memory: client-crashes-are-oom-bad-alloc.
+    """
+    saved = config.REPLY_REFEREE_ASSIGN
+    try:
+        config.REPLY_REFEREE_ASSIGN = True
+
+        # First assign, no UC conn yet → the 192 MUST go out or chat never comes up.
+        lobby = FakeConn()
+        lobby.id = 1
+        dispatch._h_assign_server(lobby, {"server_type": 4, "server_subtype": 4}, TICKET)
+        assert 192 in [t for t, _ in lobby.sent], "first assign must still dial UC/chat"
+        assert 170 in [t for t, _ in lobby.sent], "referee 170 must always go out"
+
+        # The client dials, and that UC socket registers itself as live for the same player.
+        uc = FakeConn()
+        uc.id = 2
+        uc.is_chat = True
+        uc.alive = True
+        uc.player = dispatch._player(lobby)      # same identity, different socket
+        dispatch.register_conn(uc)
+        try:
+            # The 60 s retry: 170 yes (it is the reply the retry asks for), 192 NO.
+            retry = FakeConn()
+            retry.id = 3
+            retry.player = dispatch._player(lobby)
+            dispatch._h_assign_server(retry, {"server_type": 4, "server_subtype": 4}, TICKET)
+            types = [t for t, _ in retry.sent]
+            assert 170 in types, "the referee 170 must survive — it is what the retry wants"
+            assert 192 not in types, "192 on a retry re-dials UC and leaks the socket"
+        finally:
+            dispatch.on_conn_closed(uc)
+
+        # Once the UC conn is gone, a later assign must dial again (chat must recover).
+        after = FakeConn()
+        after.id = 4
+        after.player = dispatch._player(lobby)
+        dispatch._h_assign_server(after, {"server_type": 4, "server_subtype": 4}, TICKET)
+        assert 192 in [t for t, _ in after.sent], "UC conn closed → the next assign must re-dial"
+    finally:
+        config.REPLY_REFEREE_ASSIGN = saved
+
+
 def _run():
     failures = 0
     for name, fn in sorted(globals().items()):

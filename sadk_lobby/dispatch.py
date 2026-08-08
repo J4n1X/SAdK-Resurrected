@@ -768,6 +768,10 @@ def _h_assign_server(conn, fields, ticket):
     the advertised ip:port and stands up the UserComm-SERVER connection that our :7071 listener
     serves chat over. The handler does NOT validate the ticket category, so an unsolicited
     ticket_id is accepted the same as a reply ticket.
+
+    Because that handler dials unconditionally, the 192 is sent only when the player has no live
+    UC connection — see the comment above the send. Sending one per assign leaked a client socket
+    a minute and eventually OOM-killed the client.
     """
     server_type = fields.get("server_type", 0)
     server_subtype = fields.get("server_subtype", 0)
@@ -780,8 +784,9 @@ def _h_assign_server(conn, fields, ticket):
     # LobbyServerList_GameServerAssigned@0x00469ad0 → SetRefereeServerAddress@0x4625d0 → LM+0x580.
     # ⚠️ The descriptor MUST NOT be type4/sub5 — that value is special-cased to a tincat3-private
     # handler that returns without notifying the lobby. See the REFEREE_SERVER comment below and
-    # ER 2026-07-27_referee-assign-subtype-routing. The 192 below still goes out (different message
-    # type → tincat3's UsercommServerData dial handler, independent of the 170) so UC/chat stays up.
+    # ER 2026-07-27_referee-assign-subtype-routing. The 192 below is a different message type
+    # (tincat3's UsercommServerData dial handler, independent of the 170), so UC/chat still comes up
+    # on the FIRST assign — but it is now suppressed once a UC conn is live; see there for why.
     if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
         # ONE frame, type4/sub4 → the DEFAULT branch of tincat3
         # GameServerManager_OnGameServerAssigned@0x10021520 → LobbyServerList_GameServerAssigned
@@ -819,6 +824,26 @@ def _h_assign_server(conn, fields, ticket):
                 f"-> {game['ip']}:{game['port']} (ticket={ticket}) — clears villageList+0x9c")
             return
         log("  ! AssignServer(type5/sub1) but this conn hosts no game — no 170 to echo; sending 192")
+
+    # ── UC/chat dial (UsercommServerData 192) ────────────────────────────────────────────────────
+    # ⚠️ ONE 192 PER UC CONNECTION — never one per assign. tincat3's generic CommLayer 0xc0 handler
+    # (FUN_10030420) DIALS the advertised ip:port every single time it sees a 192; it does not check
+    # whether a UserComm connection is already up. The referee reply above arms LM+0x588, which makes
+    # the client re-send AssignServer(189 type4/sub4) every 60 s for the rest of the session — that
+    # exact-60 s cadence is the tell that the latch worked, so it is CORRECT and must keep happening.
+    # Answering each retry with a 192 therefore stood up a brand-new UC socket every minute that the
+    # client never closed. Measured live 2026-08-08: 57 assigns, 48 UC logins for one player, 41 of
+    # those sockets still open, each carrying 18 ChannelInfo worth of channel objects. The client is
+    # a 32-bit process, so that leak ends exactly one way — `operator new`@0x006f2524 gets NULL from
+    # malloc and throws the static std::bad_alloc at DAT_0088f5b0 (crash 16:41:04, and 5 more that
+    # day). The retry is not the bug; re-dialing on the retry is.
+    me = _player(conn)
+    live_uc = _find_live(lambda c: getattr(c, "is_chat", False)
+                         and _player(c).perm_id == me.perm_id)
+    if live_uc:
+        log(f"  → UsercommServerData(192) SUPPRESSED — {me.username!r} (perm_id={me.perm_id}) already "
+            f"has a live UC conn (#{live_uc[0].id}); a 192 here would dial a SECOND one and leak it")
+        return
 
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
