@@ -97,7 +97,7 @@ real wall is whatever makes the host exit the village instead. Our trace already
   win than first claimed — many are already named. Value is the `(file, line)` map, not the count.
 
 ## Environment
-- Stub live on `linux-server`, ports 7070/7071/5479/5481, **reverted code**, logging `stub_n.out`.
+- Stub live on the Linux server, ports 7070/7071/5479/5481, **reverted code**, logging `stub_n.out`.
   Previous run's logs: `stub_reflogin.out` (the falsified experiment), earlier `stub_n.out` (pre-fix).
 - Ghidra `sadk_noav.exe` open; today's names/comments saved (`Reconnector_RestartAsServer_DoAction`
   @0x0040b700, plate comments on 0x00432240 and 0x0040b700).
