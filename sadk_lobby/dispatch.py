@@ -19,7 +19,7 @@ import json
 import threading
 import time
 
-from . import (buddies, chat, codec, config, crypto, economy, mail, minigames, msgdefs, npcs,
+from . import (buddies, chat, codec, config, crypto, economy, mail, minigames, msgdefs, npcs, rewards,
                players, referee, registry, store, village)
 from .log import log
 
@@ -1607,7 +1607,11 @@ def _chat_command(conn, player, text):
         except ValueError:
             return "Usage: !level <1-5>"
         w = economy.wallet(player.perm_id)
-        w.level = max(0, min(level, 255))
+        w.level = max(1, min(level, rewards.MAX_LEVEL))
+        # Experience must lie within the level's XP span or the XP bar wraps (S 0044f800).
+        lo = rewards.LEVEL_XP[w.level - 1]
+        hi = rewards.LEVEL_XP[w.level] if w.level < rewards.MAX_LEVEL else rewards.MAX_EXP
+        w.exp = min(max(w.exp, lo), hi - 1)
         stats = economy.stats_body(player.perm_id, w)
         active = economy.active_items_body(player.perm_id, w)
         for c in _find_live(lambda c: getattr(c, "is_village", False)
