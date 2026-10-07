@@ -1771,6 +1771,7 @@ reached any other way [known, static]:
   natupnp/hnetcfg/INetFw strings).
 So joiners need no forwarding, and the host needs TCP on its game port (5479 observed live). Making an
 unreachable host joinable needs something on the host's side that dials out (a tunnel helper or VPN).
+The stub's answer is the host bridge: `docs/bridge-protocol.md`.
 
 
 The host opens its room with 168. The joiner reads host ip/port from the 170 descriptor and runs
