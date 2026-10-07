@@ -42,3 +42,30 @@ S 004f84b0).
 - Whether the copy-protection layer objects to a modified `.text` is untested.
 - **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
   patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
+
+## Map sharing (bridge shim, in memory)
+
+The client already contains a map transfer: a joiner that lacks the host's map asks the host for
+`SAdK\maps\<map>.s2m` and `.bmp` over the match connection (S2TFTP, message `0x3eb`) and stores them in its
+own `Documents\SAdK\maps` (`NComm::Manager::HandleEvent` S 0040e560, game-information case). It only runs when
+the host advertises the map with type 3 (found under `Documents\SAdK\maps`) and "download allowed" (`+0x228`),
+which `SetupGameDialog::OnMapSelected` S 00454ad0 always sends as 0, and the map picker never lists that folder.
+Live 2026-10-07 (Frida, through the bridge): with both values forced, a joiner received a map it did not
+have and the match started — once all empty slots were closed (custom maps only start with no open slots).
+
+The shim (`bridge/wsock32_shim`) applies these patches in memory on the first `connect`, each only where the
+original bytes match exactly:
+
+| Address | Original | Change |
+|---|---|---|
+| 00454c37 (17 bytes) | push of the found-under type and of `0` to `SetGameSettings` | push type `3` and "download allowed" `1` for every map |
+| 0045a381 | `call SelectMapDialog_AppendMapFiles(0, …)` | also lists location 3 (`Documents\SAdK\maps`, warm-tinted rows) |
+| 00426b14 | `fopen_s` of the file a peer asked for (S2Tftp_Session_ReadNextBlock) | only `<Documents>\SAdK\maps\<name>.s2m/.bmp`; a map not found there is served from `data\game\maps\Freegamemaps` |
+| 00427b29, 00427b7e | `rename` of a finished download (S2TftpSession::CloseFile) | only into `Documents\SAdK\maps` as `.s2m/.bmp`, else the temp file is deleted |
+| 00457f51 | `SendPlayerReadyEvent` from the Ready button | refused (sends not-ready) while a download runs or the map is missing — starting without the map crashes the client |
+| 00426ca5, 00426d14, 00427a08 | temp-file open, block `fwrite`, abort `remove` | progress messages in the pre-game room; after the last file a not-ready event makes the host re-broadcast, so the joiner finds the map |
+
+**Security note (vanilla game):** without the shim, any peer in a host's match can read any file below the
+host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpManager::OnReceive` S 00428110
+answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
+for hosts that run it.
