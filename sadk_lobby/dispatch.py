@@ -1557,13 +1557,13 @@ _pending_lock = threading.Lock()
 
 
 def _notify(perm_id, text, only_in_world=False):
-    """A server line in the player's global chat (chat.notice_from_server). Sent now when the player's
+    """A server line in the player's local chat (chat.notice_from_server). Sent now when the player's
     chat connection is live (and, with only_in_world, its avatar is in the world); otherwise kept and
     delivered at the next world entry (_welcome)."""
     uc = chat._uc_conn_of(perm_id)
     in_world = any(_player(c).perm_id == perm_id for c in _in_world_conns())
     if uc is not None and (in_world or not only_in_world):
-        chat.notice_from_server(uc, text)
+        chat.notice_from_server(uc, text, chat.local_cell_of(uc, _zone_of(perm_id)))
         log(f"  [NOTICE] to {perm_id}: {text!r}")
         return True
     if not only_in_world:
@@ -1582,14 +1582,19 @@ def _welcome(conn):
     if uc is None:
         log(f"  [WELCOME] no chat connection for {me.char_name!r} yet — welcome skipped")
         return
-    chat.notice_from_server(uc, f"Welcome, {me.char_name}! " + HELP_TEXT)
-    log(f"  [WELCOME] command list sent to {me.char_name!r}")
+    cell = chat.local_cell_of(uc, _zone_of(me.perm_id))     # the local tab, selected by default
+    chat.notice_from_server(uc, f"Welcome, {me.char_name}! " + HELP_TEXT, cell)
+    log(f"  [WELCOME] command list sent to {me.char_name!r} in cell {cell}")
+    w = economy.wallet(me.perm_id)
+    if w.allowance_granted:
+        chat.notice_from_server(uc, f"Daily allowance: +{w.allowance_granted} funnies (now {w.glod}).", cell)
+        w.allowance_granted = 0
     with _pending_lock:
         kept = _pending_notices.pop(me.perm_id, [])
     for text in kept:
-        chat.notice_from_server(uc, text)
+        chat.notice_from_server(uc, text, cell)
     if mail.unread(me.perm_id):
-        chat.notice_from_server(uc, MAIL_NOTICE)
+        chat.notice_from_server(uc, MAIL_NOTICE, cell)
         log(f"  [NOTICE] {me.char_name!r} has {mail.unread(me.perm_id)} unread mail(s)")
 
 

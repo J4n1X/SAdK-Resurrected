@@ -41,7 +41,7 @@ MAX_EXP = 25000                               # end of the level-5 bar
 _lock = threading.Lock()
 _started = {}                                 # (game_id, avatar_id) -> monotonic start
 _chests = {}                                  # (game_id, avatar_id) -> chests got in that match
-#: Set by dispatch: (avatar_id, minutes, chests, won, xp, gold) -> tell the player in its global chat.
+#: Set by dispatch: (avatar_id, minutes, chests, won, xp, gold) -> tell the player in its local chat.
 NOTIFY = None
 
 

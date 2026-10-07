@@ -285,7 +285,7 @@ def _handle_message(conn, body):
         if txt.startswith("!"):
             reply_txt = COMMAND_HOOK(conn, p, txt)
             if reply_txt is not None:                  # a server command: not relayed to anyone
-                notice_from_server(conn, reply_txt)
+                notice_from_server(conn, reply_txt, cell_id)   # answered in the tab it was typed in
                 return
     targets = _roster_members(cell_id)              # already one per player
     if not any(players.of(c).perm_id == p.perm_id for c in targets):
@@ -350,13 +350,25 @@ def handle_join_channel(conn, fields, ticket):
 COMMAND_HOOK = None
 
 
+def local_cell_of(conn, zone=None):
+    """The player's LOCAL chat cell — the default tab on entering the world: the zone cell
+    (LOCAL_CHAT_CELL_BASE + zone) when this connection joined it, else any local cell it joined,
+    else the global cell."""
+    local = range(config.LOCAL_CHAT_CELL_BASE, config.LOCAL_CHAT_CELL_BASE + 16)
+    with _roster_lock:
+        joined = [cell for cell, members in _roster.items() if conn in members and cell in local]
+    if zone is not None and config.LOCAL_CHAT_CELL_BASE + zone in joined:
+        return config.LOCAL_CHAT_CELL_BASE + zone
+    return joined[-1] if joined else config.GLOBAL_CHAT_CELL
+
+
 def notice_from_server(conn, text, cell_id=None):
     """A server line shown to ONE player as an ordinary channel line, not a whisper: a ChatMessage (2)
-    on the global channel from the server id. The client's ChatReceived (S 00480e30) shows channel
+    on its local channel (or `cell_id`) from the server id. The client's ChatReceived (S 00480e30) shows channel
     lines with the sender name tincat3 has for from_id — "SERVER" for an id it does not know
     [inferred] — whereas whispers (msg 3) land in the private conversation (PrivateChatReceived
     S 004810a0). mode 0 is what the client itself sends for a channel line."""
-    cell_id = cell_id or config.GLOBAL_CHAT_CELL
+    cell_id = cell_id or local_cell_of(conn)
     data = netmsg(2, {"mode": 0, "txt": text[:255], "ticket_id": 0, "from_id": config.FROM_SERVER})
     conn.send_chat(reply(2, data, cell_id, config.FROM_SERVER, ispropset=True))
 
