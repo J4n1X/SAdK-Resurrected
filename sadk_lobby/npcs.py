@@ -244,10 +244,10 @@ def make_village_npcs(center):
         # ── Walkers (1001 avatars) — ambient motion via the waypoint ring.
         #    trbgndr now VARIES (high nibble = body part 0..2, low = gender): 0x00 left both
         #    walkers on model index (tribe−1)×3, i.e. the identical default look.
+        # Stands at the maintainer's measured "Guardian" spot (npc_positions.json, 2026-10-07).
         Npc(NPC_ID_BASE + 4, "Wächter Wilhelm", tribe_gender=0x10,
             colours=(3, 1, 2, 0, 1, 2, 3, 4),
-            anchor=at(6.0, 6.0), path=loop((6, 6), (6, -6), (-6, -6), (-6, 6)),
-            speed=1.0),
+            anchor=(-36.77, 2.79, -12.3), rot_deg=205.3),
     ]
 
 
