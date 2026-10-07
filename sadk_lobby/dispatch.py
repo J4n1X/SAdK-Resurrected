@@ -1445,6 +1445,12 @@ NPC_POSITIONS_FILE = os.path.join(config.REPO_DIR, "npc_positions.json")
 
 
 def _chat_command(conn, player, text):
+    # The client sends chat as UTF-8 while the codec decodes STRING fields as ISO-8859-15, so
+    # "Händler" arrives as "HÃ€ndler"; undo that for the command text.
+    try:
+        text = text.encode("iso-8859-15").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        pass
     cmd, _, arg = text.partition(" ")
     cmd, arg = cmd.lower(), arg.strip()
     try:

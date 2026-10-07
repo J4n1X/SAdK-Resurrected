@@ -119,8 +119,10 @@ Needs a hosted match between A and B.
 - **Trades.** The client has no outbound trade message in this build.
 - **Channel creation.** Refused on purpose until there is a feature for it.
 - **Ignore-list additions.** Not looked at in this tranche.
-- **Persistence.** Mail, buddies, gold and items live in memory and reset on a server restart (perm_ids are
-  not stable across restarts).
+- **Persistence — a player stat store (maintainer request 2026-10-07, next).** Mail, buddies, gold,
+  items, equipment and tailor colours live in memory and are lost on a server restart; perm_ids are
+  handed out in first-login order, so they are not stable across restarts either. The store needs
+  stable ids keyed by login name first, then the per-player state on disk.
 
 ## Results
 

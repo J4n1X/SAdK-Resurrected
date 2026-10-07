@@ -127,6 +127,9 @@ class Npc:
     tribe_gender: int = 0
     anchor: tuple = (0.0, 0.0, 0.0)
     rot_deg: float = 0.0
+    #: Record NPCs: the 4-bit location zone (0 = outdoors; interiors such as the town hall = 1 and a
+    #: tavern = 3 were measured with !pos on 2026-10-07).
+    zone: int = SQUARE_ZONE
     #: Walkers only: looped patrol path of absolute (x, z) waypoints, `speed` units/s.
     path: tuple = ()
     speed: float = 0.0
@@ -145,7 +148,7 @@ class Npc:
 
     def record_kwargs(self):
         """Kwargs for `village.send_player_create` (1004) — record NPCs only."""
-        return {"pos": self.anchor, "rot_deg": self.rot_deg, "zone": SQUARE_ZONE,
+        return {"pos": self.anchor, "rot_deg": self.rot_deg, "zone": self.zone,
                 "colours": self.colours, "npcidx": self.npcidx, "bdyprt": self.bdyprt,
                 "npctyp": self.npctyp, "actions": self.actions}
 
@@ -206,30 +209,36 @@ def make_village_npcs(center):
     def loop(*offsets):
         return tuple((cx + dx, cz + dz) for dx, dz in offsets)
 
-    # ⭐ Each record NPC gets a DISTINCT npcidx (the model selector) and an action that matches
-    # its role, so one look in-world reads out the npcidx→appearance table: whichever settler
-    # looks wrong is named, and its index is right here.
+    # Record NPC spots: measured in-game by the maintainer with "!pos <name>" (npc_positions.json,
+    # 2026-10-07) — position, facing and zone where they should stand. Who stood where originally is
+    # NOT known (the cast was server data); these spots are the maintainer's choice on the real map.
+    # Each NPC keeps a DISTINCT npcidx so the npcidx -> model table (data/lobby/config/
+    # npc_bodyparts.xml: Severin, Zeus, Kostas, npc01.., Sakhmet, Moppet, MacDoyleJr, MacGabhan)
+    # can be read off in-world.
     return [
         # ── Record NPCs (1004) — labelled, model-varied, each opening a real lobby dialog.
         Npc(NPC_ID_BASE + 1, "Händler Hinnerk", npctyp=NPCTYP_SETTLER,
-            anchor=at(3.5, 2.0), rot_deg=225.0, colours=(2, 1, 3, 1), npcidx=1,
+            anchor=(-24.61, 2.75, 26.51), rot_deg=233.4, colours=(2, 1, 3, 1), npcidx=1,
             actions=((ACT_OPEN_SHOP, "Zum Laden"),),
             shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
-        Npc(NPC_ID_BASE + 2, "Magd Mathilde", npctyp=NPCTYP_SETTLER,
-            anchor=at(-4.0, 3.0), rot_deg=135.0, colours=(1, 0, 4, 2), npcidx=2,
-            actions=((ACT_TAILOR, "Neue Frisur"),)),
+        Npc(NPC_ID_BASE + 2, "Schneiderin Mathilde", npctyp=NPCTYP_SETTLER,
+            anchor=(-41.02, 2.75, 24.02), rot_deg=84.4, colours=(1, 0, 4, 2), npcidx=2,
+            actions=((ACT_TAILOR, "Schneiderei"),)),
         Npc(NPC_ID_BASE + 3, "Alter Anselm", npctyp=NPCTYP_SETTLER,
-            anchor=at(0.5, -4.5), rot_deg=0.0, colours=(0, 2, 1, 3), npcidx=3,
+            anchor=(-15.97, 5.12, 71.19), rot_deg=205.3, zone=1, colours=(0, 2, 1, 3), npcidx=3,
             actions=((ACT_HALL_OF_FAME, "Ruhmeshalle"),)),
         Npc(NPC_ID_BASE + 7, "Herold Hartmut", npctyp=NPCTYP_SETTLER,
-            anchor=at(-2.0, -2.5), rot_deg=45.0, colours=(3, 1, 5, 4), npcidx=4,
+            anchor=(-29.88, 4.55, 47.02), rot_deg=210.9, colours=(3, 1, 5, 4), npcidx=4,
             actions=((ACT_LIST_GAMES, "Partien ansehen"),
                      (ACT_HOST_GAME, "Partie eröffnen"))),
         Npc(NPC_ID_BASE + 8, "Spielmeister Silas", npctyp=NPCTYP_SETTLER,
-            anchor=at(4.5, -3.5), rot_deg=300.0, colours=(5, 2, 0, 2), npcidx=5,
+            anchor=(18.6, 2.64, 68.55), rot_deg=210.9, zone=3, colours=(5, 2, 0, 2), npcidx=5,
             actions=((ACT_MINIGAME, "Minispiel"),)),
-        Npc(NPC_ID_BASE + 6, "Briefkasten", npctyp=NPCTYP_LETTERBOX,
-            anchor=at(6.5, -2.0), rot_deg=90.0,
+        # The village map already has a static letterbox object (scene1.xml "Letterbox"), so the
+        # former letterbox NPC (npctyp 2) only duplicated it. The messenger stands at the measured
+        # "Briefkasten" spot instead and offers the mailbox.
+        Npc(NPC_ID_BASE + 5, "Bote Balduin", npctyp=NPCTYP_SETTLER,
+            anchor=(-32.96, 2.77, 34.13), rot_deg=182.8, colours=(4, 0, 5, 1), npcidx=6,
             actions=((ACT_MAILBOX, "Post"),)),
         # ── Walkers (1001 avatars) — ambient motion via the waypoint ring.
         #    trbgndr now VARIES (high nibble = body part 0..2, low = gender): 0x00 left both
@@ -238,10 +247,6 @@ def make_village_npcs(center):
             colours=(3, 1, 2, 0, 1, 2, 3, 4),
             anchor=at(6.0, 6.0), path=loop((6, 6), (6, -6), (-6, -6), (-6, 6)),
             speed=1.0),
-        Npc(NPC_ID_BASE + 5, "Bote Balduin", tribe_gender=0x21, running=True,
-            colours=(4, 0, 5, 1, 2, 3, 4, 5),
-            anchor=at(-8.0, 0.0), path=loop((-8, 0), (0, 8), (8, 0), (0, -8)),
-            speed=2.2),
     ]
 
 
