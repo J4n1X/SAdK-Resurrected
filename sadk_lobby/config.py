@@ -24,12 +24,39 @@ BIN_DIR  = os.path.join(REPO_DIR, "sadk_captures")
 # ── Listener ports [PROVEN] ───────────────────────────────────────────────────
 LOBBY_PORT = 7070   # main lobby connection
 UC_PORT    = 7071   # UC/chat second connection (MUST differ from lobby port)
-WORLD_PORT = 5479   # village/world third connection
+WORLD_PORT = 5477   # village/world third connection
 
 # IP the stub ADVERTISES to the client as the address to dial back (chat/village servers).
 # Same machine -> 127.0.0.1. For a VM test (game in the VM, stub on the host) set
 # SADK_ADVERTISE_IP to the host's IP as seen FROM the VM. Listeners always bind 0.0.0.0.
-ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "192.168.1.130")
+ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "127.0.0.1")
+
+# ── Ambient village NPCs ──────────────────────────────────────────────────────
+# ⚠️ THE ONE FEATURE FLAG IN THIS FILE, and it exists by EXPLICIT USER INSTRUCTION
+# (J4n1X, 2026-08-02: "let's move NPC spawning behind a flag and disable it in the
+# config for now, I wanna pursue something else"). HARNESS.md §5 forbids an agent
+# adding a flag on its own initiative — it does NOT forbid the maintainer asking for
+# one. Recorded here so a later session reads this as authorised, not as drift.
+#
+# The NPC subsystem itself is NOT broken and NOT abandoned: msg 1004 spawns them,
+# they render with per-npcidx models, they speak their actChat lines, and the wire
+# format is documented in docs/SOURCEMAP.md §"The NPC system". It is parked because
+# two questions need answers that the binary cannot give (npcidx→appearance lives in
+# the encrypted game data; the OpenShop click path needs a live trace).
+#
+# Set back to True to bring the whole cast back — nothing else needs changing.
+VILLAGE_NPCS_ENABLED = False
+
+# ── Persistent characters ─────────────────────────────────────────────────────
+# ⚠️ ROLLED BACK 2026-08-02 (maintainer-requested flag, HARNESS §5 permits it).
+# Turning persistent characters ON broke character selection: the client reports
+# "login attempt failed" after picking an avatar. OFF restores the known-good behaviour:
+# one implicit character per account, char_id == perm_id == an in-memory sequential id,
+# shared NICKNAME_DATA appearance.
+# Prime suspect (unverified): char_id != perm_id. The client's own avatar id IS its PermID
+# and the CharacterManager is keyed by char_id, so a mismatch makes the own-avatar lookup
+# miss and the village login fail.
+PERSISTENT_CHARACTERS_ENABLED = False
 
 # ── Player accounts ───────────────────────────────────────────────────────────
 # Multiple clients can log in as DISTINCT players (host + joiner). PLAYERS[0] is the
@@ -48,7 +75,12 @@ PLAYERS = [
     {"username": "test2", "perm_id": 2, "char_id": 2, "char_name": "Siedler"},
 ]
 
-# Avatar data blob from the AdK emulator (LobbyProcessor._nicknameData).
+# ⛔ LEGACY / NO LONGER SENT. The AdK emulator's hardcoded character blob
+# (LobbyProcessor._nicknameData). Every player used to wear this — its zlib payload contains the
+# name "tester" in UTF-16LE, so everyone was literally the same character. Superseded by real
+# per-player characters (store.py); a player without one now gets an EMPTY character list, which
+# is what makes the client open its creation flow. Kept only as a decoding reference for the
+# blob format: {u32 ?, u32 0x39, u32×4 zeros, u32 uncompressed_len, zlib stream}.
 NICKNAME_DATA = bytes.fromhex(
     "000000003900000000000000000000000000000000000000"
     "a2000000785edbc9c8800cd880b8842195a1184c1631e000"
@@ -106,6 +138,22 @@ DEFAULT_CHANNELS = [
     (2, "Lobby",  "Lobby Channel",  "Admin", 0, True),
 ]
 
+# [PROVEN 2026-08-02] The tincat3 CellManager only accepts a channel JOIN for a cell it already
+# has in its registry (this+8): the ChannelJoined handler (tincat3 FUN_1000e4a0) looks the cell up
+# FIRST and answers StatusReply(status=2) on a miss — without queuing the joined-event. The
+# registry is populated ONLY by inbound ChannelInfo/PublishCell frames (dispatcher case 0 →
+# FUN_1000ee30 → cell-record insert). Advertising a cell in EnterWorld(1000) feeds a DIFFERENT,
+# SADK-side map (VillageServerConnection+0x164) and does NOT register it here — so every joinable
+# cell must ALSO be published on the chat connection. Cells 16..31 are the per-zone LOCAL channels
+# (WORLD_CHAT_CHANNELS below); before 2026-08-02 they were never published, the client rejected
+# its own local-zone join (seen live: "StatusReply from client: cell=16 → REJECTED (status=2)"),
+# and every LOCAL chat line was silently discarded by the client's null-check in
+# UserCommConnection::ChatReceived@0x00480e30 (which logs its scope BEFORE that check).
+ZONE_CHANNELS = [
+    (16 + z, f"Zone {z}", f"Local chat, zone {z}", "Admin", 0, True)
+    for z in range(16)
+]
+
 # ── Village / world-entry protocol ────────────────────────────────────────────
 # World entry [PROVEN, s39 screenshot-confirmed on the clean build]: leaving char-select
 # into the 3D world is driven ENTIRELY by the SERVER pushing inbound EnterWorld (msg 1000).
@@ -150,6 +198,21 @@ VILLAGE_PINGCODE_MSGTYPE = 0x2ED6          # 11990 — the client's in-world kee
 # (dispatch._h_send_game_data → conn.close_graceful). No flag: working behaviour is the default
 # (HARNESS §5). ER: engagement_records/2026-07-26_village-leave-close-connection.md
 VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim heartbeat); 64-byte tick MEMBLOCK
+
+# ── In-world presence (docs/IN_WORLD_PRESENCE.md) ────────────────────────────
+# Bit-packed avatar/entity messages. 1001 is the one that makes a body VISIBLE: it allocates an
+# AvatarProxy into VillageServerConnection+0x170. 1004 populates a separate *player* map at +0x174
+# and is NOT the visible avatar. All are still UNPROVEN on the wire — spec is static-only.
+VILLAGE_MSG_ENTITY_CREATE = 1001            # 0x3E9 — HandleEntityCreate@0x0046e1d0 (avatar spawn)
+VILLAGE_MSG_ENTITY_UPDATE = 1002            # 0x3EA — HandleEntityUpdate@0x0046e390 (movement)
+VILLAGE_MSG_ENTITY_REMOVE = 1003            # 0x3EB — HandleEntityRemove@0x0046e570 (despawn)
+VILLAGE_MSG_PLAYER_CREATE = 1004            # 0x3EC — HandlePlayerCreate@0x0046f8c0 (player record)
+# Where other players are spawned relative to the world origin, until real positions exist.
+# posx/posz 1024 == world centre; posy 512 == ground (y=0) given bounds (-10..30).
+AVATAR_SPAWN_SPREAD = 6.0                   # ring radius around the origin for placeholder avatars
+# Wait after EnterWorld(1000) before spawning avatars, so the client has finished entering the
+# world (SetState(VillageEntered=9)) and has an avatar container to insert into.
+AVATAR_SPAWN_DELAY = 2.0
 
 # ── Referee / match-arbiter server ────────────────────────────────────────────
 # The match-START gate. RE'd fresh this session (docs/MATCH_START.md, sadk_noav.exe):
@@ -204,3 +267,22 @@ REF_REGISTER_RESULT = 0xDB8   # RegisterGameResult: GameID, Result(0=ok) + GameS
 REF_FINISH_GAME     = 0xDC0   # end-of-match (logged, not on the start path)
 REF_GIVEUP_GAME     = 0xDD4
 REF_CLAIM_CHEST     = 0xDAC
+
+VILLAGE_AVATAR_LOCATION_MSGTYPE = 0x27D0   # 10192 = (cat 2 << 12) | 0x7d0 -> NETMSG **2000, AVATAR LOCATION**
+#   [PROVEN 2026-08-01] The client's OWN position report - where the player actually IS. Sent ~3/s by
+#   VillageServerConnection_SendAvatarLocation_2000@0x0046ca40, driven by the local player controller
+#   (LobbyPlayerController_Update@0x0051ace0 -> CLobbyClient_ReportOwnAvatarLocation@0x005034e0). Body is
+#   the same bit-packed AvatarLocation block we send in 1001, minus the id/dtblcks header:
+#   tick 16 . posx/posy/posz 11 . rot 7 . zone 4 . ghstzne 4 . rnng 1 . jmp 1 (village.parse_avatar_location).
+
+# In-world chat channels advertised in EnterWorld(1000) -- [PROVEN 2026-08-01]
+# Client keeps std::map<byte zoneKey, u32 cellId> at VillageServerConnection+0x164, built ONLY from
+# the (ChatChannelZone, ChatChannelID) pairs in msg 1000. Tab -> key (FUN_0046d5d0):
+#   tab 1 GLOBAL -> 0xFF (auto-joined at world entry), tab 2 LOCAL -> current zone byte (conn+0x225,
+#   re-joined per zone by SetLocalChatZone@0x0046e860), tab 3 MINIGAME -> 0xFE.
+# cell id 0 = INVALID (DAT_007db53c): the submit handler drops the message SILENTLY.
+GLOBAL_CHAT_CELL   = 1
+MINIGAME_CHAT_CELL = 2
+LOCAL_CHAT_CELL_BASE = 16
+WORLD_CHAT_CHANNELS = ([(0xFF, GLOBAL_CHAT_CELL), (0xFE, MINIGAME_CHAT_CELL)]
+                       + [(z, LOCAL_CHAT_CELL_BASE + z) for z in range(16)])

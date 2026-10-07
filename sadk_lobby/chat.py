@@ -25,32 +25,61 @@ _roster_lock = threading.Lock()
 _roster: dict = {}          # cell_id -> list[Conn]  (UC/chat connections)
 
 
+# ⛔ A cell roster holds one entry per PLAYER, not per socket. [PROVEN 2026-08-01 live, the
+# Win7 "double send" bug] A relog opens a fresh UC connection while the previous one is still in
+# the list and still flagged alive — the join log showed "3 existing members" with two players
+# present. Delivering the relay once per socket makes the client print every line twice, and the
+# machine that had relogged most doubled first (Win7 VM), which is why it looked OS-specific.
+def _live_one_per_player(members, exclude=None):
+    """Live connections from `members`, at most ONE per player, newest winning."""
+    by_player = {}
+    for c in members:
+        if c is exclude or not getattr(c, "alive", False):
+            continue
+        by_player[players.of(c).perm_id] = c        # a later conn replaces an earlier one
+    return list(by_player.values())
+
+
 def _roster_join(cell_id, conn):
-    """Add conn to the cell; return the OTHER live members."""
+    """Add conn to the cell; return the OTHER live members (one per player)."""
     with _roster_lock:
         members = _roster.setdefault(cell_id, [])
+        me = players.of(conn).perm_id
+        for stale in [c for c in members if c is not conn and players.of(c).perm_id == me]:
+            members.remove(stale)                   # this player's previous socket
         if conn not in members:
             members.append(conn)
-        return [c for c in members if c is not conn and getattr(c, "alive", False)]
+        return _live_one_per_player(members, exclude=conn)
 
 
 def _roster_members(cell_id):
     with _roster_lock:
-        return [c for c in _roster.get(cell_id, []) if getattr(c, "alive", False)]
+        return _live_one_per_player(_roster.get(cell_id, []))
 
 
 def on_conn_closed(conn):
-    """A UC socket went away: drop it from every cell and tell the remaining members."""
-    left = []
+    """A UC socket went away: drop it from every cell and tell the remaining members.
+
+    Only announce the leave if the player has no OTHER live connection in that cell — when a
+    stale socket from a previous login finally closes, the player is still standing there, and
+    telling everyone they left would drop them from the roster while they are present."""
+    left, still_here = [], set()
     with _roster_lock:
         for cell_id, members in _roster.items():
             if conn in members:
                 members.remove(conn)
                 left.append(cell_id)
+                if any(getattr(c, "alive", False) and players.of(c).perm_id == players.of(conn).perm_id
+                       for c in members):
+                    still_here.add(cell_id)
     if not left:
         return
     p = players.of(conn)
     for cell_id in left:
+        if cell_id in still_here:
+            log(f"  [CHAT] {p.char_name!r} dropped a stale socket in cell {cell_id} "
+                f"— still present on another connection, no leave announced")
+            continue
         inner = inner_user_left(p.perm_id, cell_id)
         others = _roster_members(cell_id)
         for c in others:
@@ -124,14 +153,21 @@ def inner_user_left(perm_id, cell_id):
 
 # ── Handlers (operate on a Conn) ──────────────────────────────────────────────
 def send_initial_reply(conn):
-    """Push the default channel list the instant the chat handshake completes."""
-    for cell_id, name, subject, creator, creator_id, protected in config.DEFAULT_CHANNELS:
+    """Push the channel list the instant the chat handshake completes.
+
+    The zone cells (16..31) MUST be published here even though nobody browses them: the client's
+    tincat3 CellManager rejects a join of any cell missing from its ChannelInfo-fed registry with
+    StatusReply(status=2) and then silently discards every chat line relayed on that cell — the
+    LOCAL-chat black hole root-caused 2026-08-02 (see config.ZONE_CHANNELS)."""
+    channels = config.DEFAULT_CHANNELS + config.ZONE_CHANNELS
+    for cell_id, name, subject, creator, creator_id, protected in channels:
         blob = channel_data_blob(
             name=name, subject=subject, creator=creator, password=None,
             protected=protected, persistent=True, autodelete=False,
             hidden=False, creator_pid=creator_id)
         conn.send_chat(channel_info(cell_id, blob, ticket=0))
-    log(f"  → [CHAT] pushed {len(config.DEFAULT_CHANNELS)} ChannelInfo on connect")
+    log(f"  → [CHAT] pushed {len(channels)} ChannelInfo on connect "
+        f"({len(config.DEFAULT_CHANNELS)} lobby + {len(config.ZONE_CHANNELS)} zone)")
 
 
 def handle_frame(conn, payload):
@@ -169,16 +205,30 @@ def handle_frame(conn, payload):
 
 
 def _handle_message(conn, body):
+    # ⚠️ This layout is [HYPOTHESIS]. Chat text never reached the server before 2026-08-01 (the
+    # client dropped every message internally — see config.WORLD_CHAT_CHANNELS), so it has never
+    # been validated against a real frame. The actual encoder is tincat3's ChatChannelManager
+    # (UserCommConnection::SendChat@0x0047ede0 → manager vtbl+0x1c), not SADK.exe, so it could not
+    # be settled statically here. Both branches below dump the raw bytes on the FIRST message of a
+    # session, so one live test settles the format either way.
     try:
         r = BinaryReader(body)
         _module_id = r.u16(); message_id = r.u16(); _except = r.u32()
         data = r.blob(); cell_id = r.u32()
     except Exception as e:  # noqa: BLE001
-        log(f"  [CHAT] failed to parse ChatMessage: {e}"); return
+        log(f"  [CHAT] ⚠ COULD NOT PARSE ChatMessage ({e}) — {len(body)}B raw body follows; the "
+            f"assumed layout {{module u16, msg u16, except u32, data blob, cell u32}} is wrong:")
+        log(hex_dump(body))
+        return
+    if not getattr(conn, "_chat_msg_seen", False):
+        conn._chat_msg_seen = True
+        log(f"  [CHAT] ⭐ FIRST chat message parsed: msg_id={message_id} cell={cell_id} "
+            f"data={data[:64]!r} — raw {len(body)}B:")
+        log(hex_dump(body))
     p = players.of(conn)
-    targets = _roster_members(cell_id)
-    if conn not in targets:            # not rostered (never joined / stale) — still show the author
-        targets.append(conn)
+    targets = _roster_members(cell_id)              # already one per player
+    if not any(players.of(c).perm_id == p.perm_id for c in targets):
+        targets.append(conn)           # author not rostered — still echo their own line back
     # ⚠️ from_id was FROM_SERVER here until 2026-07-27. Using the SPEAKER's perm_id is the natural
     # reading of the field and is what lets the client attribute the line, but it is INFERRED —
     # if lines show up unattributed or as the wrong player, put FROM_SERVER back and carry the
@@ -198,25 +248,19 @@ def handle_join_channel(conn, fields, ticket):
     """JoinChatChannel(17) arrives lobby-magic; replies are chat-magic."""
     cell_id = fields.get("cell_id", fields.get("CellId", 1))
     option = fields.get("option", fields.get("Option", 0))
-    # ⚠️ EXPERIMENT 2026-07-27 — resolve cell_id 0 to a real advertised channel.
-    # The client sends RequestJoinChannel with cell_id=0 (twice, tickets 1 and 2) even though we
-    # advertised cells 1 and 2 via ChannelInfo, i.e. it is asking the SERVER to assign. We used to
-    # echo 0 straight back in ChannelJoined + StatusReply, confirming membership of a channel that
-    # does not exist — and the client answered each one with chat-magic id 11 =
-    # StatusReply{cell_id=0, ticket_id=N, status=2}, then never transmitted a single chat frame.
-    # (Layout PROVEN by matching the middle field against the join ticket_ids, 1 and 2.)
-    # status != 0 is read as a failure report; assigning the Nth advertised channel to the Nth join
-    # is the natural reading, since the request carries no name/password to discriminate on.
-    # FALSIFIABLE: if this is right the client should answer status=0 and chat should start
-    # flowing. If status stays 2, cell assignment is not the problem — revert and read the client's
-    # StatusReply handler instead.
+    # ⛔ REFUTED 2026-08-01 — "cell_id=0 means the client is asking the SERVER to assign" was WRONG.
+    # The client joins the id it looked up in the chat-channel map it built from EnterWorld(1000)
+    # (HandleEnterWorld: map[0xFF] → JoinChannel). Our EnterWorld body was encoded as a TinCat
+    # PropertySet while the client parses msg 1000 as a bit-packed LobbyMessage, so it read
+    # ChatChannelsCount as 0, left the map empty, and `map[0xFF]` default-inserted **0** — the id it
+    # then tried to join. Fixing the encoding (config.WORLD_CHAT_CHANNELS) makes real ids arrive.
+    # A 0 here now means the EnterWorld channel list did NOT land, so say so loudly instead of
+    # quietly papering over it — but still confirm a usable cell so the session stays alive.
     if not cell_id:
-        seen = getattr(conn, "_chan_joins", 0)
-        conn._chan_joins = seen + 1
-        channels = config.DEFAULT_CHANNELS
-        cell_id = channels[seen][0] if seen < len(channels) else channels[-1][0]
-        log(f"  [CHAT] join asked for cell 0 → assigning advertised cell {cell_id} "
-            f"({channels[min(seen, len(channels) - 1)][1]!r})")
+        cell_id = config.GLOBAL_CHAT_CELL
+        log(f"  [CHAT] ⚠ join asked for cell 0 — the client's chat-channel map is EMPTY, i.e. our "
+            f"EnterWorld(1000) channel list did not parse. Confirming cell {cell_id} to keep the "
+            f"session usable, but chat sends will be dropped client-side until that is fixed.")
     conn.send_chat(channel_joined(cell_id, ticket, option))
     conn.send_chat(status_reply(cell_id, ticket, 0))
     p = players.of(conn)
