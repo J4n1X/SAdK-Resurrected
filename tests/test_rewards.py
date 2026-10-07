@@ -26,7 +26,8 @@ def _char(name):
 
 
 def test_formula_and_levels():
-    assert rewards.match_xp(0, False) == 500 and rewards.match_xp(20.9, False) == 2500
+    assert rewards.match_xp(0, False) == 0 and rewards.match_xp(1.99, True, chests=3) == 0   # < 2 min
+    assert rewards.match_xp(2, False) == 700 and rewards.match_xp(20.9, False) == 2500
     assert rewards.match_xp(20, True) == 5000                     # winner: +100 %
     assert rewards.match_xp(10, False, chests=2) == 2250          # 1500 x 1.5
     assert rewards.match_xp(10, True, chests=1) == 3375           # 1500 x 2.25
@@ -52,7 +53,7 @@ def test_match_credit_and_chests():
     assert economy.load(lose).level == 2
     # A rematch with the same GameID starts a fresh clock.
     rewards.match_started(100, win, now=0.0)
-    assert rewards.match_finished(100, win, won=False, now=0.0) == (500, 50)
+    assert rewards.match_finished(100, win, won=False, now=0.0) == (0, 0)        # under 2 minutes
     print("credited once per match into the save, chest item + bonus, rematch OK")
 
 

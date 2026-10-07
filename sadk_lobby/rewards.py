@@ -14,7 +14,8 @@ What the client gives us [known]:
 
 Server rules (maintainer decisions 2026-10-07):
   * XP = (BASE_XP + XP_PER_MINUTE per full minute played) x multiplier, each player timed from its own
-    RegisterGame to its own FinishGame / GiveUpGame. Gold = XP / 10.
+    RegisterGame to its own FinishGame / GiveUpGame; a match shorter than MIN_MINUTES gives nothing.
+    Gold = XP / 10.
   * multiplier = 1 + WIN_BONUS if its FinishGame names it the winner + CHEST_BONUS per chest it got
     in that match.
   * A chest (a referee chest's first claimant) also puts a random item into the backpack.
@@ -30,6 +31,7 @@ from .log import log
 BASE_XP = 500
 XP_PER_MINUTE = 100
 GOLD_DIVISOR = 10
+MIN_MINUTES = 2                               # shorter matches give 0 XP / 0 gold
 WIN_BONUS = 1.0                               # +100 %
 CHEST_BONUS = 0.25                            # +25 % per chest
 LEVEL_XP = (0, 1000, 2500, 5000, 10000)       # start of levels 1..5 (client table 007d8d90)
@@ -57,6 +59,8 @@ def match_started(game_id, avatar_id, now=None):
 
 
 def match_xp(minutes, won, chests=0):
+    if minutes < MIN_MINUTES:
+        return 0
     multiplier = 1 + (WIN_BONUS if won else 0) + CHEST_BONUS * chests
     return int((BASE_XP + XP_PER_MINUTE * int(minutes)) * multiplier)
 
