@@ -143,9 +143,10 @@ class Conn:
             if self._bin_file:
                 self._bin_file.close()
             dead = registry.games.remove_owner(self.id)
+            dispatch.unregister_observer(self)
             if dead:
                 log(f"  [REGISTRY] dropped {len(dead)} game(s) owned by #{self.id}: {dead}")
-            dispatch.unregister_observer(self)
+                dispatch.push_servers_removed(dead)    # other browsers drop the rows
             log(f"\n  DISCONNECTED #{self.id} [{self.role} :{local_port}]")
             # Must run AFTER the log line above so the ordering reads correctly, and after the socket
             # is closed — the village-leave phase 2 keys off the UC conn actually being gone.

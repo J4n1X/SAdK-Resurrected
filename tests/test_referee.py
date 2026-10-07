@@ -96,10 +96,61 @@ def test_base_login_frame_falls_through():
     print("base-login frame falls through OK")
 
 
+def _guid():
+    return bytes(range(16))
+
+
+def test_giveup_echoes_game_id():
+    conn = FakeConn()
+    referee.handle_frame(conn, referee.referee_payload(config.REF_GIVEUP_GAME,
+                                                       struct.pack(">I", GAME_ID) + _guid()))
+    assert conn.referee_msg_ids() == [config.REF_LOGIN_OK, config.REF_GIVEUP_ACK], conn.referee_msg_ids()
+    mt, inner = _parse_referee_payload(conn.raw[-1][config.PREFIX_SIZE:])
+    assert struct.unpack(">II", inner) == (GAME_ID, 0)
+    try:
+        referee.build_giveup_ack(GAME_ID, 21)
+        raise AssertionError("result 21 must be refused (it crashes the client)")
+    except ValueError:
+        pass
+    print("GiveUpGame → 0xDD5 with the echoed GameID OK")
+
+
+def test_finish_game_ack_then_result():
+    conn = FakeConn()
+    body = struct.pack(">I", GAME_ID) + _guid() + bytes([3]) + b"123" + struct.pack(">I", 42)
+    referee.handle_frame(conn, referee.referee_payload(config.REF_FINISH_GAME, body))
+    assert conn.referee_msg_ids() == [config.REF_LOGIN_OK, config.REF_FINISH_ACK,
+                                      config.REF_FINISH_RESULT], conn.referee_msg_ids()
+    _, inner = _parse_referee_payload(conn.raw[-1][config.PREFIX_SIZE:])
+    assert inner == struct.pack(">II", GAME_ID, 0), inner.hex()      # no FailReason with Result 0
+    assert referee._finish_reports[GAME_ID] == {conn.player.perm_id: 42}
+    print("FinishGame → 0xDC1 + 0xDC2 OK")
+
+
+def test_claim_chest_first_claimant_wins():
+    referee._chest_owner.clear()
+    a = FakeConn()
+    b = FakeConn()
+    b.player = players.resolve_by_perm(PERM_ID + 1)
+    body = lambda actor: struct.pack(">I", GAME_ID) + _guid() + struct.pack(">II", actor, 9)
+    referee.handle_frame(a, referee.referee_payload(config.REF_CLAIM_CHEST, body(500)))
+    referee.handle_frame(b, referee.referee_payload(config.REF_CLAIM_CHEST, body(501)))
+    for conn in (a, b):
+        assert conn.referee_msg_ids()[-2:] == [config.REF_CLAIM_ACK, config.REF_CLAIM_RESULT]
+        _, ack = _parse_referee_payload(conn.raw[-2][config.PREFIX_SIZE:])
+        assert struct.unpack(">II", ack) == (GAME_ID, 0)          # Result is ALWAYS 0
+        _, res = _parse_referee_payload(conn.raw[-1][config.PREFIX_SIZE:])
+        assert struct.unpack_from(">II", res) == (a.player.perm_id, 9) and res[8] == 0, res.hex()
+    print("ClaimChest → 0xDAD(0) + 0xDAE, first claimant keeps the chest OK")
+
+
 if __name__ == "__main__":
     test_type_word()
     test_login_success_golden()
     test_register_ack_result_golden()
     test_handle_register_game()
     test_base_login_frame_falls_through()
+    test_giveup_echoes_game_id()
+    test_finish_game_ack_then_result()
+    test_claim_chest_first_claimant_wins()
     print("\nALL REFEREE TESTS PASSED")

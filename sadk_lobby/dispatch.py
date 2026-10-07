@@ -407,6 +407,32 @@ def _push_to_obs(server_type, srv):
         log(f"  [OBS] pushed 170 GameServerData id={srv.get('id')} to {pushed} observer(s)")
 
 
+def push_servers_removed(server_ids, server_type=5):
+    """Push 169 RemoveServer {server_id, running 0, ticket 0} to the observers, so other browsers drop
+    the row. A ticket-0 169 reaches listener +0x14 = ServerList::RemoveServer S 0046a5e0, which erases
+    the entry; a 170 can never remove a game (games ignore `running`). [inferred, T 10023cc0 case 0xa9]
+    Called when a host removes its game and when the host's connection closes."""
+    with _obs_lock:
+        targets = list(set(_obs.get(server_type, []) + _obs.get(0, [])))
+    for sid in server_ids:
+        body = codec.encode_body(169, {"server_id": sid, "running": False, "ticket_id": 0})
+        pushed = 0
+        for c in targets:
+            if getattr(c, "alive", False):
+                try:
+                    c.send_app(169, body)
+                    pushed += 1
+                except Exception:  # noqa: BLE001
+                    pass
+        log(f"  [OBS] pushed 169 RemoveServer id={sid} to {pushed} observer(s)")
+
+
+def _has_password(fields):
+    """H9: the host sends `cipher` only when the game has a password (the literal "PASSWORD"
+    encrypted by tincat3; the real password never leaves the client). Present → protected."""
+    return bool(fields.get("cipher"))
+
+
 def handler(*types):
     def deco(fn):
         for t in types:
@@ -742,6 +768,10 @@ def _h_cdkeys(conn, fields, ticket):
 
 
 # ── Social / observers (ack-only) ─────────────────────────────────────────────
+# 172 DeregObserverServerList is acked but the observer is NOT removed: the message carries only a
+# ticket, so it cannot say WHICH list is closing, and every client registers two (171 for the village
+# list and for the game list). Dropping both on one 172 would silently stop village-list pushes. The
+# observer goes away when the socket closes; until then it only receives a few extra pushes. [inferred]
 @handler(56, 98, 99, 115, 116, 175, 176, 172, 146, 190)
 def _h_ack(conn, fields, ticket):
     conn.ok(ticket)
@@ -858,12 +888,18 @@ def server_to_170_values(srv, ticket):
     return {
         "server_id": srv["id"], "name": srv["name"], "owner_id": srv["owner_id"],
         "description": srv.get("description", ""), "ip": srv["ip"], "port": srv["port"],
-        "password_required": False,
+        # "Protected" icon: true only when ==1 (S 0048da70). Set from the host's 168/177 cipher (H9).
+        "password_required": bool(srv.get("password_required")),
         "server_type": srv.get("server_type", 5),
         "server_subtype": srv.get("server_subtype", 0),
         "version": srv.get("version", ""),
         "max_players": srv.get("max_players", 2), "cur_players": srv.get("cur_players", 1),
-        "max_spectators": 0, "cur_spectators": 0, "ai_players": srv.get("ai_players", 0),
+        # ⚠️ The game browser shows occupied = max_spectators + ai_players and never reads
+        # cur_players for games (S 0048da70, disasm 0048db1b). The host sends its HUMAN count in
+        # max_spectators (168/177, CountHumanSlots), so it must be echoed here, or every hosted game
+        # lists as "0 + AI" occupied. [known]
+        "max_spectators": srv.get("max_spectators", 1), "cur_spectators": 0,
+        "ai_players": srv.get("ai_players", 0),
         "room_id": srv.get("lobby_id", 9212),
         "level": srv.get("level", 0), "game_mode": srv.get("game_mode", 0),
         "hardcore": bool(srv.get("hardcore")), "map": srv.get("map", ""),
@@ -1035,7 +1071,9 @@ def _h_add_game_server(conn, fields, ticket):
         "ip": fields.get("ip") or conn.addr[0],
         "port": fields.get("port", config.WORLD_PORT),
         "max_players": fields.get("max_players", 2), "cur_players": 1,
+        "max_spectators": fields.get("max_spectators") or 1,    # the host's human count (see 170)
         "ai_players": fields.get("ai_players", 0),
+        "password_required": _has_password(fields),
         "lobby_id": fields.get("room_id", 9212),
         "version": fields.get("version", ""),
         "server_type": fields.get("server_type", 5),
@@ -1055,20 +1093,27 @@ def _h_add_game_server(conn, fields, ticket):
 
 @handler(169)  # RemoveServer
 def _h_remove_server(conn, fields, ticket):
-    _remove_game(conn, fields.get("server_id", 0))
-    conn.ok(ticket)
+    sid = fields.get("server_id", 0)
+    removed = _remove_game(conn, sid)
+    conn.ok(ticket)     # Result(42) 0 → DeleteResultReceived S 00469990 resets the host's +0x9c
+    if removed:
+        push_servers_removed([sid])
 
 
 @handler(177)  # ChangeGameServer
 def _h_change_server(conn, fields, ticket):
-    # Only overwrite fields the message actually carried a value for (a 177 may touch a subset;
-    # the stub ignores property_mask).
+    """The host re-sends ALL fields on every room change (property_mask is never written, T 10021040),
+    so every field is applied, including the ones the game browser shows: max_spectators (human
+    count), ai_players, hardcore (ranked) and the password flag (cipher present). [known]"""
     changes = {k: fields.get(k) for k in
-               ("name", "description", "max_players", "map", "running", "data")
+               ("name", "description", "max_players", "max_spectators", "ai_players",
+                "game_mode", "hardcore", "map", "running", "data")
                if fields.get(k) is not None}
+    changes["password_required"] = _has_password(fields)
     rec = _change_owned_game(conn, changes)
     if rec is not None:
-        log(f"  ChangeGameServer: id={rec.get('id')} running={rec.get('running')} map={rec.get('map')!r}")
+        log(f"  ChangeGameServer: id={rec.get('id')} humans={rec.get('max_spectators')} "
+            f"ai={rec.get('ai_players')} protected={rec.get('password_required')} map={rec.get('map')!r}")
         # Keep observers' browser current as the host changes map/settings.
         _push_to_obs(rec.get("server_type", 5), rec)
     conn.ok(ticket)
