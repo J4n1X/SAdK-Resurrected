@@ -18,8 +18,8 @@ import struct
 import threading
 import time
 
-from . import (chat, codec, config, crypto, msgdefs, npcs, players, referee, registry, store,
-               village)
+from . import (chat, codec, config, crypto, mail, msgdefs, npcs, players, referee, registry,
+               store, village)
 from .log import log
 
 HANDLERS = {}
@@ -772,8 +772,48 @@ def _h_cdkeys(conn, fields, ticket):
 # ticket, so it cannot say WHICH list is closing, and every client registers two (171 for the village
 # list and for the game list). Dropping both on one 172 would silently stop village-list pushes. The
 # observer goes away when the socket closes; until then it only receives a few extra pushes. [inferred]
-@handler(56, 98, 99, 115, 116, 175, 176, 172, 146, 190)
+@handler(56, 98, 99, 115, 116, 172, 146, 190)
 def _h_ack(conn, fields, ticket):
+    conn.ok(ticket)
+
+
+@handler(175, 176)  # Reg/DeregObserverBuddylist
+def _h_buddy_observer(conn, fields, ticket):
+    """Completed ONLY by AddResult(153): there is no Result case for 0xaf/0xb0 in the routing table, so
+    a Result(42) leaks the ticket (T 1002677c). No buddy pushes yet (T30). [known]"""
+    conn.status_with_id(0, fields.get("user_id", 0) or 0, ticket)
+
+
+# ── Mail (mail.py; docs/message-catalog.md 147-151) ───────────────────────────
+@handler(150)  # AddPrivateMessage
+def _h_add_private_message(conn, fields, ticket):
+    """Completed ONLY by AddResult(153) (T 10028fc0 -> PostOffice::SendMailResultReceived). A Result(42)
+    leaves MailManager busy +0x34 set and stalls the whole PostOffice queue. [known, board #4788]"""
+    target = fields.get("delivery_target", 0) or 0
+    known = any(p.perm_id == target for p in players.all_players())
+    if not known:
+        log(f"  [MAIL] AddPrivateMessage to unknown recipient {target} → AddResult errorcode 1")
+        conn.status_with_id(1, 0, ticket)
+        return
+    mid = mail.add(target, _player(conn).perm_id, fields.get("title"), fields.get("message_text"))
+    log(f"  [MAIL] {_player(conn).perm_id} → {target}: {fields.get('title')!r} stored as #{mid}")
+    conn.status_with_id(0, mid, ticket)
+
+
+@handler(147)  # RequestPrivateMessageList
+def _h_private_message_list(conn, fields, ticket):
+    mail.send_inbox(conn, fields.get("delivery_target") or _player(conn).perm_id, ticket)
+
+
+@handler(148)  # ChangePrivateMessage (mark read)
+def _h_change_private_message(conn, fields, ticket):
+    mail.mark(fields.get("message_id", 0), fields.get("status", 1))
+    conn.ok(ticket)
+
+
+@handler(151)  # RemovePrivateMessage
+def _h_remove_private_message(conn, fields, ticket):
+    mail.remove(fields.get("message_id", 0))
     conn.ok(ticket)
 
 
