@@ -12,12 +12,14 @@ Multiple clients can be logged in as distinct players at once; hosted games live
 in a process-global registry (players.py / registry.py) so one client's game is
 visible to another.
 """
+import math
 import os
 import struct
 import threading
 import time
 
-from . import chat, codec, config, crypto, msgdefs, players, referee, registry, village
+from . import (chat, codec, config, crypto, msgdefs, npcs, players, referee, registry, store,
+               village)
 from .log import log
 
 HANDLERS = {}
@@ -86,6 +88,13 @@ def on_conn_closed(conn):
         except ValueError:
             pass
     _gchat_drop(conn)                             # global-chat subscribers must not leak
+    # A village conn going away means that player's avatar must be despawned for everyone still
+    # in-world, or they are left staring at a ghost that never moves.
+    if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
+        gone = _player(conn)
+        for other in _in_world_conns(exclude_player=gone.perm_id, exclude_conn=conn):
+            village.send_entity_remove(other, gone.perm_id,
+                                       label=f"[{gone.char_name!r} left the world]")
     if not getattr(conn, "is_chat", False):
         return                                    # only a UC/chat close can complete a leave
     chat.on_conn_closed(conn)                     # drop from channel rosters + notify members
@@ -99,6 +108,284 @@ def on_conn_closed(conn):
             f"take the VILLAGE branch: re-sending WorldLoginAck(1006) on conn #{v.id} "
             f"→ ConnectionReal::Logout → transport state 9 → OnLoggedOut → SetState(VillageLeft=11)")
         village.send_world_login_ack(v, force=True)
+
+
+# The village spawn square, [PROVEN] 2026-08-01 by TTD trace `avatar_spawn_diag.run`: the client's
+# OWN avatar visual is constructed at (-31.24, 2.71, +8.28) (x/y equal the binary's default-spawn
+# constants DAT_007dd028/2c exactly; z is the observed value — the static default DAT_007dd06c is
+# -8.28, sign-flipped somewhere on the own path, but the REMOTE path is proven pass-through: we sent
+# (0,0,6) on the wire and the visual ctor received (0,0,6) verbatim). Ring-spawning around world
+# origin put remote avatars ~31 units away from the square and ~2.7 below its ground level — fully
+# spawned, modelled and styled, just standing where nobody looks. NOT in config.py on purpose: the
+# deploy server's config.py is local-only and must never be overwritten (see HANDOFF.md).
+VILLAGE_SPAWN_POINT = (-31.24, 2.71, 8.28)
+
+#: The ambient NPC cast, placed around the square above: record NPCs via PlayerCreate(1004)
+#: and walkers via EntityCreate(1001) (see npcs.py). Spawned to every entrant in
+#: _spawn_world_avatars; the walkers are kept alive and moving by the 1 Hz location ticker.
+#:
+#: ⚠️ Gated on `config.VILLAGE_NPCS_ENABLED`, currently OFF by explicit user instruction
+#: (2026-08-02 — see the flag's comment in config.py; HARNESS §5 permits a maintainer-requested
+#: flag). An empty list makes every downstream site — record_npcs/walker_npcs/advance_all and
+#: both refresh loops — a natural no-op, so no other code needs a condition.
+_npcs = npcs.make_village_npcs(VILLAGE_SPAWN_POINT) if config.VILLAGE_NPCS_ENABLED else []
+
+
+def _spawn_spot(perm_id):
+    """A deterministic ring spot around the village spawn square — the PLACEHOLDER position, used
+    only until the client's first real location report arrives (see `_live_pose`).
+
+    Keying it on perm_id keeps it stable and identical for every observer. Centered on
+    VILLAGE_SPAWN_POINT — the spot the client's own avatar provably spawns at — so a just-spawned
+    remote player appears beside the observer rather than at the distant world origin.
+
+    ⚠️ Placeholder positions are necessarily INCONSISTENT between machines: each client places its
+    own avatar itself (client-side default spawn) while we place the remote one on this ring, so
+    the two machines disagree about the pair's relative geometry. Real reported positions
+    (`_live_pose`) fix that — they are one shared truth, relayed to everyone."""
+    # Golden-angle placement so ANY number of players spreads out instead of colliding every
+    # 8th id (the old `perm_id % 8` ring): each successive id lands ~137.5° round, and the
+    # radius grows a little each full turn.
+    ang = perm_id * 2.39996322972865332
+    r = config.AVATAR_SPAWN_SPREAD * (1.0 + (perm_id // 8) * 0.3)
+    cx, cy, cz = VILLAGE_SPAWN_POINT
+    return (cx + math.cos(ang) * r, cy, cz + math.sin(ang) * r)
+
+
+#: perm_id → the player's last reported pose, from their own msg 2000 (village.parse_avatar_location).
+#: This is the world's single source of truth for where each avatar is; the refresh/relay path feeds
+#: it straight back out as 1001 waypoints, so every client sees everyone where they actually stand.
+_poses = {}
+_poses_lock = threading.Lock()
+
+
+def _in_world_conns(exclude_player=None, exclude_conn=None):
+    """Live village connections that have entered the world — **ONE per player**.
+
+    Same stale-socket hazard as the chat roster (see `chat._live_one_per_player`, and the Win7
+    "double send" bug it caused): a relog opens a fresh village connection while the previous one
+    is still live, so iterating sockets would send every spawn, waypoint and clock sync twice to
+    that client — and count the same player twice as an occupant of the world. Newest wins."""
+    by_player = {}
+    for c in _find_live(lambda c: getattr(c, "is_village", False)
+                        and getattr(c, "_enter_world_sent", False)):
+        if c is exclude_conn:
+            continue
+        pid = _player(c).perm_id
+        if exclude_player is not None and pid == exclude_player:
+            continue
+        by_player[pid] = c
+    return list(by_player.values())
+
+
+def _live_pose(perm_id):
+    """The kwargs describing where a player is, ready to splat into `village.send_entity_create`:
+    their last REPORTED pose, or the placeholder ring spot if they have not reported yet (the ~1 s
+    window between world entry and their first msg 2000).
+
+    ⭐ `zone`/`ghost_zone` are relayed VERBATIM. They are the sub-zone the player is standing in —
+    the minigame rooms and the hall of fame are separate zones — and hardcoding 0 told everyone
+    else that a player who had walked into a side room was still out on the square. The client is
+    the authority on its own zone; the server's job is to pass it on. (`FUN_0045fd30`, the minimap
+    renderer, gates on own `zone == 0 && ghstzne == 0x0F`, which also shows **15**, not 0, is the
+    neutral outdoor ghost-zone value — so 0/0 was never a harmless placeholder.)"""
+    with _poses_lock:
+        loc = _poses.get(perm_id)
+    if loc is None:
+        return {"pos": _spawn_spot(perm_id), "rot_deg": 0.0}
+    return {"pos": loc["pos"], "rot_deg": loc["rot_deg"],
+            "running": loc["running"], "jumping": loc["jumping"],
+            "zone": loc["zone"], "ghost_zone": loc["ghost_zone"]}
+
+
+def _avatar_style(player):
+    """AvatarStyle block (dtblcks bit1) for a player — the appearance the client draws.
+
+    Layout VERIFIED against `AvatarProxy_ReadStyleBlock@0x004825f0` (2026-07-31): a `name` STRING via
+    reader vtbl+0x34, then NINE 8-bit values landing in consecutive bytes AvatarProxy+0x48..+0x50 —
+    `trbgndr`, `hrclr`, `sknclr`, `shrtclr`, `trsrclr`, `addColor1..4`. Each has its own error string
+    in LobbyAvatarProxy.cpp, so a wrong field names ITSELF in the client's LobbyComm.log
+    ("Could not read skin color from stream." etc.) rather than failing silently.
+
+    Values are conservative defaults: colour 0 on every slot, tribe/gender 0. `trbgndr` packs tribe
+    and gender into one byte and the packing is **[TODO]** — 0 is the safest first guess. The name is
+    the real character name, so a rendered avatar should also be labelled correctly.
+    """
+    return {"name": player.char_name, "tribe_gender": 0, "colours": (0,) * 8}
+
+
+# Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
+# the client positions every remote avatar from a ring buffer of timestamped WAYPOINTS that only
+# location UPDATES feed (`FUN_00519b20`, reached via `CLobbyClient_UpdateAvatar`'s update path on a
+# repeat 1001). The spawn frame paints exactly one frame; from the next frame the interpolator
+# (`FUN_00519d50`) snaps an empty-ringed avatar to (0,0,0). So the server must STREAM location
+# refreshes — this is the real protocol, not a workaround. 1 Hz is ample: each waypoint says
+# "be here at tick+2000 ms" and the avatar holds position past the last waypoint.
+AVATAR_REFRESH_SECS = 1.0
+_avatar_ticker_lock = threading.Lock()
+_avatar_ticker_started = False
+
+
+def _now_ms():
+    """THE wire timebase: an advancing millisecond clock. Every tick we send — the WorldTick(1005)
+    clock sync AND the EntityCreate location tick16s — must come from THIS one clock, because the
+    client slews its world clock to the 1005 ticks and then reconstructs every location tick16
+    against that slewed clock (`FUN_004f4d10`, nearest-anchor mod 65536)."""
+    return int(time.monotonic() * 1000)
+
+
+def _now_tick16():
+    """Low 16 bits of `_now_ms()` — the wire `tick` field of avatar location blocks.
+
+    ⚠️ CORRECTED MODEL 2026-08-01: the client does NOT tolerate an arbitrary absolute phase. The
+    nearest-anchor reconstruction is anchored on the client WORLD CLOCK, which the real server
+    kept slewed to ITS tick stream via WorldTick(1005). Without 1005 the phase error is arbitrary
+    (up to ±32.7 s, per machine/boot) — that was the round-2/3 avatar die-off. With 1005 flowing
+    from the same clock, reconstruction is phase-true."""
+    return _now_ms() & 0xFFFF
+
+
+def _avatar_location_ticker():
+    cycles = 0
+    while True:
+        time.sleep(AVATAR_REFRESH_SECS)
+        cycles += 1
+        # Geometry experiment 2026-08-01 (round 3): send now-1000 so the client-side waypoint stamp
+        # (reconstruct(tick)+2000) lands ≈now+1000 — each 1 Hz push then brackets "now" between the
+        # push from 1-2 s ago and the fresh one, and the newest stamp is never behind the clock.
+        # With plain "now" the stamps sit +2000 ahead and live behaviour showed the avatar hidden
+        # (stale/no-bracket path latching render-node bit 0x20).
+        tick = (_now_tick16() - 1000) & 0xFFFF
+        in_world = _in_world_conns()
+        sent = 0
+        for conn in in_world:
+            # World-clock sync FIRST, every cycle (see village.send_world_tick): keeps each
+            # client's world clock slewed to the same clock the location tick16s below are cut
+            # from. After the first slew the client's 250 ms tolerance makes this a no-op.
+            try:
+                village.send_world_tick(conn, _now_ms(), quiet=True)
+            except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                log(f"  [WORLD] WorldTick(1005) to conn #{conn.id} failed: {exc}")
+        # NPC walkers take one step per cycle; the step size (speed × 1 s) stays far
+        # under the interpolator's 10-unit snap threshold, so the client walks the
+        # model smoothly between waypoints.
+        npcs.advance_all(_npcs, AVATAR_REFRESH_SECS)
+        for conn in in_world:
+            me = _player(conn)
+            for other in in_world:
+                op = _player(other)
+                if other is conn or op.perm_id == me.perm_id:
+                    continue
+                try:
+                    village.send_entity_create(conn, op.perm_id, tick=tick, quiet=True,
+                                               **_live_pose(op.perm_id))
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                    log(f"  [WORLD] avatar refresh to conn #{conn.id} failed: {exc}")
+            for npc in npcs.walker_npcs(_npcs):
+                try:
+                    village.send_entity_create(conn, npc.perm_id, tick=tick, quiet=True,
+                                               **npc.pose())
+                    sent += 1
+                except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the ticker
+                    log(f"  [WORLD] NPC refresh to conn #{conn.id} failed: {exc}")
+        if sent and cycles % 30 == 0:
+            log(f"  [WORLD] avatar location refresh running: {sent} update(s)/cycle every "
+                f"{AVATAR_REFRESH_SECS:.0f}s, tick={tick} (logged 1-in-30 cycles)")
+
+
+def _ensure_avatar_ticker():
+    global _avatar_ticker_started
+    with _avatar_ticker_lock:
+        if _avatar_ticker_started:
+            return
+        _avatar_ticker_started = True
+        threading.Thread(target=_avatar_location_ticker, daemon=True).start()
+        log(f"  [WORLD] avatar location ticker started — {AVATAR_REFRESH_SECS:.0f}s waypoint "
+            f"refresh per remote avatar (ER 2026-08-01_avatar-location-refresh)")
+
+
+def _spawn_world_avatars(conn):
+    """Mutual avatar spawn on world entry: show this client everyone already in-world, and show
+    this client TO everyone already in-world.
+
+    PROVEN ON THE WIRE 2026-08-01: the spawn itself works end-to-end (TTD-verified chain, see
+    docs/IN_WORLD_PRESENCE.md). The avatar only STAYS visible while the location ticker above
+    streams waypoint refreshes — the spawn paints one frame, the ring does the rest."""
+    _ensure_avatar_ticker()
+    me = _player(conn)
+    # Ambient NPCs first — they exist for every entrant, players or not.
+    # World-clock sync MUST precede the first waypoint: stamps are cut against the
+    # client's slewed clock at parse time and a later slew does not re-anchor them
+    # (ER 2026-08-01_worldtick-clock-sync). The others-branch resend below is a no-op
+    # client-side once the clock is slewed (250 ms tolerance).
+    village.send_world_tick(conn, _now_ms())
+    # Record NPCs (PlayerCreate 1004): one message each — the consumer builds the
+    # object from its template immediately, no waypoint stream involved.
+    for npc in npcs.record_npcs(_npcs):
+        village.send_player_create(conn, npc.perm_id, npc.name, quiet=True,
+                                   **npc.record_kwargs())
+        # ⛔ Do NOT push the NPC's shop here. ShopInventoryData(0xE11) is not a stock cache —
+        # its ARRIVAL OPENS THE DIALOG: the villageConn+0x128 observer `FUN_004323d0` hands the
+        # data to the ShopDialog (screen+0x35d4) and then calls its vtbl+0x2c *show* method
+        # [PROVEN 2026-08-02]. Pushing it at world entry made the shop pop open unbidden the
+        # moment the NPC spawned (live-observed) and did nothing on a later click — a result
+        # that LOOKS like a working shop but is really the server forcing a dialog. The real
+        # server can only have sent 0xE11 as the REPLY to a shop-open request.
+        # ⏳ The blocker: clicking a shop NPC puts NOTHING on the wire (live-verified twice via
+        # the stub journal), so the client's request path is not being reached. Finding out why
+        # needs a live trace of the OpenShop button handler — static analysis of
+        # `VillageScreen_UpdateActionButtons@0x00433f60` bottoms out in unreliable
+        # decompilation. `village.send_shop_inventory` is ready for that reply when we get
+        # there; `npc.shop` carries the stock.
+    # Walkers (EntityCreate 1001 avatars): the proven remote-player pattern — one
+    # styled spawn plus two ring-priming pushes so the movement ring brackets "now".
+    npc_tick_base = _now_tick16()
+    for npc in npcs.walker_npcs(_npcs):
+        pose = npc.pose()
+        village.send_entity_create(conn, npc.perm_id, tick=(npc_tick_base - 1000) & 0xFFFF,
+                                   quiet=True, style=npc.style(), **pose)
+        for prime in ((npc_tick_base - 3000) & 0xFFFF, (npc_tick_base - 1000) & 0xFFFF):
+            village.send_entity_create(conn, npc.perm_id, tick=prime, quiet=True, **pose)
+    if _npcs:
+        log(f"  [WORLD] spawned {len(npcs.record_npcs(_npcs))} record NPC(s) + "
+            f"{len(npcs.walker_npcs(_npcs))} walker(s) for {me.char_name!r}")
+    else:
+        log("  [WORLD] NPCs are OFF (config.VILLAGE_NPCS_ENABLED=False) — none spawned")
+    others = _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn)
+    if not others:
+        log(f"  [WORLD] {me.char_name!r} entered — no other players in-world yet")
+        return
+    # Sync each client's world clock to OUR timebase BEFORE any waypoint lands: waypoint stamps
+    # are absolute u64s cut against the clock at parse time and are NOT re-anchored by a later
+    # slew, so the slew must happen first. First 1005 ⇒ phase error ≥250 ms ⇒ immediate slew.
+    village.send_world_tick(conn, _now_ms())
+    for other in others:
+        village.send_world_tick(other, _now_ms(), quiet=True)
+    tick_base = _now_tick16()
+    tick = (tick_base - 1000) & 0xFFFF
+    my_pose = _live_pose(me.perm_id)
+    for other in others:
+        op = _player(other)
+        # Spawn each side at the other's LAST REPORTED pose (msg 2000) — position, facing AND zone.
+        # A player who has been walking around is already somewhere, possibly inside a side room;
+        # only a player who has not reported yet falls back to the placeholder ring spot.
+        op_pose = _live_pose(op.perm_id)
+        village.send_entity_create(conn, op.perm_id, tick=tick,
+                                   label=f"[{op.char_name!r} shown to {me.char_name!r}]",
+                                   style=_avatar_style(op), **op_pose)
+        village.send_entity_create(other, me.perm_id, tick=tick,
+                                   label=f"[{me.char_name!r} shown to {op.char_name!r}]",
+                                   style=_avatar_style(me), **my_pose)
+        # Prime the movement ring so the avatar is bracketed from the very first tick: waypoint
+        # stamp = reconstruct(wire tick)+2000 ms, so wire now-3000 lands a stamp at ≈now-1000 and
+        # wire now-1000 lands one at ≈now+1000 — a bracket STRADDLING "now" immediately, held until
+        # the 1 Hz ticker takes over. Without waypoints the interpolator hides the avatar
+        # (render-node bit 0x20) one frame after the create paints it (TTD: avatar_vanish_diag.run).
+        for prime in ((tick_base - 3000) & 0xFFFF, (tick_base - 1000) & 0xFFFF):
+            village.send_entity_create(conn, op.perm_id, tick=prime, quiet=True, **op_pose)
+            village.send_entity_create(other, me.perm_id, tick=prime, quiet=True, **my_pose)
+    log(f"  [WORLD] {me.char_name!r} entered — exchanged avatars with {len(others)} player(s)")
 
 
 def _push_to_obs(server_type, srv):
@@ -282,35 +569,165 @@ def _h_user_info(conn, fields, ticket):
     conn.ok(ticket)
 
 
-def _char_values(conn, ticket):
+def _char_values(conn, ticket, char=None):
+    """CharacterData(75)/UserCharConn(60) field values for ONE character.
+
+    ⭐ `char_id` and `owner_id` are DIFFERENT namespaces (msgdefs.ini gives both fields): the
+    character has its own id, the account owns it. They used to be the same number here, which
+    only worked while an account could hold exactly one character."""
     p = _player(conn)
     return {
-        "char_id": p.char_id, "name": p.char_name,
-        "owner_id": p.perm_id, "owner_name": p.username,
+        "char_id": int(char["char_id"]) if char else p.char_id,
+        "name": (char.get("name") if char else p.char_name) or p.username,
+        "owner_id": p.user_id, "owner_name": p.username,
         "guild_id": 0, "guild_name": None, "guild_role": 0, "status": 1,
-        "server_id": 0, "server_name": None, "data": p.data,
+        "server_id": 0, "server_name": None,
+        "data": (char.get("data") if char else p.data) or b"",
         "ticket_id": ticket}
 
 
 @handler(55)  # RequestUserCharList -> UserCharConn
 def _h_player_info(conn, fields, ticket):
-    conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
+    # Same rule as RequestCharacters(72): a player who has not created a character has an empty
+    # list, not a stand-in one. Announcing a character here that 72 then fails to produce would
+    # leave the two lists disagreeing about who this account is.
+    p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED or p.has_character:
+        conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
     conn.ok(ticket)
 
 
 @handler(72)  # RequestCharacters -> CharacterData
-def _h_select_nickname(conn, fields, ticket):
-    conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
+def _h_request_characters(conn, fields, ticket):
+    """Answer with the player's PERSISTED character, or with nothing at all.
+
+    ⭐ Sending ZERO CharacterData frames is a first-class, supported client path, not a failure:
+    `CharacterManager::CharacterObserverListener::CharacterDataReceived@0x00474910` branches on
+    the aggregated count and, at count==0, logs "No characters found." at INFO severity, sets the
+    parent's loaded flag (+0x88) and refreshes the UI — which is what opens character creation.
+    That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
+    character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
+    p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        # LEGACY (rollback path): one implicit character, char_id == perm_id, shared appearance.
+        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
+        conn.ok(ticket)
+        return
+    chars = store.list_characters(p.username)
+    for char in chars:
+        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char)))
+    if chars:
+        log(f"  → CharacterData ×{len(chars)} for {p.username!r}: "
+            + ", ".join(f"{c['name']!r}(id {c['char_id']}, {len(c['data'])}B)" for c in chars))
+    else:
+        log(f"  → RequestCharacters: {p.username!r} has NO characters yet — replying with an "
+            f"empty list so the client opens character creation")
     conn.ok(ticket)
 
 
+def _store_character(conn, fields, ticket, what):
+    """Shared body of the three character-creating messages (77/79/86).
+
+    The `data` blob is stored EXACTLY as the client sent it. We do not parse or regenerate it:
+    the client authors the character (name in UTF-16LE plus appearance/stat fields, split into
+    six sub-blocks by `CommLayer::Character::GetData`), and replaying its own bytes is both the
+    correct store behaviour and the only way to avoid corrupting a format we have not fully
+    reversed."""
+    p = _player(conn)
+    name = fields.get("name") or p.username
+    data = fields.get("data") or b""
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        # LEGACY (rollback path): acknowledge the creation with the account's own id and store
+        # nothing — the client then plays the single implicit character, as it did all session.
+        log(f"  {what} name={name!r} — persistence is OFF, acknowledging without storing")
+        conn.status_with_id(0, p.perm_id, ticket)
+        return
+    if not data:
+        # Storing an empty blob would leave a character that LOOKS created but has no body —
+        # better to refuse loudly than to persist a broken record.
+        log(f"  ⚠ {what} for {p.username!r} carried NO data blob — refusing to store an empty "
+            f"character; the client will be told the creation failed.")
+        conn.status_with_id(1, 0, ticket)
+        return
+    char = store.create_character(p.username, name, data)
+    existing = store.list_characters(p.username)
+    log(f"  ✅ {what}: {name!r} stored for {p.username!r} → char_id {char['char_id']} "
+        f"({len(data)}B); the account now has {len(existing)} character(s), surviving restarts.")
+    # ⭐ Answer with the NEW character's id, not the account's — this is the id the client will
+    # refer to that character by from now on (and, on selection, present as its token perm_id).
+    conn.status_with_id(0, int(char["char_id"]), ticket)
+
+
 @handler(77)  # CreateCharacterFromPreview
-def _h_register_nickname(conn, fields, ticket):
-    log(f"  CreateCharacter name={fields.get('name')!r}")
-    conn.status_with_id(0, _player(conn).perm_id, ticket)
+def _h_create_character(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "CreateCharacterFromPreview")
 
 
-@handler(86, 88, 94)  # AddCharacter / ChangeUser(confirm) / RemoveCharacter
+@handler(79)  # AddCharacterFromPreview
+def _h_add_character_preview(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "AddCharacterFromPreview")
+
+
+@handler(86)  # AddCharacter
+def _h_add_character(conn, fields, ticket):
+    _store_character(conn, fields, ticket, "AddCharacter")
+
+
+@handler(90)  # ChangeCharacter
+def _h_change_character(conn, fields, ticket):
+    """Persist an edit to the character the client NAMES by char_id.
+
+    `property_mask` says which fields the client considers changed; we update only what it
+    actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
+    p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        conn.ok(ticket)                       # LEGACY: bare ack, nothing persisted
+        return
+    char_id = fields.get("char_id") or p.char_id
+    mask = fields.get("property_mask", 0)
+    if not char_id:
+        log(f"  ⚠ ChangeCharacter from {p.username!r} named no char_id — ignoring")
+        conn.ok(ticket)
+        return
+    updated = store.update_character(char_id, name=fields.get("name"), data=fields.get("data"))
+    if updated is None:
+        log(f"  ⚠ ChangeCharacter: no character with char_id {char_id} — nothing updated")
+    else:
+        players.refresh_from_store(p.username)
+        log(f"  ✅ ChangeCharacter: char_id {char_id} is now {updated['name']!r} "
+            f"({len(updated['data'])}B, mask=0x{mask:x})")
+    conn.ok(ticket)
+
+
+@handler(94)  # RemoveCharacter
+def _h_remove_character(conn, fields, ticket):
+    """Delete the character the client NAMES by char_id — not 'whatever this account has'.
+
+    With several characters on an account, deleting by account would remove the wrong one; the
+    message carries the id precisely so the client can say which."""
+    p = _player(conn)
+    if not config.PERSISTENT_CHARACTERS_ENABLED:
+        conn.ok(ticket)                       # LEGACY: bare ack, nothing to delete
+        return
+    char_id = fields.get("char_id") or p.char_id
+    if not char_id:
+        log(f"  ⚠ RemoveCharacter from {p.username!r} named no char_id — refusing to guess "
+            f"which character to delete")
+        conn.ok(ticket)
+        return
+    gone = store.delete_character(char_id)
+    if gone is None:
+        log(f"  ⚠ RemoveCharacter: no character with char_id {char_id} — nothing deleted")
+    else:
+        players.refresh_from_store(p.username)
+        left = store.list_characters(p.username)
+        log(f"  ✅ RemoveCharacter: {gone['name']!r} (char_id {char_id}) deleted; "
+            f"{p.username!r} has {len(left)} character(s) left"
+            + (" — the next RequestCharacters re-opens creation" if not left else ""))
+    conn.ok(ticket)
+
+
+@handler(88)  # ChangeUser (confirm)
 def _h_char_ack(conn, fields, ticket):
     conn.ok(ticket)
 
@@ -351,6 +768,10 @@ def _h_assign_server(conn, fields, ticket):
     the advertised ip:port and stands up the UserComm-SERVER connection that our :7071 listener
     serves chat over. The handler does NOT validate the ticket category, so an unsolicited
     ticket_id is accepted the same as a reply ticket.
+
+    Because that handler dials unconditionally, the 192 is sent only when the player has no live
+    UC connection — see the comment above the send. Sending one per assign leaked a client socket
+    a minute and eventually OOM-killed the client.
     """
     server_type = fields.get("server_type", 0)
     server_subtype = fields.get("server_subtype", 0)
@@ -363,8 +784,9 @@ def _h_assign_server(conn, fields, ticket):
     # LobbyServerList_GameServerAssigned@0x00469ad0 → SetRefereeServerAddress@0x4625d0 → LM+0x580.
     # ⚠️ The descriptor MUST NOT be type4/sub5 — that value is special-cased to a tincat3-private
     # handler that returns without notifying the lobby. See the REFEREE_SERVER comment below and
-    # ER 2026-07-27_referee-assign-subtype-routing. The 192 below still goes out (different message
-    # type → tincat3's UsercommServerData dial handler, independent of the 170) so UC/chat stays up.
+    # ER 2026-07-27_referee-assign-subtype-routing. The 192 below is a different message type
+    # (tincat3's UsercommServerData dial handler, independent of the 170), so UC/chat still comes up
+    # on the FIRST assign — but it is now suppressed once a UC conn is live; see there for why.
     if config.REPLY_REFEREE_ASSIGN and server_type == 4 and server_subtype == 4:
         # ONE frame, type4/sub4 → the DEFAULT branch of tincat3
         # GameServerManager_OnGameServerAssigned@0x10021520 → LobbyServerList_GameServerAssigned
@@ -402,6 +824,26 @@ def _h_assign_server(conn, fields, ticket):
                 f"-> {game['ip']}:{game['port']} (ticket={ticket}) — clears villageList+0x9c")
             return
         log("  ! AssignServer(type5/sub1) but this conn hosts no game — no 170 to echo; sending 192")
+
+    # ── UC/chat dial (UsercommServerData 192) ────────────────────────────────────────────────────
+    # ⚠️ ONE 192 PER UC CONNECTION — never one per assign. tincat3's generic CommLayer 0xc0 handler
+    # (FUN_10030420) DIALS the advertised ip:port every single time it sees a 192; it does not check
+    # whether a UserComm connection is already up. The referee reply above arms LM+0x588, which makes
+    # the client re-send AssignServer(189 type4/sub4) every 60 s for the rest of the session — that
+    # exact-60 s cadence is the tell that the latch worked, so it is CORRECT and must keep happening.
+    # Answering each retry with a 192 therefore stood up a brand-new UC socket every minute that the
+    # client never closed. Measured live 2026-08-08: 57 assigns, 48 UC logins for one player, 41 of
+    # those sockets still open, each carrying 18 ChannelInfo worth of channel objects. The client is
+    # a 32-bit process, so that leak ends exactly one way — `operator new`@0x006f2524 gets NULL from
+    # malloc and throws the static std::bad_alloc at DAT_0088f5b0 (crash 16:41:04, and 5 more that
+    # day). The retry is not the bug; re-dialing on the retry is.
+    me = _player(conn)
+    live_uc = _find_live(lambda c: getattr(c, "is_chat", False)
+                         and _player(c).perm_id == me.perm_id)
+    if live_uc:
+        log(f"  → UsercommServerData(192) SUPPRESSED — {me.username!r} (perm_id={me.perm_id}) already "
+            f"has a live UC conn (#{live_uc[0].id}); a 192 here would dial a SECOND one and leak it")
+        return
 
     conn.send_app(192, codec.encode_body(192, {
         "server_id": 1, "ip": config.ADVERTISED_IP, "port": config.UC_PORT,
@@ -727,6 +1169,9 @@ def _h_send_token(conn, fields, ticket):
         def _push_enter_world(c=conn):
             time.sleep(config.ENTER_WORLD_DELAY)
             village.send_enter_world(c)             # idempotent (_enter_world_sent latch)
+            # Now that this client is in the world, exchange avatars with everyone else who is.
+            time.sleep(config.AVATAR_SPAWN_DELAY)
+            _spawn_world_avatars(c)
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")
@@ -797,8 +1242,55 @@ def _h_send_game_data(conn, fields, ticket):
         # little-endian, so the client's `if (code == 0xDEADBEEF)` never matched and the whole handler
         # body was skipped. Fixing the byte order (village.world_login_ack_body) exposed it immediately.
         # 1006 is now sent ONLY as the answer to a leave request (msg 2002), above.
+    elif msg_type == config.VILLAGE_AVATAR_LOCATION_MSGTYPE:   # 0x27D0 — msg 2000 AVATAR LOCATION
+        _h_avatar_location(conn, data)
     else:
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on conn #{conn.id} — logged, no in-world handler)")
+
+
+def _h_avatar_location(conn, data):
+    """The client telling us where its player actually IS (msg 2000) — the inbound half of the
+    presence protocol. Store the pose, then RELAY it to every other in-world client as a 1001
+    location refresh, which is how a waypoint reaches their movement ring.
+
+    Relay timing: we re-stamp with OUR clock (`_now_ms() - 1000`) rather than forwarding the
+    sender's `tick`. The client turns a wire tick into a waypoint stamped `reconstruct(tick) +
+    2000 ms`, and the interpolator needs waypoints straddling "now" — forwarding the sender's own
+    (current) tick would put every stamp ~2 s in the FUTURE, which underflows the staleness check
+    and hides the avatar (proven the hard way in round 2, ER 2026-08-01_avatar-location-refresh).
+    Position/rotation/animation flags are relayed verbatim; only the timebase is ours.
+
+    Arrival rate is ~3/s per client, so this is the real movement stream; the 1 Hz ticker stays as
+    a keepalive for anyone who has stopped reporting."""
+    try:
+        loc = village.parse_avatar_location(data)
+    except Exception as exc:  # noqa: BLE001 — a malformed report must not kill the conn
+        log(f"  [WORLD] avatar location (msg 2000) from conn #{conn.id} unparseable: {exc} "
+            f"({len(data)}B: {data[:16].hex()})")
+        return
+    me = _player(conn)
+    with _poses_lock:
+        prev = _poses.get(me.perm_id)
+        _poses[me.perm_id] = loc
+    x, y, z = loc["pos"]
+    if prev is None:
+        log(f"  [WORLD] {me.char_name!r} is reporting its position (msg 2000, ~3/s) — first fix "
+            f"({x:.1f}, {y:.1f}, {z:.1f}) rot={loc['rot_deg']:.0f}° "
+            f"zone={loc['zone']} ghstzne={loc['ghost_zone']}; relaying live to the others")
+    elif (prev["zone"], prev["ghost_zone"]) != (loc["zone"], loc["ghost_zone"]):
+        # Sub-zone transition (minigame room / hall of fame). Logged loudly because it is exactly
+        # the case that used to break: we relayed zone 0 regardless, so a player who walked into a
+        # side room stayed advertised as standing outside.
+        log(f"  [WORLD] {me.char_name!r} ZONE CHANGE "
+            f"{prev['zone']}/{prev['ghost_zone']} → {loc['zone']}/{loc['ghost_zone']} "
+            f"at ({x:.1f}, {y:.1f}, {z:.1f}) — relaying the new zone")
+    tick = (_now_tick16() - 1000) & 0xFFFF
+    for other in _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn):
+        try:
+            village.send_entity_create(other, me.perm_id, tick=tick, quiet=True,
+                                       **_live_pose(me.perm_id))
+        except Exception as exc:  # noqa: BLE001 — a dying socket must not kill the relay
+            log(f"  [WORLD] avatar location relay to conn #{other.id} failed: {exc}")
 
 
 # ── Chat over lobby magic ─────────────────────────────────────────────────────
@@ -872,9 +1364,12 @@ def _h_chat_message(conn, fields, ticket):
 # account/social login replies. connection.py routes their full per-message decode to
 # tincat_lobby_unhandled.log (file only) so the main view stays focused on auth, server-list,
 # AssignServer, village/world and chat. Genuinely UNKNOWN types (no handler) STAY in the main log.
+# ⭐ The CHARACTER handlers (72/77/79/86/90/94) were quiet while they were boilerplate that
+# echoed one hardcoded stand-in character. They are now the persistence path — creation,
+# storage and replay of a real player's character — so they belong in the main log.
 QUIET_HANDLERS = frozenset({
     _h_ack, _h_char_ack, _h_ignore_list, _h_user_info, _h_player_info,
-    _h_select_nickname, _h_cdkeys, _h_property_get, _h_motd,
+    _h_cdkeys, _h_property_get, _h_motd,
 })
 
 

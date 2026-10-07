@@ -46,31 +46,54 @@ def gamedata_frame(msg_type, data, magic=None):
 
 
 def enter_world_body(worldname=None, server_perm=None, channels=None):
-    """Positional TinCat-PropertySet body for EnterWorld (msg 1000), ground-truthed from
-    VillageServerConnection::HandleEnterWorld @0x46f470 (each name is seek'd, then read via the reader
-    vtable: +0x30 ReadString / +0x18 ReadMemBlock(dst,0x20)):
-        Worldname          : STRING         (str_field; empty => client uses "<UNNAMED>")
-        ServerPerm         : MEMBLOCK 0x20   (32-byte world admission token; stored, not validated)
-        ChatChannelsCount  : MEMBLOCK 0x20   (read as a 32-byte block; FIRST DWORD = N = channel count)
-        repeat N times:
-          ChatChannelZone  : MEMBLOCK 0x20
-          ChatChannelID    : MEMBLOCK 0x20
-    HandleEnterWorld calls SetState(VillageEntered=9) BEFORE parsing, so even a minimal body enters; the
-    RE recommends N>=1, so we default to one zero-filled (zone,id) pair. ChatChannelsCount is a 32-byte
-    MEMBLOCK (first dword = N) — NOT a bare u32 (that earlier mis-read put the channel loop out of phase)."""
-    worldname = config.ENTER_WORLD_WORLDNAME if worldname is None else worldname
-    if channels is None:
-        channels = [(b"\x00" * 32, b"\x00" * 32)]   # one dummy (zone,id) pair — HandleEnterWorld wants N>=1
-    server_perm = b"\x00" * 32 if server_perm is None else (server_perm + b"\x00" * 32)[:32]
-    count_blk = struct.pack("<I", len(channels)) + b"\x00" * 28   # 32-byte MEMBLOCK, first dword = N
+    """Body for EnterWorld (msg 1000) — a **BIT-PACKED LobbyMessage**, not a PropertySet.
 
-    body = str_field(worldname)                       # Worldname          : STRING
-    body += bytes_field(server_perm)                  # ServerPerm         : MEMBLOCK 0x20
-    body += bytes_field(count_blk)                    # ChatChannelsCount  : MEMBLOCK 0x20 (first dword=N)
-    for zone, cid in channels:
-        body += bytes_field((zone + b"\x00" * 32)[:32])   # ChatChannelZone : MEMBLOCK 0x20
-        body += bytes_field((cid + b"\x00" * 32)[:32])    # ChatChannelID   : MEMBLOCK 0x20
-    return body
+    ⭐ CORRECTED 2026-08-01 (this was silently wrong since the message was first implemented, and it
+    is what broke chat). `HandleEnterWorld@0x0046f670` reads through the LobbyMessage reader vtable
+    (`InitFromWire@0x0048fa50` installs vftable 0x007db594) — the SAME bit-packed reader as the
+    avatar messages, so there are NO u32 length prefixes anywhere in this body:
+        Worldname         : reader +0x30 = `FUN_004900a0` → **8-bit length + that many 8-bit chars**
+        ServerPerm        : reader +0x18 = `FUN_0048f300(dst, 0x20)` → **32 BITS** (0x20 is a BIT
+                            count, not a byte count — the old "MEMBLOCK 0x20" reading was wrong)
+        ChatChannelsCount : **32 bits**
+        repeat N times:
+          ChatChannelZone : **32 bits** — the map key is its **LOW BYTE** (disasm 0x0046f7d6:
+                            `MOV AL, byte ptr [ESP+0x20]`)
+          ChatChannelID   : **32 bits** — the chat cell id stored as the map value
+
+    What the client does with them (all [PROVEN] static, `VillageServerConnection+0x164` is a
+    `std::map<byte zone, u32 cellId>`):
+      * inserts each pair, then immediately looks up key **0xFF** and calls
+        `UserCommConnection::JoinChannel(map[0xFF])` — the GLOBAL channel, joined on world entry;
+      * `FUN_0046d5d0(conn, tabId)` maps a chat TAB to a cell: tab 1 GLOBAL → key **0xFF**,
+        tab 2 LOCAL → key = the player's current zone byte (`conn+0x225`), tab 3 MINIGAME → key
+        **0xFE**;
+      * `SetLocalChatZone@0x0046e860` leaves the old zone's channel and joins the new one on every
+        zone change, through the same map.
+
+    ⛔ **A cell id of 0 means INVALID** (`DAT_007db53c` = 0). The chat submit handler
+    (`FUN_00436860`) does `if (cellId == 0) return;` — **silently**, with no wire traffic and no
+    local echo. That is exactly the long-standing "chat text is blocked client-side" symptom: our
+    old PropertySet-shaped body made the client parse ChatChannelsCount as **0**, leaving the map
+    empty so every lookup default-inserted 0. (It also explains the client joining "cell 0": it was
+    not asking the server to assign, it was joining the id we advertised.)
+
+    `channels` is a list of `(zone_key, cell_id)` ints; defaults to `config.WORLD_CHAT_CHANNELS`."""
+    worldname = config.ENTER_WORLD_WORLDNAME if worldname is None else worldname
+    channels = list(config.WORLD_CHAT_CHANNELS if channels is None else channels)
+    server_perm = 0 if server_perm is None else int(server_perm)
+    bad = [c for c in channels if not (c[1] & 0xFFFFFFFF)]
+    if bad:
+        raise ValueError(f"chat cell id 0 is the INVALID sentinel — would silently kill chat: {bad}")
+
+    w = BitWriter()
+    w.write_string(worldname)                  # "Worldname"          8-bit len + chars
+    w.write(server_perm, 32)                   # "ServerPerm"         32 bits
+    w.write(len(channels), 32)                 # "ChatChannelsCount"  32 bits
+    for zone_key, cell_id in channels:
+        w.write(zone_key, 32)                  # "ChatChannelZone"    32 bits (low byte = map key)
+        w.write(cell_id, 32)                   # "ChatChannelID"      32 bits (cell id, non-zero)
+    return w.bytes()
 
 
 def world_login_ack_body(code=None):
@@ -108,17 +131,283 @@ def pong_body(token=b"\x00\x00\x00\x00"):
     return (bytes(token) + b"\x00\x00\x00\x00")[:4]       # bare u32 echo, no prefix
 
 
-def world_tick_body():
-    """Body for WorldTick (msg 1005): a 64-byte "tick" MEMBLOCK (HandleWorldTick @0x46f420 reads via the
-    reader's WIDE slot vtable+0x20, len 0x40). A zero clock is fine for a stub heartbeat. OPTIONAL — held
-    OFF for the first isolated drive of the 1006 gate (see dispatch._h_send_game_data)."""
-    return bytes_field(b"\x00" * 64)
+def world_tick_body(tick_ms):
+    """Body for WorldTick (msg 1005): ONE positional field, "tick", read as a **64-BIT scalar**
+    (NOT a 64-byte MEMBLOCK — that was a mis-read of the 0x40 argument, which is a BIT count).
+
+    [PROVEN 2026-08-01 static] `HandleWorldTick@0x0046f620` does SelectField("tick") then reader
+    vtbl+0x20 = `FUN_0048f380` → `FUN_0048f050(this, 0x40)` — the positional MSB-first bit reader
+    pulling 64 bits into an 8-byte stack local. So the wire form is 8 raw big-endian bytes, no
+    length prefix (same scalar rule as the proven big-endian u32s).
+
+    ⚠️ CLIENT ENGINE BUG (shipped): `FUN_0048f050` assembles bits with a 32-bit `SHL EAX,CL` (x86
+    masks CL & 0x1f) + CDQ, so for a 64-bit read the two 32-bit halves ALIAS into the low dword
+    (`lo = hi_half | lo_half`) and the high dword becomes a sign-smear. Consequence: the high
+    dword on the wire MUST be zero or it corrupts the value — hence `tick_ms & 0xFFFFFFFF`.
+    Only the low 16 bits are consumed anyway (the clock slew, see send_world_tick)."""
+    return struct.pack(">Q", int(tick_ms) & 0xFFFFFFFF)
 
 
-def _send_village(conn, msg_type, body, magic, tag):
+# ── In-world presence: bit-packed LobbyMessage bodies (msgs 1001-1004) ────────────────────────
+# [SPEC PROVEN 2026-07-27 static — docs/IN_WORLD_PRESENCE.md]
+# The entity/avatar messages do NOT use the positional PropertySet layout the rest of village.py
+# sends. They are a BIT-PACKED stream with non-byte-aligned field widths.
+#
+# Bit order (FUN_0048f0d0): each byte is consumed MSB-first (bit 7 down), and the value is
+# assembled MSB-first, i.e. plain big-endian bit packing — the same convention that made the
+# referee's 32-bit PermID exactly 4 big-endian bytes.
+#
+# Field NAMES are only looked up when the LobbyMessage "names" flag is set (bit 15 of the type
+# word). We send names=0, so FUN_0048f5f0 skips the name entirely and reads N bits positionally —
+# which is why this writer only needs widths, in order.
+#
+# names=0 IS REQUIRED, not merely convenient (settled statically 2026-07-29, sadk_noav.exe):
+#   FUN_0048f5f0(msg, nbits, name)  gates ALL name handling on msg+0x20, then always tail-calls
+#                                   FUN_0048f0d0(msg, nbits) — the pure positional bit read.
+#   The name is a CALLER-SUPPLIED C string (e.g. "dtblcks"); it is never read from the wire. With
+#   the flag set it is folded into a running hash at msg+0x30 (init 0x00762320 / update 0x00762350
+#   / mix 0x00762400) — that hash is bookkeeping and consumes no bits.
+#   BUT the finalize FUN_0048f530, called at the end of each block group, does this when the flag
+#   is set:   FUN_0048f0d0(msg, 0x20)   <-- consumes a trailing 32-bit hash word off the stream.
+# So sending names=1 would oblige us to append a 32-bit trailer per message; with names=0 the
+# client reads exactly the bits we write and stops. Do not "fix" this to names=1 — a stale draft
+# of docs/IN_WORLD_PRESENCE.md claimed that, and it would silently over-read every body by 4 bytes.
+class BitWriter:
+    """MSB-first bit packer. `write(value, nbits)` appends the low nbits of value, MSB first."""
+
+    def __init__(self):
+        self._bits = []
+
+    def write(self, value, nbits):
+        value = int(value) & ((1 << nbits) - 1)
+        for i in range(nbits - 1, -1, -1):
+            self._bits.append((value >> i) & 1)
+        return self
+
+    def write_bool(self, flag):
+        return self.write(1 if flag else 0, 1)
+
+    def write_string(self, s):
+        """8-bit length + one 8-bit char each (FUN_0048ffc0). No NUL, no 32-bit prefix, and NOT
+        byte-aligned — it rides the same bit stream.
+
+        ⭐ **The wire encoding is UTF-8** [PROVEN 2026-08-02]: the string reader at LobbyMessage
+        vtbl+0x30 (`FUN_004900a0`) hands its bytes to `FUN_00487620`, which is
+        `MultiByteToWideChar(0xFDE9 = CP_UTF8, …)` → `WideCharToMultiByte(CP_ACP, …)`. The same
+        converter is applied to the NPC `npcdesc`, the avatar `name`, and both chat strings.
+        We sent ISO-8859-15, so "Händler" put a bare 0xE4 on the wire — invalid UTF-8, decoded to
+        U+FFFD and displayed as "H?ndler" (live-observed). The length prefix counts BYTES, so a
+        multi-byte character costs more than one of the 255 available."""
+        raw = (s or "").encode("utf-8", "replace")[:255]
+        self.write(len(raw), 8)
+        for ch in raw:
+            self.write(ch, 8)
+        return self
+
+    def bytes(self):
+        """Pad the final partial byte with zero bits (the reader stops at the field count)."""
+        out = bytearray()
+        for i in range(0, len(self._bits), 8):
+            chunk = self._bits[i:i + 8]
+            chunk = chunk + [0] * (8 - len(chunk))
+            byte = 0
+            for bit in chunk:
+                byte = (byte << 1) | bit
+            out.append(byte)
+        return bytes(out)
+
+    def __len__(self):
+        return len(self._bits)
+
+
+class BitReader:
+    """MSB-first bit reader — the exact inverse of `BitWriter`, and of the client's own
+    `LobbyMessage_ReadBitsCore@0x0048f050` (each byte consumed bit 7 → bit 0, value assembled
+    MSB-first). Used to decode the client's inbound avatar location reports."""
+
+    def __init__(self, data):
+        self._data = data
+        self._pos = 0
+
+    def read(self, nbits):
+        value = 0
+        for _ in range(nbits):
+            byte_i, bit_i = divmod(self._pos, 8)
+            if byte_i >= len(self._data):
+                raise ValueError(f"bit stream exhausted after {self._pos} bits "
+                                 f"({len(self._data)}B body)")
+            value = (value << 1) | ((self._data[byte_i] >> (7 - bit_i)) & 1)
+            self._pos += 1
+        return value
+
+    def read_bool(self):
+        return bool(self.read(1))
+
+
+def dequantise_axis(raw, axis):
+    """Inverse of `quantise_axis` — matches `LobbyMessage_ReadLocationBlock@0x0048f670`:
+    `value = raw * (max - min) * (1/2048) + min`."""
+    lo, hi = WORLD_BOUNDS[axis]
+    return raw / float(POS_STEPS) * (hi - lo) + lo
+
+
+def dequantise_rot(raw):
+    """Inverse of `quantise_rot`: `degrees = raw * 360.0 * (1/128)`."""
+    return raw * 360.0 / ROT_STEPS
+
+
+def parse_avatar_location(data):
+    """Decode the client's OWN avatar location report — village msg **2000** (wire msg_type 0x27D0).
+
+    [PROVEN 2026-08-01 static] `VillageServerConnection_SendAvatarLocation_2000@0x0046ca40` builds
+    a category-2 LobbyMessage id 2000 and writes, in order:
+        tick 16 (`LobbyMessage_WriteShort`, value `tick | 1` — bit 0 forced set, so a tick is never 0)
+        posx 11 · posy 11 · posz 11 · rot 7 · zone 4   (`LobbyMessage_WriteLocationBlock@0x0048f7e0`)
+        ghstzne 4                                      (`LobbyMessage_WriteGhostZone@0x0048f980`)
+        rnng 1 · jmp 1
+    — i.e. **exactly the AvatarLocation block we already WRITE in `entity_create_body`**, minus the
+    `id`/`dtblcks` header (the server knows the sender from the connection). Same quantisation
+    constants: the writer's scaling is the mirror of `LobbyMessage_ReadLocationBlock@0x0048f670`.
+
+    Driven by `LobbyPlayerController_Update@0x0051ace0` (the local player controller, which also
+    reads the Lobby/ControllerMode·FirstPerson·TurnSpeed settings) →
+    `CLobbyClient_ReportOwnAvatarLocation@0x005034e0` → this message, ~3/s while in-world.
+
+    Returns a dict ready to hand to `send_entity_create` (`pos`, `rot_deg`, `running`, `jumping`).
+    The client's own `tick` is deliberately NOT reused for the relay: waypoint stamps must straddle
+    the receiver's clock, so the relay re-stamps from our own clock (see dispatch)."""
+    r = BitReader(data)
+    tick = r.read(16)
+    pos = (dequantise_axis(r.read(11), "x"),
+           dequantise_axis(r.read(11), "y"),
+           dequantise_axis(r.read(11), "z"))
+    rot_deg = dequantise_rot(r.read(7))
+    zone = r.read(4)
+    ghost_zone = r.read(4)
+    running = r.read_bool()
+    jumping = r.read_bool()
+    return {"tick": tick, "pos": pos, "rot_deg": rot_deg, "zone": zone,
+            "ghost_zone": ghost_zone, "running": running, "jumping": jumping}
+
+
+# World bounds + quantisation, read from the binary (FUN_0048f670 / 2026-07-27):
+#   x = posx/2048 * (BOUND_MAX_X - BOUND_MIN_X) + BOUND_MIN_X      etc.
+#   rot_degrees = rot7 * 360.0 / 128
+# so 11 bits span each axis and 7 bits span a full turn.
+WORLD_BOUNDS = {           # axis: (min, max)  — floats at 0x87b700..0x87b714
+    "x": (-150.0, 150.0),
+    "y": (-10.0, 30.0),
+    "z": (-150.0, 150.0),
+}
+POS_STEPS = 2048           # 1/2048 scale at 0x7debc8 (11 bits)
+ROT_STEPS = 128            # 360.0 (0x7debc0) * 1/128 (0x7debb8) → 7 bits
+
+
+def quantise_axis(value, axis):
+    lo, hi = WORLD_BOUNDS[axis]
+    frac = 0.0 if hi == lo else (float(value) - lo) / (hi - lo)
+    return max(0, min(POS_STEPS - 1, int(round(frac * POS_STEPS))))
+
+
+def quantise_rot(degrees):
+    return int(round((float(degrees) % 360.0) / 360.0 * ROT_STEPS)) % ROT_STEPS
+
+
+#: Field order of the AvatarStyle block (`FUN_004825f0`, dtblcks bit1). Widths are FULL BYTES here,
+#: unlike PlayerCreate(1004)'s 4-bit colour nibbles — the two are different formats for different
+#: kinds of entity, so do not copy widths across.
+AVATAR_STYLE_COLOURS = ("hrclr", "sknclr", "shrtclr", "trsrclr",
+                        "addColor1", "addColor2", "addColor3", "addColor4")
+
+
+def avatar_style_block(w, name, tribe_gender=0, colours=()):
+    """Append the AvatarStyle block (dtblcks bit1) to an in-progress BitWriter.
+
+    `FUN_004825f0`, in wire order:
+        name STRING · trbgndr 8 · hrclr 8 · sknclr 8 · shrtclr 8 · trsrclr 8 · addColor1..4 8 each
+
+    `colours` supplies the eight byte-wide slots in AVATAR_STYLE_COLOURS order; short sequences are
+    zero-filled. They land in AvatarProxy+0x49..+0x50 and tint the model
+    (`AvatarVisual_RefreshStyleModel@0x00508090`). Failure to parse is reported by the client as
+    "Could not read AvatarStyle from message." in LobbyComm.log.
+
+    ⭐ **`trbgndr` packing RESOLVED** [PROVEN 2026-08-02, same function]: HIGH nibble = body part
+    (`+0x48 >> 4`, `FUN_0046b5c0`; the model math clamps it to < 3), LOW nibble = gender
+    (`+0x48 & 0xF`, `FUN_0046b5d0`, used as a boolean). The avatar model index is
+    `bodypart + (tribe − 1) × 3`, tribe from vtbl+0x18 clamped to 1..5. Sending 0 pins every
+    avatar to body part 0 / gender 0 — i.e. the identical default look on everyone.
+
+    Sent live since 2026-08-01 (`dispatch._spawn_world_avatars` passes `style=`), so a rendered
+    avatar carries its real character name as the label.
+    """
+    vals = list(colours) + [0] * (len(AVATAR_STYLE_COLOURS) - len(colours))
+    w.write_string(name)                           # "name"
+    w.write(tribe_gender, 8)                       # "trbgndr" — hi nibble bodypart, lo nibble gender
+    for value in vals[:len(AVATAR_STYLE_COLOURS)]:
+        w.write(value, 8)                          # hrclr/sknclr/shrtclr/trsrclr/addColor1..4
+    return w
+
+
+def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
+                       zone=0, ghost_zone=0, running=False, jumping=False,
+                       style=None):
+    """Body for EntityCreate (msg 1001) — the message that puts a visible AVATAR in the world.
+
+    `HandleEntityCreate@0x0046e1d0` reads `id` (32 bits), allocates an AvatarProxy (0xE0 bytes) into
+    the avatar container at VillageServerConnection+0x170 if unknown, then `FUN_00482c20` parses the
+    payload and the observer fan-out tells the world about it.
+
+    `FUN_00482c20` reads a 4-bit `dtblcks` MASK and then only the blocks it selects:
+        bit0 AvatarLocation · bit1 AvatarStyle · bit2 ActiveItems · bit3 Avatar Stats
+    We send **dtblcks=1** (location only) — the minimal viable avatar. Each block has its own error
+    string in LobbyAvatarProxy.cpp, so a malformed one is VISIBLE in the client's LobbyComm.log
+    ("Could not read AvatarLocation from message." etc.) rather than failing silently.
+
+    AvatarLocation for a REMOTE avatar (FUN_004824b0, the `this+0xc != GetCommSystem()` branch):
+        tick 16 · posx 11 · posy 11 · posz 11 · rot 7 · zone 4 · ghstzne 4 · rnng 1 · jmp 1
+
+    `style`, when given, is a dict passed through to `avatar_style_block` and sets dtblcks bit1. It
+    is OFF by default on purpose — see that function. Blocks are written in dtblcks BIT ORDER
+    (location, then style), which is the order FUN_00482c20 reads them.
+    """
+    dtblcks = 1 | (2 if style else 0)
+    w = BitWriter()
+    w.write(avatar_id, 32)                     # "id"       — peeked by HandleEntityCreate
+    w.write(dtblcks, 4)                        # "dtblcks"  — AvatarLocation [+ AvatarStyle]
+    w.write(tick, 16)                          # "tick"
+    w.write(quantise_axis(pos[0], "x"), 11)    # "posx"
+    w.write(quantise_axis(pos[1], "y"), 11)    # "posy"
+    w.write(quantise_axis(pos[2], "z"), 11)    # "posz"
+    w.write(quantise_rot(rot_deg), 7)          # "rot"
+    w.write(zone, 4)                           # "zone"
+    w.write(ghost_zone, 4)                     # "ghstzne"
+    w.write_bool(running)                      # "rnng"
+    w.write_bool(jumping)                      # "jmp"
+    if style:
+        avatar_style_block(w, style.get("name", ""),
+                           style.get("tribe_gender", 0),
+                           style.get("colours", ()))
+    return w.bytes()
+
+
+# ⛔ NEVER send a short/truncated EntityCreate(1001) body — IT CRASHES THE CLIENT.
+# Established 2026-07-31 by a negative-control probe (ER
+# engagement_records/2026-07-31_entitycreate-negative-control.md): a 2-byte body, sent to make the
+# 32-bit `id` peek fail loudly, instead killed the game process ~1.1 s later (server saw every
+# connection drop at once; the player saw the window vanish with no error).
+#
+# ⭐ It answered the question anyway, and definitively: **an undelivered frame cannot crash
+# anything**, so msg 1001 IS routed to `VillageServerConnection::HandleEntityCreate@0x0046e1d0` and
+# IS parsed. Routing is NOT the problem — rendering is.
+#
+# It also corrects an RE assumption: the peek at stream vtbl+0x18 does **not** bounds-check against
+# the buffer length, so `Can't peek AvatarID` fires on some other condition, not on "buffer too
+# short". Any future probe must stay well-formed and vary only field VALUES.
+def _send_village(conn, msg_type, body, magic, tag, quiet=False):
     payload = gamedata_frame(msg_type, body, magic=(magic or config.VILLAGE_PAYLOAD_MAGIC))
     conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))
-    log(f"  → [VILLAGE] {tag} (msg {msg_type}/0x{msg_type:x}) in SendGameData(74) on conn #{conn.id} ({len(payload)}B)")
+    if not quiet:
+        log(f"  → [VILLAGE] {tag} (msg {msg_type}/0x{msg_type:x}) in SendGameData(74) on conn #{conn.id} ({len(payload)}B)")
 
 
 def send_enter_world(conn, magic=None, force=False):
@@ -175,13 +464,199 @@ def send_pong(conn, token=b"\x00\x00\x00\x00", magic=None):
     _send_village(conn, config.VILLAGE_MSG_PONG, pong_body(token), magic, "Pong(0xED7) keepalive")
 
 
-def send_world_tick(conn, magic=None):
-    """Send a WorldTick (msg 1005) — the in-world sim heartbeat (NOT one-shot; call periodically). OPTIONAL:
-    held OFF for the first isolated drive of the 1006 gate so a render-gate failure isn't conflated with a
-    missing clock. Enable once 1006 is confirmed to dismiss the loading screen."""
+def send_world_tick(conn, tick_ms, magic=None, quiet=False):
+    """Send a WorldTick (msg 1005) — **the world-clock SYNC**, not an optional heartbeat.
+
+    [PROVEN 2026-08-01 static + trace avatar_refresh_diag2.run] The chain:
+      `HandleWorldTick@0x0046f620` (village msg 1005) reads the 64-bit "tick" field and fires the
+      conn's +0x11c notify list → `CLobbyClient_OnWorldTick_Throttled@0x00503590` (subscribed at
+      conn birth) → `FUN_0057b910(tick & 0xFFFF, 250)`: if the client WORLD CLOCK
+      (`FUN_0057b8d0` = raw timer − offset @0x88a62c) differs in phase from the wire tick by
+      ≥250 ms (shorter direction mod 65536), the offset is slewed so the clock's low 16 bits
+      EQUAL the tick. That world clock is the anchor `FUN_004f4d10` reconstructs every avatar
+      location tick16 against, AND the `t` the movement-ring interpolator `FUN_00519d50` runs on
+      (trace-proven: Tick param == 0x88a620−0x88a62c at the call).
+
+    So WITHOUT this message the phase between our EntityCreate tick stream and the client clock is
+    ARBITRARY per machine/boot (up to ±32.7 s) — waypoint stamps land far past (>3.0 s stale →
+    hidden) or far future (u64 underflow → instantly hidden). This was the round-2/3 die-off and
+    the PC-vs-VM asymmetry. `tick_ms` MUST come from the same clock as the location ticks
+    (dispatch._now_ms) so the slew aligns the client to OUR timebase. Call periodically; after the
+    first slew the 250 ms tolerance makes further sends client-side no-ops."""
     if not conn.alive:
         return
-    _send_village(conn, config.VILLAGE_MSG_WORLD_TICK, world_tick_body(), magic, "WorldTick(1005)")
+    _send_village(conn, config.VILLAGE_MSG_WORLD_TICK, world_tick_body(tick_ms), magic,
+                  f"WorldTick(1005) tick_ms={int(tick_ms) & 0xFFFFFFFF} — world-clock sync", quiet=quiet)
+
+
+def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0, magic=None,
+                       label="", style=None, quiet=False, running=False, jumping=False,
+                       zone=0, ghost_zone=0):
+    """Spawn OR refresh a visible avatar in the recipient's lobby world (msg 1001).
+
+    PROVEN ON THE WIRE 2026-08-01 (TTD traces avatar_spawn_diag.run / avatar_vanish_diag.run):
+    the first 1001 for an id creates the avatar (CLobbyObj + visual + styled model); every LATER
+    1001 for the same id takes `CLobbyClient_UpdateAvatar`'s update path, whose location block
+    pushes a WAYPOINT (pos+rot+rnng/jmp, stamped tick+2000 ms) into the visual's 8-slot movement
+    ring (`FUN_00519b20`). ⚠️ The per-frame interpolator (`FUN_00519d50`) positions the avatar
+    EXCLUSIVELY from that ring — without periodic refreshes the ring is empty and the avatar snaps
+    to (0,0,0) one frame after spawning. `tick` is the low 16 bits of an advancing ms clock; the
+    client re-anchors it against its own local clock (`FUN_004f4d10`), so no absolute sync is
+    needed. Waypoints with pos ≈ (0,0,0) are REJECTED by the push — never park an avatar there.
+
+    `running`/`jumping` ride the same location block and drive the remote avatar's animation state;
+    they come straight from the mover's own report (`parse_avatar_location`).
+
+    `zone`/`ghost_zone` say WHICH sub-zone the avatar is in (the minigame rooms and the hall of
+    fame are separate zones). Relay the mover's own reported values — see `dispatch._live_pose`."""
+    if not conn.alive:
+        return
+    body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style,
+                              running=running, jumping=jumping,
+                              zone=zone, ghost_zone=ghost_zone)
+    blocks = "location+style" if style else "location"
+    _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
+                  f"EntityCreate(1001) avatar id={avatar_id} {label}"
+                  f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
+                  f" zone={zone}/{ghost_zone} dtblcks={blocks} {len(body)}B"
+                  f" — HandleEntityCreate → AvatarProxy into +0x170", quiet=quiet)
+
+
+#: Village msg id for PlayerCreate — the NPC/record spawn (client: HandlePlayerCreate@0x0046f8c0).
+#: Deliberately NOT in config.py: the deploy server's config.py is local-only (see HANDOFF.md).
+VILLAGE_MSG_PLAYER_CREATE = 1004
+
+
+def player_create_body(npc_id, npcdesc, pos=(0.0, 0.0, 0.0), rot_deg=0.0, zone=0,
+                       colours=(), npcidx=0, bdyprt=0, npctyp=1, actions=()):
+    """Body for PlayerCreate (msg 1004) — the real NPC mechanism.
+
+    Layout from the record reader `FUN_0047b5c0` (record alloc 0x120 in `HandlePlayerCreate
+    @0x0046f8c0`, container VillageServerConnection+0x174 — DISTINCT from the 1001 avatar
+    container at +0x170):
+
+        id 32 · npcdesc STRING · [LobbyMessage_ReadLocationBlock@0x0048f670:
+        posx 11 · posy 11 · posz 11 · rot 7 · zone 4] · hrclr 4 · sknclr 4 · shrtclr 4 ·
+        trsrclr 4 · npcidx 4 · bdyprt 4 · npctyp 2 · actcnt 8 · actcnt × (act 8 · actChat STRING)
+
+    Unlike the avatar location block there is NO tick, ghost-zone or running/jumping — NPC
+    records are static placements. Colours are 4-bit NIBBLES here (the avatar style block's
+    are full bytes — do not copy widths across; test_world_presence.py pins both).
+
+    `npctyp` selects the visual in the consumer (`FUN_005031a0` → `FUN_004f6ea0`, subscribed
+    on villageConn+0x38): **1 = "settler" template person** (labelled with npcdesc),
+    **2 = "letterbox" template**, anything else = NO visual (0 is a real-player record — their
+    body arrives via EntityCreate 1001 instead).
+
+    ⭐ **`npcidx` is the MODEL selector** [PROVEN 2026-08-02]: the record is a
+    `LobbyComm::NPCProxy` (type 2 at +8), and `AvatarVisual_RefreshStyleModel@0x00508090` takes
+    the model index for type-2 objects straight from vtbl+0x1c (`FUN_006ab260` → +0xc0 =
+    npcidx), skipping the avatar tribe/gender/bodypart math. `bdyprt` lands in +0x48, the
+    AVATAR tribe/gender byte, which that branch never reads — it does not affect an NPC's look.
+    Colours land in +0x49..+0x4c (hrclr/sknclr/shrtclr/trsrclr) and tint the chosen model.
+
+    `actions` = up to 3 (act_id, act_text) pairs filling the record's 3 slots. ⭐ **`act` is a
+    LobbyAction id** [PROVEN, `FUN_004325b0`], NOT an emote: 0/19 None · 1 HairColor · 2..6
+    MinigameMatchmaking · 7 Mailbox · 8/18 HostGame · 9 ListGames · 10 HallOfFame · 11 OpenShop.
+    [TODO] whether `actChat` is the button label or a spoken line.
+    """
+    vals = list(colours) + [0] * (4 - len(colours))
+    w = BitWriter()
+    w.write(npc_id, 32)                        # "id"
+    w.write_string(npcdesc)                    # "npcdesc" — the label (reader vtbl+0x34)
+    w.write(quantise_axis(pos[0], "x"), 11)    # "posx"
+    w.write(quantise_axis(pos[1], "y"), 11)    # "posy"
+    w.write(quantise_axis(pos[2], "z"), 11)    # "posz"
+    w.write(quantise_rot(rot_deg), 7)          # "rot"
+    w.write(zone, 4)                           # "zone" — single nibble, no ghost-zone
+    for value in vals[:4]:
+        w.write(value, 4)                      # hrclr/sknclr/shrtclr/trsrclr — NIBBLES
+    w.write(npcidx, 4)                         # "npcidx"
+    w.write(bdyprt, 4)                         # "bdyprt"
+    w.write(npctyp, 2)                         # "npctyp" — 1 settler person, 2 letterbox
+    w.write(len(actions), 8)                   # "actcnt"
+    for act_id, chat_line in actions:
+        w.write(act_id, 8)                     # "act"
+        w.write_string(chat_line)              # "actChat" (reader vtbl+0x30)
+    return w.bytes()
+
+
+def send_player_create(conn, npc_id, npcdesc, magic=None, quiet=False, **kwargs):
+    """Send PlayerCreate (msg 1004) — spawn an NPC record — on the village conn."""
+    body = player_create_body(npc_id, npcdesc, **kwargs)
+    _send_village(conn, VILLAGE_MSG_PLAYER_CREATE, body, magic,
+                  f"PlayerCreate NPC {npcdesc!r} id={npc_id}", quiet=quiet)
+
+
+#: Village msg id for ShopInventoryData — the shop's wares (client: HandleShopInventoryData
+#: @0x004706b0). SERVER-PUSHED: clicking a shop NPC sends NOTHING on the wire (live-verified
+#: 2026-08-02 — the journal shows only keepalive Pongs), so the client is waiting for this the
+#: way it waits for EnterWorld(1000).
+VILLAGE_MSG_SHOP_INVENTORY = 0xE11
+
+
+def shop_inventory_body(npc_id, shop_id, shop_name, sell_mod=1.0, items=()):
+    """Body for ShopInventoryData (msg 0xE11) — binds a stock list to a shop NPC.
+
+    Layout from `HandleShopInventoryData@0x004706b0`:
+
+        NPCID 32 · ShopID 32 · ShopName STRING · SellMod 32(byte-swapped float) ·
+        StockCount 16 · StockCount × { ItemID 32 · Buy 32 · Sell 32 }
+
+    (the per-item reader is `FUN_0046b360`.)
+
+    ⚠️ `SellMod` is read through LobbyMessage vtbl+0x40 (`FUN_0048ff50`), which reads 32 bits and
+    then REVERSES the four bytes before storing — i.e. it is a little-endian float inside our
+    otherwise big-endian bit stream. `_swapped_float` below does that flip, so callers pass a
+    normal Python float (1.0 = sell at face value).
+
+    ⚠️ `StockCount` is read through vtbl+0x10 (`FUN_0048f280`), a 16-BIT read — not 32.
+
+    [TODO] `ItemID` values are game-data ids (the encrypted item tables), not derivable from the
+    binary. The defaults in `npcs.SHOP_STOCK` are a low-id probe: whichever ids render as real
+    wares identify themselves, and unknown ids are expected to show as blanks/placeholders.
+    """
+    w = BitWriter()
+    w.write(npc_id, 32)                        # "NPCID"  — binds the shop to an NPC record
+    w.write(shop_id, 32)                       # "ShopID"
+    w.write_string(shop_name)                  # "ShopName"
+    w.write(_swapped_float(sell_mod), 32)      # "SellMod" — byte-reversed float
+    w.write(len(items), 16)                    # "StockCount" — 16 bits
+    for item_id, buy, sell in items:
+        w.write(item_id, 32)                   # "ItemID"
+        w.write(buy, 32)                       # "Buy"
+        w.write(sell, 32)                      # "Sell"
+    return w.bytes()
+
+
+def _swapped_float(value):
+    """The u32 to put on the wire so the client's byte-reversing reader recovers `value`."""
+    return struct.unpack(">I", struct.pack("<f", float(value)))[0]
+
+
+def send_shop_inventory(conn, npc_id, shop_id, shop_name, magic=None, quiet=False, **kwargs):
+    """Send ShopInventoryData (msg 0xE11) on the village conn."""
+    body = shop_inventory_body(npc_id, shop_id, shop_name, **kwargs)
+    _send_village(conn, VILLAGE_MSG_SHOP_INVENTORY, body, magic,
+                  f"ShopInventoryData {shop_name!r} npc={npc_id} "
+                  f"({kwargs.get('items') and len(kwargs['items']) or 0} item(s))", quiet=quiet)
+
+
+def entity_remove_body(avatar_id):
+    """Body for EntityRemove (msg 1003) — despawn an avatar.
+
+    `HandleEntityRemove@0x0046e570` reads **only** `id` (32 bits), looks it up in the avatar
+    container at +0x170 and releases the handle. So the whole body is one big-endian dword.
+    Logs "Can't read AvatarID" / "Can't find Avatar" on failure."""
+    return BitWriter().write(avatar_id, 32).bytes()
+
+
+def send_entity_remove(conn, avatar_id, magic=None, label=""):
+    """Remove a previously spawned avatar from this client's world (msg 1003)."""
+    if not conn.alive:
+        return
+    _send_village(conn, config.VILLAGE_MSG_ENTITY_REMOVE, entity_remove_body(avatar_id), magic,
+                  f"EntityRemove(1003) avatar id={avatar_id} {label}")
 
 
 def handle_frame(conn, payload):
