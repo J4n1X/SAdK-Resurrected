@@ -105,7 +105,33 @@ def test_create_channel_refused():
     print("create channel → StatusReply 0x11 OK")
 
 
+def test_pos_command_saves_pose_and_is_not_relayed():
+    import tempfile
+    a, b = UC("chat_gina"), UC("chat_hugo")
+    _join(a, 1)
+    _join(b, 1)
+    a.chat.clear()
+    b.chat.clear()
+    dispatch.NPC_POSITIONS_FILE = os.path.join(tempfile.mkdtemp(), "npc_positions.json")
+    with dispatch._poses_lock:
+        dispatch._poses[a.player.perm_id] = {"pos": (35.9, 2.5, 33.1), "rot_deg": 90.0,
+                                             "zone": 0, "ghost_zone": 0}
+    line = struct.pack("<H", 2) + codec.encode_body(2, {"mode": 0, "txt": "!pos Briefkasten",
+                                                        "ticket_id": 0, "from_id": a.player.perm_id})
+    chat.handle_frame(a, _cell_message(2, line, 1))
+    assert b.relays() == []                                   # not relayed
+    got = a.relays()
+    assert len(got) == 1 and got[0][0] == 3 and "Briefkasten" in got[0][1]["txt"], got
+    import json
+    saved = json.load(open(dispatch.NPC_POSITIONS_FILE))
+    assert saved["Briefkasten"]["pos"] == [35.9, 2.5, 33.1] and saved["Briefkasten"]["rot_deg"] == 90.0
+    for x in (a, b):
+        chat.on_conn_closed(x)
+    print("!pos saves the pose, answers privately, is not relayed OK")
+
+
 if __name__ == "__main__":
+    test_pos_command_saves_pose_and_is_not_relayed()
     test_whisper_reaches_target_only()
     test_leave_completes_on_cellmanager()
     test_create_channel_refused()

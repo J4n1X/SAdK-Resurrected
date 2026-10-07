@@ -277,6 +277,16 @@ def _handle_message(conn, body):
     if message_id == 30:
         _handle_whisper(conn, p, data or b"")
         return
+    if message_id == 2 and COMMAND_HOOK is not None:
+        try:
+            txt = (codec.decode_body(2, (data or b"")[2:]).get("txt") or "").strip()
+        except Exception:  # noqa: BLE001
+            txt = ""
+        if txt.startswith("!"):
+            reply_txt = COMMAND_HOOK(conn, p, txt)
+            if reply_txt is not None:                  # a server command: not relayed to anyone
+                whisper_from_server(conn, p, reply_txt)
+                return
     targets = _roster_members(cell_id)              # already one per player
     if not any(players.of(c).perm_id == p.perm_id for c in targets):
         targets.append(conn)           # author not rostered — still echo their own line back
@@ -333,6 +343,18 @@ def handle_join_channel(conn, fields, ticket):
             pass
     log(f"  → [CHAT] JoinChatChannel cell={cell_id}: {p.char_name!r} joined; "
         f"exchanged ChatUserInfo with {len(others)} existing member(s)")
+
+
+#: Set by dispatch: (conn, player, text) -> reply text for a "!command" chat line, or None when the
+#: line is not a server command (then it is relayed as normal chat).
+COMMAND_HOOK = None
+
+
+def whisper_from_server(conn, p, text):
+    """A server line shown to one player only, as an incoming whisper from "Server"."""
+    msg = netmsg(3, {"mode": 3, "txt": text[:255], "cell_id": 1, "from_id": config.FROM_SERVER,
+                     "to_id": p.perm_id, "from_name": "Server"})
+    conn.send_chat(reply(3, msg, 1, config.FROM_SERVER, ispropset=True))
 
 
 def _uc_conn_of(perm_id):
