@@ -40,3 +40,5 @@ S 004f84b0).
 - The server then listens on TCP **1234** (u16 at 0x008810bc; file offset 0x4810bc, `d2 04`) and polls
   every 200 ms. Talk to it with `tools/cvar_client.py` (protocol in its docstring). [inferred until tried]
 - Whether the copy-protection layer objects to a modified `.text` is untested.
+- **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
+  patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
