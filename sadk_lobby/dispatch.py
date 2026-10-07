@@ -662,12 +662,19 @@ def _char_values(conn, ticket, char=None):
 
 @handler(55)  # RequestUserCharList -> UserCharConn
 def _h_player_info(conn, fields, ticket):
-    # Same rule as RequestCharacters(72): a player who has not created a character has an empty
-    # list, not a stand-in one. Announcing a character here that 72 then fails to produce would
-    # leave the two lists disagreeing about who this account is.
+    """The avatar-select list: one UserCharConn (60) row per stored character, then Result(42).
+    This, not RequestCharacters (72), is what fills the client's character list:
+    CharListReceived S 00474910 keeps 60 rows only for a 0x37 (55) ticket and builds each avatar from
+    its `data` save. No rows is the client's own path to character creation. (Answering only for a
+    character already bound to the connection sent nothing at login, so every login looked like a
+    new account.)"""
     p = _player(conn)
-    if p.has_character:
-        conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
+    chars = store.list_characters(p.username)
+    for char in chars:
+        conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket, char)))
+    log(f"  → UserCharConn ×{len(chars)} for {p.username!r}"
+        + (": " + ", ".join(f"{c['name']!r}(id {c['char_id']})" for c in chars) if chars
+           else " — no characters yet, the client opens character creation"))
     conn.ok(ticket)
 
 

@@ -113,6 +113,24 @@ def test_character_token_of_a_logged_in_account_is_accepted():
     assert not players.issued(int(other["char_id"]))
 
 
+def test_user_char_list_lists_every_stored_character():
+    # RequestUserCharList (55) fills the avatar-select screen (CharListReceived S 00474910): one 60
+    # row per stored character, at login, before any character is bound to the connection.
+    conn = FakeConn(51)
+    conn.player = players.resolve_by_username("listed")
+    a = store.create_character("listed", "Erster", b"\x00" * 24)
+    b = store.create_character("listed", "Zweiter", b"\x00" * 24)
+    dispatch._h_player_info(conn, {"ticket_id": TICKET}, TICKET)
+    rows = conn.sent_of(60)
+    assert [(r["char_id"], r["name"]) for r in rows] == [(int(a["char_id"]), "Erster"),
+                                                          (int(b["char_id"]), "Zweiter")], rows
+    assert all(r["owner_id"] == conn.player.user_id for r in rows)
+    empty = FakeConn(52)
+    empty.player = players.resolve_by_username("brandnew")
+    dispatch._h_player_info(empty, {"ticket_id": TICKET}, TICKET)
+    assert empty.sent_of(60) == []                       # -> the client opens character creation
+
+
 def test_empty_username_gets_own_guest_identity():
     # Undecodable logins must not collapse onto one perm_id (they would be one settler).
     g1 = players.resolve_by_username("")
