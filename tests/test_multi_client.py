@@ -68,28 +68,27 @@ def _add_game(conn, **over):
 
 
 # ── 1. Player resolution ───────────────────────────────────────────────────────
-def test_player_resolution_predefined_and_auto():
-    p1 = players.resolve_by_username("test")
-    p2 = players.resolve_by_username("test2")
-    assert (p1.perm_id, p1.char_name) == (config.TEST_PERM_ID, config.TEST_CHAR_NAME)
-    assert (p2.perm_id, p2.char_name) == (2, "Siedler")
+def test_player_resolution_login_name_is_identity():
+    # The login name IS the identity: no predefined accounts, sequential perm_ids,
+    # stable per name (case-insensitive) for the life of the process.
+    p1 = players.resolve_by_username("mc_alpha")
+    p2 = players.resolve_by_username("mc_beta")
     assert p1.perm_id != p2.perm_id
-    # case-insensitive match to the same predefined player
-    assert players.resolve_by_username("TEST2").perm_id == 2
-    # unknown username auto-registers a fresh, distinct perm_id
-    auto = players.resolve_by_username("alice")
-    assert auto.perm_id >= 1000 and auto.perm_id not in (1, 2)
-    assert auto.username == "alice"
+    assert p1.char_name == "mc_alpha" and p2.char_name == "mc_beta"
+    assert players.resolve_by_username("MC_BETA") is p2
     # UC/village conns resolve by the token perm_id back to the same players
-    assert players.resolve_by_perm(2).char_name == "Siedler"
-    assert players.resolve_by_perm(auto.perm_id).username == "alice"
-    # unknown perm_id falls back to the default player (defensive)
-    assert players.resolve_by_perm(0xDEAD).perm_id == config.TEST_PERM_ID
+    assert players.resolve_by_perm(p2.perm_id) is p2
+    # an id we never issued keeps its value (the client's avatar id must not change)
+    stray = players.resolve_by_perm(0xDEAD)
+    assert stray.perm_id == 0xDEAD and stray.char_id == 0xDEAD
 
 
-def test_empty_username_falls_back_to_default():
-    assert players.resolve_by_username("").perm_id == config.TEST_PERM_ID
-    assert players.resolve_by_username(None).perm_id == config.TEST_PERM_ID
+def test_empty_username_gets_own_guest_identity():
+    # Undecodable logins must not collapse onto one perm_id (they would be one settler).
+    g1 = players.resolve_by_username("")
+    g2 = players.resolve_by_username(None)
+    assert g1.perm_id != g2.perm_id
+    assert g1.username.startswith("Guest ") and g2.username.startswith("Guest ")
 
 
 # ── 2. Cross-client visibility + join resolution ───────────────────────────────
@@ -97,9 +96,9 @@ def test_hosted_game_visible_and_joinable_cross_client():
     registry.games.clear()
     try:
         host = FakeConn(1, addr=("10.0.0.5", 4444))
-        host.player = players.resolve_by_username("test")          # perm 1
+        host.player = players.resolve_by_username("mc_host")
         joiner = FakeConn(2, addr=("10.0.0.9", 5555))
-        joiner.player = players.resolve_by_username("test2")        # perm 2
+        joiner.player = players.resolve_by_username("mc_joiner")
 
         # Host advertises its IP via 168 (ip="" → falls back to the conn's address).
         sid = _add_game(host, name="Steinfjord Duell", ip="", port=5479)
@@ -110,17 +109,17 @@ def test_hosted_game_visible_and_joinable_cross_client():
         assert any(g["name"] == "Steinfjord Duell" for g in games), [g["name"] for g in games]
         g = next(g for g in games if g["name"] == "Steinfjord Duell")
         assert g["server_id"] == sid
-        assert g["owner_id"] == 1                  # owned by the host player
+        assert g["owner_id"] == host.player.perm_id   # owned by the host player
         assert g["server_subtype"] == 1            # game list (BrowseGameDialog)
         assert g["ip"] == "10.0.0.5"               # host's real address, not advertised default
 
         # Joiner clicks Join → 221 → 222 carries the host's address (P2P handoff).
         joiner.sent.clear()
-        dispatch._h_connection_data(joiner, {"perm_id": 2, "server_id": sid}, TICKET)
+        dispatch._h_connection_data(joiner, {"perm_id": joiner.player.perm_id, "server_id": sid}, TICKET)
         cd = joiner.sent_of(222)[0]
         assert cd["server_id"] == sid
         assert cd["ip"] == "10.0.0.5" and cd["port"] == 5479
-        assert cd["perm_id"] == 2                   # the joiner's perm_id
+        assert cd["perm_id"] == joiner.player.perm_id   # the joiner's perm_id
         assert cd["errorcode"] == 0
     finally:
         registry.games.clear()

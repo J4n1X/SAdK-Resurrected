@@ -22,7 +22,11 @@ GAME_ID = 0x1234
 
 
 def _parse_referee_payload(app_payload):
-    """Decode a referee app-payload (Magic|74|74|msg_type|MEMBLOCK([type word|fields])) → (msg_type, inner)."""
+    """Decode a referee app-payload → (type word, fields).
+
+    Proven framing (referee.referee_payload, live 2026-07-27): Magic|74|74|typeWord(u32 LE)|
+    MEMBLOCK(u32 LE length + FIELDS ONLY). The type word is not repeated inside the MEMBLOCK, and
+    the fields are BIG-endian."""
     magic, t1, t2, msg_type = struct.unpack_from("<HHHI", app_payload, 0)
     assert magic == config.PAYLOAD_MAGIC, hex(magic)
     assert t1 == config.VILLAGE_SENDGAMEDATA == t2, (t1, t2)
@@ -40,19 +44,19 @@ def test_type_word():
 
 def test_login_success_golden():
     msg_type, inner = _parse_referee_payload(referee.build_login_success(PERM_ID))
-    tw, perm = struct.unpack_from("<HI", inner, 0)
-    assert msg_type == 0x3DCA and tw == 0x3DCA and perm == PERM_ID, (hex(msg_type), hex(tw), perm)
+    (perm,) = struct.unpack_from(">I", inner, 0)
+    assert msg_type == 0x3DCA and len(inner) == 4 and perm == PERM_ID, (hex(msg_type), inner.hex())
     print("LoginSuccess(0xDCA) golden OK")
 
 
 def test_register_ack_result_golden():
     mt, inner = _parse_referee_payload(referee.build_register_game_ack(GAME_ID))
-    tw, gid, res = struct.unpack_from("<HII", inner, 0)
-    assert mt == 0x3DB7 and tw == 0x3DB7 and gid == GAME_ID and res == 0
+    gid, res = struct.unpack_from(">II", inner, 0)
+    assert mt == 0x3DB7 and len(inner) == 8 and gid == GAME_ID and res == 0
 
     mt, inner = _parse_referee_payload(referee.build_register_game_result(GAME_ID))
-    tw, gid, res, seed = struct.unpack_from("<HIII", inner, 0)
-    assert mt == 0x3DB8 and tw == 0x3DB8 and gid == GAME_ID and res == 0
+    gid, res, seed = struct.unpack_from(">III", inner, 0)
+    assert mt == 0x3DB8 and len(inner) == 12 and gid == GAME_ID and res == 0
     assert seed == config.REF_GAME_SEED, hex(seed)
     print("RegisterGameAck/Result golden OK")
 
@@ -74,7 +78,7 @@ class FakeConn:
 
 def test_handle_register_game():
     conn = FakeConn()
-    inbound = referee.referee_payload(config.REF_REGISTER_GAME, struct.pack("<I", GAME_ID))
+    inbound = referee.referee_payload(config.REF_REGISTER_GAME, struct.pack(">I", GAME_ID))
     assert referee.handle_frame(conn, inbound) is True
     # LoginSuccess pushed on the channel open, then Ack + Result for RegisterGame.
     assert conn.referee_msg_ids() == [
