@@ -68,7 +68,7 @@ def test_open_buy_sell():
     r = BitReader(_last(economy.MSG_SHOP_BUY_RESULT))
     assert (r.read(32), r.read(1)) == (31, 1)
     assert _purse()[3] == config.START_GOLD - 100
-    assert _backpack()[1][0] == (1, 1, 7)
+    assert _backpack()[1][0] == (5, 1, 7)          # item 7 is a pet: sltt 5
     sent.clear()
     # too expensive: result false, no state messages
     economy.handle_buy(None, PERM, BitWriter().write(31, 32).write(1, 16).write(1, 16)
@@ -104,7 +104,22 @@ def test_move_delete_and_tailor():
     print("move / delete / tailor (paid and refused) OK")
 
 
+def test_debug_backpack_keeps_equipment():
+    economy.reset_for_tests()
+    w = economy.wallet(PERM)
+    w.active[0] = (2, 1, 2)                       # crown worn on the head
+    w.gold = 3
+    economy.send_owner_state(None, PERM)
+    assert w.gold == config.START_GOLD and w.active[0] == (2, 1, 2)
+    assert [r[0] for r in w.backpack] == list(economy.DEBUG_BACKPACK)
+    assert all(r[2] in (2, 3, 4, 5) for r in w.backpack)
+    assert len(economy.shop_stock()) == len(economy.ITEMS) == 36
+    sent.clear()
+    print("world entry: purse refilled, 20 real items, equipment kept OK")
+
+
 if __name__ == "__main__":
+    test_debug_backpack_keeps_equipment()
     test_open_buy_sell()
     test_move_delete_and_tailor()
     print("\nAll economy tests PASSED")

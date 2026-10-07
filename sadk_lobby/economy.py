@@ -48,6 +48,60 @@ UNKNOWN_SLTT = 1                 # backpack item never equipped yet: no known eq
 TAILOR_PRICE = 50
 SELL_MOD = 0.9                   # V27: the client's built-in default (007db9d0)
 
+# The client's item table: ItemsClient.txt ("generated from Items.XML"), field 6 = the slot mask
+# (1 head, 2 right hand, 4 left hand, 8 pet), field 9 = the price. Ids are what 3100-3102 / 0xE11 carry.
+ITEMS = (                        # (item_id, name, slot mask, price) — data/lobby/config/ItemsClient.txt
+    (1, 'ITEM_SWORD', 2, 150),
+    (2, 'ITEM_CROWN', 1, 250),
+    (3, 'ITEM_SLORD', 4, 40),
+    (4, 'PET_RABBIT', 8, 130),
+    (5, 'PET_DOG', 8, 250),
+    (6, 'PET_BOXERDOG', 8, 340),
+    (7, 'PET_BLACKCAT', 8, 340),
+    (8, 'PET_REDCAT', 8, 340),
+    (9, 'PET_CAT', 8, 250),
+    (10, 'PET_MARMOT', 8, 800),
+    (11, 'PET_GOOP', 8, 450),
+    (12, 'PET_SHEEP', 8, 80),
+    (13, 'PET_BEAR', 8, 450),
+    (14, 'PET_POLARBEAR', 8, 500),
+    (15, 'PET_GOAT', 8, 180),
+    (16, 'PET_FALCON', 8, 500),
+    (17, 'ITEM_TURBAN', 1, 300),
+    (18, 'ITEM_TOPHAT', 1, 80),
+    (19, 'ITEM_SORCERERHAT', 1, 500),
+    (20, 'ITEM_FLOWERREDMEDIUM', 2, 150),
+    (21, 'ITEM_BEER', 2, 150),
+    (22, 'ITEM_LAMP', 2, 150),
+    (23, 'ITEM_SKULL', 2, 150),
+    (24, 'ITEM_CAKE', 2, 150),
+    (25, 'ITEM_FLOWER', 2, 150),
+    (26, 'ITEM_ICE', 2, 150),
+    (27, 'ITEM_PRESENT', 2, 150),
+    (28, 'ITEM_DRINKS', 2, 150),
+    (29, 'ITEM_FROG', 2, 150),
+    (30, 'ITEM_RING', 4, 150),
+    (31, 'ITEM_ORB', 2, 150),
+    (32, 'ITEM_CUP', 2, 150),
+    (33, 'ITEM_WHITESUNGLASSES', 1, 250),
+    (34, 'ITEM_GLASSESHIPPIE', 1, 250),
+    (35, 'ITEM_HEADPHONES', 1, 250),
+    (36, 'ITEM_SUNGLASSES', 1, 250),
+)
+#: slot mask -> the equipment container it is worn in (= its sltt). Head 2 and pet 5 are confirmed by the
+#: live equip of the crown and the red cat (2026-10-07); right hand 3 / left hand 4 are [inferred].
+MASK_TO_CONTAINER = {1: 2, 2: 3, 4: 4, 8: 5}
+ITEM_SLTT = {i: MASK_TO_CONTAINER.get(m, UNKNOWN_SLTT) for i, _n, m, _p in ITEMS}
+#: The test backpack every player gets on world entry (the backpack has exactly INVENTORY_SLOTS = 20
+#: slots): all 8 head items, both swords and the ring, four hand items and five pets. The other 16 are in
+#: the shop (shop_stock()).
+DEBUG_BACKPACK = (2, 17, 18, 19, 33, 34, 35, 36, 1, 3, 30, 21, 22, 23, 24, 5, 7, 10, 11, 13)
+
+
+def shop_stock():
+    """Every item in the game at its real price; selling back pays half (× SELL_MOD on top)."""
+    return tuple((i, price, price // 2) for i, _n, _m, price in ITEMS)
+
 MSG_STATS = 3201
 MSG_ITEMS_FULL = 3102
 MSG_SHOP_BUY_RESULT = 0xE1B
@@ -158,6 +212,9 @@ def send_owner_state(conn, perm_id):
     w = wallet(perm_id)
     with _lock:
         w.gold = w.glod = config.START_GOLD
+        # Debug backpack (maintainer request 2026-10-07): refilled on every entry; equipped items stay.
+        w.backpack = [(i, 1, ITEM_SLTT[i]) for i in DEBUG_BACKPACK][:INVENTORY_SLOTS]
+        w.backpack += [None] * (INVENTORY_SLOTS - len(w.backpack))
     send_stats(conn, perm_id)
     send_items(conn, perm_id)
 
@@ -232,7 +289,7 @@ def handle_buy(conn, perm_id, data):
                 why = "backpack full / slot taken"
             else:
                 w.gold -= cost
-                w.backpack[target] = (item_id, qty, UNKNOWN_SLTT)
+                w.backpack[target] = (item_id, qty, ITEM_SLTT.get(item_id, UNKNOWN_SLTT))
                 ok, why = True, f"item {item_id} x{qty} into slot {target} for {cost} gold"
     log(f"  [ECON] ShopBuy shop={shop_id} slot={slot}: {'OK ' if ok else 'FAILED '}{why}")
     _send(conn, MSG_SHOP_BUY_RESULT, result_body(shop_id, ok), f"ShopBuyResult(0xE1B) ok={ok}")
