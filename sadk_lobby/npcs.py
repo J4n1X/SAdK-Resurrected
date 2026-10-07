@@ -74,6 +74,11 @@ SHOP_STOCK_B = _shop_stock(SHOP_B_IDS)
 
 ACT_NONE = 0
 ACT_HAIRCOLOR = 1
+#: Minigame matchmaking for one tavern: code 2 + tavern id. DispatchSlotAction (S 00434230) opens
+#: MiniGameMatchMakingDialog::Open (S 00444cb0) with tavernId = code - 2, and the dialog lists only
+#: tables whose scntbl low nibble - 2 == tavernId (S 00445cf0) — the same tavernId a click on a
+#: table spot in scene N yields (scntblLo = N, RefreshActionSlots S 00433f60). So the code of a
+#: tavern's matchmaker is its scene id: 2 for taverne03.kex, 3 for taverne02.kex. [known]
 ACT_MINIGAME = 2
 ACT_MAILBOX = 7
 ACT_HOST_GAME = 8
@@ -244,7 +249,7 @@ def make_village_npcs(center):
                      (ACT_HOST_GAME, "Partie eröffnen"))),
         Npc(NPC_ID_BASE + 8, "Spielmeister Silas", npctyp=NPCTYP_SETTLER,
             anchor=(18.6, 2.64, 68.55), rot_deg=210.9, zone=3, colours=(5, 2, 0, 2), npcidx=4,
-            actions=((ACT_MINIGAME, "Minispiel"),)),
+            actions=((ACT_MINIGAME + 3 - 2, "Minispiel"),)),        # his tavern is scene 3
         # The village map already has a static letterbox object (scene1.xml "Letterbox"), so the
         # former letterbox NPC (npctyp 2) only duplicated it. The messenger stands at the measured
         # "Briefkasten" spot instead and offers the mailbox.

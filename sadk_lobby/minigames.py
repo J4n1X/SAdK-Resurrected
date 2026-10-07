@@ -54,6 +54,9 @@ PLAYABLE = (DICE,)
 #: "slot:NN_c" (CGfxObjStd::ParseNodeHierarchyTags S 00518e50); group = the object's scene id. Both
 #: tavern interiors carry slot:00..14 (taverne02.kex = scene 3, taverne03.kex = scene 2): tables 0-12
 #: have 4 seats, 13-14 have 8. Creating with group 0 / table 0 (outdoors) crashed the client twice.
+#: The client's own tavern id is group - 2: the matchmaking dialog lists a table only when
+#: scntblLo - 2 == its tavernId (S 00445cf0), and 2001 carries that tavernId as `tvrn` and the clicked
+#: table spot (scntblHi, 0xFF when opened from an NPC) as `tblidx` (S 00442f00, S 00433f60). [known]
 TAVERN_ZONES = (2, 3)
 SMALL_TABLES = tuple(range(13))          # 4 seats
 BIG_TABLES = (13, 14)                    # 8 seats
@@ -194,14 +197,16 @@ def handle_create(io, conn, perm_id, data):
     kind, _money, _stake = r.read(8), r.read(8), r.read(32)
     name = bytes(r.read(8) for _ in range(r.read(8))).decode("utf-8", "replace")
     lmtmn, lmtmx, mxplyr = r.read(32), r.read(32), r.read(8)
-    # tvrn / tblidx from the client are ignored: it sent 0 / 0 from outdoors, which is group 0, table 0.
-    _tvrn, _tblidx, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
+    tvrn, tblidx, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
     with _lock:
-        # The table goes into the tavern the creator stands in (its zone = the scene id = the group).
-        zone = io.zone_of(perm_id)
+        # tvrn is the dialog's tavernId (scene - 2, see TAVERN_ZONES); without one the table goes into
+        # the tavern the creator stands in (its zone = the scene id = the group).
+        zone = tvrn + 2 if tvrn + 2 in TAVERN_ZONES else io.zone_of(perm_id)
         pool = BIG_TABLES if mxplyr > 4 else SMALL_TABLES
         used = {t.index for t in _tables.values() if t.tavern == zone}
         free = [i for i in pool if i not in used]
+        if tblidx in free:                       # created at a clicked table spot: that spot first
+            free.insert(0, tblidx)
         if kind not in PLAYABLE or zone not in TAVERN_ZONES or not free:
             io.send(conn, MSG_NO_TABLE, b"")
             log(f"  [MINIGAME] create type={kind} in zone {zone}: refused (0xDB) — "
