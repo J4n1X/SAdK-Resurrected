@@ -1430,7 +1430,15 @@ def _minigame_io():
                                                         f"minigame msg 0x{msg:x}", quiet=True),
         everyone=lambda: _in_world_conns(),
         publish_cell=lambda cell, name: chat.publish_cell(
-            cell, name, _find_live(lambda c: getattr(c, "is_chat", False))))
+            cell, name, _find_live(lambda c: getattr(c, "is_chat", False))),
+        zone_of=_zone_of)
+
+
+def _zone_of(perm_id):
+    """The player's current location zone from its latest msg-2000 report (None if none yet)."""
+    with _poses_lock:
+        loc = _poses.get(perm_id)
+    return loc["zone"] if loc else None
 
 
 _MINIGAME_HANDLERS = {

@@ -15,10 +15,7 @@ if REPO not in sys.path:
 import tempfile  # noqa: E402
 os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
 from sadk_lobby import economy, minigames as mg  # noqa: E402
-
-# Table creation is switched off live (it crashed the client); the logic is still tested with Dice on.
 LIVE_PLAYABLE = mg.PLAYABLE
-mg.PLAYABLE = (mg.DICE,)
 from sadk_lobby.village import BitReader, BitWriter  # noqa: E402
 
 A, B = 5001, 5002
@@ -28,9 +25,11 @@ class FakeIo(mg.Io):
     def __init__(self):
         self.log = []          # (conn, msg, body)
         self.cells = []
+        self.zone = 3                                 # the creator stands in taverne02 (scene 3)
         super().__init__(send=lambda c, m, b: self.log.append((c, m, b)),
                          everyone=lambda: ["world"],
-                         publish_cell=lambda cell, name: self.cells.append((cell, name)))
+                         publish_cell=lambda cell, name: self.cells.append((cell, name)),
+                         zone_of=lambda perm_id: self.zone)
 
     def msgs(self):
         out = [(c, m) for c, m, _ in self.log]
@@ -105,10 +104,13 @@ def test_dice_table_cycle():
     t = mg._tables[(1, 0)]
     created = decode(io.last(mg.MSG_CREATE))
     assert created["type"] == 1 and created["chtid"] == 1001 and created["key"] == (1, 0)
+    assert created["scntbl"] == (0 << 4) | 3          # table spot 0 in the tavern of scene 3
     assert created["settings"][2] == "Würfeltisch" and created["seats"] == []
     assert [m for _, m in io.msgs()] == [mg.MSG_CREATE, mg.MSG_UPDATE]
-    _create(io, "b", B)                            # same tavern slot → refused
+    io.zone = 0
+    _create(io, "b", B)                            # outdoors → refused (no table spots there)
     assert io.msgs() == [("b", mg.MSG_NO_TABLE)]
+    io.zone = 3
 
     _join(io, "a", A, t.key, stake=300)
     _join(io, "b", B, t.key, stake=200)
@@ -148,9 +150,7 @@ def test_dice_table_cycle():
 def test_full_and_protected_tables():
     mg.reset_for_tests()
     io = FakeIo()
-    _create(io, "a", A, kind=2, tavern=4)                          # Poker: refused (crashed the client)
-    assert io.msgs() == [("a", mg.MSG_NO_TABLE)]
-    _create(io, "a", A, kind=1, tavern=3, psswd=1, crc=0xABCD)
+    _create(io, "a", A, kind=1, psswd=1, crc=0xABCD)
     key = (1, 0)
     io.log.clear()
     _join(io, "b", B, key, crc=0x1111)                            # wrong password CRC
@@ -160,13 +160,25 @@ def test_full_and_protected_tables():
     print("protected / non-dice tables OK")
 
 
-def test_live_refuses_every_table():
-    assert LIVE_PLAYABLE == ()
-    print("live: every table type refused (0xDB) until the crash is traced OK")
+def test_tables_fill_the_tavern_spots():
+    mg.reset_for_tests()
+    io = FakeIo()
+    for _ in range(13):
+        _create(io, "a", A)                                       # 4-seat tables 0..12
+    assert sorted(t.index for t in mg._tables.values()) == list(range(13))
+    io.log.clear()
+    _create(io, "a", A)                                           # 14th small table: none left
+    assert io.msgs() == [("a", mg.MSG_NO_TABLE)]
+    w = BitWriter().write(2, 8).write(1, 8).write(100, 32).write_string("Poker 8")
+    w.write(10, 32).write(0x7FFFFFFF, 32).write(8, 8).write(0, 8).write(0, 8).write(0, 8).write(0, 32)
+    mg.handle_create(io, "a", A, w.bytes())                       # 8 players → big table 13
+    assert any(t.index == 13 and t.kind == 2 for t in mg._tables.values())
+    assert LIVE_PLAYABLE == (mg.DICE, mg.POKER, mg.PAWNCHESS)
+    print("tables fill tavern spots 0-12, 8-seat games use 13-14 OK")
 
 
 if __name__ == "__main__":
-    test_live_refuses_every_table()
+    test_tables_fill_the_tavern_spots()
     test_packed_round_trip()
     test_payout_rule()
     test_dice_table_cycle()

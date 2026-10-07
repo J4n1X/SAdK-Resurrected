@@ -23,9 +23,9 @@ lists at most 8 entries, only `used` = 1 entries, sltidx 0..7. Every seated AVAT
 with a 3D object in the receiving client, or that client rejects the whole seat block (silently).
 
 Server decisions (V33–V39), marked [guess] where the client gives no hint:
-  * msgprt from 1 upwards, rnid 0 (V34). One table per (tavern, table index); a second create there
-    gets 0xDB (V33).
-  * scntbl = tavern in the low nibble, table index in the high nibble [guess].
+  * msgprt from 1 upwards, rnid 0 (V34). A table goes into the tavern the creator stands in (zone 2 or
+    3) on the first free table spot (0-12 with 4 seats, 13-14 with 8 for > 4 players); no free spot or
+    not inside a tavern -> 0xDB (V33). See TAVERN_ZONES for the scntbl / table-spot derivation.
   * Each table gets its own chat cell (chtid, V35), published on every UC connection.
   * Joining moves `stck` gold into table credits (clamped to the player's gold, V38); Amount moves more
     (V39); leaving returns the credits to gold. A table is removed when its last player leaves (V37).
@@ -44,10 +44,16 @@ from .village import BitReader, BitWriter
 DICE, POKER, PAWNCHESS = 1, 2, 3
 MSG_REMOVE, MSG_UPDATE, MSG_CREATE = 0xD8, 0xD9, 0xDA
 MSG_NO_TABLE, MSG_NO_SEAT = 0xDB, 0xDC
-# EMPTY: creating a Poker table (09:13:51) AND a Dice table (live, 2026-10-07) both crashed the client
-# shortly after our 0xDA + 0xD9, so the crash is in the shared table path. Every create is refused with
-# 0xDB ("Kein Tisch mehr frei") until a live trace shows which field the client chokes on.
-PLAYABLE = ()
+PLAYABLE = (DICE, POKER, PAWNCHESS)
+#: Table spots (2026-10-07). A table's key byte `scntbl` is {low nibble = GROUP, high nibble = TABLE}
+#: and the client places the table at NodeTagTable[group][table][slot 'c'] (Generic_Grid2D_ApplyTransformAt
+#: S 004fbd90 — no NULL check, so an empty cell crashes). The cells are filled from model nodes named
+#: "slot:NN_c" (CGfxObjStd::ParseNodeHierarchyTags S 00518e50); group = the object's scene id. Both
+#: tavern interiors carry slot:00..14 (taverne02.kex = scene 3, taverne03.kex = scene 2): tables 0-12
+#: have 4 seats, 13-14 have 8. Creating with group 0 / table 0 (outdoors) crashed the client twice.
+TAVERN_ZONES = (2, 3)
+SMALL_TABLES = tuple(range(13))          # 4 seats
+BIG_TABLES = (13, 14)                    # 8 seats
 MAX_SEATS = 8
 FIRST_TABLE_CELL = 1000          # chat cells for tables: 1000, 1001, ... (must not collide with lobby/zone cells)
 PHASE_BETTING, PHASE_RESULT = 1, 3
@@ -106,7 +112,7 @@ def read_packed(r):
 def _key(w, t, settings, seats, state):
     mngt = t.kind | (0x10 if settings else 0) | (0x40 if seats else 0) | (0x80 if state else 0)
     w.write(mngt, 8)
-    w.write((t.index & 0xF) << 4 | (t.tavern & 0xF), 8)           # scntbl [guess]
+    w.write((t.index & 0xF) << 4 | (t.tavern & 0xF), 8)           # scntbl: hi = table, lo = group (scene id)
     write_packed(w, t.chtid)
     w.write(t.key[0], 16).write(t.key[1], 8)
 
@@ -162,8 +168,9 @@ def payout(bets, dice_sum):
 # ── Handlers. `send(conn, msg, body)` sends one village message; `everyone()` lists the in-world
 #    village conns; `publish_cell(chtid, name)` puts a chat cell on every UC connection. ──────────
 class Io:
-    def __init__(self, send, everyone, publish_cell):
+    def __init__(self, send, everyone, publish_cell, zone_of=lambda perm_id: None):
         self.send, self.everyone, self.publish_cell = send, everyone, publish_cell
+        self.zone_of = zone_of                    # perm_id -> the player's current location zone
 
     def broadcast(self, msg, body):
         for c in self.everyone():
@@ -179,14 +186,20 @@ def handle_create(io, conn, perm_id, data):
     kind, _money, _stake = r.read(8), r.read(8), r.read(32)
     name = bytes(r.read(8) for _ in range(r.read(8))).decode("utf-8", "replace")
     lmtmn, lmtmx, mxplyr = r.read(32), r.read(32), r.read(8)
-    tavern, index, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
+    # tvrn / tblidx from the client are ignored: it sent 0 / 0 from outdoors, which is group 0, table 0.
+    _tvrn, _tblidx, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
     with _lock:
-        taken = any((t.tavern, t.index) == (tavern, index) for t in _tables.values())
-        # See PLAYABLE: every game type is refused until the create/update crash is traced.
-        if kind not in PLAYABLE or taken:
+        # The table goes into the tavern the creator stands in (its zone = the scene id = the group).
+        zone = io.zone_of(perm_id)
+        pool = BIG_TABLES if mxplyr > 4 else SMALL_TABLES
+        used = {t.index for t in _tables.values() if t.tavern == zone}
+        free = [i for i in pool if i not in used]
+        if kind not in PLAYABLE or zone not in TAVERN_ZONES or not free:
             io.send(conn, MSG_NO_TABLE, b"")
-            log(f"  [MINIGAME] create type={kind} tavern={tavern}/{index}: refused (0xDB)")
+            log(f"  [MINIGAME] create type={kind} in zone {zone}: refused (0xDB) — "
+                f"{'not inside a tavern' if zone not in TAVERN_ZONES else 'no free table'}")
             return
+        tavern, index = zone, free[0]
         key = (_next_msgprt & 0xFFFF, 0)
         _next_msgprt += 1
         t = Table(kind, name, tavern, index, psswd, crc, lmtmn, min(lmtmx, LIMIT_MAX), mxplyr,
