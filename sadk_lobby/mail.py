@@ -18,23 +18,64 @@ Server decisions (catalog T11-T23):
     picks new mail up on its next 60-s list poll (T23).
   * Lists are newest first, at most 100 records (T12/T13). Deletes are hard (T20).
 """
+import json
+import os
+import tempfile
 import threading
 import time
 
-from . import codec
+from . import codec, store
 from .log import log
 
 MAX_LIST = 100
 
 _lock = threading.Lock()
 _next_id = 1
-_mails = {}          # message_id -> record dict
+_mails = None        # message_id -> record dict; loaded from disk on first use
+#: Persisted beside the player store (sadk_players.json -> sadk_mail.json), written atomically;
+#: byte fields are hex. Mail used to live in memory only and was lost on every restart.
+_path = None
+
+
+def _mail_path():
+    return os.environ.get("SADK_MAIL_PATH") or os.path.join(
+        os.path.dirname(os.path.abspath(store.STORE_PATH)), "sadk_mail.json")
+
+
+def _load_locked():
+    global _mails, _next_id, _path
+    path = _mail_path()
+    if _mails is not None and _path == path:
+        return _mails
+    _path, _mails, _next_id = path, {}, 1
+    try:
+        doc = json.load(open(path, encoding="utf-8"))
+        for m in doc.get("mails", []):
+            m["message_text"] = bytes.fromhex(m.get("message_text", ""))
+            m["data"] = bytes.fromhex(m.get("data", ""))
+            _mails[int(m["message_id"])] = m
+        _next_id = max([int(doc.get("next_id", 1))] + [k + 1 for k in _mails])
+    except (OSError, ValueError):
+        pass
+    return _mails
+
+
+def _save_locked():
+    doc = {"next_id": _next_id, "mails": [
+        {**m, "message_text": bytes(m["message_text"]).hex(), "data": bytes(m["data"]).hex()}
+        for m in _mails.values()]}
+    d = os.path.dirname(_path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".mail.", suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
+    os.replace(tmp, _path)
 
 
 def add(delivery_target, creator, title, message_text):
     """Store one mail; returns its message_id."""
     global _next_id
     with _lock:
+        _load_locked()
         mid = _next_id
         _next_id += 1
         _mails[mid] = {
@@ -42,35 +83,44 @@ def add(delivery_target, creator, title, message_text):
             "creation_time": int(time.time()), "title": title or "", "status": 0,
             "message_text": message_text or b"\x00", "data": b"",
         }
+        _save_locked()
         return mid
 
 
 def inbox(delivery_target):
     """Copies of the recipient's mails, newest first, capped at MAX_LIST."""
     with _lock:
-        mine = [dict(m) for m in _mails.values() if m["delivery_target"] == delivery_target]
+        mine = [dict(m) for m in _load_locked().values() if m["delivery_target"] == delivery_target]
     mine.sort(key=lambda m: m["message_id"], reverse=True)
     return mine[:MAX_LIST]
 
 
 def mark(message_id, status):
     with _lock:
-        if message_id in _mails:
+        if message_id in _load_locked():
             _mails[message_id]["status"] = 1 if status else 0
+            _save_locked()
             return True
         return False
 
 
 def remove(message_id):
     with _lock:
-        return _mails.pop(message_id, None) is not None
+        gone = _load_locked().pop(message_id, None) is not None
+        if gone:
+            _save_locked()
+        return gone
+
+
+def unread(delivery_target):
+    """How many of the recipient's mails are not marked read (status 1, msg 148)."""
+    return sum(1 for m in inbox(delivery_target) if m.get("status") != 1)
 
 
 def reset_for_tests():
-    global _next_id
+    global _mails, _next_id, _path
     with _lock:
-        _mails.clear()
-        _next_id = 1
+        _mails, _next_id, _path = {}, 1, _mail_path()
 
 
 def send_inbox(conn, delivery_target, ticket):

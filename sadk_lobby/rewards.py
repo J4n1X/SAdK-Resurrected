@@ -41,6 +41,8 @@ MAX_EXP = 25000                               # end of the level-5 bar
 _lock = threading.Lock()
 _started = {}                                 # (game_id, avatar_id) -> monotonic start
 _chests = {}                                  # (game_id, avatar_id) -> chests got in that match
+#: Set by dispatch: (avatar_id, minutes, chests, won, xp, gold) -> tell the player in its global chat.
+NOTIFY = None
 
 
 def reset_for_tests():
@@ -107,4 +109,6 @@ def match_finished(game_id, avatar_id, won, now=None):
     economy.persist(avatar_id)
     log(f"  [REWARD] match {game_id}: {avatar_id} {'WON' if won else 'played'} {int(minutes)} min, "
         f"{chests} chest(s) → +{xp} XP (now {w.exp}, level {w.level}), +{gold} gold (now {w.gold})")
+    if NOTIFY is not None:
+        NOTIFY(avatar_id, int(minutes), chests, won, xp, gold)
     return xp, gold
