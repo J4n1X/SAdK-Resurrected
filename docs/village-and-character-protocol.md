@@ -87,6 +87,9 @@ values inside the parts are u32 LE. [known, T 100163c0, T 1002eac0]
 This blob is the game's own **save**: the client builds the character (look, items, gold/glod, level,
 last position) from it at login, and the avatar-select screen draws it. The server keeps it current
 (`sadk_lobby/savegame.py`). [PROVEN 2026-10-07: look, items and position restored after a re-login]
+The avatar-select screen shows the saved colours but only some equipped items: items that change the
+main-hand animation are not drawn there, and neither are some that do not [observed live 2026-10-07;
+which items the select screen draws, and why, is TODO].
 
 The avatar-select list comes from **RequestUserCharList (55)**: one UserCharConn (60) row per
 character, then Result(42); `CharListReceived` S 00474910 keeps rows only for a 55 ticket. Entering
