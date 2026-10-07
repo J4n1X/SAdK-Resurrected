@@ -67,7 +67,8 @@ def decode(body):
     return out
 
 
-def _create(io, conn, perm, kind=1, tavern=2, index=0, psswd=0, crc=0):
+def _create(io, conn, perm, kind=1, tavern=0xFF, index=0xFF, psswd=0, crc=0):
+    """Defaults: no tavern / table from the client, so the stub uses the creator's zone."""
     w = BitWriter().write(kind, 8).write(1, 8).write(100, 32).write_string("Würfeltisch")
     w.write(10, 32).write(0x7FFFFFFF, 32).write(4, 8).write(tavern, 8).write(index, 8)
     w.write(psswd, 8).write(crc, 32)
@@ -179,7 +180,32 @@ def test_tables_fill_the_tavern_spots():
     print("tables fill tavern spots 0-12, 8-seat games use 13-14 OK")
 
 
+def test_tables_are_listed_by_the_matchmaking_dialog():
+    """The dialog lists a table only when scntblLo - 2 == its tavernId (S 00445cf0); tavernId is the
+    NPC action code - 2 (S 00434230) and comes back as `tvrn` in 2001."""
+    from sadk_lobby import npcs
+    mg.reset_for_tests()
+    io = FakeIo()
+    io.zone = 0                                                   # zone ignored when tvrn is given
+    _create(io, "a", A, tavern=1, index=4)                        # tavern 1, clicked table spot 4
+    t = decode(io.last(mg.MSG_CREATE))
+    assert t["scntbl"] & 0xF == 3 and t["scntbl"] >> 4 == 4, hex(t["scntbl"])
+    _create(io, "a", A, tavern=1, index=4)                        # spot taken → next free spot
+    assert decode(io.last(mg.MSG_CREATE))["scntbl"] == 0x03
+    io.zone = 3
+    _create(io, "a", A)                                           # no tvrn: the creator's zone
+    assert decode(io.last(mg.MSG_CREATE))["scntbl"] & 0xF == 3
+    # Every matchmaker NPC opens the dialog for the tavern it stands in.
+    matchmakers = [(n, code) for n in npcs.make_village_npcs((0.0, 0.0, 0.0))
+                   for code, _ in n.actions if 2 <= code <= 6]
+    assert matchmakers
+    for npc, code in matchmakers:
+        assert npc.zone in mg.TAVERN_ZONES and code - 2 == npc.zone - 2, (npc.name, code, npc.zone)
+    print("tables carry the dialog's tavern id, NPC matchmakers match their tavern OK")
+
+
 if __name__ == "__main__":
+    test_tables_are_listed_by_the_matchmaking_dialog()
     test_tables_fill_the_tavern_spots()
     test_packed_round_trip()
     test_payout_rule()
