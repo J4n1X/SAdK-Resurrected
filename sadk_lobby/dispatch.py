@@ -233,7 +233,9 @@ def _avatar_style(player):
     """
     w = economy.wallet(player.perm_id)             # loaded from the character save at world entry
     return {"name": player.char_name, "tribe_gender": w.trbgndr,
-            "colours": tuple(w.colours)}           # saved look + tailor changes (3950)
+            "colours": tuple(w.colours),           # saved look + tailor changes (3950)
+            "active": list(w.active),              # equipped items (1001 dtblcks bit2)
+            "level": w.level}                      # the outfit model is picked by level (bit3)
 
 
 # Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
