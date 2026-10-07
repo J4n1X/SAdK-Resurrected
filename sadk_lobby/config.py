@@ -274,6 +274,18 @@ REF_CLAIM_CHEST     = 0xDAC   # ClaimChest (client→referee): GameID, MapGUID[1
 REF_CLAIM_ACK       = 0xDAD   # ClaimChestAcknowledge: GameID, Result — ALWAYS 0 (≠0 tears the session down)
 REF_CLAIM_RESULT    = 0xDAE   # ClaimChestResult: AvatarID (0 = denied), ChestID, Text(u8 len) (S 00479fb0)
 
+# Village economy, client → server (wire type = 0x2000 | id; economy.py). [known, catalog village]
+VILLAGE_MOVE_ITEM_MSGTYPE     = 0x2BB9   # 3001 MoveItem
+VILLAGE_DELETE_ITEM_MSGTYPE   = 0x2BBA   # 3002 DeleteItemRequest
+VILLAGE_OPEN_SHOP_MSGTYPE     = 0x2E10   # 3600 OpenShop  -> 0xE11 reply
+VILLAGE_SHOP_BUY_MSGTYPE      = 0x2E1A   # 3610 ShopBuy   -> 0xE1B
+VILLAGE_SHOP_SELL_MSGTYPE     = 0x2E24   # 3620 ShopSell  -> 0xE25
+VILLAGE_COLOR_CHANGE_MSGTYPE  = 0x2F6E   # 3950 AvatarColorChange (tailor)
+VILLAGE_CHAT_COMMAND_MSGTYPE  = 0x2FA0   # 4000 ChatCommand (nothing required; logged)
+# Starting purse (gold and glod) of every player — a server decision (catalog V17). The client's
+# own default for a freshly created character is 50; 1000 lets the shop and tailor be tested.
+START_GOLD = 1000
+
 VILLAGE_AVATAR_LOCATION_MSGTYPE = 0x27D0   # 10192 = (cat 2 << 12) | 0x7d0 -> NETMSG **2000, AVATAR LOCATION**
 #   [PROVEN 2026-08-01] The client's OWN position report - where the player actually IS. Sent ~3/s by
 #   VillageServerConnection_SendAvatarLocation_2000@0x0046ca40, driven by the local player controller
