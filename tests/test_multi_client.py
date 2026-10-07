@@ -21,7 +21,7 @@ if REPO not in sys.path:
 
 import tempfile  # noqa: E402
 os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
-from sadk_lobby import codec, config, dispatch, players, registry  # noqa: E402
+from sadk_lobby import store, codec, config, dispatch, players, registry  # noqa: E402
 
 TICKET = 0x0BADF00D
 
@@ -82,7 +82,7 @@ def test_player_resolution_login_name_is_identity():
     assert players.resolve_by_perm(p2.perm_id) is p2
     # an id we never issued keeps its value (the client's avatar id must not change)
     stray = players.resolve_by_perm(0xDEAD)
-    assert stray.perm_id == 0xDEAD and stray.char_id == 0xDEAD
+    assert stray.perm_id == 0xDEAD and stray.char_id == 0           # an account, no character bound
 
 
 def test_stale_token_is_refused():
@@ -94,6 +94,23 @@ def test_stale_token_is_refused():
     conn2 = FakeConn(32)
     dispatch._h_send_token(conn2, {"perm_id": owner.perm_id, "ticket_id": TICKET}, TICKET)
     assert conn2.sent_of("153")[0]["errorcode"] == 0 and conn2.player is owner
+
+
+def test_character_token_of_a_logged_in_account_is_accepted():
+    # Entering the village logs chat and village in with the PICKED CHARACTER's id (EnterVillage
+    # S 00503f50 -> CharacterManager+0x98 set by SelectCharacter S 00472200), not the account's.
+    owner = players.resolve_by_username("char_owner")
+    char = store.create_character("char_owner", "Ritter", b"\x00" * 24)
+    cid = int(char["char_id"])
+    assert cid != owner.perm_id and players.issued(cid)
+    conn = FakeConn(41)
+    dispatch._h_send_token(conn, {"perm_id": cid, "ticket_id": TICKET}, TICKET)
+    st = conn.sent_of("153")[0]
+    assert st["errorcode"] == 0 and st["id"] == cid and conn.player.char_name == "Ritter"
+    # A character of an account that has not logged in on this run is still refused.
+    store.get_or_create_account("absent")
+    other = store.create_character("absent", "Fremder", b"\x00" * 24)
+    assert not players.issued(int(other["char_id"]))
 
 
 def test_empty_username_gets_own_guest_identity():

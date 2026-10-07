@@ -396,6 +396,24 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
     return w.bytes()
 
 
+def style_update_body(avatar_id, style):
+    """A 1001 for an EXISTING avatar carrying only the AvatarStyle block (dtblcks = 2): no location,
+    so nothing is pushed into the movement ring. The client's update path then re-applies the look
+    (CLobbyClient::UpdateAvatar S 00503620 -> CGfxObjAvatar::UpdateAppearance S 00508090)."""
+    w = BitWriter()
+    w.write(avatar_id, 32)
+    w.write(2, 4)                              # dtblcks: AvatarStyle only
+    avatar_style_block(w, style.get("name", ""), style.get("tribe_gender", 0), style.get("colours", ()))
+    return w.bytes()
+
+
+def send_style_update(conn, avatar_id, style, label=""):
+    if not conn.alive:
+        return
+    _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, style_update_body(avatar_id, style), None,
+                  f"EntityCreate(1001) avatar id={avatar_id} {label} dtblcks=style only")
+
+
 # ⛔ NEVER send a short/truncated EntityCreate(1001) body — IT CRASHES THE CLIENT.
 # Established 2026-07-31 by a negative-control probe (ER
 # engagement_records/2026-07-31_entitycreate-negative-control.md): a 2-byte body, sent to make the

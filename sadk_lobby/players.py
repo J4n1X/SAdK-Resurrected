@@ -81,26 +81,6 @@ def _clean(name):
     return name[:MAX_NAME_LEN]
 
 
-def _create_legacy(name):
-    """The pre-persistence identity shape: char_id == perm_id and the shared `NICKNAME_DATA`
-    appearance, used while `config.PERSISTENT_CHARACTERS_ENABLED` is False.
-
-    The perm_id comes from the account store (`store.get_or_create_account`), so it is STABLE per
-    login name across server restarts. It used to be an in-memory sequential id: after a restart a
-    client that reconnected its UC/world sockets with its old token became a "Player N" placeholder,
-    and its next real login got a different id, which sent it into a broken character-creation
-    screen (live 2026-10-07 10:17-10:20). Caller holds `_lock`."""
-    perm = int(store.get_or_create_account(name)["user_id"])
-    p = Player(perm_id=perm, char_id=perm, user_id=perm, username=name,
-               char_name=name, data=config.NICKNAME_DATA)
-    stale = _by_perm.get(perm)
-    if stale is not None:                  # a placeholder made from this id's token: same player
-        _by_user.pop(stale.username.lower(), None)
-    _by_perm[perm] = p
-    _by_user[name.lower()] = p
-    return p
-
-
 def _from_store(name):
     """Build (or rebuild) the in-memory ACCOUNT-level Player for `name`.
 
@@ -157,16 +137,22 @@ def resolve_by_username(username):
             name = f"Guest {_guest_seq}"
         existing = _by_user.get(name.lower())
         if existing is None:
-            existing = (_from_store(name) if config.PERSISTENT_CHARACTERS_ENABLED
-                        else _create_legacy(name))
+            existing = _from_store(name)
         _issued.add(existing.perm_id)
         return existing
 
 
 def issued(perm_id):
-    """Whether this perm_id logged in through the lobby in this server process."""
+    """Whether this perm_id may present a token in this server process: an account that logged in
+    through the lobby, or one of that account's characters. Picking a character and entering the
+    village logs the chat AND village connections in with the CHARACTER's id: EnterVillage
+    S 00503f50 opens UserComm with CharacterManager+0x98, which SelectCharacter S 00472200 sets to the
+    picked char_id; OnUserCommLoggedIn S 004704e0 then logs the village in with the same id."""
     with _lock:
-        return perm_id in _issued
+        if perm_id in _issued:
+            return True
+    char, acct = store.find_character(perm_id)
+    return bool(char and acct and int(acct["user_id"]) in _issued)
 
 
 def resolve_by_perm(perm_id):
@@ -178,19 +164,6 @@ def resolve_by_perm(perm_id):
     with _lock:
         p = _by_perm.get(perm_id)
         if p is not None:
-            return p
-        if not config.PERSISTENT_CHARACTERS_ENABLED:
-            # LEGACY: the id keeps its value, so the client's avatar id and ours stay in agreement.
-            # The name comes from the account store when the id is known there (a client that
-            # reconnects with its old token after a server restart keeps its name).
-            rec = next((a for a in store.all_players() if int(a["user_id"]) == int(perm_id)), None)
-            if rec is None:
-                rec = store.reserve_user_id(perm_id)
-            name = rec.get("username") or f"Player {perm_id}"
-            p = Player(perm_id=perm_id, char_id=perm_id, user_id=perm_id,
-                       username=name, char_name=name, data=config.NICKNAME_DATA)
-            _by_perm[perm_id] = p
-            _by_user.setdefault(p.username.lower(), p)
             return p
         # ⭐ DUAL LOOKUP. A token's perm_id may name either a CHARACTER or an ACCOUNT, and which
         # one the client sends is the open question (store.py docstring): the own-avatar id is

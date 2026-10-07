@@ -19,7 +19,7 @@ def test_round_trip():
     s = sg.Save(body=1, gender=1, colours=[1, 2, 3, 4, 5, 6, 7, 8],
                 active=[(17, 1, 2), None, (30, 1, 4), None],
                 inventory=[(5, 3, 0), None, (7, 1, 1)] + [None] * 17,
-                level=3, exp=42, gold=1234, glod=99, pos=(10.5, 2.5, -7.25), heading=0x40490fdb,
+                level=3, exp=42, gold=1234, glod=99, pos=(10.5, 2.5, -7.25), heading=123.5,
                 zone=3, ghost_zone=15)
     blob = sg.build(s)
     sizes = struct.unpack_from("<6I", blob, 0)
@@ -28,9 +28,9 @@ def test_round_trip():
     r = sg.parse(blob)
     assert not r.fresh
     for f in ("body", "gender", "colours", "active", "inventory", "level", "exp", "gold", "glod",
-              "heading", "zone", "ghost_zone"):
+              "zone", "ghost_zone"):
         assert getattr(r, f) == getattr(s, f), f
-    assert all(abs(a - b) < 1e-5 for a, b in zip(r.pos, s.pos))
+    assert all(abs(a - b) < 1e-5 for a, b in zip(r.pos, s.pos)) and abs(r.heading - 123.5) < 1e-5
     assert r.trbgndr == 0x11
     # Empty equipment slots keep the client's default slot types 2..5.
     active = sg.split(blob)[2]

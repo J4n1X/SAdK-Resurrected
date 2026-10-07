@@ -47,16 +47,6 @@ ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "127.0.0.1")
 # Set back to True to bring the whole cast back — nothing else needs changing.
 VILLAGE_NPCS_ENABLED = True
 
-# ── Persistent characters ─────────────────────────────────────────────────────
-# ⚠️ ROLLED BACK 2026-08-02 (maintainer-requested flag, HARNESS §5 permits it).
-# Turning persistent characters ON broke character selection: the client reports
-# "login attempt failed" after picking an avatar. OFF restores the known-good behaviour:
-# one implicit character per account, char_id == perm_id == an in-memory sequential id,
-# shared NICKNAME_DATA appearance.
-# Prime suspect (unverified): char_id != perm_id. The client's own avatar id IS its PermID
-# and the CharacterManager is keyed by char_id, so a mismatch makes the own-avatar lookup
-# miss and the village login fail.
-PERSISTENT_CHARACTERS_ENABLED = False
 
 # ── Player accounts ───────────────────────────────────────────────────────────
 # Multiple clients can log in as DISTINCT players (host + joiner). PLAYERS[0] is the

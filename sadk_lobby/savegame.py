@@ -15,7 +15,8 @@ Parts, as the client reads them [known — each block's Deserialize]:
   2  ActiveItems variant, 4 x {slotType, itemId, count}      (defaults slotType 2,3,4,5; S 00486a20)
   3  Inventory   variant, count, min(count, 20) x {slotType, itemId, count}            (S 00486b60)
   4  Stats       variant, level, exp, gold, [glod if variant != 0],
-                 [x f32, y f32, z f32, heading u32, zone u8, ghost zone u8 if variant > 1]  (S 00486d70)
+                 [x f32, y f32, z f32, heading f32 degrees, zone u8, ghost zone u8 if variant > 1]
+                 (S 00486d70; the heading becomes FromAxisAngle(heading * pi / 180) in S 00481e60)
   5  unused
 The creation form (part 0 not 0xC bytes, parts 1-5 empty) starts the character with level 1, gold =
 glod = 50 and the default spawn; the full form restores everything above.
@@ -42,7 +43,7 @@ class Save:
     gold: int = 1000
     glod: int = 1000
     pos: tuple = DEFAULT_POS
-    heading: int = 0                             # raw u32 the client keeps at AvatarProxy+0x70
+    heading: float = 0.0                         # degrees (AvatarProxy+0x70)
     zone: int = 0
     ghost_zone: int = 0xF
     fresh: bool = False                          # parsed from a creation-form blob
@@ -116,7 +117,7 @@ def parse(blob):
         if variant != 0 and len(b) >= 20:
             s.glod = struct.unpack_from("<I", b, 16)[0]
         if variant > 1 and len(b) >= 38:
-            x, y, z, s.heading = struct.unpack_from("<3fI", b, 20)
+            x, y, z, s.heading = struct.unpack_from("<4f", b, 20)
             s.pos = (x, y, z)
             s.zone, s.ghost_zone = b[36], b[37]
     return s
@@ -129,6 +130,6 @@ def build(s):
     active = struct.pack("<I", 0) + b"".join(_slot(r, t) for r, t in zip(s.active, ACTIVE_SLOT_TYPES))
     inv = list(s.inventory)[:INVENTORY_SLOTS] + [None] * (INVENTORY_SLOTS - len(s.inventory))
     inventory = struct.pack("<2I", 0, INVENTORY_SLOTS) + b"".join(_slot(r, 0) for r in inv)
-    stats = struct.pack("<5I3fI2B", 2, s.level, s.exp, s.gold, s.glod, *s.pos, s.heading & 0xFFFFFFFF,
+    stats = struct.pack("<5I4f2B", 2, s.level, s.exp, s.gold, s.glod, *s.pos, float(s.heading),
                         s.zone & 0xFF, s.ghost_zone & 0xFF)
     return join([appearance, style, active, inventory, stats, b""])
