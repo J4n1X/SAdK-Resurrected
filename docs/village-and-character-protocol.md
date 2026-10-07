@@ -79,7 +79,19 @@ values inside the parts are u32 LE. [known, T 100163c0, T 1002eac0]
 |---|---|---|
 | 0 | **Creation** block: `variant, tribe, gender, hair, skin, shirt, trouser` + (`variant != 0`) `addColor1..4`, size 0x2C (0x1C if variant 0). Or an **Appearance** block of exactly 0xC bytes: `variant, tribeGenderHi, …` | [known] S 00486550, S 00486760 |
 | 1 | **Style** block: `variant, hair, skin, shirt, trouser` + (`variant != 0`) `addColor1..4` | [known] S 004868c0 |
-| 2–5 | Stats, active items and inventory blocks (`AvatarStatsBlockEx`, `AvatarActiveItemsBlockEx`, `AvatarInventoryBlockEx`) | [inferred] exact part index per block [TODO] |
+| 2 | **ActiveItems**: `variant`, 4 × {`slotType`, `itemId`, `count`} (empty slots keep slot types 2, 3, 4, 5) | [known] S 00486a20 |
+| 3 | **Inventory**: `variant`, `count`, min(count, 20) × {`slotType`, `itemId`, `count`} | [known] S 00486b60 |
+| 4 | **Stats**: `variant`, `level`, `exp`, `gold`, [`glod` if variant ≠ 0], [`x`, `y`, `z` f32, `heading` f32 degrees, `zone` u8, `ghostZone` u8 if variant > 1] | [known] S 00486d70 |
+| 5 | unused | [known] S 00481e60 |
+
+This blob is the game's own **save**: the client builds the character (look, items, gold/glod, level,
+last position) from it at login, and the avatar-select screen draws it. The server keeps it current
+(`sadk_lobby/savegame.py`). [PROVEN 2026-10-07: look, items and position restored after a re-login]
+
+The avatar-select list comes from **RequestUserCharList (55)**: one UserCharConn (60) row per
+character, then Result(42); `CharListReceived` S 00474910 keeps rows only for a 55 ticket. Entering
+the village then logs chat and village in with the **picked character's id** (EnterVillage S 00503f50
+-> CharacterManager+0x98, set by SelectCharacter S 00472200). [PROVEN 2026-10-07]
 
 Rules that matter for a server:
 - A blob shorter than 0x18 bytes makes all six parts empty. The avatar is then likely dropped
