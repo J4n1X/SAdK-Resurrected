@@ -212,52 +212,43 @@ def make_village_npcs(center):
     # Record NPC spots: measured in-game by the maintainer with "!pos <name>" (npc_positions.json,
     # 2026-10-07) — position, facing and zone where they should stand. Who stood where originally is
     # NOT known (the cast was server data); these spots are the maintainer's choice on the real map.
-    # Each NPC keeps a DISTINCT npcidx so the npcidx -> model table (data/lobby/config/
-    # npc_bodyparts.xml: Severin, Zeus, Kostas, npc01.., Sakhmet, Moppet, MacDoyleJr, MacGabhan)
-    # can be read off in-world.
+    # npcidx = index into the MALE set of data/lobby/config/npc_bodyparts.xml (table in
+    # docs/village-and-character-protocol.md §5, read off a live lineup 2026-10-07). 0-2 are campaign
+    # heroes and are avoided; the picks below are the maintainer's Herold = 3 plus fitting generics.
     return [
         # ── Record NPCs (1004) — labelled, model-varied, each opening a real lobby dialog.
         Npc(NPC_ID_BASE + 1, "Händler Hinnerk", npctyp=NPCTYP_SETTLER,
-            anchor=(-24.61, 2.75, 26.51), rot_deg=233.4, colours=(2, 1, 3, 1), npcidx=1,
+            # model 10 (seated Egyptian) is turned 270° in its own idle pose: compensate the facing.
+            anchor=(-24.61, 2.75, 26.51), rot_deg=(233.4 - 270.0) % 360.0, colours=(2, 1, 3, 1), npcidx=10,
             actions=((ACT_OPEN_SHOP, "Zum Laden"),),
             shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
         Npc(NPC_ID_BASE + 2, "Schneiderin Mathilde", npctyp=NPCTYP_SETTLER,
-            anchor=(-41.02, 2.75, 24.02), rot_deg=84.4, colours=(1, 0, 4, 2), npcidx=2,
+            anchor=(-41.02, 2.75, 24.02), rot_deg=84.4, colours=(1, 0, 4, 2), npcidx=7,
             actions=((ACT_TAILOR, "Schneiderei"),)),
         Npc(NPC_ID_BASE + 3, "Alter Anselm", npctyp=NPCTYP_SETTLER,
-            anchor=(-15.97, 5.12, 71.19), rot_deg=205.3, zone=1, colours=(0, 2, 1, 3), npcidx=3,
+            anchor=(-15.97, 5.12, 71.19), rot_deg=205.3, zone=1, colours=(0, 2, 1, 3), npcidx=9,
             actions=((ACT_HALL_OF_FAME, "Ruhmeshalle"),)),
         Npc(NPC_ID_BASE + 7, "Herold Hartmut", npctyp=NPCTYP_SETTLER,
-            anchor=(-29.88, 4.55, 47.02), rot_deg=210.9, colours=(3, 1, 5, 4), npcidx=4,
+            anchor=(-29.88, 4.55, 47.02), rot_deg=210.9, colours=(3, 1, 5, 4), npcidx=3,
             actions=((ACT_LIST_GAMES, "Partien ansehen"),
                      (ACT_HOST_GAME, "Partie eröffnen"))),
         Npc(NPC_ID_BASE + 8, "Spielmeister Silas", npctyp=NPCTYP_SETTLER,
-            anchor=(18.6, 2.64, 68.55), rot_deg=210.9, zone=3, colours=(5, 2, 0, 2), npcidx=5,
+            anchor=(18.6, 2.64, 68.55), rot_deg=210.9, zone=3, colours=(5, 2, 0, 2), npcidx=4,
             actions=((ACT_MINIGAME, "Minispiel"),)),
         # The village map already has a static letterbox object (scene1.xml "Letterbox"), so the
         # former letterbox NPC (npctyp 2) only duplicated it. The messenger stands at the measured
         # "Briefkasten" spot instead and offers the mailbox.
         Npc(NPC_ID_BASE + 5, "Bote Balduin", npctyp=NPCTYP_SETTLER,
-            anchor=(-32.96, 2.77, 34.13), rot_deg=182.8, colours=(4, 0, 5, 1), npcidx=6,
+            anchor=(-32.96, 2.77, 34.13), rot_deg=182.8, colours=(4, 0, 5, 1), npcidx=8,
             actions=((ACT_MAILBOX, "Post"),)),
         # ── Walkers (1001 avatars) — ambient motion via the waypoint ring.
         #    trbgndr now VARIES (high nibble = body part 0..2, low = gender): 0x00 left both
         #    walkers on model index (tribe−1)×3, i.e. the identical default look.
-        *model_lineup(),
         Npc(NPC_ID_BASE + 4, "Wächter Wilhelm", tribe_gender=0x10,
             colours=(3, 1, 2, 0, 1, 2, 3, 4),
             anchor=at(6.0, 6.0), path=loop((6, 6), (6, -6), (-6, -6), (-6, 6)),
             speed=1.0),
     ]
-
-
-def model_lineup():
-    """TEMPORARY (2026-10-07): one record NPC per npcidx 0..15, labelled "Modell N", in a row between
-    the tailor and trader spots (measured ground y ~2.75), so the maintainer can read the npcidx ->
-    model table off in-world. Remove once the models are chosen."""
-    return [Npc(NPC_ID_BASE + 100 + i, f"Modell {i}", npctyp=NPCTYP_SETTLER,
-                anchor=(-40.0 + i * 1.0, 2.75, 18.0), rot_deg=180.0, colours=(0, 0, 0, 0), npcidx=i)
-            for i in range(16)]
 
 
 def record_npcs(npc_list):
