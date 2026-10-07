@@ -21,7 +21,7 @@ if REPO not in sys.path:
 
 import tempfile  # noqa: E402
 os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
-from sadk_lobby import store, codec, config, dispatch, players, registry  # noqa: E402
+from sadk_lobby import store, codec, config, crypto, dispatch, players, registry  # noqa: E402
 
 TICKET = 0x0BADF00D
 
@@ -196,7 +196,11 @@ def test_browser_counts_humans_and_flags_password():
     try:
         host = FakeConn(11, addr=("10.0.0.5", 4444))
         host.player = players.resolve_by_username("sl_host")
-        sid = _add_game(host, max_spectators=2, ai_players=1, cipher=b"\x01\x02")
+        # tincat3 always sends `cipher`: the session-key encryption of "PASSWORD" or of "" (T 10021040)
+        host.session_key = bytes(range(32))
+        protected = crypto.build_token_cipher(host.session_key, b"PASSWORD".ljust(129, b"\0"))
+        open_game = crypto.build_token_cipher(host.session_key, b"\0" * 129)
+        sid = _add_game(host, max_spectators=2, ai_players=1, cipher=protected)
         viewer = FakeConn(12)
         dispatch._send_server_list(viewer, 5, TICKET)
         g = next(g for g in viewer.sent_of(170) if g["server_id"] == sid)
@@ -208,7 +212,8 @@ def test_browser_counts_humans_and_flags_password():
         dispatch._h_change_server(host, {"name": "x", "description": "", "max_players": 4,
                                          "max_spectators": 1, "ai_players": 2, "game_mode": 0,
                                          "hardcore": False, "map": "MP_2P_steinfjord",
-                                         "running": False, "ticket_id": TICKET}, TICKET)
+                                         "running": False, "cipher": open_game,
+                                         "ticket_id": TICKET}, TICKET)
         rec = registry.games.get(sid)
         assert rec["max_spectators"] == 1 and rec["ai_players"] == 2
         assert rec["password_required"] is False

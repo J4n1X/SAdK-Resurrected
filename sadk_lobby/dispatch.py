@@ -453,10 +453,25 @@ def push_servers_removed(server_ids, server_type=5):
         log(f"  [OBS] pushed 169 RemoveServer id={sid} to {pushed} observer(s)")
 
 
-def _has_password(fields):
-    """H9: the host sends `cipher` only when the game has a password (the literal "PASSWORD"
-    encrypted by tincat3; the real password never leaves the client). Present → protected."""
-    return bool(fields.get("cipher"))
+def _has_password(conn, fields):
+    """H9: is the hosted game password-protected? The host passes "" (no password) or the literal
+    "PASSWORD" to tincat3 (ServerList::UpdateGameServer S 0046aff0; the real password never leaves the
+    client), and tincat3 encrypts whatever pointer it gets — "" too — so `cipher` is ALWAYS present
+    (UpdateGameServer T 10021040: encrypts whenever the pointer is non-NULL; key = ConnectionManager+0x38,
+    length +0xb8 = the 207 session key). Only the decrypted text tells the two apart."""
+    blob = fields.get("cipher")
+    key = getattr(conn, "session_key", None)
+    if not blob or len(blob) <= 16 or not key:
+        return False
+    try:
+        plain = crypto.decrypt_cipher(bytes(blob), key)
+    except Exception as e:  # noqa: BLE001
+        log(f"  [GAME] password cipher not decryptable ({e}) — treated as no password")
+        return False
+    text = plain.split(b"\0", 1)[0]
+    log(f"  [GAME] password cipher decrypts to {text[:16]!r} ({len(plain)} bytes) → "
+        f"{'protected' if text else 'open'}")
+    return bool(text)
 
 
 def handler(*types):
@@ -1225,7 +1240,7 @@ def _h_add_game_server(conn, fields, ticket):
         "max_players": fields.get("max_players", 2), "cur_players": 1,
         "max_spectators": fields.get("max_spectators") or 1,    # the host's human count (see 170)
         "ai_players": fields.get("ai_players", 0),
-        "password_required": _has_password(fields),
+        "password_required": _has_password(conn, fields),
         "lobby_id": fields.get("room_id", 9212),
         "version": fields.get("version", ""),
         "server_type": fields.get("server_type", 5),
@@ -1266,7 +1281,7 @@ def _h_change_server(conn, fields, ticket):
                ("name", "description", "max_players", "max_spectators", "ai_players",
                 "game_mode", "hardcore", "map", "running", "data")
                if fields.get(k) is not None}
-    changes["password_required"] = _has_password(fields)
+    changes["password_required"] = _has_password(conn, fields)
     rec = _change_owned_game(conn, changes)
     if rec is not None:
         log(f"  ChangeGameServer: id={rec.get('id')} humans={rec.get('max_spectators')} "
