@@ -92,7 +92,7 @@ def test_move_delete_and_tailor():
     active, pack = _backpack()
     assert active[1] == (3, 1, 12) and pack[3] == (0, 0, 0)   # sltt = the container it is worn in
     economy.handle_delete_item(None, PERM, BitWriter().write(3, 8).write(0, 8).bytes())
-    assert _backpack()[0][1] == (0, 0, 0)
+    assert _backpack()[0][1] == (3, 0, 0)   # empty worn slot keeps its container so the client clears it
     sent.clear()
     # tailor: change hair (bit 0) and shirt (bit 2) to 5 and 9
     ok = economy.handle_color_change(None, PERM, BitWriter().write(0b101, 8).write(5, 4)

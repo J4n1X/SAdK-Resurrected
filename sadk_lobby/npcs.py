@@ -68,8 +68,9 @@ NPCTYP_LETTERBOX = 2
 #     else  → LobbyAction_None
 #: Shop stock: every item of the client's own item table (ItemsClient.txt) at its real price — see
 #: economy.ITEMS. (Before 2026-10-07 this was a probe of ids 1-8 with made-up prices.)
-from .economy import shop_stock as _shop_stock
-SHOP_STOCK = _shop_stock()
+from .economy import SHOP_A_IDS, SHOP_B_IDS, shop_stock as _shop_stock
+SHOP_STOCK = _shop_stock(SHOP_A_IDS)
+SHOP_STOCK_B = _shop_stock(SHOP_B_IDS)
 
 ACT_NONE = 0
 ACT_HAIRCOLOR = 1
@@ -222,6 +223,10 @@ def make_village_npcs(center):
             anchor=(-24.61, 2.75, 26.51), rot_deg=233.4, colours=(2, 1, 3, 1), npcidx=6,
             actions=((ACT_OPEN_SHOP, "Zum Laden"),),
             shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
+        Npc(NPC_ID_BASE + 9, "Händler Heinrich", npctyp=NPCTYP_SETTLER,
+            anchor=(-25.93, 2.77, 28.42), rot_deg=250.3, colours=(1, 3, 2, 0), npcidx=5,
+            actions=((ACT_OPEN_SHOP, "Zum Laden"),),
+            shop=(2, "Tiere & Waffen", 1.0, SHOP_STOCK_B)),
         Npc(NPC_ID_BASE + 2, "Schneiderin Mathilde", npctyp=NPCTYP_SETTLER,
             anchor=(-41.02, 2.75, 24.02), rot_deg=84.4, colours=(1, 0, 4, 2), npcidx=7,
             actions=((ACT_TAILOR, "Schneiderei"),)),
