@@ -19,7 +19,7 @@ from sadk_lobby.village import BitReader  # noqa: E402
 
 def test_spawn_carries_items_and_level():
     style = {"name": "J4n1X", "tribe_gender": 0x10, "colours": (9, 1, 5, 8, 1, 9, 14, 2),
-             "active": [(2, 1, 2), None, (30, 1, 4), None], "level": 5}
+             "active": [(2, 1, 2), None, (30, 1, 4), None], "level": 5, "gold": 1234, "glod": 99}
     r = BitReader(village.entity_create_body(100000, pos=(-31.9, 2.8, 27.5), tick=7, style=style))
     assert r.read(32) == 100000
     assert r.read(4) == 0b1111                                   # location + style + items + stats
@@ -29,12 +29,12 @@ def test_spawn_carries_items_and_level():
     assert [r.read(8) for _ in range(9)] == [0x10, 9, 1, 5, 8, 1, 9, 14, 2]
     slots = [(r.read(8), r.read(8), r.read(32)) for _ in range(4)]
     assert slots == [(2, 1, 2), (0, 0, 0), (4, 1, 30), (0, 0, 0)]   # sltt, cnt, itmid
-    assert [r.read(32) for _ in range(4)] == [5, 0, 0, 0]        # lvl, exp, gold, glod
+    assert [r.read(32) for _ in range(4)] == [5, 0, 1234, 99]    # lvl, exp, gold, glod
     # Without items/level the old shape stays (NPC walkers, ring refreshes).
     r = BitReader(village.entity_create_body(1, pos=(1.0, 2.7, 1.0), style={"name": "x"}))
     r.read(32)
     assert r.read(4) == 0b0011
-    print("spawn 1001 carries style, equipment and level in the client's order OK")
+    print("spawn 1001 carries style, equipment, level, gold and glod in the client's order OK")
 
 
 if __name__ == "__main__":

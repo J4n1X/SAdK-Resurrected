@@ -337,6 +337,17 @@ def find_character(char_id):
     return None, None
 
 
+def find_character_by_name(name):
+    """(character, owning-account) for a character name (case-insensitive), or (None, None)."""
+    want = (name or "").strip().lower()
+    with _lock:
+        for rec in _load_locked()["players"].values():
+            for ch in rec.get("characters") or []:
+                if (ch.get("name") or "").strip().lower() == want:
+                    return _decode(ch), _account_copy(rec)
+    return None, None
+
+
 def create_character(username, name, data):
     """Append a NEW character the client authored, with a freshly allocated char_id."""
     with _lock:

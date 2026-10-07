@@ -232,7 +232,8 @@ def _avatar_style(player):
     return {"name": player.char_name, "tribe_gender": w.trbgndr,
             "colours": tuple(w.colours),           # saved look + tailor changes (3950)
             "active": list(w.active),              # equipped items (1001 dtblcks bit2)
-            "level": w.level}                      # the outfit model is picked by level (bit3)
+            "level": w.level,                      # the outfit model is picked by level (bit3)
+            "gold": w.gold, "glod": w.glod}        # shown in other players' info view (bit3)
 
 
 # Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
@@ -642,17 +643,20 @@ def _h_user_info(conn, fields, ticket):
     conn.ok(ticket)
 
 
-def _char_values(conn, ticket, char=None):
+def _char_values(conn, ticket, char=None, owner=None):
     """CharacterData(75)/UserCharConn(60) field values for ONE character.
 
     ⭐ `char_id` and `owner_id` are DIFFERENT namespaces (msgdefs.ini gives both fields): the
     character has its own id, the account owns it. They used to be the same number here, which
     only worked while an account could hold exactly one character."""
     p = _player(conn)
+    owner_id, owner_name = p.user_id, p.username
+    if char is not None and owner is not None:
+        owner_id, owner_name = int(owner["user_id"]), owner.get("username")
     return {
         "char_id": int(char["char_id"]) if char else p.char_id,
         "name": (char.get("name") if char else p.char_name) or p.username,
-        "owner_id": p.user_id, "owner_name": p.username,
+        "owner_id": owner_id, "owner_name": owner_name,
         "guild_id": 0, "guild_name": None, "guild_role": 0, "status": 1,
         "server_id": 0, "server_name": None,
         "data": (char.get("data") if char else p.data) or b"",
@@ -688,6 +692,22 @@ def _h_request_characters(conn, fields, ticket):
     That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
     character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
     p = _player(conn)
+    # A lookup names one character, by id (LookUpName, action 8: mail senders, ...) or by name
+    # (LookUpID, action 9: mail recipients, ...); the client takes the FIRST row's name / char_id
+    # (CharacterDataReceived S 00473590). Answer exactly that character, or no row (= unknown).
+    want_id, want_name = fields.get("char_id") or 0, (fields.get("name") or "").strip()
+    if want_id or want_name:
+        char, owner = store.find_character(want_id) if want_id else store.find_character_by_name(want_name)
+        if char is None and want_id:            # an account id: answer with its first character
+            acct = next((a for a in store.all_players() if int(a["user_id"]) == int(want_id)), None)
+            if acct and acct.get("characters"):
+                char, owner = acct["characters"][0], acct
+        if char is not None:
+            conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char, owner)))
+        log(f"  → RequestCharacters lookup {'id ' + str(want_id) if want_id else repr(want_name)}: "
+            + (f"{char['name']!r} (id {char['char_id']})" if char is not None else "unknown — no row"))
+        conn.ok(ticket)
+        return
     chars = store.list_characters(p.username)
     for char in chars:
         conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char)))
@@ -853,15 +873,31 @@ def _h_buddy_observer(conn, fields, ticket):
 def _h_add_private_message(conn, fields, ticket):
     """Completed ONLY by AddResult(153) (T 10028fc0 -> PostOffice::SendMailResultReceived). A Result(42)
     leaves MailManager busy +0x34 set and stalls the whole PostOffice queue. [known, board #4788]"""
+    # Mail is addressed to and from CHARACTERS: the recipient id comes from a name lookup (LookUpID ->
+    # a character), and the inbox shows the sender's name by looking the creator id up as a character
+    # (Mail::UpdateFromRecord S 0048cce0 -> LookUpName; "???" until it resolves). Offline characters
+    # are valid recipients.
     target = fields.get("delivery_target", 0) or 0
-    known = any(p.perm_id == target for p in players.all_players())
-    if not known:
+    if store.find_character(target)[0] is None:
         log(f"  [MAIL] AddPrivateMessage to unknown recipient {target} → AddResult errorcode 1")
         conn.status_with_id(1, 0, ticket)
         return
-    mid = mail.add(target, _player(conn).perm_id, fields.get("title"), fields.get("message_text"))
-    log(f"  [MAIL] {_player(conn).perm_id} → {target}: {fields.get('title')!r} stored as #{mid}")
+    sender = _sender_character(_player(conn))
+    mid = mail.add(target, sender, fields.get("title"), fields.get("message_text"))
+    log(f"  [MAIL] {sender} → {target}: {fields.get('title')!r} stored as #{mid}")
     conn.status_with_id(0, mid, ticket)
+
+
+def _sender_character(p):
+    """The character a lobby-connection player is writing as: the one in the world, else the
+    account's first character, else the account id."""
+    in_world = next((c for c in _in_world_conns()
+                     if store.find_character(_player(c).perm_id)[1] is not None
+                     and int(store.find_character(_player(c).perm_id)[1]["user_id"]) == int(p.user_id)), None)
+    if in_world is not None:
+        return _player(in_world).perm_id
+    chars = store.list_characters(p.username)
+    return int(chars[0]["char_id"]) if chars else p.perm_id
 
 
 @handler(147)  # RequestPrivateMessageList
@@ -1603,6 +1639,17 @@ def _chat_command(conn, player, text):
 
 
 chat.COMMAND_HOOK = _chat_command
+
+
+def _stats_to_others(perm_id, body):
+    for c in _in_world_conns(exclude_player=perm_id):
+        try:
+            village._send_village(c, economy.MSG_STATS, body, None, "StatsUpdate(3201)", quiet=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+economy.STATS_TO_OTHERS = _stats_to_others
 
 
 def _h_color_change(conn, data):

@@ -403,7 +403,9 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
                 item_id, count, sltt = rec
                 w.write(sltt, 8).write(min(count, 255), 8).write(item_id, 32)
     if level:
-        w.write(level, 32).write(0, 32).write(0, 32).write(0, 32)     # lvl, exp, gold, glod
+        # lvl, exp, gold, glod — another player's info view shows this gold ("credits", +0xd0) and
+        # glod ("play money", +0xd4) (SelectionInfoDialog::RefreshInventoryPanel S 0044f9f0).
+        w.write(level, 32).write(0, 32).write(style.get("gold", 0), 32).write(style.get("glod", 0), 32)
     return w.bytes()
 
 
