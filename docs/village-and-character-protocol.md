@@ -519,14 +519,16 @@ LobbyAction table (S 004325b0):
   | 7 | bavarian_soldier1_mesh | Bavarian halberdier, unarmoured, unarmed; idle: squints, hand above the eyes |
   | 8 | bavarian_soldier2_mesh | Bavarian halberdier, unarmed, blond moustache, blue clothes |
   | 9 | bavarian_soldier3_mesh | Bavarian halberdier, unarmed, golden armour, grey clothes |
-  | 10 | egypt_male_5 | Egyptian original character; idle animation sits, model turned 270° |
+  | 10 | egypt_male_5 | Egyptian original character; idle animation sits as if mounted (floats on flat ground), model turned 270° |
   | 11 | egypt_soldier2_mesh | Egyptian generic (easy computer opponent) |
   | 12 | egypt_soldier3_mesh | Egyptian generic (hard computer opponent) |
   | 13 | scot_soldier1_mesh | Scottish generic (easy) |
   | 14 | scot_soldier2_mesh | Scottish generic (medium) |
   | 15 | scot_soldier3_mesh | Scottish generic (hard) |
 
-  The colour palette per model is still [TODO].
+  The field is `ReadNamedBits(msg, 4, "npcidx")` (S 0047b5c0), so 16+ cannot be encoded. Other looks
+  (female, every tribe, items) are only possible as 1001 avatars, which have no action buttons
+  (AvatarProxy slot 5 zeroes the codes, S 00482490). The colour palette per model is still [TODO].
 
 **Stub:** NPC spawning is implemented but currently switched off (`config.VILLAGE_NPCS_ENABLED =
 False`, at the maintainer's request) until the appearance and `actChat` questions are settled.
