@@ -13,6 +13,10 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
 from sadk_lobby import economy, minigames as mg  # noqa: E402
+
+# Table creation is switched off live (it crashed the client); the logic is still tested with Dice on.
+LIVE_PLAYABLE = mg.PLAYABLE
+mg.PLAYABLE = (mg.DICE,)
 from sadk_lobby.village import BitReader, BitWriter  # noqa: E402
 
 A, B = 5001, 5002
@@ -154,7 +158,13 @@ def test_full_and_protected_tables():
     print("protected / non-dice tables OK")
 
 
+def test_live_refuses_every_table():
+    assert LIVE_PLAYABLE == ()
+    print("live: every table type refused (0xDB) until the crash is traced OK")
+
+
 if __name__ == "__main__":
+    test_live_refuses_every_table()
     test_packed_round_trip()
     test_payout_rule()
     test_dice_table_cycle()

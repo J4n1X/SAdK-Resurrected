@@ -66,11 +66,10 @@ NPCTYP_LETTERBOX = 2
 #     10    → LobbyAction_HoF             (hall of fame)
 #     11    → LobbyAction_OpenShop
 #     else  → LobbyAction_None
-#: Probe stock for the shop: (ItemID, Buy, Sell). [TODO] ItemIDs are game-data ids from the
-#: encrypted item tables and are NOT derivable from the binary, so this is a deliberate low-id
-#: sweep — whichever ids come back as real wares identify themselves, and unknown ids should show
-#: as blanks. Prices are arbitrary until the id space is known.
-SHOP_STOCK = tuple((item_id, 100 * item_id, 50 * item_id) for item_id in range(1, 9))
+#: Shop stock: every item of the client's own item table (ItemsClient.txt) at its real price — see
+#: economy.ITEMS. (Before 2026-10-07 this was a probe of ids 1-8 with made-up prices.)
+from .economy import shop_stock as _shop_stock
+SHOP_STOCK = _shop_stock()
 
 ACT_NONE = 0
 ACT_HAIRCOLOR = 1
