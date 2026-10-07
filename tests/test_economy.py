@@ -110,22 +110,35 @@ def test_move_delete_and_tailor():
     print("move / delete / tailor (paid and refused) OK")
 
 
-def test_debug_backpack_keeps_equipment():
+def test_world_entry_loads_and_saves_the_character():
+    """The character `data` blob is the game's save (savegame.py): a new character gets the test purse
+    and the debug backpack once; after that everything is persistent."""
+    import struct
+    from sadk_lobby import savegame, store
+    store.reset_for_tests(os.path.join(tempfile.mkdtemp(), "players.json"))
     economy.reset_for_tests()
-    w = economy.wallet(PERM)
-    w.active[0] = (2, 1, 2)                       # crown worn on the head
-    w.gold = 3
-    economy.send_owner_state(None, PERM)
-    assert w.gold == config.START_GOLD and w.active[0] == (2, 1, 2)
-    assert [r[0] for r in w.backpack] == list(economy.DEBUG_BACKPACK)
+    store.get_or_create_account("Saver")
+    creation = savegame.join([struct.pack("<11I", 1, 1, 0, 2, 3, 4, 5, 6, 7, 8, 9), b"", b"", b"", b"", b""])
+    cid = int(store.create_character("Saver", "Saver", creation)["char_id"])
+    w = economy.load(cid)
+    assert w.gold == config.START_GOLD and [r[0] for r in w.backpack] == list(economy.DEBUG_BACKPACK)
+    assert w.colours == [2, 3, 4, 5, 6, 7, 8, 9] and w.trbgndr == 0x10
     assert all(r[2] in (2, 3, 4, 5) for r in w.backpack)
+    assert not savegame.parse(store.find_character(cid)[0]["data"]).fresh   # saved in full form
+    w.gold, w.active[0], w.colours[3] = 777, (2, 1, 2), 11
+    w.pose = ((12.5, 2.7, -3.0), 90.0, 3, 15)
+    economy.persist(cid)
+    economy.reset_for_tests()                         # a server restart
+    w = economy.load(cid)
+    assert w.gold == 777 and w.active[0] == (2, 1, 2) and w.colours[3] == 11
+    assert w.pose[2] == 3 and abs(w.pose[0][0] - 12.5) < 1e-5
     assert len(economy.shop_stock()) == len(economy.ITEMS) == 36
     sent.clear()
-    print("world entry: purse refilled, 20 real items, equipment kept OK")
+    print("world entry loads the character save; changes and position persist OK")
 
 
 if __name__ == "__main__":
-    test_debug_backpack_keeps_equipment()
+    test_world_entry_loads_and_saves_the_character()
     test_open_buy_sell()
     test_move_delete_and_tailor()
     print("\nAll economy tests PASSED")

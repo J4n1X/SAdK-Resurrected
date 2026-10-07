@@ -98,6 +98,7 @@ def on_conn_closed(conn):
     if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
         gone = _player(conn)
         minigames.leave_all(_minigame_io(), gone.perm_id)     # credits go back to gold
+        _save_position(gone.perm_id)              # the character save keeps where they left
         for other in _in_world_conns(exclude_player=gone.perm_id, exclude_conn=conn):
             village.send_entity_remove(other, gone.perm_id,
                                        label=f"[{gone.char_name!r} left the world]")
@@ -184,6 +185,19 @@ def _in_world_conns(exclude_player=None, exclude_conn=None):
     return list(by_player.values())
 
 
+def _save_position(perm_id):
+    """Store the last reported pose in the character save (Stats block: position, heading, zone —
+    the client restores it at the next login unless "reset login position" is ticked)."""
+    with _poses_lock:
+        loc = _poses.get(perm_id)
+    if loc is None:
+        return
+    economy.wallet(perm_id).pose = (tuple(loc["pos"]), float(loc["rot_deg"]), loc["zone"], loc["ghost_zone"])
+    if economy.persist(perm_id):
+        x, y, z = loc["pos"]
+        log(f"  [SAVE] position of {perm_id} saved: ({x:.1f}, {y:.1f}, {z:.1f}) zone {loc['zone']}")
+
+
 def _live_pose(perm_id):
     """The kwargs describing where a player is, ready to splat into `village.send_entity_create`:
     their last REPORTED pose, or the placeholder ring spot if they have not reported yet (the ~1 s
@@ -217,8 +231,9 @@ def _avatar_style(player):
     and gender into one byte and the packing is **[TODO]** — 0 is the safest first guess. The name is
     the real character name, so a rendered avatar should also be labelled correctly.
     """
-    return {"name": player.char_name, "tribe_gender": 0,
-            "colours": tuple(economy.wallet(player.perm_id).colours)}   # tailor changes (3950)
+    w = economy.wallet(player.perm_id)             # loaded from the character save at world entry
+    return {"name": player.char_name, "tribe_gender": w.trbgndr,
+            "colours": tuple(w.colours)}           # saved look + tailor changes (3950)
 
 
 # Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
@@ -651,7 +666,7 @@ def _h_player_info(conn, fields, ticket):
     # list, not a stand-in one. Announcing a character here that 72 then fails to produce would
     # leave the two lists disagreeing about who this account is.
     p = _player(conn)
-    if not config.PERSISTENT_CHARACTERS_ENABLED or p.has_character:
+    if p.has_character:
         conn.send_app(60, codec.encode_body(60, _char_values(conn, ticket)))
     conn.ok(ticket)
 
@@ -667,11 +682,6 @@ def _h_request_characters(conn, fields, ticket):
     That is why a brand-new player gets an empty list here instead of the old hardcoded stand-in
     character (`config.NICKNAME_DATA`, whose zlib payload is literally named "tester")."""
     p = _player(conn)
-    if not config.PERSISTENT_CHARACTERS_ENABLED:
-        # LEGACY (rollback path): one implicit character, char_id == perm_id, shared appearance.
-        conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket)))
-        conn.ok(ticket)
-        return
     chars = store.list_characters(p.username)
     for char in chars:
         conn.send_app(75, codec.encode_body(75, _char_values(conn, ticket, char)))
@@ -695,12 +705,6 @@ def _store_character(conn, fields, ticket, what):
     p = _player(conn)
     name = fields.get("name") or p.username
     data = fields.get("data") or b""
-    if not config.PERSISTENT_CHARACTERS_ENABLED:
-        # LEGACY (rollback path): acknowledge the creation with the account's own id and store
-        # nothing — the client then plays the single implicit character, as it did all session.
-        log(f"  {what} name={name!r} — persistence is OFF, acknowledging without storing")
-        conn.status_with_id(0, p.perm_id, ticket)
-        return
     if not data:
         # Storing an empty blob would leave a character that LOOKS created but has no body —
         # better to refuse loudly than to persist a broken record.
@@ -739,9 +743,6 @@ def _h_change_character(conn, fields, ticket):
     `property_mask` says which fields the client considers changed; we update only what it
     actually sent and leave the rest alone. [TODO] the mask's bit meanings."""
     p = _player(conn)
-    if not config.PERSISTENT_CHARACTERS_ENABLED:
-        conn.ok(ticket)                       # LEGACY: bare ack, nothing persisted
-        return
     char_id = fields.get("char_id") or p.char_id
     mask = fields.get("property_mask", 0)
     if not char_id:
@@ -765,9 +766,6 @@ def _h_remove_character(conn, fields, ticket):
     With several characters on an account, deleting by account would remove the wrong one; the
     message carries the id precisely so the client can say which."""
     p = _player(conn)
-    if not config.PERSISTENT_CHARACTERS_ENABLED:
-        conn.ok(ticket)                       # LEGACY: bare ack, nothing to delete
-        return
     char_id = fields.get("char_id") or p.char_id
     if not char_id:
         log(f"  ⚠ RemoveCharacter from {p.username!r} named no char_id — refusing to guess "
@@ -1604,6 +1602,10 @@ def _h_color_change(conn, data):
         return
     if not accepted:
         return
+    # The owner: the confirm button only writes the colours into the local avatar's bytes
+    # (ConfirmTaylorDialog S 0045e020 -> ActorProxy::SetColors S 0046b6e0, which redraws nothing);
+    # the model is rebuilt from them when a 1001 updates that avatar. Style only, no location.
+    village.send_style_update(conn, me.perm_id, _avatar_style(me), label=f"[{me.char_name!r} new look, own]")
     tick = (_now_tick16() - 1000) & 0xFFFF
     for other in _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn):
         try:

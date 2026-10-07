@@ -36,7 +36,7 @@ Server decisions (catalog V15–V30):
 import struct
 import threading
 
-from . import config
+from . import config, savegame, store
 from .log import log
 from .village import BitReader, BitWriter
 
@@ -128,7 +128,14 @@ class Wallet:
         self.active = [None] * ACTIVE_SLOTS          # None or (item_id, count, sltt)
         self.backpack = [None] * INVENTORY_SLOTS
         self.colours = [0] * 8                       # hrclr sknclr shrtclr trsrclr addColor1..4
+        self.body = 0                                # trbgndr high nibble (model variant)
+        self.gender = 0                              # trbgndr low nibble
         self.open_shop = None                        # (npc_id, shop_id, stock tuple) after 3600
+        self.pose = None                             # last reported (pos, rot_deg, zone, ghost_zone)
+
+    @property
+    def trbgndr(self):
+        return (self.body & 0xF) << 4 | (self.gender & 0xF)
 
     def container(self, slt):
         if slt == CONTAINER_BACKPACK:
@@ -218,6 +225,7 @@ def send_stats(conn, perm_id):
     w = wallet(perm_id)
     _send(conn, MSG_STATS, stats_body(perm_id, w),
           f"StatsUpdate(3201) ownr={perm_id} gold={w.gold} glod={w.glod} lvl={w.level}")
+    persist(perm_id)                                 # every money/level change reaches the owner here
 
 
 def send_items(conn, perm_id, clear=()):
@@ -227,6 +235,7 @@ def send_items(conn, perm_id, clear=()):
           f"ItemsFullSync(3102) ownr={perm_id} ({used} item(s)){' clearing ' + str(sorted(clear)) if clear else ''}")
     if clear:
         settle(lambda: send_items(conn, perm_id))
+    persist(perm_id)                                 # every item change reaches the owner here
 
 
 #: Runs `fn` after UNEQUIP_SETTLE_SECS (tests replace it to run immediately or collect the calls).
@@ -239,16 +248,62 @@ def emptied_slots(before, w):
     return {i for i, (b, a) in enumerate(zip(before, w.active)) if b is not None and a is None}
 
 
-def send_owner_state(conn, perm_id):
-    """Gold and items for the owner — sent at world entry so the client's own checks (e.g. the
-    tailor's gold >= 50, S 00434230) see the server's values. The purse is refilled to
-    config.START_GOLD on every entry (maintainer decision: gold is not a real economy for testing)."""
+# ── Persistence: the character save (savegame.py) ─────────────────────────────
+# The character `data` blob is the game's own save: the client builds the character from it at login
+# (AvatarProxy::ApplyCharacterDataBlocks S 00481e60). The server keeps it current, so gold, glod,
+# level, items, equipment, colours and the last position survive logouts and server restarts.
+def load(perm_id):
+    """Fill the wallet from the character's save at world entry. A character that was only just
+    created (creation-form save) starts with the test purse config.START_GOLD and the debug backpack
+    (maintainer decisions 2026-10-07); everything after that is persistent."""
+    char, _acct = store.find_character(perm_id)
+    w = wallet(perm_id)
+    if char is None:
+        return w
+    sv = savegame.parse(char.get("data") or b"")
+    with _lock:
+        w.body, w.gender, w.colours = sv.body, sv.gender, list(sv.colours)
+        w.level, w.exp = sv.level, sv.exp
+        if sv.fresh:
+            w.gold = w.glod = config.START_GOLD
+            w.active = [None] * ACTIVE_SLOTS
+            w.backpack = [(i, 1, ITEM_SLTT[i]) for i in DEBUG_BACKPACK][:INVENTORY_SLOTS]
+            w.backpack += [None] * (INVENTORY_SLOTS - len(w.backpack))
+        else:
+            w.gold, w.glod = sv.gold, sv.glod
+            w.active = list(sv.active)[:ACTIVE_SLOTS]
+            w.backpack = list(sv.inventory)[:INVENTORY_SLOTS]
+            w.pose = (sv.pos, sv.heading, sv.zone, sv.ghost_zone)
+    if sv.fresh:
+        persist(perm_id)
+    log(f"  [SAVE] loaded {char.get('name')!r} (char {perm_id}){' — new character' if sv.fresh else ''}: "
+        f"gold={w.gold} glod={w.glod} lvl={w.level} items={sum(1 for r in w.backpack if r)}+"
+        f"{sum(1 for r in w.active if r)} colours={w.colours}")
+    return w
+
+
+def persist(perm_id):
+    """Write the wallet (and the last known pose) back into the character's save."""
+    char, _acct = store.find_character(perm_id)
+    if char is None:
+        return False
     w = wallet(perm_id)
     with _lock:
-        w.gold = w.glod = config.START_GOLD
-        # Debug backpack (maintainer request 2026-10-07): refilled on every entry; equipped items stay.
-        w.backpack = [(i, 1, ITEM_SLTT[i]) for i in DEBUG_BACKPACK][:INVENTORY_SLOTS]
-        w.backpack += [None] * (INVENTORY_SLOTS - len(w.backpack))
+        sv = savegame.parse(char.get("data") or b"")
+        sv.body, sv.gender, sv.colours = w.body, w.gender, list(w.colours)
+        sv.level, sv.exp, sv.gold, sv.glod = w.level, w.exp, w.gold, w.glod
+        sv.active, sv.inventory = list(w.active), list(w.backpack)
+        if w.pose is not None:
+            sv.pos, sv.heading, sv.zone, sv.ghost_zone = w.pose
+        blob = savegame.build(sv)
+    store.update_character(perm_id, data=blob)
+    return True
+
+
+def send_owner_state(conn, perm_id):
+    """Gold and items for the owner — sent at world entry so the client's own checks (e.g. the
+    tailor's gold >= 50, S 00434230) see the server's values. Loaded from the character save."""
+    load(perm_id)
     send_stats(conn, perm_id)
     send_items(conn, perm_id)
 
