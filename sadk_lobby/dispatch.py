@@ -886,6 +886,7 @@ def _h_add_private_message(conn, fields, ticket):
     mid = mail.add(target, sender, fields.get("title"), fields.get("message_text"))
     log(f"  [MAIL] {sender} → {target}: {fields.get('title')!r} stored as #{mid}")
     conn.status_with_id(0, mid, ticket)
+    _notify(target, MAIL_NOTICE, only_in_world=True)   # recipient in the lobby world: tell it now
 
 
 def _sender_character(p):
@@ -1550,9 +1551,32 @@ _MINIGAME_HANDLERS = {
 NPC_POSITIONS_FILE = os.path.join(config.REPO_DIR, "npc_positions.json")
 
 
+MAIL_NOTICE = "YOU'VE GOT MAIL!"               # maintainer's text, 2026-10-07
+_pending_notices = {}                         # perm_id -> [text] waiting for the next world entry
+_pending_lock = threading.Lock()
+
+
+def _notify(perm_id, text, only_in_world=False):
+    """A server line in the player's global chat (chat.notice_from_server). Sent now when the player's
+    chat connection is live (and, with only_in_world, its avatar is in the world); otherwise kept and
+    delivered at the next world entry (_welcome)."""
+    uc = chat._uc_conn_of(perm_id)
+    in_world = any(_player(c).perm_id == perm_id for c in _in_world_conns())
+    if uc is not None and (in_world or not only_in_world):
+        chat.notice_from_server(uc, text)
+        log(f"  [NOTICE] to {perm_id}: {text!r}")
+        return True
+    if not only_in_world:
+        with _pending_lock:
+            _pending_notices.setdefault(perm_id, []).append(text)
+        log(f"  [NOTICE] for {perm_id} kept until the next world entry: {text!r}")
+    return False
+
+
 def _welcome(conn):
-    """On entering the world: a server line listing the commands (maintainer request 2026-10-07).
-    Sent through the player's chat (UC) connection, the one that shows "!command" replies."""
+    """On entering the world: a server line listing the commands (maintainer request 2026-10-07), the
+    notices kept while the player was away (match rewards), and "YOU'VE GOT MAIL!" when its mailbox
+    holds unread mail. Sent through the player's chat (UC) connection."""
     me = _player(conn)
     uc = chat._uc_conn_of(me.perm_id)
     if uc is None:
@@ -1560,6 +1584,13 @@ def _welcome(conn):
         return
     chat.notice_from_server(uc, f"Welcome, {me.char_name}! " + HELP_TEXT)
     log(f"  [WELCOME] command list sent to {me.char_name!r}")
+    with _pending_lock:
+        kept = _pending_notices.pop(me.perm_id, [])
+    for text in kept:
+        chat.notice_from_server(uc, text)
+    if mail.unread(me.perm_id):
+        chat.notice_from_server(uc, MAIL_NOTICE)
+        log(f"  [NOTICE] {me.char_name!r} has {mail.unread(me.perm_id)} unread mail(s)")
 
 
 #: The server commands, as the welcome whisper and "!help" list them.
@@ -1654,6 +1685,18 @@ def _stats_to_others(perm_id, body):
 
 
 economy.STATS_TO_OTHERS = _stats_to_others
+
+
+def _reward_notice(avatar_id, minutes, chests, won, xp, gold):
+    if xp:
+        text = (f"Match reward: {xp} XP and {gold} gold ({minutes} min"
+                + (", winner" if won else "") + (f", {chests} chest(s)" if chests else "") + ").")
+    else:
+        text = f"Match reward: none - matches under {rewards.MIN_MINUTES} minutes give no XP or gold."
+    _notify(avatar_id, text)
+
+
+rewards.NOTIFY = _reward_notice
 
 
 def _h_color_change(conn, data):
