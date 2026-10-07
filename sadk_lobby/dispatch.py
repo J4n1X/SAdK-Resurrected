@@ -1473,6 +1473,28 @@ def _chat_command(conn, player, text):
         log(f"  [POS] {player.char_name!r} saved {arg!r}: ({x:.2f}, {y:.2f}, {z:.2f}) rot={loc['rot_deg']:.0f} "
             f"zone={loc['zone']}/{loc['ghost_zone']}")
         return f"Saved '{arg}': ({x:.1f}, {y:.1f}, {z:.1f}) facing {loc['rot_deg']:.0f} deg, zone {loc['zone']}"
+    if cmd == "!level":
+        # The avatar's head is picked by level: model = (level - 1) * 3 + tribe column, level clamped
+        # to 1..5 (CGfxObjAvatar::UpdateAppearance S 00508090; heads bavarian/scot/egypt _1.._5 in
+        # bodyparts.xml). StatsUpdate (3201) sets the level but fires no observer, so an item update
+        # follows to make the clients redraw (3102 to the owner, 3100 to the others).
+        try:
+            level = int(arg)
+        except ValueError:
+            return "Usage: !level <1-5>"
+        w = economy.wallet(player.perm_id)
+        w.level = max(0, min(level, 255))
+        stats = economy.stats_body(player.perm_id, w)
+        active = economy.active_items_body(player.perm_id, w)
+        for c in _find_live(lambda c: getattr(c, "is_village", False)
+                            and getattr(c, "_enter_world_sent", False)):
+            village._send_village(c, economy.MSG_STATS, stats, None, "StatsUpdate(3201)", quiet=True)
+            if _player(c).perm_id == player.perm_id:
+                economy.send_items(c, player.perm_id)
+            else:
+                village._send_village(c, 3100, active, None, "ActiveItemsUpdate(3100)", quiet=True)
+        log(f"  [STATS] {player.char_name!r} level -> {w.level}")
+        return f"Level set to {w.level} (looks change for levels 1-5)"
     if cmd == "!poslist":
         if not saved:
             return "No positions saved yet."
