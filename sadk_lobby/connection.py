@@ -267,8 +267,9 @@ class Conn:
                 off = 6 if (len(payload) >= 6 and struct.unpack_from("<H", payload, 4)[0] == t1) else 4
                 if len(payload) >= off + 4:
                     msg_type = struct.unpack_from("<I", payload, off)[0]
-                    return msg_type not in (config.VILLAGE_LEAVE_REQUEST_MSGTYPE,
-                                            config.VILLAGE_PINGCODE_MSGTYPE)
+                    # Only the constant position stream is noise; every other village request
+                    # (shop, items, tailor, minigames, leave, ping) stays in the main log.
+                    return msg_type == config.VILLAGE_AVATAR_LOCATION_MSGTYPE
             return False                                                   # base login / other village frames stay
         return dispatch.is_quiet(t1)
 

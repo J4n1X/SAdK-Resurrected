@@ -80,6 +80,11 @@ ACT_HOST_GAME = 8
 ACT_LIST_GAMES = 9
 ACT_HALL_OF_FAME = 10
 ACT_OPEN_SHOP = 11
+#: The tailor. DispatchSlotAction (S 00434230) has NO case for code 1 (HairColor only labels the
+#: button, S 004325b0), so a code-1 button does nothing — live-confirmed 2026-10-07. Code 17 checks
+#: gold >= 50, asks !TAYLOR_QUESTION and opens the tailor; its button gets the generic template but
+#: is enabled. [known]
+ACT_TAILOR = 17
 
 
 @dataclass
@@ -213,7 +218,7 @@ def make_village_npcs(center):
             shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
         Npc(NPC_ID_BASE + 2, "Magd Mathilde", npctyp=NPCTYP_SETTLER,
             anchor=at(-4.0, 3.0), rot_deg=135.0, colours=(1, 0, 4, 2), npcidx=2,
-            actions=((ACT_HAIRCOLOR, "Neue Frisur"),)),
+            actions=((ACT_TAILOR, "Neue Frisur"),)),
         Npc(NPC_ID_BASE + 3, "Alter Anselm", npctyp=NPCTYP_SETTLER,
             anchor=at(0.5, -4.5), rot_deg=0.0, colours=(0, 2, 1, 3), npcidx=3,
             actions=((ACT_HALL_OF_FAME, "Ruhmeshalle"),)),

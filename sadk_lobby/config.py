@@ -45,7 +45,7 @@ ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "127.0.0.1")
 # the encrypted game data; the OpenShop click path needs a live trace).
 #
 # Set back to True to bring the whole cast back — nothing else needs changing.
-VILLAGE_NPCS_ENABLED = False
+VILLAGE_NPCS_ENABLED = True
 
 # ── Persistent characters ─────────────────────────────────────────────────────
 # ⚠️ ROLLED BACK 2026-08-02 (maintainer-requested flag, HARNESS §5 permits it).

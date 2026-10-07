@@ -142,9 +142,10 @@ def test_dice_table_cycle():
 def test_full_and_protected_tables():
     mg.reset_for_tests()
     io = FakeIo()
-    _create(io, "a", A, kind=2, tavern=3, psswd=1, crc=0xABCD)
+    _create(io, "a", A, kind=2, tavern=4)                          # Poker: refused (crashed the client)
+    assert io.msgs() == [("a", mg.MSG_NO_TABLE)]
+    _create(io, "a", A, kind=1, tavern=3, psswd=1, crc=0xABCD)
     key = (1, 0)
-    assert "dice" not in decode(io.last(mg.MSG_UPDATE))          # no game state for Poker
     io.log.clear()
     _join(io, "b", B, key, crc=0x1111)                            # wrong password CRC
     assert io.msgs() == [("b", mg.MSG_NO_SEAT)]

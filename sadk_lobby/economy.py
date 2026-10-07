@@ -25,7 +25,10 @@ Server decisions (catalog V15–V30):
   * INVENTORY_SLOTS records are ALWAYS sent. The client reads exactly its own slot count (0 before the
     character data blocks, max(20, n) after; our character blob carries no inventory part, so n = 0)
     and ignores extra records, while FEWER records make it read past the end. 20 is safe for both.
-  * `sltt` (slot type) meaning is unknown [guess]: 1 for an occupied slot, 0 for empty.
+  * `sltt` is the item's EQUIPMENT TYPE = the container it is worn in: 2 → item slot 0, 3 → slot 2,
+    4 → slot 1, 5 → pet (CGfxObjAvatar::SyncEquipmentSlot S 00507f60 switches on it and attaches
+    nothing for any other value) [known]. An equipped item carries its container; a backpack item keeps
+    the type it was last equipped as, or UNKNOWN_SLTT until it has been equipped once.
   * Moves are applied as swaps; an illegal move re-sends the current state (V21). Deletes always
     succeed (V22). Buying fails on short gold or a full backpack (V29). Selling credits
     Sell × SellMod (V30). The tailor charges TAILOR_PRICE when the player can pay (V15).
@@ -41,6 +44,7 @@ INVENTORY_SLOTS = 20
 ACTIVE_SLOTS = 4                 # Pet, Head, RightHand, LeftHand (S 0048abe0)
 CONTAINER_BACKPACK = 0
 EQUIP_CONTAINERS = (2, 3, 4, 5)  # [inferred] container ids of the four equipment slots
+UNKNOWN_SLTT = 1                 # backpack item never equipped yet: no known equipment type
 TAILOR_PRICE = 50
 SELL_MOD = 0.9                   # V27: the client's built-in default (007db9d0)
 
@@ -59,7 +63,7 @@ class Wallet:
         self.exp = 0
         self.gold = config.START_GOLD
         self.glod = config.START_GOLD
-        self.active = [None] * ACTIVE_SLOTS          # None or (item_id, count)
+        self.active = [None] * ACTIVE_SLOTS          # None or (item_id, count, sltt)
         self.backpack = [None] * INVENTORY_SLOTS
         self.colours = [0] * 8                       # hrclr sknclr shrtclr trsrclr addColor1..4
         self.open_shop = None                        # (npc_id, shop_id, stock tuple) after 3600
@@ -90,8 +94,8 @@ def _slot(bw, rec):
     if rec is None:
         bw.write(0, 8).write(0, 8).write(0, 32)
     else:
-        item_id, count = rec
-        bw.write(1, 8).write(min(count, 255), 8).write(item_id, 32)   # sltt 1 = occupied [guess]
+        item_id, count, sltt = rec
+        bw.write(sltt, 8).write(min(count, 255), 8).write(item_id, 32)
 
 
 def _equip_index(slt, idx):
@@ -102,6 +106,15 @@ def _equip_index(slt, idx):
 def stats_body(perm_id, w):
     return BitWriter().write(perm_id, 32).write(w.level, 32).write(w.exp, 32) \
         .write(w.gold, 32).write(w.glod, 32).bytes()
+
+
+def active_items_body(perm_id, w):
+    """3100 ActiveItemsUpdate: ownr + exactly 4 records (S 0048abe0) — what OTHER players need to
+    redraw this avatar's gear (their CLobbyClient observer calls UpdateAppearance)."""
+    bw = BitWriter().write(perm_id, 32)
+    for rec in w.active:
+        _slot(bw, rec)
+    return bw.bytes()
 
 
 def items_full_body(perm_id, w):
@@ -159,8 +172,12 @@ def handle_move_item(conn, perm_id, data):
         ok = ok and 0 <= di < len(dst)
         if ok:
             src[si], dst[di] = dst[di], src[si]       # swap (moves into an empty slot too)
+            for c, i, slt in ((dst, di, dstslt), (src, si, srcslt)):
+                if c[i] is not None and slt in EQUIP_CONTAINERS:
+                    c[i] = (c[i][0], c[i][1], slt)    # worn in container slt = its equipment type
     log(f"  [ECON] MoveItem {srcslt}/{srcidx} → {dstslt}/{dstidx}: {'applied' if ok else 'refused, re-sync'}")
     send_items(conn, perm_id)
+    return ok and (srcslt in EQUIP_CONTAINERS or dstslt in EQUIP_CONTAINERS)   # gear changed
 
 
 def handle_delete_item(conn, perm_id, data):
@@ -174,6 +191,7 @@ def handle_delete_item(conn, perm_id, data):
             c[i] = None
     log(f"  [ECON] DeleteItem {slt}/{idx}")
     send_items(conn, perm_id)
+    return slt in EQUIP_CONTAINERS                     # gear changed
 
 
 def handle_open_shop(conn, perm_id, data, shops):
@@ -210,7 +228,7 @@ def handle_buy(conn, perm_id, data):
                 why = "backpack full / slot taken"
             else:
                 w.gold -= cost
-                w.backpack[target] = (item_id, qty)
+                w.backpack[target] = (item_id, qty, UNKNOWN_SLTT)
                 ok, why = True, f"item {item_id} x{qty} into slot {target} for {cost} gold"
     log(f"  [ECON] ShopBuy shop={shop_id} slot={slot}: {'OK ' if ok else 'FAILED '}{why}")
     _send(conn, MSG_SHOP_BUY_RESULT, result_body(shop_id, ok), f"ShopBuyResult(0xE1B) ok={ok}")
@@ -227,12 +245,12 @@ def handle_sell(conn, perm_id, data):
     with _lock:
         rec = w.backpack[backpack] if 0 <= backpack < INVENTORY_SLOTS else None
         if rec is not None:
-            item_id, count = rec
+            item_id, count, sltt = rec
             qty = min(max(qty, 1), count)
             stock = {i: s for i, _b, s in (w.open_shop[2] if w.open_shop else ())}
             price = int(stock.get(item_id, 0) * SELL_MOD) * qty
             w.gold += price
-            w.backpack[backpack] = (item_id, count - qty) if count > qty else None
+            w.backpack[backpack] = (item_id, count - qty, sltt) if count > qty else None
             ok, why = True, f"item {item_id} x{qty} for {price} gold"
     log(f"  [ECON] ShopSell shop={shop_id} slot={backpack}: {'OK ' if ok else 'FAILED '}{why}")
     _send(conn, MSG_SHOP_SELL_RESULT, result_body(shop_id, ok), f"ShopSellResult(0xE25) ok={ok}")

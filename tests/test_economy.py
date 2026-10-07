@@ -85,12 +85,12 @@ def test_open_buy_sell():
 def test_move_delete_and_tailor():
     economy.reset_for_tests()
     w = economy.wallet(PERM)
-    w.backpack[3] = (12, 1)
+    w.backpack[3] = (12, 1, economy.UNKNOWN_SLTT)
     # backpack slot 3 → equipment container 3 (active slot 1)
     economy.handle_move_item(None, PERM, BitWriter().write(0, 8).write(3, 8).write(3, 8)
                              .write(0, 8).write(1, 8).bytes())
     active, pack = _backpack()
-    assert active[1] == (1, 1, 12) and pack[3] == (0, 0, 0)
+    assert active[1] == (3, 1, 12) and pack[3] == (0, 0, 0)   # sltt = the container it is worn in
     economy.handle_delete_item(None, PERM, BitWriter().write(3, 8).write(0, 8).bytes())
     assert _backpack()[0][1] == (0, 0, 0)
     sent.clear()

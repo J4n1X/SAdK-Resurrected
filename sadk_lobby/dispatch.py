@@ -1396,9 +1396,21 @@ def _shops():
     return {n.perm_id: (n.shop[0], n.shop[1], n.shop[3]) for n in _npcs if getattr(n, "shop", None)}
 
 
+def _gear_changed(handler):
+    """Wrap an item handler: when the worn gear changed, send the other in-world players this avatar's
+    ActiveItemsUpdate (3100) so their client re-runs UpdateAppearance for it."""
+    def run(conn, perm_id, data):
+        if handler(conn, perm_id, data):
+            body = economy.active_items_body(perm_id, economy.wallet(perm_id))
+            for other in _in_world_conns(exclude_player=perm_id, exclude_conn=conn):
+                village._send_village(other, 3100, body, None, "ActiveItemsUpdate(3100)", quiet=True)
+            log(f"  → [ECON] ActiveItemsUpdate(3100) ownr={perm_id} to the other players")
+    return run
+
+
 _ECONOMY_HANDLERS = {
-    config.VILLAGE_MOVE_ITEM_MSGTYPE: economy.handle_move_item,
-    config.VILLAGE_DELETE_ITEM_MSGTYPE: economy.handle_delete_item,
+    config.VILLAGE_MOVE_ITEM_MSGTYPE: _gear_changed(economy.handle_move_item),
+    config.VILLAGE_DELETE_ITEM_MSGTYPE: _gear_changed(economy.handle_delete_item),
     config.VILLAGE_OPEN_SHOP_MSGTYPE: lambda conn, pid, data: economy.handle_open_shop(conn, pid, data, _shops()),
     config.VILLAGE_SHOP_BUY_MSGTYPE: economy.handle_buy,
     config.VILLAGE_SHOP_SELL_MSGTYPE: economy.handle_sell,
