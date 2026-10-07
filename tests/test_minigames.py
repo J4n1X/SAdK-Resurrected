@@ -235,7 +235,7 @@ def test_tables_fill_the_tavern_spots():
     w.write(10, 32).write(0x7FFFFFFF, 32).write(8, 8).write(0, 8).write(0, 8).write(0, 8).write(0, 32)
     mg.handle_create(io, "a", A, w.bytes())                       # 8 players → big table 13
     assert any(t.index == 13 and t.kind == 2 for t in mg._tables.values())
-    assert LIVE_PLAYABLE == (mg.DICE, mg.POKER)                    # PawnChess is refused live
+    assert LIVE_PLAYABLE == (mg.DICE, mg.POKER, mg.PAWNCHESS)
     print("tables fill tavern spots 0-12, 8-seat games use 13-14 OK")
 
 
