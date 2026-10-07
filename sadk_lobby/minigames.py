@@ -44,6 +44,7 @@ from .village import BitReader, BitWriter
 DICE, POKER, PAWNCHESS = 1, 2, 3
 MSG_REMOVE, MSG_UPDATE, MSG_CREATE = 0xD8, 0xD9, 0xDA
 MSG_NO_TABLE, MSG_NO_SEAT = 0xDB, 0xDC
+PLAYABLE = (DICE,)
 MAX_SEATS = 8
 FIRST_TABLE_CELL = 1000          # chat cells for tables: 1000, 1001, ... (must not collide with lobby/zone cells)
 PHASE_BETTING, PHASE_RESULT = 1, 3
@@ -178,7 +179,10 @@ def handle_create(io, conn, perm_id, data):
     tavern, index, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
     with _lock:
         taken = any((t.tavern, t.index) == (tavern, index) for t in _tables.values())
-        if kind not in (DICE, POKER, PAWNCHESS) or taken:
+        # Only Dice is offered. Creating a POKER table crashed the client ~0.6 s after our 0xDA + 0xD9
+        # (live 2026-10-07 09:13:51, all three sockets reset at once); the Poker/PawnChess game state
+        # is not implemented, so those creates are refused with 0xDB until a trace explains the crash.
+        if kind not in PLAYABLE or taken:
             io.send(conn, MSG_NO_TABLE, b"")
             log(f"  [MINIGAME] create type={kind} tavern={tavern}/{index}: refused (0xDB)")
             return
