@@ -82,7 +82,11 @@ class Conn:
 
     def ok(self, ticket):
         # Result(42): errorcode(UNBYTE)=0, errormsg(STRING32)=null, ticket_id
-        body = struct.pack("<B", 0) + struct.pack("<i", 0) + struct.pack("<I", ticket)
+        self.result(0, ticket)
+
+    def result(self, errorcode, ticket):
+        """Result(42) with an explicit errorcode (non-zero = the request was refused)."""
+        body = struct.pack("<B", errorcode) + struct.pack("<i", 0) + struct.pack("<I", ticket)
         self.send_app(42, body)
 
     def status_with_id(self, errorcode, obj_id, ticket):
