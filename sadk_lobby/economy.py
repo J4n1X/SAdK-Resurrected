@@ -221,10 +221,18 @@ def _send(conn, msg, body, tag):
     log(f"  → [ECON] {tag}")
 
 
+#: Set by dispatch: (perm_id, body) -> send this 3201 to every OTHER player in the world. Other
+#: players' info view shows an avatar's gold and glod (S 0044f9f0), and HandleAvatarStatsUpdate
+#: (S 0046c9c0) applies a 3201 to whichever avatar it names.
+STATS_TO_OTHERS = None
+
+
 def send_stats(conn, perm_id):
     w = wallet(perm_id)
-    _send(conn, MSG_STATS, stats_body(perm_id, w),
-          f"StatsUpdate(3201) ownr={perm_id} gold={w.gold} glod={w.glod} lvl={w.level}")
+    body = stats_body(perm_id, w)
+    _send(conn, MSG_STATS, body, f"StatsUpdate(3201) ownr={perm_id} gold={w.gold} glod={w.glod} lvl={w.level}")
+    if STATS_TO_OTHERS is not None:
+        STATS_TO_OTHERS(perm_id, body)
     persist(perm_id)                                 # every money/level change reaches the owner here
 
 
