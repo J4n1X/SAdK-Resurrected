@@ -1,0 +1,18 @@
+#define IDI_APP          1
+#define IDD_MAIN         100
+#define IDR_SHIM         200
+
+#define IDC_FOLDER       1001
+#define IDC_BROWSE       1002
+#define IDC_STATUS       1003
+#define IDC_MODWARN      1004
+#define IDC_HOST         1005
+#define IDC_ADVANCED     1006
+#define IDC_LOBBYPORT    1007
+#define IDC_GAMEPORT     1008
+#define IDC_BRIDGEPORT   1009
+#define IDC_FORCE        1010
+#define IDC_SHIM         1011
+#define IDC_L_LOBBYPORT  1012
+#define IDC_L_GAMEPORT   1013
+#define IDC_L_BRIDGEPORT 1014
