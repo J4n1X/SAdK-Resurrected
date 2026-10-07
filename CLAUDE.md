@@ -128,6 +128,10 @@ python -m sadk_lobby
 - `players.py` — multi-user identities · `registry.py` — process-global hosted-game store
 - `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
 - `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
+
+Outside the server: `sadkmod/` is the C++ library for code running inside SADK.exe (generated game
+declarations, patches, hooks; `sadkmod/README.md`). The bridge shim `bridge/wsock32_shim/` is built on it (C++);
+the setup tool `bridge/serverconfig/` (C, Win32) embeds the shim.
 - `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 
 ---
@@ -198,6 +202,9 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
 - `tools/sadk_crypt.py` / `tools/kex.py` — offline decryption of the game's encrypted data files and parsing /
   splitting of `.KEX` scenes (`docs/asset-formats.md`). Stated reason: `AdKEd.exe` (MEW-packed) crashes under
   Wine and no MCP converts files in bulk; both re-implement the client's own loaders, checked against every file
+- `sadkmod/gen/gen_game_headers.py` — generates sadkmod's C++ declarations of the game from `sourcemap/`
+  (types, functions, globals). Stated reason (approved by the maintainer 2026-10-07): neither MCP produces source
+  code; it reads only the committed sourcemap. `sourcemap/ExportTypesJson.java` (runs inside Ghidra) feeds it.
 - `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
   the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
 

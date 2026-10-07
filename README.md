@@ -35,6 +35,8 @@ that the real client connects to, plus a small optional client add-on for hostin
 - Tavern minigames in both taverns: **Dice**, **Poker** and **Pawn Chess**, all live-tested with two
   players.
 - Funnies (play money for the minigames): 500 per day on the first visit.
+- The advertising screens show a plain board instead of the dead web pages ("Disable billboards" in
+  SAdK-ServerConfig; live-tested 2026-10-07).
 
 **Matches**
 - Hosting a game, the game browser, joining, the pre-game room, and the full referee chain that lets a
@@ -133,6 +135,11 @@ against fake sockets. Live behaviour is only ever proven against a real client.
   with signatures, 1,500+ classes and namespaces, 4,300 data types, labels and comments. Import it
   into your own Ghidra on your own copy of the DRM-free `SADK.exe` and `tincat3.dll` with
   `ApplySourcemap.java` (see `sourcemap/README.md`).
+- **`sadkmod/`** — a C++ library for modding the game from inside its process: typed declarations of the
+  game's functions, classes and globals generated from the sourcemap (17,000+ callable functions, 2,300
+  types with checked layouts), byte patches that check what they replace, MinHook-based hooks, mirrors of
+  the MSVC 2005 `std::string` / `vector` / `list`, and a verify mode that checks a mod's patches against
+  `SADK.exe` without running it. The bridge shim is built on it. See `sadkmod/README.md`.
 - **`docs/message-catalog.md`** — the protocol reference: every message the client sends or handles,
   what it expects back, and why, with binary addresses.
 - `docs/types.md` (structs and classes), `docs/subsystems.md`, `docs/village-and-character-protocol.md`,
@@ -176,7 +183,8 @@ so one generic codec encodes and decodes every message.
 
 ```
 sadk_lobby/          the server (Python package)
-bridge/wsock32_shim/ the host bridge's client side (proxy wsock32.dll, C)
+sadkmod/             C++ modding library: generated game declarations, patches, hooks (sadkmod/README.md)
+bridge/wsock32_shim/ the host bridge's client side and the game patches (proxy wsock32.dll, C++ on sadkmod)
 bridge/serverconfig/ SAdK-ServerConfig, the Windows setup tool (C, Win32)
 sourcemap/           Ghidra map of SADK.exe and tincat3.dll + its import script
 docs/                protocol and RE reference
