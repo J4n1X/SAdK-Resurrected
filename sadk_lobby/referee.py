@@ -42,7 +42,7 @@ prior (removed) attempt converged on after live tests; re-confirm it against the
 """
 import struct
 
-from . import config
+from . import config, rewards
 from .log import hex_dump, log
 from .tincat import app_payload, bytes_field, build_frame
 
@@ -234,7 +234,9 @@ def handle_frame(conn, payload):
     # channel frame (idempotent), then handle the specific message.
     send_login_success(conn)
 
+    me = getattr(getattr(conn, "player", None), "perm_id", 0)
     if msg_id == config.REF_REGISTER_GAME:
+        rewards.match_started(game_id, me)                  # the player's match clock starts
         log(f"  [REFEREE] RegisterGame(0xDB6) GameID={game_id} → Ack(0xDB7,0) + Result(0xDB8,0,"
             f"GameSeed=0x{config.REF_GAME_SEED:x})")
         _send(conn, build_register_game_ack(game_id), "RegisterGameAck(0xDB7, Result=0)")
@@ -243,6 +245,7 @@ def handle_frame(conn, payload):
         # GiveUpGame: GameID(32), MapGUID(128). The client shows "Finalizing..." and may resend every
         # frame until a matching 0xDD5 arrives, so answering every repeat is correct.
         log(f"  [REFEREE] GiveUpGame(0xDD4) GameID={game_id} → GiveUpGameAcknowledge(0xDD5, Result=0)")
+        rewards.match_finished(game_id, me, won=False)      # once; repeats find no running match
         _send(conn, build_giveup_ack(game_id), f"GiveUpGameAcknowledge(0xDD5, GameID={game_id}, Result=0)")
     elif msg_id == config.REF_FINISH_GAME:
         # FinishGame: GameID(32), MapGUID(128), MapSettings(u8 len + 3 digits), Winner(32).
@@ -258,12 +261,16 @@ def handle_frame(conn, payload):
             f"({len(reports)} report(s), {'agreeing' if agree else 'DISAGREEING: ' + str(reports)})")
         _send(conn, build_finish_ack(game_id), f"FinishGameAcknowledge(0xDC1, GameID={game_id}, Result=0)")
         _send(conn, build_finish_result(game_id), f"FinishGameResult(0xDC2, GameID={game_id}, Result=0)")
+        rewards.match_finished(game_id, perm, won=(winner == perm))
     elif msg_id == config.REF_CLAIM_CHEST:
         # ClaimChest: GameID(32), MapGUID(128 raw), ActorID(32), ChestID(32) — byte-aligned.
         _, inner = _inner(payload)
         actor_id, chest_id = _field_u32(inner, 20), _field_u32(inner, 24)
         claimant = getattr(getattr(conn, "player", None), "perm_id", 0) or actor_id
+        first = (game_id, chest_id) not in _chest_owner
         owner = _chest_owner.setdefault((game_id, chest_id), claimant)
+        if first:
+            rewards.grant_chest(owner, f"chest {chest_id} in match {game_id}", game_id)
         log(f"  [REFEREE] ClaimChest(0xDAC) GameID={game_id} chest={chest_id} actor={actor_id} "
             f"claimant={claimant} → owner {owner}{' (first claim)' if owner == claimant else ' (already claimed)'}")
         _send(conn, build_claim_ack(game_id), f"ClaimChestAcknowledge(0xDAD, GameID={game_id}, Result=0)")
