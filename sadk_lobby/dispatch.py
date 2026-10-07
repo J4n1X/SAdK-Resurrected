@@ -1400,11 +1400,17 @@ def _shops():
 def _gear_changed(handler):
     """Wrap an item handler: when the worn gear changed, send the other in-world players this avatar's
     ActiveItemsUpdate (3100) so their client re-runs UpdateAppearance for it."""
+    def push(perm_id, conn, clear=()):
+        body = economy.active_items_body(perm_id, economy.wallet(perm_id), clear)
+        for other in _in_world_conns(exclude_player=perm_id, exclude_conn=conn):
+            village._send_village(other, 3100, body, None, "ActiveItemsUpdate(3100)", quiet=True)
+
     def run(conn, perm_id, data):
-        if handler(conn, perm_id, data):
-            body = economy.active_items_body(perm_id, economy.wallet(perm_id))
-            for other in _in_world_conns(exclude_player=perm_id, exclude_conn=conn):
-                village._send_village(other, 3100, body, None, "ActiveItemsUpdate(3100)", quiet=True)
+        changed, cleared = handler(conn, perm_id, data)
+        if changed:
+            push(perm_id, conn, cleared)                 # two-step clear, see economy._active_slots
+            if cleared:
+                economy.settle(lambda: push(perm_id, conn))
             log(f"  → [ECON] ActiveItemsUpdate(3100) ownr={perm_id} to the other players")
     return run
 

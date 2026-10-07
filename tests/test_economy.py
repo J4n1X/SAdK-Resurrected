@@ -11,6 +11,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
+import tempfile  # noqa: E402
+os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
 from sadk_lobby import config, economy, village  # noqa: E402
 from sadk_lobby.village import BitReader, BitWriter  # noqa: E402
 
@@ -27,6 +29,8 @@ def _capture(conn, msg_type, body, magic, tag, quiet=False):
 
 
 village._send_village = _capture
+settled = []
+economy.settle = settled.append          # collect the delayed second step of an unequip
 
 
 def _msgs():
@@ -76,7 +80,7 @@ def test_open_buy_sell():
     assert _msgs() == [economy.MSG_SHOP_BUY_RESULT]
     # sell it back for 60 * 0.9 = 54
     economy.handle_sell(None, PERM, BitWriter().write(31, 32).write(0, 16).write(1, 16).bytes())
-    assert _purse()[3] == config.START_GOLD - 100 + 54
+    assert _purse()[3] == config.START_GOLD - 100 + int(340 // 2 * economy.SELL_MOD)   # item 7 lists at 340
     assert _backpack()[1][0] == (0, 0, 0)
     sent.clear()
     print("shop open / buy / refused buy / sell OK")
@@ -92,7 +96,9 @@ def test_move_delete_and_tailor():
     active, pack = _backpack()
     assert active[1] == (3, 1, 12) and pack[3] == (0, 0, 0)   # sltt = the container it is worn in
     economy.handle_delete_item(None, PERM, BitWriter().write(3, 8).write(0, 8).bytes())
-    assert _backpack()[0][1] == (3, 0, 0)   # empty worn slot keeps its container so the client clears it
+    assert _backpack()[0][1] == (3, 0, 0)   # step 1: the emptied slot names its container (clears it)
+    settled.pop()()                          # step 2, normally 0.5 s later
+    assert _backpack()[0][1] == (0, 0, 0)   # back to sltt 0 so the slot counts as free again
     sent.clear()
     # tailor: change hair (bit 0) and shirt (bit 2) to 5 and 9
     ok = economy.handle_color_change(None, PERM, BitWriter().write(0b101, 8).write(5, 4)
