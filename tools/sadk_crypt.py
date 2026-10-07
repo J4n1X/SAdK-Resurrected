@@ -21,6 +21,7 @@ Every file is verified against the key CRC, the size and the data CRC from its o
 
 Usage:  python3 tools/sadk_crypt.py decrypt <game data dir> <output dir>
         python3 tools/sadk_crypt.py file <encrypted file> [<output file>]
+        python3 tools/sadk_crypt.py encrypt <plain file> <output file>   (key from the output file's name)
 Output keeps the folder structure and file names; plain (unencrypted) files are not copied.
 """
 import os
@@ -125,6 +126,25 @@ def lzss_decode(src):
     return bytes(out)
 
 
+def lzss_encode_literal(data):
+    """Valid input for Lzss_Decode: every byte a literal (flag byte 0xff before each group of 8). No
+    compression (12.5 % larger), which the game's decoder reads like any other stream."""
+    out = bytearray()
+    for i in range(0, len(data), 8):
+        out.append(0xFF)
+        out += data[i:i + 8]
+    return bytes(out)
+
+
+def encrypt(plain, name):
+    """Build a sadk container for `plain` under file name `name` (the key depends on it)."""
+    key = file_key(name)
+    payload = bytearray(lzss_encode_literal(plain))
+    xor_scramble(payload, key)
+    header = struct.pack("<I4s3I", VERSION, MAGIC, zlib.crc32(plain), zlib.crc32(key), len(plain))
+    return header + bytes(payload)
+
+
 def is_encrypted(head):
     return len(head) >= 8 and struct.unpack_from("<I", head)[0] == VERSION and head[4:8] == MAGIC
 
@@ -180,6 +200,13 @@ def decrypt_tree(src_root, dst_root):
 def main(argv):
     if len(argv) >= 3 and argv[0] == "decrypt":
         return 0 if decrypt_tree(argv[1], argv[2]) else 1
+    if len(argv) == 3 and argv[0] == "encrypt":
+        with open(argv[1], "rb") as fh:
+            blob = encrypt(fh.read(), os.path.basename(argv[2]))
+        assert decrypt(blob, os.path.basename(argv[2])) == open(argv[1], "rb").read()
+        with open(argv[2], "wb") as fh:
+            fh.write(blob)
+        return 0
     if len(argv) >= 2 and argv[0] == "file":
         with open(argv[1], "rb") as fh:
             out = decrypt(fh.read(), os.path.basename(argv[1]))
