@@ -87,7 +87,8 @@ Two tracks:
 | Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
 | Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
 | In-world content: NPCs | ⚠️ implemented, parked by `config.VILLAGE_NPCS_ENABLED = False` |
-| Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07 from `docs/message-catalog.md`, not live-tested — `[TODO]` |
+| Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07; tailor ✅ live 2026-10-07 (owner and others see the new look); shop/inventory `[TODO]` |
+| Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
 | Minigame tables: Dice create → second player joins → rounds with rotating roller | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`); settlement display, leaving and Poker/PawnChess `[TODO]` |
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
