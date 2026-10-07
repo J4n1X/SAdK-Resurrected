@@ -1551,15 +1551,15 @@ NPC_POSITIONS_FILE = os.path.join(config.REPO_DIR, "npc_positions.json")
 
 
 def _welcome(conn):
-    """On entering the world: a server whisper listing the commands (maintainer request 2026-10-07).
+    """On entering the world: a server line listing the commands (maintainer request 2026-10-07).
     Sent through the player's chat (UC) connection, the one that shows "!command" replies."""
     me = _player(conn)
     uc = chat._uc_conn_of(me.perm_id)
     if uc is None:
         log(f"  [WELCOME] no chat connection for {me.char_name!r} yet — welcome skipped")
         return
-    chat.whisper_from_server(uc, players.of(uc), f"Welcome, {me.char_name}! " + HELP_TEXT)
-    log(f"  [WELCOME] command list whispered to {me.char_name!r}")
+    chat.notice_from_server(uc, f"Welcome, {me.char_name}! " + HELP_TEXT)
+    log(f"  [WELCOME] command list sent to {me.char_name!r}")
 
 
 #: The server commands, as the welcome whisper and "!help" list them.

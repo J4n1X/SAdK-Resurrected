@@ -123,7 +123,10 @@ def test_pos_command_saves_pose_and_is_not_relayed():
     chat.handle_frame(a, _cell_message(2, line, 1))
     assert b.relays() == []                                   # not relayed
     got = a.relays()
-    assert len(got) == 1 and got[0][0] == 3 and "Briefkasten" in got[0][1]["txt"], got
+    # The reply is a channel line (msg 2) from the server id, not a whisper (msg 3), so it does not
+    # mix into a whisper conversation (ChatReceived S 00480e30 vs PrivateChatReceived S 004810a0).
+    assert len(got) == 1 and got[0][0] == 2 and "Briefkasten" in got[0][1]["txt"], got
+    assert got[0][1]["from_id"] == config.FROM_SERVER and got[0][1]["mode"] == 0
     import json
     saved = json.load(open(dispatch.NPC_POSITIONS_FILE))
     assert saved["Briefkasten"]["pos"] == [35.9, 2.5, 33.1] and saved["Briefkasten"]["rot_deg"] == 90.0
