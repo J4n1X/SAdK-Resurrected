@@ -18,8 +18,8 @@ import struct
 import threading
 import time
 
-from . import (chat, codec, config, crypto, economy, mail, msgdefs, npcs, players, referee,
-               registry, store, village)
+from . import (buddies, chat, codec, config, crypto, economy, mail, msgdefs, npcs, players,
+               referee, registry, store, village)
 from .log import log
 
 HANDLERS = {}
@@ -88,6 +88,10 @@ def on_conn_closed(conn):
         except ValueError:
             pass
     _gchat_drop(conn)                             # global-chat subscribers must not leak
+    if getattr(conn, "role", "") == "lobby":
+        gone = _player(conn).perm_id
+        if _lobby_conn_of(gone) is None:          # no newer lobby socket for this player
+            buddies.push_presence(gone, False, _lobby_conn_of)
     # A village conn going away means that player's avatar must be despawned for everyone still
     # in-world, or they are left staring at a ghost that never moves.
     if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
@@ -777,9 +781,36 @@ def _h_cdkeys(conn, fields, ticket):
 # ticket, so it cannot say WHICH list is closing, and every client registers two (171 for the village
 # list and for the game list). Dropping both on one 172 would silently stop village-list pushes. The
 # observer goes away when the socket closes; until then it only receives a few extra pushes. [inferred]
-@handler(56, 98, 99, 115, 116, 172, 146, 190)
+@handler(115, 116, 172, 146, 190)
 def _h_ack(conn, fields, ticket):
     conn.ok(ticket)
+
+
+# ── Buddies (buddies.py; catalog 56/61/98/99) ─────────────────────────────────
+def _lobby_conn_of(perm_id):
+    """A player's live LOBBY connection (newest), for 61 presence pushes."""
+    found = _find_live(lambda c: getattr(c, "role", "") == "lobby" and _player(c).perm_id == perm_id)
+    return found[-1] if found else None
+
+
+@handler(56)  # RequestUserBuddyList -> N x 61 on the ticket, then Result
+def _h_buddy_list(conn, fields, ticket):
+    buddies.send_list(conn, _player(conn).perm_id, ticket)
+
+
+@handler(98)  # AddUserBuddy
+def _h_add_buddy(conn, fields, ticket):
+    me, other = _player(conn).perm_id, fields.get("buddy_id", 0) or 0
+    err = buddies.add(me, other)
+    conn.result(err, ticket)
+    log(f"  [BUDDY] {me} adds {other}: {'OK' if not err else 'refused (errorcode 1)'}")
+    if not err:
+        buddies.push_one(conn, me, other)          # T29: start with the buddy's real status
+
+
+@handler(99)  # RemoveUserBuddy
+def _h_remove_buddy(conn, fields, ticket):
+    conn.result(buddies.remove(_player(conn).perm_id, fields.get("buddy_id", 0) or 0), ticket)
 
 
 @handler(175, 176)  # Reg/DeregObserverBuddylist
@@ -825,6 +856,8 @@ def _h_remove_private_message(conn, fields, ticket):
 @handler(157)  # RequestUserIgnoreList — the LAST message of the lobby-connection login
 def _h_ignore_list(conn, fields, ticket):
     conn.ok(ticket)
+    # The lobby login is complete: tell this player's watchers it is online (T25).
+    buddies.push_presence(_player(conn).perm_id, True, _lobby_conn_of)
 
 
 # ── MOTD ──────────────────────────────────────────────────────────────────────
@@ -1211,7 +1244,9 @@ def _h_token_start(conn, fields, ticket):
     log("  → AckValidateTokenSession (212) sent")
 
 
-@handler(213)  # SendToken -> AddResult(153)  [the 0x99 ACK the client awaits; NOT a 214]
+@handler(213, 224)  # SendToken / TANLogin -> AddResult(153)  [the 0x99 ACK the client awaits; NOT a 214]
+# 224 TANLogin {perm_id, nonce, ticket} replaces 213 on a server-id connection opened with data
+# (HandlerGS T 10023460, conn+0x3c == 0) and completes the same way: 153 with the 207 perm_id. [known]
 def _h_send_token(conn, fields, ticket):
     # [PROVEN, s31] The UC-login client state machine (tincat3 ClientRecvHandler) has NO case for 214
     # (jump-table bound 0xAA, so a 214 is dropped as "Invalid message-type"). After 213 SendToken the
