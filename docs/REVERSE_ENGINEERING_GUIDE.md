@@ -4,6 +4,12 @@ Reverse-engineering and modding the game data of **Die Siedler: Aufbruch der Kul
 (The Settlers: Rise of Cultures, Blue Byte / Ubisoft, 2008). This is the **asset /
 KEX-file track** — for the online-lobby revival work see `AGENTS.md`.
 
+> **Corrected 2026-10-07 — see `docs/asset-formats.md`.** `.KEX` files are **not** encrypted: they are
+> binary 3D scenes (meshes, skeletons, animations), parsed by `tools/kex.py`. The encrypted files are the
+> ones starting with `12 18 09 06 "sadk"` (textures, Lua, XML, shaders, maps), whatever their extension;
+> `tools/sadk_crypt.py` decrypts all of them, verified against each file's own CRCs. `AdKEd.exe` is packed
+> with MEW and crashes before `main()` under Wine, so it is not used on Linux.
+
 The game stores its data in encrypted `.KEX` files. `AdKEd.exe` decrypts them into
 readable XML / Lua / text, which can then be inspected and (re-encrypted) modded.
 
