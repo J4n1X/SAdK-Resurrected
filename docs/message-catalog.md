@@ -1544,7 +1544,8 @@ Enter. [PROVEN]
 **Required server behaviour.**
 - For a hosted game, echo what the host reported in 168/177. The browser computes its "occupied"
   count from `max_spectators + ai_players`. The host puts its human count in `max_spectators`. [known]
-- Set `password_required = 1` when the host's latest 177 carried a non-empty `cipher`. Echo `hardcore`.
+- Set `password_required = 1` when the host's latest 177 `cipher` decrypts (207 session key) to a
+  non-empty text. Its mere presence means nothing: it is always sent. Echo `hardcore`.
   [inferred]
 - Echo the host's `description` verbatim. It carries the wager, settings and player names. [inferred]
 - Keep server ids unique across **all** connection kinds. tincat3 looks up connections by server id
@@ -1629,7 +1630,7 @@ ServerList+0x9c = PENDING (-2). [inferred, board #1024]
 |---|---|---|---|
 | 1 | name | STRING 128 | `<avatar name> <localized !LOBBY_GAME>` (with a space) |
 | 2 | description | STRING 128 | as in 168, current names |
-| 3 | cipher | MEMBLOCK | absent if there is no password. If the game has a password, it is the literal `"PASSWORD"` encrypted by tincat3 (ConnMgr key +0x38). The real password never leaves the client |
+| 3 | cipher | MEMBLOCK | **always present**: the host passes `""` (no password) or the literal `"PASSWORD"` (S 0046aff0, chosen by `IsPasswordMd5Empty`), and T 10021040 encrypts whenever the pointer is non-NULL, `""` included. Key = ConnectionManager+0x38 (length +0xb8) = the 207 session key; framing IV(16) ‖ Twofish-CTR. Live: 145 bytes either way. The real password never leaves the client [known] |
 | 4 | max_players | UNSHORT | map max minus closed slots |
 | 5 | max_spectators | UNSHORT | **human count** (CountHumanSlots) |
 | 6 | ai_players | UNSHORT | AI slot count |
@@ -1656,7 +1657,7 @@ It is re-sent on room changes. [inferred] There is no server_type/subtype/port/i
 
 **Open decisions.**
 - **H9** How to map `cipher` to `password_required`. The client accepts any value. Default:
-  non-empty cipher -> 1.
+  decrypted text non-empty (`"PASSWORD"`) -> 1, `""` -> 0.
 
 #### 0x0A9 (169) RemoveServer — C->S and S->C push
 
@@ -4412,7 +4413,7 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | H6 | 170 (village) | name, counts, running, data | running 1 adds, 0 removes; data roomId = 1000 | as the stub sends them |
 | H7 | 168 AddGameServer | accept or refuse a host | errorcode 0; non-zero tears down the host network | accept |
 | H8 | 168 | returned id | see H3 | see H3 |
-| H9 | 177 ChangeGameServer | `cipher` -> password_required | anything | non-empty -> 1 |
+| H9 | 177 ChangeGameServer | `cipher` -> password_required | anything | decrypts to non-empty -> 1 |
 | H10 | 189 / 170 (referee) | referee server id | non-zero, unique, **stable** across retries | fixed id (stub 77) |
 | H11 | 170 (referee assign) | descriptor type/subtype | any pair except 4/5 | 4/4 |
 | H12 | 222 ConnectionData | ip/port per server | any reachable endpoint | advertised IP + that server's listener port |
