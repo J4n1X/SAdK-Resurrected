@@ -139,4 +139,4 @@ Needs a hosted match between A and B.
 | 9 shop | | |
 | 10 inventory | | |
 | 11 tailor | | |
-| 12 minigames | | |
+| 12 minigames | Dice works | 2026-10-07, two clients, .134 traced with Frida: create seats the creator; the client builds the 3D table and accepts both seats (ReadSeats true, OnSeatJoined 0 and 1); the second player joined seat 1; rounds 1→2→3→4 ran, the roller rotated, and both players rolled from their own client. Not yet checked: the result display / settled credits, leaving, a table in the scene-2 tavern (Wendelin). |
