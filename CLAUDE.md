@@ -189,6 +189,8 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
 - `tools/lobby_proxy.py` — passive MITM proxy/logger of the live wire
 - `tools/analyze_capture.py`, `tools/decode_lobby_capture.py`, `tools/decode_game_join.py`
   — offline decoders for captured traffic
+- `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
+  the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
 
 Adding anything else requires the stated-reason gate in `HARNESS.md §3`. Treat
 captures/logs as valuable RE artifacts — don't delete or casually rewrite them.
