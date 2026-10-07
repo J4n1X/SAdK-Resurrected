@@ -189,6 +189,9 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
 - `tools/lobby_proxy.py` — passive MITM proxy/logger of the live wire
 - `tools/analyze_capture.py`, `tools/decode_lobby_capture.py`, `tools/decode_game_join.py`
   — offline decoders for captured traffic
+- `tools/frida_mcp/` — **the live-debugging MCP** (Frida): call client functions, hook handlers, read
+  objects and catch crashes in the running SADK.exe. Needs frida-server 17.22.2 (windows-x86) running as
+  Administrator on the game PC; registered in `.mcp.json` as `frida-sadk`
 - `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
   the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
 
