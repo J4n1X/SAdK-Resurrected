@@ -16,6 +16,7 @@ import tempfile  # noqa: E402
 os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
 from sadk_lobby import economy, minigames as mg  # noqa: E402
 LIVE_PLAYABLE = mg.PLAYABLE
+mg.PLAYABLE = (mg.DICE, mg.POKER, mg.PAWNCHESS)    # the table logic is tested for every type
 from sadk_lobby.village import BitReader, BitWriter  # noqa: E402
 
 A, B = 5001, 5002
@@ -56,7 +57,8 @@ def decode(body):
             seats.append((r.read(4), r.read(2), mg.read_packed(r)))
         out["seats"] = seats
     if mngt & 0x80:
-        dice, _dlr, n, phase, _t = r.read(8), r.read(8), r.read(8), r.read(8), r.read(16)
+        dice, dlr, n, phase, _t = r.read(8), r.read(8), r.read(8), r.read(8), r.read(16)
+        assert dlr <= 3, f"dealer seat {dlr} would crash the client"
         players = []
         for _ in range(n):
             players.append((r.read(8), mg.read_packed(r), mg.read_packed(r),
@@ -173,7 +175,7 @@ def test_tables_fill_the_tavern_spots():
     w.write(10, 32).write(0x7FFFFFFF, 32).write(8, 8).write(0, 8).write(0, 8).write(0, 8).write(0, 32)
     mg.handle_create(io, "a", A, w.bytes())                       # 8 players → big table 13
     assert any(t.index == 13 and t.kind == 2 for t in mg._tables.values())
-    assert LIVE_PLAYABLE == (mg.DICE, mg.POKER, mg.PAWNCHESS)
+    assert LIVE_PLAYABLE == (mg.DICE,)
     print("tables fill tavern spots 0-12, 8-seat games use 13-14 OK")
 
 

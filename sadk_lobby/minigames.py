@@ -44,7 +44,10 @@ from .village import BitReader, BitWriter
 DICE, POKER, PAWNCHESS = 1, 2, 3
 MSG_REMOVE, MSG_UPDATE, MSG_CREATE = 0xD8, 0xD9, 0xDA
 MSG_NO_TABLE, MSG_NO_SEAT = 0xDB, 0xDC
-PLAYABLE = (DICE, POKER, PAWNCHESS)
+# Dice only: Poker and PawnChess updates carry no game state yet, so their dealer seat stays at the
+# client's default — the same unchecked node lookup that crashed Dice (see table_body) is the likely
+# trap there. They are refused (0xDB) until their state block is implemented.
+PLAYABLE = (DICE,)
 #: Table spots (2026-10-07). A table's key byte `scntbl` is {low nibble = GROUP, high nibble = TABLE}
 #: and the client places the table at NodeTagTable[group][table][slot 'c'] (Generic_Grid2D_ApplyTransformAt
 #: S 004fbd90 — no NULL check, so an empty cell crashes). The cells are filled from model nodes named
@@ -137,7 +140,12 @@ def table_body(t, settings=True, seats=True):
             write_packed(w, perm)                                 # id = the avatar id = perm_id
     if state:
         elapsed = int((time.monotonic() - t.phase_start) * 1000) & 0xFFFF
-        w.write(t.dice, 8).write(0xFF, 8)                         # dice (two nibbles), dealer none
+        # dlr MUST be a real seat (0..3): in the betting phase the client draws the dice cup at the
+        # dealer seat's node, read unchecked from a 4-entry table (CGfxObjMiniGameDice_Board::
+        # DrawRenderItem S 00517264). 0xFF ("none") read past it, got NULL and crashed the client in
+        # Generic_Copy16Dwords (crash dump 2026-10-07: EIP 0049fd46, ECX 0, caller 0051727b).
+        dealer = min(t.seats) if t.seats else 0
+        w.write(t.dice, 8).write(dealer, 8)                       # dice (two nibbles), dealer seat
         w.write(len(t.seats), 8).write(t.phase, 8).write(elapsed, 16)
         for sltidx, perm in sorted(t.seats.items()):
             w.write(sltidx, 8)
