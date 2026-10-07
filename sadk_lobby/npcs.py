@@ -250,6 +250,11 @@ def make_village_npcs(center):
         Npc(NPC_ID_BASE + 8, "Spielmeister Silas", npctyp=NPCTYP_SETTLER,
             anchor=(18.6, 2.64, 68.55), rot_deg=210.9, zone=3, colours=(5, 2, 0, 2), npcidx=4,
             actions=((ACT_MINIGAME + 3 - 2, "Minispiel"),)),        # his tavern is scene 3
+        # The matchmaker of the other tavern (taverne03, scene 2), at the maintainer's measured
+        # "Tavern2" spot (npc_positions.json, 2026-10-07).
+        Npc(NPC_ID_BASE + 10, "Spielmeister Wendelin", npctyp=NPCTYP_SETTLER,
+            anchor=(107.08, 2.11, -30.47), rot_deg=261.6, zone=2, colours=(2, 2, 3, 0), npcidx=13,
+            actions=((ACT_MINIGAME + 2 - 2, "Minispiel"),)),        # his tavern is scene 2
         # The village map already has a static letterbox object (scene1.xml "Letterbox"), so the
         # former letterbox NPC (npctyp 2) only duplicated it. The messenger stands at the measured
         # "Briefkasten" spot instead and offers the mailbox.
