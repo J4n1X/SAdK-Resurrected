@@ -123,10 +123,20 @@ def _key(w, t, settings, seats, state):
     w.write(t.key[0], 16).write(t.key[1], 8)
 
 
-def table_body(t, settings=True, seats=True):
-    """0xDA / 0xD9 body: key, then the blocks the mngt flags announce (settings, seats, game state).
+def create_body(t):
+    """0xDA body: key and settings only. A seat block here crashes the client: ReadSeats announces
+    the seats (AnnounceSeats S 00471eb0), and the seat-joined observer (S 00503710) calls into the
+    table's 3D object at proxy+0x20 — which only the first 0xD9 creates (HandleMiniGameTableUpdate
+    S 0046f380 notifies +0x68 before reading the state). Crash dump 2026-10-07: NULL read at
+    S 00503717 under HandleMiniGameTableCreate -> Dice ReadTableState -> ReadSeats -> AnnounceSeats.
+    Seats and game state therefore go in the 0xD9 that follows."""
+    return table_body(t, seats=False, state=False)
+
+
+def table_body(t, settings=True, seats=True, state=True):
+    """0xD9 body: key, then the blocks the mngt flags announce (settings, seats, game state).
     Game state is only written for Dice."""
-    state = t.kind == DICE
+    state = state and t.kind == DICE
     w = BitWriter()
     _key(w, t, settings, seats, state)
     if settings:
@@ -223,7 +233,7 @@ def handle_create(io, conn, perm_id, data):
         # S 00442f00). Without this the table stayed empty.
         _seat(t, perm_id, stake)
     io.publish_cell(t.chtid, name or f"Tisch {key[0]}")
-    io.broadcast(MSG_CREATE, table_body(t))
+    io.broadcast(MSG_CREATE, create_body(t))
     io.broadcast(MSG_UPDATE, table_body(t))
     log(f"  [MINIGAME] table {key} created: type={kind} {name!r} tavern={tavern}/{index} "
         f"max={t.mxplyr} cell={t.chtid}; creator {perm_id} seated with {t.credits[perm_id]} credits")
@@ -236,7 +246,7 @@ def sync_tables(io, conn):
         tables = list(_tables.values())
     for t in tables:
         io.publish_cell(t.chtid, t.name or f"Tisch {t.key[0]}")
-        io.send(conn, MSG_CREATE, table_body(t))
+        io.send(conn, MSG_CREATE, create_body(t))
         io.send(conn, MSG_UPDATE, table_body(t))
     if tables:
         log(f"  [MINIGAME] sent {len(tables)} existing table(s) to conn #{getattr(conn, 'id', '?')}")
