@@ -696,6 +696,12 @@ def _h_request_characters(conn, fields, ticket):
     # (LookUpID, action 9: mail recipients, ...); the client takes the FIRST row's name / char_id
     # (CharacterDataReceived S 00473590). Answer exactly that character, or no row (= unknown).
     want_id, want_name = fields.get("char_id") or 0, (fields.get("name") or "").strip()
+    if want_id and int(want_id) == SERVER_MAIL_SENDER:  # the sender of server mail (intro_mail)
+        conn.send_app(75, codec.encode_body(75, _char_values(
+            conn, ticket, {"char_id": SERVER_MAIL_SENDER, "name": SERVER_MAIL_NAME, "data": b""},
+            {"user_id": SERVER_MAIL_SENDER, "username": SERVER_MAIL_NAME})))
+        conn.ok(ticket)
+        return
     if want_id or want_name:
         char, owner = store.find_character(want_id) if want_id else store.find_character_by_name(want_name)
         if char is None and want_id:            # an account id: answer with its first character
@@ -926,8 +932,13 @@ def _h_ignore_list(conn, fields, ticket):
 # ── MOTD ──────────────────────────────────────────────────────────────────────
 @handler(105)  # RequestMOTD -> MOTD
 def _h_motd(conn, fields, ticket):
-    conn.send_app(106, codec.encode_body(106, {
-        "txt": "Willkommen! SaDK Revival Server - WIP", "ticket_id": ticket}))
+    conn.send_app(106, codec.encode_body(106, {"txt": MOTD, "ticket_id": ticket}))
+
+
+#: Maintainer's text (2026-10-07), shortened to fit: 106 txt is STRING 256 (255 bytes + NUL).
+MOTD = ("Welcome to Die Siedler - Auferstehung der Kulturen, a reimplementation of the SAdK Multiplayer "
+        "servers.\n\nEnvisioned and implemented by J4n1X, 2026.\n\nWe hope you enjoy your stay! New here? "
+        "Create a character and check the castle mailbox for help.")
 
 
 # ── Assign server (AssignServer 189) ──────────────────────────────────────────
@@ -1593,15 +1604,70 @@ def _welcome(conn):
         kept = _pending_notices.pop(me.perm_id, [])
     for text in kept:
         chat.notice_from_server(uc, text, cell)
+    _intro_mail(me.perm_id)
     if mail.unread(me.perm_id):
         chat.notice_from_server(uc, MAIL_NOTICE, cell)
         log(f"  [NOTICE] {me.char_name!r} has {mail.unread(me.perm_id)} unread mail(s)")
 
 
+# ── Introduction mail (maintainer request 2026-10-07) ─────────────────────────
+# Every character finds it in its mailbox on its first world entry. The client shows a mail's sender by
+# looking the creator id up as a character (LookUpName); _h_request_characters answers this id.
+FASTTRACK_AMOUNT = 100_000                    # !fasttrack: gold and funnies each
+SERVER_MAIL_SENDER = config.FROM_SERVER
+SERVER_MAIL_NAME = "Server"
+INTRO_TITLE = "Welcome - progression and hosting"
+INTRO_TEXT = f"""Welcome to Die Siedler - Auferstehung der Kulturen!
+
+FUNNIES
+Funnies are the play money of the tavern games (dice, poker, pawn chess). Every character gets {economy.DAILY_FUNNIES} funnies on its first visit to the village each day.
+
+XP AND GOLD
+You earn experience and gold by playing matches:
+- A match must last at least {rewards.MIN_MINUTES} minutes; shorter matches give nothing.
+- After that you get {rewards.BASE_XP} XP plus {rewards.XP_PER_MINUTE} XP for every full minute played.
+- The winner gets double XP.
+- Every chest you open puts an item into your backpack and adds +{int(rewards.CHEST_BONUS * 100)}% to that match's XP and gold.
+- Gold is a tenth of the XP.
+Levels: 2 at {rewards.LEVEL_XP[1]} XP, 3 at {rewards.LEVEL_XP[2]}, 4 at {rewards.LEVEL_XP[3]}, 5 (the maximum) at {rewards.LEVEL_XP[4]}. Your rewards are announced in the chat.
+
+FAST TRACK
+Don't want to grind? Type !fasttrack in the chat: your character jumps to level {rewards.MAX_LEVEL} and gets {FASTTRACK_AMOUNT:,} gold and {FASTTRACK_AMOUNT:,} funnies.
+
+HOSTING GAMES
+To host a match, the other players must be able to connect to you: forward TCP port 5479 on your router to your PC. Joining a game needs no forwarding. If you can't forward ports, hang on: a server bridge system is planned.
+
+Have fun!
+"""
+
+
+def _intro_mail(char_id):
+    """Put the introduction mail into the character's mailbox, once per character."""
+    if store.claim_once(char_id, "intro_mail"):
+        mid = mail.add(char_id, SERVER_MAIL_SENDER, INTRO_TITLE, INTRO_TEXT.encode("cp1252") + b"\x00")
+        log(f"  [MAIL] introduction mail #{mid} for {char_id}")
+
+
+def _send_stats_everywhere(player):
+    """Push the player's 3201 stats to every client in the world; the owner also gets its items and
+    the others its active items, which makes the clients redraw (a 3201 fires no observer)."""
+    w = economy.wallet(player.perm_id)
+    stats = economy.stats_body(player.perm_id, w)
+    active = economy.active_items_body(player.perm_id, w)
+    for c in _find_live(lambda c: getattr(c, "is_village", False)
+                        and getattr(c, "_enter_world_sent", False)):
+        village._send_village(c, economy.MSG_STATS, stats, None, "StatsUpdate(3201)", quiet=True)
+        if _player(c).perm_id == player.perm_id:
+            economy.send_items(c, player.perm_id)
+        else:
+            village._send_village(c, 3100, active, None, "ActiveItemsUpdate(3100)", quiet=True)
+
+
 #: The server commands, as the welcome whisper and "!help" list them.
 HELP_TEXT = ("Server commands: !help - this list | !setpwd <new> - change your password | "
-             "!level <1-5> - your avatar's level/look | !pos <name> - save your spot | "
-             "!poslist - list saved spots")
+             "!fasttrack - max level, 100k gold and funnies | !level <1-5> - your level/look | "
+             "!pos <name> - save your spot | !poslist")
+_WALLET_MAX = 2**31 - 1                       # 3201 gold/glod are 32-bit; stay clear of the sign bit
 
 
 def _chat_command(conn, player, text):
@@ -1648,17 +1714,21 @@ def _chat_command(conn, player, text):
         lo = rewards.LEVEL_XP[w.level - 1]
         hi = rewards.LEVEL_XP[w.level] if w.level < rewards.MAX_LEVEL else rewards.MAX_EXP
         w.exp = min(max(w.exp, lo), hi - 1)
-        stats = economy.stats_body(player.perm_id, w)
-        active = economy.active_items_body(player.perm_id, w)
-        for c in _find_live(lambda c: getattr(c, "is_village", False)
-                            and getattr(c, "_enter_world_sent", False)):
-            village._send_village(c, economy.MSG_STATS, stats, None, "StatsUpdate(3201)", quiet=True)
-            if _player(c).perm_id == player.perm_id:
-                economy.send_items(c, player.perm_id)
-            else:
-                village._send_village(c, 3100, active, None, "ActiveItemsUpdate(3100)", quiet=True)
+        _send_stats_everywhere(player)
         log(f"  [STATS] {player.char_name!r} level -> {w.level}")
         return f"Level set to {w.level} (looks change for levels 1-5)"
+    if cmd == "!fasttrack":
+        # Maintainer rule 2026-10-07: maximum level plus 100k gold and 100k funnies.
+        w = economy.wallet(player.perm_id)
+        w.level = rewards.MAX_LEVEL
+        w.exp = max(w.exp, rewards.LEVEL_XP[-1])
+        w.gold = min(w.gold + FASTTRACK_AMOUNT, _WALLET_MAX)
+        w.glod = min(w.glod + FASTTRACK_AMOUNT, _WALLET_MAX)
+        economy.persist(player.perm_id)
+        _send_stats_everywhere(player)
+        log(f"  [STATS] {player.char_name!r} !fasttrack -> level {w.level}, {w.gold} gold, {w.glod} funnies")
+        return (f"Fast track: level {w.level}, +{FASTTRACK_AMOUNT:,} gold (now {w.gold:,}) "
+                f"and +{FASTTRACK_AMOUNT:,} funnies (now {w.glod:,}).")
     if cmd == "!setpwd":
         # The only way to change a password once set (maintainer rule 2026-10-07). The new one counts
         # from the next login; the client sends login passwords as raw bytes, chat as UTF-8, so the

@@ -113,7 +113,42 @@ def test_daily_funnies():
     print("500 funnies once per day, announced at world entry OK")
 
 
+def test_intro_mail_and_motd():
+    store.reset_for_tests(os.environ["SADK_STORE_PATH"])
+    mail.reset_for_tests()
+    cid = int(store.create_character("intro", "Neuling", b"\x00" * 24)["char_id"])
+    lines = _setup(online={cid})
+    dispatch._welcome(Conn(cid))
+    box = mail.inbox(cid)
+    assert [m["title"] for m in box] == [dispatch.INTRO_TITLE] and box[0]["creator"] == dispatch.SERVER_MAIL_SENDER
+    text = bytes(box[0]["message_text"])
+    assert text.endswith(b"\x00") and b"!fasttrack" in text and b"TCP port 5479" in text
+    assert lines[-1] == (cid, dispatch.MAIL_NOTICE)
+    dispatch._welcome(Conn(cid))
+    assert len(mail.inbox(cid)) == 1                            # once per character
+    assert len(dispatch.MOTD.encode()) <= 255                   # 106 txt is STRING 256
+    print("introduction mail once per character, MOTD fits OK")
+
+
+def test_fasttrack():
+    store.reset_for_tests(os.environ["SADK_STORE_PATH"])
+    economy.reset_for_tests()
+    cid = int(store.create_character("fast", "Eilig", b"\x00" * 24)["char_id"])
+    w = economy.load(cid)
+    gold, glod = w.gold, w.glod
+    dispatch._find_live = lambda pred: []
+    reply = dispatch._chat_command(None, Conn(cid).player, "!fasttrack")
+    assert reply.startswith("Fast track: level 5")
+    assert (w.level, w.gold, w.glod) == (5, gold + 100_000, glod + 100_000) and w.exp >= 10000
+    w.gold = 2**31 - 10
+    dispatch._chat_command(None, Conn(cid).player, "!fasttrack")
+    assert w.gold == 2**31 - 1                                  # capped below the sign bit
+    print("!fasttrack: level 5, +100k gold and funnies OK")
+
+
 if __name__ == "__main__":
+    test_intro_mail_and_motd()
+    test_fasttrack()
     test_local_cell_choice()
     test_daily_funnies()
     test_reward_notice_kept_until_world_entry()
