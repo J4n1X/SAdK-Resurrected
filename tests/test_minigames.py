@@ -109,7 +109,8 @@ def test_dice_table_cycle():
     assert created["type"] == 1 and created["chtid"] == 1001 and created["key"] == (1, 0)
     assert created["scntbl"] == (0 << 4) | 3          # table spot 0 in the tavern of scene 3
     assert created["settings"][2] == "Würfeltisch"
-    assert created["seats"] == [(0, 1, A)]           # the creator sits down with the 2001 stake
+    assert "seats" not in created and "dice" not in created   # 0xDA with seats crashes the client
+    assert decode(io.last(mg.MSG_UPDATE))["seats"] == [(0, 1, A)]   # creator seated by the 0xD9
     assert t.credits[A] == 100 and economy.wallet(A).gold == economy.config.START_GOLD - 100
     assert [m for _, m in io.msgs()] == [mg.MSG_CREATE, mg.MSG_UPDATE]
     io.zone = 0
@@ -213,7 +214,9 @@ def test_late_entrant_gets_existing_tables():
     _create(io, "a", A)
     io.log.clear()
     mg.sync_tables(io, "late")                                    # B enters the world afterwards
-    assert io.msgs() == [("late", mg.MSG_CREATE), ("late", mg.MSG_UPDATE)]
+    sent = [(c, m, decode(b)) for c, m, b in io.log]
+    assert [(c, m) for c, m, _ in sent] == [("late", mg.MSG_CREATE), ("late", mg.MSG_UPDATE)]
+    assert "seats" not in sent[0][2] and sent[1][2]["seats"] == [(0, 1, A)]
     mg.leave_all(io, A)                                           # the creator leaves → table gone
     assert mg._tables == {}
     print("late entrants receive existing tables; a table closes when its creator leaves OK")
