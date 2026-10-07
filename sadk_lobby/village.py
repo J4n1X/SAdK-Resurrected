@@ -370,7 +370,11 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
     is OFF by default on purpose — see that function. Blocks are written in dtblcks BIT ORDER
     (location, then style), which is the order FUN_00482c20 reads them.
     """
-    dtblcks = 1 | (2 if style else 0)
+    # Optional stats block (dtblcks bit3: lvl, exp, gold, glod — 32 bits each, read after the style
+    # block). The avatar's outfit is picked by level: model = (level - 1) * 3 + body part, clamped to
+    # 1..5 (CGfxObjAvatar::UpdateAppearance S 00508090), so an avatar NPC needs its level here.
+    level = style.get("level") if style else None
+    dtblcks = 1 | (2 if style else 0) | (8 if level else 0)
     w = BitWriter()
     w.write(avatar_id, 32)                     # "id"       — peeked by HandleEntityCreate
     w.write(dtblcks, 4)                        # "dtblcks"  — AvatarLocation [+ AvatarStyle]
@@ -387,6 +391,8 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
         avatar_style_block(w, style.get("name", ""),
                            style.get("tribe_gender", 0),
                            style.get("colours", ()))
+    if level:
+        w.write(level, 32).write(0, 32).write(0, 32).write(0, 32)     # lvl, exp, gold, glod
     return w.bytes()
 
 

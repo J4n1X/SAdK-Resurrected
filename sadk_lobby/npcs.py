@@ -126,6 +126,9 @@ class Npc:
     #: 0 means body part 0 / gender 0 for everyone — which is exactly why the walkers all wore
     #: the same default look.
     tribe_gender: int = 0
+    #: 1001 walkers only: the avatar level sent in the stats block — it picks the outfit variant
+    #: (bodyparts.xml heads <tribe>_<gender>_1.._5). 0 = no stats block (shows as level 1).
+    level: int = 0
     anchor: tuple = (0.0, 0.0, 0.0)
     rot_deg: float = 0.0
     #: Record NPCs: the 4-bit location zone (0 = outdoors; interiors such as the town hall = 1 and a
@@ -155,8 +158,10 @@ class Npc:
 
     def style(self):
         """AvatarStyle dict for `village.entity_create_body` (1001) — walkers only."""
-        return {"name": self.name, "tribe_gender": self.tribe_gender,
-                "colours": self.colours}
+        style = {"name": self.name, "tribe_gender": self.tribe_gender, "colours": self.colours}
+        if self.level:
+            style["level"] = self.level
+        return style
 
     def pose(self):
         """Location kwargs for `village.send_entity_create` — walkers only."""
@@ -249,11 +254,32 @@ def make_village_npcs(center):
         # ── Walkers (1001 avatars) — ambient motion via the waypoint ring.
         #    trbgndr now VARIES (high nibble = body part 0..2, low = gender): 0x00 left both
         #    walkers on model index (tribe−1)×3, i.e. the identical default look.
+        *avatar_lineup(),
         # Stands at the maintainer's measured "Guardian" spot (npc_positions.json, 2026-10-07).
         Npc(NPC_ID_BASE + 4, "Wächter Wilhelm", tribe_gender=0x10,
             colours=(3, 1, 2, 0, 1, 2, 3, 4),
             anchor=(-36.77, 2.79, -12.3), rot_deg=205.3),
     ]
+
+
+#: Player-avatar outfit order in data/lobby/config/bodyparts.xml: body part 0..2 = these tribes.
+_LINEUP_TRIBES = ("bavarian", "scot", "egypt")
+
+
+def avatar_lineup():
+    """TEMPORARY (2026-10-07): every player-avatar outfit as a standing 1001 avatar, labelled with
+    its bodyparts.xml model name — row 1 (z = 14) the 15 male outfits, row 2 (z = 11) the 15 female
+    ones, levels 1..5 x body parts 0..2 in the client's model order. Remove once looks are chosen."""
+    out = []
+    for row, (gender, z) in enumerate(((0, 14.0), (1, 11.0))):
+        for k in range(15):
+            level, part = k // 3 + 1, k % 3
+            out.append(Npc(NPC_ID_BASE + 200 + row * 20 + k,
+                           f"{_LINEUP_TRIBES[part]}_{'woman' if gender else 'male'}_{level}",
+                           tribe_gender=part << 4 | gender, level=level,
+                           colours=(0, 0, 0, 0, 0, 0, 0, 0),
+                           anchor=(-41.0 + k * 1.2, 2.75, z), rot_deg=180.0))
+    return out
 
 
 def record_npcs(npc_list):
