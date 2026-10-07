@@ -139,6 +139,57 @@ def test_lobby_world_join_falls_back_to_world_port():
         registry.games.clear()
 
 
+# ── 3. Server-list correctness (docs/message-catalog.md 169/170/177) ───────────
+def test_browser_counts_humans_and_flags_password():
+    registry.games.clear()
+    try:
+        host = FakeConn(11, addr=("10.0.0.5", 4444))
+        host.player = players.resolve_by_username("sl_host")
+        sid = _add_game(host, max_spectators=2, ai_players=1, cipher=b"\x01\x02")
+        viewer = FakeConn(12)
+        dispatch._send_server_list(viewer, 5, TICKET)
+        g = next(g for g in viewer.sent_of(170) if g["server_id"] == sid)
+        # occupied = max_spectators + ai_players (S 0048da70): the human count must be echoed
+        assert g["max_spectators"] == 2 and g["ai_players"] == 1, g
+        assert g["password_required"] is True
+        # 177 re-sends everything: one human left, password removed
+        host.sent.clear()
+        dispatch._h_change_server(host, {"name": "x", "description": "", "max_players": 4,
+                                         "max_spectators": 1, "ai_players": 2, "game_mode": 0,
+                                         "hardcore": False, "map": "MP_2P_steinfjord",
+                                         "running": False, "ticket_id": TICKET}, TICKET)
+        rec = registry.games.get(sid)
+        assert rec["max_spectators"] == 1 and rec["ai_players"] == 2
+        assert rec["password_required"] is False
+    finally:
+        registry.games.clear()
+
+
+def test_remove_pushes_169_to_observers():
+    registry.games.clear()
+    try:
+        host = FakeConn(21)
+        host.player = players.resolve_by_username("rm_host")
+        watcher = FakeConn(22)
+        watcher.alive = True
+        dispatch._reg_obs(watcher, 5)
+        sid = _add_game(host)
+        watcher.sent.clear()
+        dispatch._h_remove_server(host, {"server_id": sid, "ticket_id": TICKET}, TICKET)
+        pushed = watcher.sent_of(169)
+        assert len(pushed) == 1 and pushed[0]["server_id"] == sid, watcher.sent
+        assert pushed[0]["ticket_id"] == 0 and not pushed[0]["running"]
+        assert registry.games.get(sid) is None
+        # a host disconnect does the same for every game it owned
+        sid2 = _add_game(host)
+        watcher.sent.clear()
+        dispatch.push_servers_removed(registry.games.remove_owner(host.id))
+        assert [p["server_id"] for p in watcher.sent_of(169)] == [sid2]
+    finally:
+        dispatch.unregister_observer(watcher)
+        registry.games.clear()
+
+
 # ── 3. Ownership cleanup on disconnect ─────────────────────────────────────────
 def test_owner_cleanup_removes_games():
     registry.games.clear()

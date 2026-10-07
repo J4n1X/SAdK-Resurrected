@@ -120,6 +120,54 @@ def build_register_game_result(game_id, result=0, game_seed=None):
     return referee_payload(config.REF_REGISTER_RESULT, _u32(game_id) + _u32(result) + _u32(game_seed))
 
 
+def build_giveup_ack(game_id, result=0):
+    """GiveUpGameAcknowledge (0xDD5): GameID(u32), Result(u32).
+
+    GameID MUST echo the request's — a mismatch is a silent no-op and the client stays on
+    "Finalizing". Result 0..20 only: 1..20 index the ERefereeResult name table (S 0046b3d0), and
+    ≥21 yields a NULL name the client dereferences (crash). Both 0 and a failure code run the same
+    exit (referee logout, then the main screen). [known, S 0047ae80]"""
+    if not 0 <= result <= 20:
+        raise ValueError(f"GiveUpGameAcknowledge result {result} outside 0..20 crashes the client")
+    return referee_payload(config.REF_GIVEUP_ACK, _u32(game_id) + _u32(result))
+
+
+def build_finish_ack(game_id, result=0):
+    """FinishGameAcknowledge (0xDC1): GameID(u32), Result(u32; 0 → logged). [known, S 0047a810]"""
+    return referee_payload(config.REF_FINISH_ACK, _u32(game_id) + _u32(result))
+
+
+def build_finish_result(game_id):
+    """FinishGameResult (0xDC2): GameID(u32), Result(u32)=0. A FailReason string follows only when
+    Result ≠ 0, so with 0 it must NOT be sent. [known, S 0047a9c0]"""
+    return referee_payload(config.REF_FINISH_RESULT, _u32(game_id) + _u32(0))
+
+
+def build_claim_ack(game_id):
+    """ClaimChestAcknowledge (0xDAD): GameID(u32), Result(u32) — ALWAYS 0. A non-zero Result fires
+    the RegisterGame-failure list (+0x5c): with the WorldScreen up that shows REGISTER_GAME_FAILED
+    and tears the referee session down. [known, S 00479fb0 / disasm 0047a0ff]"""
+    return referee_payload(config.REF_CLAIM_ACK, _u32(game_id) + _u32(0))
+
+
+def build_claim_result(avatar_id, chest_id, text=b""):
+    """ClaimChestResult (0xDAE): AvatarID(u32; 0 = denied), ChestID(u32), Text(u8 length + bytes,
+    always present). No Result field. [known, S 00479fb0, push order verified at 0047a2b0]"""
+    text = text[:255]
+    return referee_payload(config.REF_CLAIM_RESULT,
+                           _u32(avatar_id) + _u32(chest_id) + bytes([len(text)]) + text)
+
+
+# ── Match-end state (server decisions, docs/message-catalog.md H19 / H22) ────────
+# Chest ownership per game: the FIRST claimant of a chest gets it, and every later claim of the same
+# chest is answered with that same winner, so all clients agree on who holds it. (H22; the client
+# accepts any non-zero AvatarID as success.)
+_chest_owner = {}            # (game_id, chest_id) -> avatar_id
+# FinishGame reports per game: every client that evaluates victory sends one. (H19: accept every
+# report; the winner is recorded when they agree — the client does not care, this is for the log.)
+_finish_reports = {}         # game_id -> {perm_id: winner}
+
+
 # ── Send helpers ────────────────────────────────────────────────────────────────
 def _send(conn, payload, tag):
     conn.send_raw(build_frame(config.FROM_SERVER, conn.id, config.MSG_APPLICATION, payload))
@@ -137,23 +185,31 @@ def send_login_success(conn):
 
 
 # ── Receive (client → referee) ───────────────────────────────────────────────────
-def _inner_msg_id(payload):
-    """Extract the referee LobbyMessage id from an inbound app frame. The referee channel rides
+def _inner(payload):
+    """Split an inbound referee app frame into (msg_id, field bytes). The referee channel rides
     SendGameData(74): Magic|74|74|typeWord(u32)|MEMBLOCK(fields). The id lives in the typeWord u32,
-    NOT inside the MEMBLOCK — see referee_payload() for the binary proof. Returns (msg_id, game_id),
-    or (None, None) if it isn't a referee frame (e.g. a base-login NETMSG the lobby dispatch owns)."""
+    NOT inside the MEMBLOCK — see referee_payload() for the binary proof. Returns (None, b"") if it
+    isn't a referee frame (e.g. a base-login NETMSG the lobby dispatch owns)."""
     if len(payload) < 14:
-        return None, None
+        return None, b""
     magic, t1, t2 = struct.unpack_from("<HHH", payload, 0)
     if magic != config.PAYLOAD_MAGIC or t1 != config.VILLAGE_SENDGAMEDATA or t2 != t1:
-        return None, None                                   # not a 74 envelope → base-login/other
+        return None, b""                                    # not a 74 envelope → base-login/other
     tw = struct.unpack_from("<I", payload, 6)[0]             # typeWord = names<<15|cat<<12|id (LE)
-    msg_id = tw & 0xFFF
     blen = struct.unpack_from("<I", payload, 10)[0]
-    inner = payload[14:14 + blen]
-    # ⚠️ LobbyMessage fields are BIG-endian — see _u32().
-    game_id = struct.unpack_from(">I", inner, 0)[0] if len(inner) >= 4 else 0
-    return msg_id, game_id
+    return tw & 0xFFF, payload[14:14 + blen]
+
+
+def _field_u32(inner, byte_off):
+    """A byte-aligned 32-bit field of the MSB-first bit stream (= big-endian), or 0 if absent."""
+    return struct.unpack_from(">I", inner, byte_off)[0] if len(inner) >= byte_off + 4 else 0
+
+
+def _inner_msg_id(payload):
+    """(msg_id, GameID) of an inbound referee frame; GameID is the first field of every client →
+    referee message (RegisterGame, FinishGame, GiveUpGame, ClaimChest)."""
+    msg_id, inner = _inner(payload)
+    return (None, None) if msg_id is None else (msg_id, _field_u32(inner, 0))
 
 
 def handle_frame(conn, payload):
@@ -183,8 +239,36 @@ def handle_frame(conn, payload):
             f"GameSeed=0x{config.REF_GAME_SEED:x})")
         _send(conn, build_register_game_ack(game_id), "RegisterGameAck(0xDB7, Result=0)")
         _send(conn, build_register_game_result(game_id), "RegisterGameResult(0xDB8, Result=0, GameSeed)")
-    elif msg_id in (config.REF_FINISH_GAME, config.REF_GIVEUP_GAME, config.REF_CLAIM_CHEST):
-        log(f"  [REFEREE] end-of-match msg 0x{msg_id:x} — logged (ack deferred; not on the start path)")
+    elif msg_id == config.REF_GIVEUP_GAME:
+        # GiveUpGame: GameID(32), MapGUID(128). The client shows "Finalizing..." and may resend every
+        # frame until a matching 0xDD5 arrives, so answering every repeat is correct.
+        log(f"  [REFEREE] GiveUpGame(0xDD4) GameID={game_id} → GiveUpGameAcknowledge(0xDD5, Result=0)")
+        _send(conn, build_giveup_ack(game_id), f"GiveUpGameAcknowledge(0xDD5, GameID={game_id}, Result=0)")
+    elif msg_id == config.REF_FINISH_GAME:
+        # FinishGame: GameID(32), MapGUID(128), MapSettings(u8 len + 3 digits), Winner(32).
+        # Every client that evaluates victory sends one, so N per match (H19: accept all).
+        _, inner = _inner(payload)
+        settings_len = inner[20] if len(inner) > 20 else 0
+        winner = _field_u32(inner, 21 + settings_len)
+        perm = getattr(getattr(conn, "player", None), "perm_id", 0)
+        reports = _finish_reports.setdefault(game_id, {})
+        reports[perm] = winner
+        agree = len(set(reports.values())) == 1
+        log(f"  [REFEREE] FinishGame(0xDC0) GameID={game_id} from perm {perm}: winner={winner} "
+            f"({len(reports)} report(s), {'agreeing' if agree else 'DISAGREEING: ' + str(reports)})")
+        _send(conn, build_finish_ack(game_id), f"FinishGameAcknowledge(0xDC1, GameID={game_id}, Result=0)")
+        _send(conn, build_finish_result(game_id), f"FinishGameResult(0xDC2, GameID={game_id}, Result=0)")
+    elif msg_id == config.REF_CLAIM_CHEST:
+        # ClaimChest: GameID(32), MapGUID(128 raw), ActorID(32), ChestID(32) — byte-aligned.
+        _, inner = _inner(payload)
+        actor_id, chest_id = _field_u32(inner, 20), _field_u32(inner, 24)
+        claimant = getattr(getattr(conn, "player", None), "perm_id", 0) or actor_id
+        owner = _chest_owner.setdefault((game_id, chest_id), claimant)
+        log(f"  [REFEREE] ClaimChest(0xDAC) GameID={game_id} chest={chest_id} actor={actor_id} "
+            f"claimant={claimant} → owner {owner}{' (first claim)' if owner == claimant else ' (already claimed)'}")
+        _send(conn, build_claim_ack(game_id), f"ClaimChestAcknowledge(0xDAD, GameID={game_id}, Result=0)")
+        _send(conn, build_claim_result(owner, chest_id),
+              f"ClaimChestResult(0xDAE, AvatarID={owner}, ChestID={chest_id})")
     else:
         log(f"  [REFEREE] msg 0x{msg_id:x} — logged, no handler yet")
     return True

@@ -264,9 +264,14 @@ REF_LOGIN_FAIL      = 0xDCB   # LoginFailed   (…_OnLoginFailed) — NEVER send
 REF_REGISTER_GAME   = 0xDB6   # RegisterGame (client→referee): GameID, MapGUID[16], MapName, MapSettings, …
 REF_REGISTER_ACK    = 0xDB7   # RegisterGameAck (referee→client): GameID, Result(0=ok)
 REF_REGISTER_RESULT = 0xDB8   # RegisterGameResult: GameID, Result(0=ok) + GameSeed(u32)
-REF_FINISH_GAME     = 0xDC0   # end-of-match (logged, not on the start path)
-REF_GIVEUP_GAME     = 0xDD4
-REF_CLAIM_CHEST     = 0xDAC
+REF_FINISH_GAME     = 0xDC0   # FinishGame (client→referee): GameID, MapGUID[16], MapSettings, Winner
+REF_FINISH_ACK      = 0xDC1   # FinishGameAcknowledge: GameID, Result(0=ok)            (S 0047a810)
+REF_FINISH_RESULT   = 0xDC2   # FinishGameResult: GameID, Result(0=ok) [+FailReason only if ≠0] (S 0047a9c0)
+REF_GIVEUP_GAME     = 0xDD4   # GiveUpGame (client→referee): GameID, MapGUID[16]
+REF_GIVEUP_ACK      = 0xDD5   # GiveUpGameAcknowledge: GameID (must echo), Result 0..20 (≥21 crashes) (S 0047ae80)
+REF_CLAIM_CHEST     = 0xDAC   # ClaimChest (client→referee): GameID, MapGUID[16], ActorID, ChestID
+REF_CLAIM_ACK       = 0xDAD   # ClaimChestAcknowledge: GameID, Result — ALWAYS 0 (≠0 tears the session down)
+REF_CLAIM_RESULT    = 0xDAE   # ClaimChestResult: AvatarID (0 = denied), ChestID, Text(u8 len) (S 00479fb0)
 
 VILLAGE_AVATAR_LOCATION_MSGTYPE = 0x27D0   # 10192 = (cat 2 << 12) | 0x7d0 -> NETMSG **2000, AVATAR LOCATION**
 #   [PROVEN 2026-08-01] The client's OWN position report - where the player actually IS. Sent ~3/s by
