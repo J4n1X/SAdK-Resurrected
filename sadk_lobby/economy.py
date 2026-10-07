@@ -98,9 +98,16 @@ ITEM_SLTT = {i: MASK_TO_CONTAINER.get(m, UNKNOWN_SLTT) for i, _n, m, _p in ITEMS
 DEBUG_BACKPACK = (2, 17, 18, 19, 33, 34, 35, 36, 1, 3, 30, 21, 22, 23, 24, 5, 7, 10, 11, 13)
 
 
-def shop_stock():
-    """Every item in the game at its real price; selling back pays half (× SELL_MOD on top)."""
-    return tuple((i, price, price // 2) for i, _n, _m, price in ITEMS)
+def shop_stock(ids=None):
+    """Items at their real price (all of them when `ids` is None); selling back pays half
+    (× SELL_MOD on top)."""
+    return tuple((i, price, price // 2) for i, _n, _m, price in ITEMS if ids is None or i in ids)
+
+
+#: All 36 items do not fit one shop dialog (live 2026-10-07), so two traders split the stock 18/18:
+#: head and hand-held items / pets, swords, ring, orb and cup.
+SHOP_A_IDS = (2, 17, 18, 19, 33, 34, 35, 36, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29)
+SHOP_B_IDS = (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 3, 30, 31, 32)
 
 MSG_STATS = 3201
 MSG_ITEMS_FULL = 3102
@@ -162,19 +169,29 @@ def stats_body(perm_id, w):
         .write(w.gold, 32).write(w.glod, 32).bytes()
 
 
+def _active_slots(bw, w):
+    """The 4 equipped slots. An EMPTY one is sent as {sltt = its container, cnt 0, itmid 0}:
+    SyncEquipmentSlot (S 00507f60) switches on sltt FIRST and only then clears an empty slot, so an
+    empty record with sltt 0 is skipped and the previously worn item stays drawn (live bug
+    2026-10-07: unequipping did not remove the item)."""
+    for i, rec in enumerate(w.active):
+        if rec is None:
+            bw.write(EQUIP_CONTAINERS[i], 8).write(0, 8).write(0, 32)
+        else:
+            _slot(bw, rec)
+
+
 def active_items_body(perm_id, w):
     """3100 ActiveItemsUpdate: ownr + exactly 4 records (S 0048abe0) — what OTHER players need to
     redraw this avatar's gear (their CLobbyClient observer calls UpdateAppearance)."""
     bw = BitWriter().write(perm_id, 32)
-    for rec in w.active:
-        _slot(bw, rec)
+    _active_slots(bw, w)
     return bw.bytes()
 
 
 def items_full_body(perm_id, w):
     bw = BitWriter().write(perm_id, 32)
-    for rec in w.active:
-        _slot(bw, rec)
+    _active_slots(bw, w)
     bw.write(INVENTORY_SLOTS, 8)                     # sltcnt — read and ignored by the client
     for rec in w.backpack:
         _slot(bw, rec)
