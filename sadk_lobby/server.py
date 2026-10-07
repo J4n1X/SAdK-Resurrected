@@ -12,7 +12,7 @@ import sys
 import threading
 from datetime import datetime
 
-from . import config, crypto
+from . import bridge, config, crypto
 from .connection import Conn, next_conn_id
 from .log import log, set_log_path
 
@@ -124,6 +124,7 @@ def main(argv=None):
     uc = _make_listener(config.UC_PORT, "UC/chat server")
     world = _make_listener(config.WORLD_PORT, "Lobby world stub")
     referee_srv = _make_listener(config.REFEREE_PORT, "Referee server")
+    bridge.start()                  # host bridge: control :BRIDGE_PORT, joiner relay :BRIDGE_RELAY_PORT
     print()
 
     try:

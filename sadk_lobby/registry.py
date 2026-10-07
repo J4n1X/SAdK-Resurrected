@@ -37,6 +37,15 @@ class GameRegistry:
                 return True
             return False
 
+    def set_fields(self, sid, changes):
+        """Apply `changes` to game `sid` (any owner); returns True if it exists."""
+        with self._lock:
+            rec = self._games.get(sid)
+            if rec is None:
+                return False
+            rec.update(changes)
+            return True
+
     def get(self, sid):
         """A copy of the game record, or None."""
         with self._lock:

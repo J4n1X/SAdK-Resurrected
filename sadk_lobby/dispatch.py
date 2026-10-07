@@ -19,7 +19,7 @@ import json
 import threading
 import time
 
-from . import (buddies, chat, codec, config, crypto, economy, mail, minigames, msgdefs, npcs, rewards,
+from . import (bridge, buddies, chat, codec, config, crypto, economy, mail, minigames, msgdefs, npcs, rewards,
                players, referee, registry, store, village)
 from .log import log
 
@@ -1236,6 +1236,10 @@ def _h_add_game_server(conn, fields, ticket):
         "data": fields.get("data"),
     }
     sid = _register_game(conn, info)
+    bridged = bridge.game_registered(sid, getattr(conn, "bridge_token", None))
+    if bridged:                     # host unreachable: joiners reach it through the bridge
+        info["ip"], info["port"] = bridged
+        registry.games.set_fields(sid, {"ip": bridged[0], "port": bridged[1]})
     log(f"  AddGameServer: id={sid} name={info['name']!r} map={info['map']!r} "
         f"owner={info['owner_id']} subtype={info['server_subtype']}")
     conn.status_with_id(0, sid, ticket)
@@ -1249,6 +1253,7 @@ def _h_remove_server(conn, fields, ticket):
     removed = _remove_game(conn, sid)
     conn.ok(ticket)     # Result(42) 0 → DeleteResultReceived S 00469990 resets the host's +0x9c
     if removed:
+        bridge.game_removed(sid)
         push_servers_removed([sid])
 
 
