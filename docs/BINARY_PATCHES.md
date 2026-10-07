@@ -81,7 +81,7 @@ for hosts that run it.
 
 The three advertising screens in the lobby world (`lobby/scene/scene_ad.xml`, models `ad0.KEX` / `ad1.KEX`) are
 web pages. Each model has two materials: the board (`sign ad0` → `sign_ad0.dds`) and the screen
-(`Material #478` → `ad0.tga` / `ad1.tga` / `ad2.tga`). `Lobby::CGfxTextureMgr::GetTexture` S 005046c0 compares
+(`Material #478` → `ad0.tga` / `ad1.tga` / `ad2.tga`). `Lobby::CGfxTextureMgr::GetTexture` S 00504650 compares
 the texture name against those three literals (S 007e6240 / 007e6208 / 007e61d0, read nowhere else) and, on a
 match, creates the texture with `S2CE::CTexture::CreateFromURL` S 004e7880: an embedded Internet Explorer
 renders `http://www.funatics.de/sadk/forwardingN.html` into it. Those pages return HTTP 404:
