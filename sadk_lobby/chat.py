@@ -167,6 +167,32 @@ def inner_user_left(perm_id, cell_id):
     return struct.pack("<H", 6) + struct.pack("<I", perm_id) + struct.pack("<I", cell_id)
 
 
+# ── Dynamic cells (minigame table channels) ───────────────────────────────────
+# Cells created at runtime must be published on every UC connection — the client rejects a join of
+# an unpublished cell (StatusReply 2) and silently drops its chat. Late joiners get them in
+# send_initial_reply.
+_extra_cells = {}            # cell_id -> name
+
+
+def _cell_blob(name, subject=""):
+    return channel_data_blob(name=name, subject=subject, creator="Server", password=None,
+                             protected=False, persistent=False, autodelete=True, hidden=True,
+                             creator_pid=config.FROM_SERVER)
+
+
+def publish_cell(cell_id, name, uc_conns):
+    _extra_cells[cell_id] = name
+    frame = channel_info(cell_id, _cell_blob(name), ticket=0)
+    sent = 0
+    for c in uc_conns:
+        try:
+            c.send_chat(frame)
+            sent += 1
+        except Exception:  # noqa: BLE001
+            pass
+    log(f"  → [CHAT] published cell {cell_id} {name!r} on {sent} UC connection(s)")
+
+
 # ── Handlers (operate on a Conn) ──────────────────────────────────────────────
 def send_initial_reply(conn):
     """Push the channel list the instant the chat handshake completes.
@@ -182,7 +208,9 @@ def send_initial_reply(conn):
             protected=protected, persistent=True, autodelete=False,
             hidden=False, creator_pid=creator_id)
         conn.send_chat(channel_info(cell_id, blob, ticket=0))
-    log(f"  → [CHAT] pushed {len(channels)} ChannelInfo on connect "
+    for cell_id, name in list(_extra_cells.items()):
+        conn.send_chat(channel_info(cell_id, _cell_blob(name), ticket=0))
+    log(f"  → [CHAT] pushed {len(channels) + len(_extra_cells)} ChannelInfo on connect "
         f"({len(config.DEFAULT_CHANNELS)} lobby + {len(config.ZONE_CHANNELS)} zone)")
 
 

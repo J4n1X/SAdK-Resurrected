@@ -18,8 +18,8 @@ import struct
 import threading
 import time
 
-from . import (buddies, chat, codec, config, crypto, economy, mail, msgdefs, npcs, players,
-               referee, registry, store, village)
+from . import (buddies, chat, codec, config, crypto, economy, mail, minigames, msgdefs, npcs,
+               players, referee, registry, store, village)
 from .log import log
 
 HANDLERS = {}
@@ -96,6 +96,7 @@ def on_conn_closed(conn):
     # in-world, or they are left staring at a ghost that never moves.
     if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
         gone = _player(conn)
+        minigames.leave_all(_minigame_io(), gone.perm_id)     # credits go back to gold
         for other in _in_world_conns(exclude_player=gone.perm_id, exclude_conn=conn):
             village.send_entity_remove(other, gone.perm_id,
                                        label=f"[{gone.char_name!r} left the world]")
@@ -1374,6 +1375,14 @@ def _h_send_game_data(conn, fields, ticket):
             _ECONOMY_HANDLERS[msg_type](conn, _player(conn).perm_id, data)
         except Exception as exc:  # noqa: BLE001 — a malformed request must not kill the conn
             log(f"  [ECON] msg 0x{msg_type:x} from conn #{conn.id} failed: {exc} ({data[:16].hex()})")
+    elif msg_type in _MINIGAME_HANDLERS or msg_type in config.VILLAGE_GAME_ACTION_MSGTYPES:
+        try:
+            if msg_type in _MINIGAME_HANDLERS:
+                _MINIGAME_HANDLERS[msg_type](_minigame_io(), conn, _player(conn).perm_id, data)
+            else:
+                minigames.handle_game_action(_minigame_io(), conn, _player(conn).perm_id, msg_type, data)
+        except Exception as exc:  # noqa: BLE001
+            log(f"  [MINIGAME] msg 0x{msg_type:x} from conn #{conn.id} failed: {exc} ({data[:24].hex()})")
     elif msg_type == config.VILLAGE_COLOR_CHANGE_MSGTYPE:      # 0x2F6E — msg 3950 tailor
         _h_color_change(conn, data)
     elif msg_type == config.VILLAGE_CHAT_COMMAND_MSGTYPE:      # 0x2FA0 — msg 4000, nothing required
@@ -1393,6 +1402,25 @@ _ECONOMY_HANDLERS = {
     config.VILLAGE_OPEN_SHOP_MSGTYPE: lambda conn, pid, data: economy.handle_open_shop(conn, pid, data, _shops()),
     config.VILLAGE_SHOP_BUY_MSGTYPE: economy.handle_buy,
     config.VILLAGE_SHOP_SELL_MSGTYPE: economy.handle_sell,
+}
+
+
+def _minigame_io():
+    return minigames.Io(
+        send=lambda c, msg, body: village._send_village(c, msg, body, None,
+                                                        f"minigame msg 0x{msg:x}", quiet=True),
+        everyone=lambda: _in_world_conns(),
+        publish_cell=lambda cell, name: chat.publish_cell(
+            cell, name, _find_live(lambda c: getattr(c, "is_chat", False))))
+
+
+_MINIGAME_HANDLERS = {
+    config.VILLAGE_CREATE_TABLE_MSGTYPE: minigames.handle_create,
+    config.VILLAGE_JOIN_TABLE_MSGTYPE: minigames.handle_join,
+    config.VILLAGE_LEAVE_TABLE_MSGTYPE: minigames.handle_leave,
+    config.VILLAGE_TABLE_AMOUNT_MSGTYPE: minigames.handle_amount,
+    config.VILLAGE_DICE_BETS_MSGTYPE: minigames.handle_place_bets,
+    config.VILLAGE_DICE_ROLL_MSGTYPE: minigames.handle_roll,
 }
 
 

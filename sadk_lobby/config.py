@@ -282,6 +282,14 @@ VILLAGE_SHOP_BUY_MSGTYPE      = 0x2E1A   # 3610 ShopBuy   -> 0xE1B
 VILLAGE_SHOP_SELL_MSGTYPE     = 0x2E24   # 3620 ShopSell  -> 0xE25
 VILLAGE_COLOR_CHANGE_MSGTYPE  = 0x2F6E   # 3950 AvatarColorChange (tailor)
 VILLAGE_CHAT_COMMAND_MSGTYPE  = 0x2FA0   # 4000 ChatCommand (nothing required; logged)
+# Minigames (minigames.py): 2001 is category 2, table actions are category 5.
+VILLAGE_CREATE_TABLE_MSGTYPE  = 0x27D1   # 2001 CreateMiniGameTable -> 0xDA + 0xD9 / 0xDB
+VILLAGE_JOIN_TABLE_MSGTYPE    = 0x50D1   # 209 JoinTable -> 0xD9 / 0xDC
+VILLAGE_LEAVE_TABLE_MSGTYPE   = 0x50CC   # 204 LeaveTable -> 0xD9 / 0xD8
+VILLAGE_TABLE_AMOUNT_MSGTYPE  = 0x50DE   # 222 Amount (credit top-up)
+VILLAGE_DICE_BETS_MSGTYPE     = 0x50DC   # 220 Dice PlaceBets
+VILLAGE_DICE_ROLL_MSGTYPE     = 0x50DD   # 221 Dice Roll
+VILLAGE_GAME_ACTION_MSGTYPES  = (0x512C, 0x512D, 0x512E, 0x5190, 0x5191, 0x5192, 0x5193)  # Poker / PawnChess
 # Starting purse (gold and glod) of every player — a server decision (catalog V17). The client's
 # own default for a freshly created character is 50; 1000 lets the shop and tailor be tested.
 START_GOLD = 1000
