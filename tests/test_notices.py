@@ -1,5 +1,5 @@
 """
-Server notices (offline): match rewards and "YOU'VE GOT MAIL!" as global-chat lines from the server
+Server notices (offline): match rewards, the daily funnies and "YOU'VE GOT MAIL!" as local-chat lines from the server
 (chat.notice_from_server): sent at once when the player's chat connection is live, otherwise kept and
 delivered at the next world entry; unread mail is announced at world entry and when new mail arrives
 for a player in the world. Mail survives a restart.
@@ -15,7 +15,7 @@ if REPO not in sys.path:
     sys.path.insert(0, REPO)
 os.environ["SADK_STORE_PATH"] = os.path.join(tempfile.mkdtemp(), "players.json")
 
-from sadk_lobby import chat, dispatch, mail, players, rewards, store  # noqa: E402
+from sadk_lobby import chat, config, dispatch, economy, mail, players, rewards, store  # noqa: E402
 
 
 class Conn:
@@ -81,7 +81,41 @@ def test_mail_survives_restart():
     print("mail persisted across a restart OK")
 
 
+def test_local_cell_choice():
+    me, other = object(), object()
+    base = config.LOCAL_CHAT_CELL_BASE
+    with chat._roster_lock:
+        chat._roster.clear()
+        chat._roster.update({config.GLOBAL_CHAT_CELL: [me, other], base + 2: [other], base + 3: [me]})
+    assert chat.local_cell_of(me, 3) == base + 3              # its zone's cell
+    assert chat.local_cell_of(me, 2) == base + 3              # not in that zone's cell: the one it joined
+    assert chat.local_cell_of(object()) == config.GLOBAL_CHAT_CELL   # no local cell: global
+    with chat._roster_lock:
+        chat._roster.clear()
+    print("server lines go to the local chat cell OK")
+
+
+def test_daily_funnies():
+    store.reset_for_tests(os.environ["SADK_STORE_PATH"])
+    mail.reset_for_tests()
+    cid = int(store.create_character("daily", "Taeglich", b"\x00" * 24)["char_id"])
+    economy.reset_for_tests()
+    before = economy.load(cid).glod
+    assert economy.daily_allowance(cid, "2026-10-07") == economy.DAILY_FUNNIES == 500
+    assert economy.daily_allowance(cid, "2026-10-07") == 0      # once per day
+    assert economy.wallet(cid).glod == before + 500
+    assert economy.daily_allowance(cid, "2026-10-08") == 500    # next day again
+    lines = _setup(online={cid})
+    economy.wallet(cid).allowance_granted = 500
+    dispatch._welcome(Conn(cid))
+    assert any(t.startswith("Daily allowance: +500 funnies") for _, t in lines)
+    assert economy.wallet(cid).allowance_granted == 0
+    print("500 funnies once per day, announced at world entry OK")
+
+
 if __name__ == "__main__":
+    test_local_cell_choice()
+    test_daily_funnies()
     test_reward_notice_kept_until_world_entry()
     test_mail_notice()
     test_mail_survives_restart()

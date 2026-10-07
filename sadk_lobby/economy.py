@@ -132,6 +132,7 @@ class Wallet:
         self.gender = 0                              # trbgndr low nibble
         self.open_shop = None                        # (npc_id, shop_id, stock tuple) after 3600
         self.pose = None                             # last reported (pos, rot_deg, zone, ghost_zone)
+        self.allowance_granted = 0                   # funnies added at this world entry (for the notice)
 
     @property
     def trbgndr(self):
@@ -308,10 +309,30 @@ def persist(perm_id):
     return True
 
 
+#: Funnies (glod, "play money") are only used by the minigames (matchmaking and stake dialogs, the info
+#: view; S 004447f0); no message awards them. Maintainer rule 2026-10-07: a flat DAILY_FUNNIES on the
+#: first world entry of each new day.
+DAILY_FUNNIES = 500
+
+
+def daily_allowance(perm_id, day=None):
+    """Add DAILY_FUNNIES once per character per day. Returns the amount added (0 if already claimed)."""
+    import datetime
+    day = day or datetime.date.today().isoformat()
+    if not store.claim_daily(perm_id, day):
+        return 0
+    w = wallet(perm_id)
+    w.glod += DAILY_FUNNIES
+    log(f"  [ECON] daily allowance for {perm_id}: +{DAILY_FUNNIES} funnies (now {w.glod})")
+    return DAILY_FUNNIES
+
+
 def send_owner_state(conn, perm_id):
     """Gold and items for the owner — sent at world entry so the client's own checks (e.g. the
-    tailor's gold >= 50, S 00434230) see the server's values. Loaded from the character save."""
-    load(perm_id)
+    tailor's gold >= 50, S 00434230) see the server's values. Loaded from the character save, plus
+    the daily funnies allowance."""
+    w = load(perm_id)
+    w.allowance_granted = daily_allowance(perm_id)
     send_stats(conn, perm_id)
     send_items(conn, perm_id)
 

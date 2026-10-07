@@ -337,6 +337,22 @@ def find_character(char_id):
     return None, None
 
 
+def claim_daily(char_id, day):
+    """True the first time `char_id` claims on `day` (a date string); records it. Used for the daily
+    funnies allowance."""
+    with _lock:
+        state = _load_locked()
+        for rec in state["players"].values():
+            for ch in rec.get("characters") or []:
+                if int(ch["char_id"]) == int(char_id):
+                    if ch.get("allowance_day") == day:
+                        return False
+                    ch["allowance_day"] = day
+                    _save_locked()
+                    return True
+    return False
+
+
 def find_character_by_name(name):
     """(character, owning-account) for a character name (case-insensitive), or (None, None)."""
     want = (name or "").strip().lower()
