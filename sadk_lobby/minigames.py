@@ -194,7 +194,7 @@ class Io:
 def handle_create(io, conn, perm_id, data):
     global _next_msgprt
     r = BitReader(data)
-    kind, _money, _stake = r.read(8), r.read(8), r.read(32)
+    kind, _money, stake = r.read(8), r.read(8), r.read(32)
     name = bytes(r.read(8) for _ in range(r.read(8))).decode("utf-8", "replace")
     lmtmn, lmtmx, mxplyr = r.read(32), r.read(32), r.read(8)
     tvrn, tblidx, psswd, crc = r.read(8), r.read(8), r.read(8), r.read(32)
@@ -218,11 +218,45 @@ def handle_create(io, conn, perm_id, data):
         t = Table(kind, name, tavern, index, psswd, crc, lmtmn, min(lmtmx, LIMIT_MAX), mxplyr,
                   FIRST_TABLE_CELL + key[0], key)
         _tables[key] = t
+        # The creator sits down at once: the create request carries the buy-in from the same stake
+        # dialog as JoinTable, and the client sends 2001 OR JoinTable, never both (OnSetStackResult
+        # S 00442f00). Without this the table stayed empty.
+        _seat(t, perm_id, stake)
     io.publish_cell(t.chtid, name or f"Tisch {key[0]}")
     io.broadcast(MSG_CREATE, table_body(t))
     io.broadcast(MSG_UPDATE, table_body(t))
     log(f"  [MINIGAME] table {key} created: type={kind} {name!r} tavern={tavern}/{index} "
-        f"max={t.mxplyr} cell={t.chtid}")
+        f"max={t.mxplyr} cell={t.chtid}; creator {perm_id} seated with {t.credits[perm_id]} credits")
+
+
+def sync_tables(io, conn):
+    """Show a player who just entered the world every table that already exists (0xDA, then 0xD9 —
+    the first 0xD9 is what builds the 3D table). Tables are otherwise only announced when created."""
+    with _lock:
+        tables = list(_tables.values())
+    for t in tables:
+        io.publish_cell(t.chtid, t.name or f"Tisch {t.key[0]}")
+        io.send(conn, MSG_CREATE, table_body(t))
+        io.send(conn, MSG_UPDATE, table_body(t))
+    if tables:
+        log(f"  [MINIGAME] sent {len(tables)} existing table(s) to conn #{getattr(conn, 'id', '?')}")
+
+
+def _seat(t, perm_id, stake):
+    """Put a player on the first free seat and move `stake` gold into table credits (clamped to the
+    player's gold, V38). Returns False when the table is full."""
+    if t.seat_of(perm_id) is not None:
+        return True
+    free = [s for s in range(t.mxplyr) if s not in t.seats]
+    if not free:
+        return False
+    t.seats[free[0]] = perm_id
+    w = economy.wallet(perm_id)
+    moved = min(stake, w.gold)
+    w.gold -= moved
+    t.credits[perm_id] = moved
+    t.bets[perm_id] = [0] * 11
+    return True
 
 
 def _table(r):
@@ -234,18 +268,10 @@ def handle_join(io, conn, perm_id, data):
     with _lock:
         t = _table(r)
         stake, crc = r.read(32), r.read(32)
-        free = [s for s in range(t.mxplyr) if s not in t.seats] if t else []
-        if t is None or (t.seat_of(perm_id) is None and not free) or (t.password and crc != t.crc):
+        if t is None or (t.password and crc != t.crc) or not _seat(t, perm_id, stake):
             io.send(conn, MSG_NO_SEAT, b"")
             log(f"  [MINIGAME] join by {perm_id}: refused (0xDC)")
             return
-        if t.seat_of(perm_id) is None:
-            t.seats[free[0]] = perm_id
-            w = economy.wallet(perm_id)
-            moved = min(stake, w.gold)
-            w.gold -= moved
-            t.credits[perm_id] = moved
-            t.bets[perm_id] = [0] * 11
     io.broadcast(MSG_UPDATE, table_body(t))
     log(f"  [MINIGAME] {perm_id} joined table {t.key} seat {t.seat_of(perm_id)} "
         f"with {t.credits.get(perm_id)} credits")
