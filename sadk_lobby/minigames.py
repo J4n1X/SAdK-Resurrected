@@ -51,17 +51,15 @@ import random
 import threading
 import time
 
-from . import economy
+from . import economy, poker
 from .log import log
 from .village import BitReader, BitWriter
 
 DICE, POKER, PAWNCHESS = 1, 2, 3
 MSG_REMOVE, MSG_UPDATE, MSG_CREATE = 0xD8, 0xD9, 0xDA
 MSG_NO_TABLE, MSG_NO_SEAT = 0xDB, 0xDC
-# Dice only: Poker and PawnChess updates would carry no game state, so their dealer seat stays at the
-# client's default — the same unchecked node lookup that crashed Dice (see table_body) is the likely
-# trap there. They are refused (0xDB) until their state block is implemented.
-PLAYABLE = (DICE,)
+# PawnChess updates would carry no game state; it is refused (0xDB) until its state block is implemented.
+PLAYABLE = (DICE, POKER)
 #: Table spots (2026-10-07). A table's key byte `scntbl` is {low nibble = GROUP, high nibble = TABLE}
 #: and the client places the table at NodeTagTable[group][table][slot 'c'] (Generic_Grid2D_ApplyTransformAt
 #: S 004fbd90 — no NULL check, so an empty cell crashes). The cells are filled from model nodes named
@@ -110,6 +108,10 @@ class Table:
         self.phase = PHASE_BETTING
         self.phase_start = time.monotonic()
         self.round = 0           # bumped on every phase change; stale timers check it
+        # Poker
+        self.hand = None         # PokerHand while a hand runs
+        self.button = None       # dealer-button seat of the last hand
+        self.sitting_out = set()  # perms that asked to sit out (302 enbl=1)
 
     def seat_of(self, perm_id):
         return next((s for s, p in self.seats.items() if p == perm_id), None)
@@ -177,7 +179,7 @@ def create_body(t):
 def table_body(t, settings=True, seats=True, state=True):
     """0xD9 body: key, then the blocks the mngt flags announce (settings, seats, game state).
     Game state is only written for Dice."""
-    state = state and t.kind == DICE
+    state = state and t.kind in (DICE, POKER)
     w = BitWriter()
     _key(w, t, settings, seats, state)
     if settings:
@@ -192,8 +194,10 @@ def table_body(t, settings=True, seats=True, state=True):
             w.write(1, 1).write(sltidx, 4)                        # used = 1, seat index
             w.write(1, 2)                                         # acttype 1 = avatar
             write_packed(w, perm)                                 # id = the avatar id = perm_id
-    if state:
-        elapsed = min(int((time.monotonic() - t.phase_start) * 1000), 0xFFFF)
+    if state and t.kind == POKER:
+        _poker_state(w, t)
+    elif state:
+        elapsed = _elapsed(t)
         # dlr MUST be a real seat (0..3): the client draws the dice cup at the dealer seat's node, read
         # unchecked from a 4-entry table (CGfxObjMiniGameDice_Board::DrawRenderItem S 00517264). 0xFF
         # ("none") read past it, got NULL and crashed the client in Generic_Copy16Dwords (crash dump
@@ -207,6 +211,12 @@ def table_body(t, settings=True, seats=True, state=True):
             for b in t.bets.get(perm, [0] * 11):
                 write_packed(w, b)
     return w.bytes()
+
+
+def _elapsed(t):
+    """`time` on the wire: HUNDREDTHS of a second since the phase (Poker: the turn) started —
+    SetPhaseStartFromElapsed S 00471540 sets phaseStart = now_ms - time * 10. [known]"""
+    return min(int((time.monotonic() - t.phase_start) * 100), 0xFFFF)
 
 
 def key_body(t):
@@ -237,8 +247,9 @@ def _timer(delay, fn):
 
 class Io:
     def __init__(self, send, everyone, publish_cell, zone_of=lambda perm_id: None,
-                 stats=lambda perm_id: None, schedule=_timer):
+                 stats=lambda perm_id: None, schedule=_timer, send_to=lambda perm_id, msg, body: None):
         self.send, self.everyone, self.publish_cell = send, everyone, publish_cell
+        self.send_to = send_to                    # one player's village connection (Poker hole cards)
         self.zone_of = zone_of                    # perm_id -> the player's current location zone
         self.stats, self.schedule = stats, schedule
 
@@ -292,6 +303,8 @@ def handle_create(io, conn, perm_id, data):
         f"creator {perm_id} seated with {t.credits[perm_id]}")
     if kind == DICE:
         _start_betting(io, t)
+    elif kind == POKER:
+        _poker_idle(io, t)
 
 
 def sync_tables(io, conn):
@@ -340,6 +353,8 @@ def handle_join(io, conn, perm_id, data):
     io.stats(perm_id)
     log(f"  [MINIGAME] {perm_id} joined table {t.key} seat {t.seat_of(perm_id)} "
         f"with {t.credits.get(perm_id)}")
+    if t.kind == POKER and t.hand is None:
+        _poker_idle(io, t)
 
 
 def leave(io, perm_id, t):
@@ -349,6 +364,9 @@ def leave(io, perm_id, t):
         s = t.seat_of(perm_id)
         if s is None:
             return
+        if t.kind == POKER:
+            _poker_drop(io, t, perm_id)
+            t.sitting_out.discard(perm_id)
         stack = t.credits.pop(perm_id, 0)
         bets = t.bets.pop(perm_id, [0] * 11)
         if t.kind == DICE and t.phase in (PHASE_THROW, PHASE_RESULT):
@@ -398,6 +416,8 @@ def handle_amount(io, conn, perm_id, data):
     _update(io, t)
     io.stats(perm_id)
     log(f"  [MINIGAME] {perm_id} topped up {moved} at table {t.key}")
+    if t.kind == POKER and t.hand is None:
+        _poker_idle(io, t)
 
 
 # ── Dice round ────────────────────────────────────────────────────────────────
@@ -495,6 +515,443 @@ def handle_roll(io, conn, perm_id, data):
     _roll(io, t, perm_id)
 
 
+MSG_POKER_ACTION, MSG_POKER_WAGER, MSG_POKER_SITOUT = 0x512C, 0x512D, 0x512E
+MSG_HAND = 0x12F                 # 303 MiniGameHand, S->C, to the owner only
+
+
 def handle_game_action(io, conn, perm_id, msg_type, data):
-    """Poker 300-302 and PawnChess 400-403: game logic not implemented — logged."""
-    log(f"  [MINIGAME] action 0x{msg_type:x} from {perm_id} ({data.hex()}) — game logic not implemented")
+    """Poker 300-302; PawnChess 400-403 (game logic not implemented — logged)."""
+    r = BitReader(data)
+    t = _table(r)
+    if t is not None and t.kind == POKER and msg_type in (MSG_POKER_ACTION, MSG_POKER_WAGER):
+        code = r.read(16)
+        wgr = read_packed(r) if msg_type == MSG_POKER_WAGER else None
+        _poker_act(io, t, perm_id, code, wgr)
+    elif t is not None and t.kind == POKER and msg_type == MSG_POKER_SITOUT:
+        _poker_sit_out(io, t, perm_id, bool(r.read(8)))
+    else:
+        log(f"  [MINIGAME] action 0x{msg_type:x} from {perm_id} ({data.hex()}) — game logic not implemented")
+
+
+# ── Poker ─────────────────────────────────────────────────────────────────────
+# The client's hand, as it plays it (MinigameDialog_Poker::Update S 0044b3c0, UpdateCards S 00525300,
+# CMiniGameControllerPoker_Board::Update S 00525550) [known]:
+#   phase 1 waiting · 5 deal (round 1 hole cards, 2 flop, 3 turn, 4 river; egr 1/2 = all-in run-out from
+#   the flop / the turn) · 6 betting (current-player marker) · 8 bets collected into the pots (needs
+#   ptncnt bit7 with each pot's wagers of this street) · 9 payout: the CLIENT picks every pot's winners
+#   as the highest hndval among its plrmsk seats and splits evenly (AnimatePayout S 005250f0).
+#   The client never acts on a timeout; the server does (15 s, the client's own countdown).
+#   A turn re-opens only when crntplyr, phase or round changes (stateChangeCounter, S 004894a0), so
+#   every action must move the turn on — invalid input is coerced, never re-prompted.
+POKER_TURN_SECS = 15.0           # the client counts 15 s down (S 0044b3c0) [known]
+POKER_DEAL_CARD_SECS = 0.7       # per hole-card pass; the preflop log waits (seats + 1) * 700 ms [known]
+POKER_STREET_SECS = 1.5          # flop/turn/river deal animation [decision]
+POKER_COLLECT_SECS = 1.5         # [decision]
+POKER_POT_SECS = 1.0             # the payout animation takes 1 s per pot [known]
+POKER_SHOW_SECS = 3.0            # result shown before the next hand [decision]
+POKER_SITOUT_ACT_SECS = 1.0      # a sitting-out player in the hand checks/folds after this [decision]
+
+
+class PokerHand:
+    def __init__(self, players, button):
+        self.players = players               # perms dealt in, seat order
+        self.button = button
+        deck = list(range(52))
+        random.shuffle(deck)
+        self.deck = deck
+        self.hole = {p: [self.deck.pop(), self.deck.pop()] for p in players}
+        self.board = []
+        self.folded, self.allin = set(), set()
+        self.street = {}                     # perm -> chips put in this street
+        self.contrib = {}                    # perm -> chips put in on earlier streets
+        self.last_code = {}                  # perm -> last action code (actn bits 0-10)
+        self.highest = 0
+        self.min_raise = 0
+        self.big_blind = 0
+        self.to_act = []                     # perms still to act this street, in turn order
+        self.current = None
+        self.round = 1
+        self.egr = 0
+        self.shwcrds = 0xFF
+        self.last = (0xFF, 1, 0)             # lstply, lstactn, lstvl (client initial lstactn = 1)
+        self.collect = None                  # phase 8: [(amount, eligible, {perm: wager})]
+        self.showdown = False
+
+    def live(self):
+        return [p for p in self.players if p not in self.folded]
+
+    def able(self, t):
+        return [p for p in self.live() if p not in self.allin and t.credits.get(p, 0) > 0]
+
+
+def _order(t, perms, after_seat):
+    """perms in turn order, starting with the first seat after `after_seat`."""
+    start = -1 if after_seat is None else after_seat
+    return sorted(perms, key=lambda p: (t.seat_of(p) - start - 1) % MAX_SEATS)
+
+
+def _blind(t):
+    return max(2, t.lmtmn or 2)              # big blind = the table's minimum stake [decision]
+
+
+def _poker_state(w, t):
+    """The Poker game-state block (MiniGamePokerProxy::ReadTableState S 004894a0)."""
+    h = t.hand
+    seat = t.seat_of
+    in_bet = h is not None and t.phase == 6 and h.current is not None
+    cur = h.current if in_bet else None
+    actns = 0
+    if cur is not None:
+        stack, wager = t.credits.get(cur, 0), h.street.get(cur, 0)
+        actns = poker.buttons(h.highest - wager, stack, wager, h.highest, h.min_raise, h.big_blind)
+    w.write(seat(h.button) if h and seat(h.button) is not None else 0xFF, 8)     # dlr (0xFF hides it)
+    w.write(len(t.seats), 8)                                                     # plyrcnt
+    w.write(seat(cur) if cur is not None else 0xFF, 8)                           # crntplyr
+    w.write(actns, 16)
+    w.write(t.phase, 8).write(h.round if h else 1, 8)
+    w.write(h.egr if h else 0, 8).write(h.shwcrds if h else 0xFF, 8)
+    w.write(_elapsed(t), 16)
+    w.write((h.highest or h.big_blind) if h else 0, 32)                          # minwgr
+    last = h.last if h else (0xFF, 1, 0)
+    w.write(last[0], 8)
+    write_packed(w, last[2])                                                     # lstvl
+    write_packed(w, h.min_raise if h else 0)                                     # mnrs
+    w.write(last[1], 16)                                                         # lstactn
+    rnd = h.round if h else 1
+    board = (h.board if h else []) + [poker.NO_CARD] * 5
+    if rnd > 1:
+        for c in board[:3]:
+            w.write(c, 8)
+    if rnd > 2:
+        w.write(board[3], 8)
+    if rnd > 3:
+        w.write(board[4], 8)
+    wagers = {seat(p): a for p, a in (h.street.items() if h else ()) if a > 0 and seat(p) is not None}
+    w.write(sum(1 << s for s in wagers), 8)                                      # wgrmsk
+    for s in sorted(wagers):
+        write_packed(w, wagers[s])
+    for s, p in sorted(t.seats.items()):
+        w.write(s, 8)
+        flags = 0
+        if p in t.sitting_out:
+            flags |= poker.ACTN_SITOUT
+        if h is None or p not in h.players:
+            flags |= poker.ACTN_OUT_OF_HAND
+            w.write(1, 1).write(poker.NO_CARD, 8).write(poker.NO_CARD, 8).write(0, 32)   # no cards
+        elif p in h.folded:
+            flags |= poker.ACTN_FOLDED
+            w.write(1, 1).write(poker.NO_CARD, 8).write(poker.NO_CARD, 8).write(0, 32)
+        elif h.showdown:
+            c0, c1 = h.hole[p]
+            w.write(1, 1).write(c0, 8).write(c1, 8).write(poker.hand_value(h.hole[p] + h.board), 32)
+        else:
+            w.write(0, 1)        # cards face down for the others; the owner keeps its 303 values
+        if h is not None and p in h.allin:
+            flags |= poker.ACTN_ALLIN
+        w.write(flags | (h.last_code.get(p, 0) & 0x7FF if h else 0), 16)
+        write_packed(w, t.credits.get(p, 0))                                     # crdts = stack
+        write_packed(w, _balance(t, p))                                          # accnt
+    pots = h.collect if (h and t.phase == 8 and h.collect) else _pots(t)
+    per_pot_wagers = bool(h and t.phase == 8 and h.collect)
+    w.write((0x80 if per_pot_wagers else 0) | len(pots), 8)                     # ptncnt (<= 8)
+    for amount, eligible, wg in pots:
+        w.write(amount, 32)
+        w.write(sum(1 << seat(p) for p in eligible if seat(p) is not None), 8)  # plrmsk
+        if per_pot_wagers:
+            seats_w = {seat(p): a for p, a in wg.items() if a > 0 and seat(p) is not None}
+            w.write(sum(1 << s for s in seats_w), 8)
+            for s in sorted(seats_w):
+                write_packed(w, seats_w[s])
+
+
+def _pots(t):
+    h = t.hand
+    if h is None or not any(h.contrib.values()):
+        return []
+    live = set(h.live())
+    return [(a, e, {}) for a, e in poker.side_pots(h.contrib, live)][:MAX_SEATS]
+
+
+def _hand_msg(t, perm):
+    h = t.hand
+    c0, c1 = h.hole[perm]
+    w = BitWriter().write(t.key[0], 16).write(t.key[1], 8).write(c0, 8).write(c1, 8)
+    return w.write(poker.hand_value(h.hole[perm] + h.board), 32).bytes()
+
+
+def _send_hands(io, t):
+    """Each live player's own cards and current hand value — 303, to the owner only (ReadHand
+    S 00489410 writes them into the local seat)."""
+    for p in t.hand.live():
+        io.send_to(p, MSG_HAND, _hand_msg(t, p))
+
+
+def _poker_idle(io, t):
+    """No hand running: show the waiting state and start one when two players can play."""
+    with _lock:
+        if t.hand is not None or t.key not in _tables:
+            return
+        ready = [p for _, p in sorted(t.seats.items())
+                 if p not in t.sitting_out and t.credits.get(p, 0) > 0]
+        _enter(t, 1)
+    _update(io, t)
+    if len(ready) >= 2:
+        io.schedule(POKER_SITOUT_ACT_SECS, _guard(t, lambda: _poker_start_hand(io, t)))
+
+
+def _put(t, h, p, amount):
+    amount = max(0, min(amount, t.credits.get(p, 0)))
+    t.credits[p] -= amount
+    h.street[p] = h.street.get(p, 0) + amount
+    if t.credits[p] == 0:
+        h.allin.add(p)
+    return amount
+
+
+def _poker_start_hand(io, t):
+    with _lock:
+        ready = [p for _, p in sorted(t.seats.items())
+                 if p not in t.sitting_out and t.credits.get(p, 0) > 0]
+        if t.hand is not None or len(ready) < 2:
+            return
+        seats = [t.seat_of(p) for p in ready]
+        later = [s for s in seats if t.button is not None and s > t.button]
+        t.button = (later or seats)[0]
+        button = t.seats[t.button]
+        h = t.hand = PokerHand(_order(t, ready, t.button - 1), button)
+        bb = h.big_blind = h.min_raise = _blind(t)
+        order = _order(t, ready, t.button)            # first seat after the button first
+        if len(ready) == 2:                           # heads-up: the button posts the small blind
+            sb_p, bb_p = button, order[0] if order[0] != button else order[1]
+        else:
+            sb_p, bb_p = order[0], order[1]
+        _put(t, h, sb_p, bb // 2)
+        h.last_code[sb_p] = poker.SMALL_BLIND
+        posted = _put(t, h, bb_p, bb)
+        h.last_code[bb_p] = poker.BIG_BLIND
+        h.highest = max(h.street.values())
+        h.last = (t.seat_of(bb_p), poker.BIG_BLIND, posted)
+        first = _order(t, ready, t.seat_of(bb_p))
+        h.to_act = [p for p in first if p not in h.allin]
+        _enter(t, 1)                                  # phase 1 / round 1 clears the last hand's cards
+    _update(io, t)
+    _send_hands(io, t)
+    with _lock:
+        _enter(t, 5)
+    _update(io, t)
+    log(f"  [POKER] table {t.key}: hand dealt to {h.players}, button seat {t.button}, blinds "
+        f"{bb // 2}/{bb}; " + ", ".join(f"{p}: {poker.card_text(a)} {poker.card_text(b)}"
+                                         for p, (a, b) in h.hole.items()))
+    io.schedule(POKER_DEAL_CARD_SECS * (len(h.players) + 1) + 1.0, _guard(t, lambda: _poker_next_turn(io, t)))
+
+
+def _poker_next_turn(io, t):
+    """Give the turn to the next player in to_act, or close the street."""
+    with _lock:
+        h = t.hand
+        if h is None:
+            return
+        h.to_act = [p for p in h.to_act if p in h.live() and p not in h.allin and t.seat_of(p) is not None]
+        if len(h.live()) <= 1 or not h.to_act:
+            done = True
+        else:
+            done = False
+            h.current = h.to_act[0]
+            _enter(t, 6)
+    if done:
+        _poker_end_street(io, t)
+        return
+    _update(io, t)
+    p = h.current
+    if p in t.sitting_out:
+        io.schedule(POKER_SITOUT_ACT_SECS, _guard(t, lambda: _poker_auto(io, t, p)))
+    else:
+        io.schedule(POKER_TURN_SECS, _guard(t, lambda: _poker_auto(io, t, p)))
+
+
+def _poker_auto(io, t, p):
+    """Timeout or sitting out: check when free, else fold."""
+    h = t.hand
+    if h is None or h.current != p:
+        return
+    free = h.street.get(p, 0) >= h.highest
+    log(f"  [POKER] table {t.key}: {p} {'checks' if free else 'folds'} (timeout / sitting out)")
+    _poker_act(io, t, p, poker.CHECK if free else poker.FOLD, None)
+
+
+def _poker_act(io, t, perm, code, wgr):
+    with _lock:
+        h = t.hand
+        if h is None or t.phase != 6 or h.current != perm:
+            log(f"  [POKER] table {t.key}: action 0x{code:x} from {perm} out of turn — ignored")
+            return
+        stack, wager = t.credits.get(perm, 0), h.street.get(perm, 0)
+        to_call = h.highest - wager
+        if code == poker.CHECK and to_call > 0:
+            code = poker.CALL                         # stale button: coerce, never re-prompt
+        if code in (poker.BET, poker.RAISE):
+            low = h.highest + h.min_raise if h.highest else h.big_blind
+            target = low if wgr is None or wgr == 0xFFFFFFFF else wgr
+            target = max(low, min(target, wager + stack))
+        elif code == poker.ALLIN:
+            target = wager + stack
+        elif code == poker.CALL:
+            target = min(h.highest, wager + stack)
+        else:
+            target = wager
+        if code == poker.FOLD:
+            h.folded.add(perm)
+            value = 0
+        else:
+            value = _put(t, h, perm, target - wager)
+            if code == poker.CALL and perm in h.allin:
+                code = poker.ALLIN
+        h.last_code[perm] = code
+        new_total = h.street.get(perm, 0)
+        if new_total > h.highest:                     # a bet or raise re-opens the action
+            h.min_raise = max(h.min_raise, new_total - h.highest)
+            h.highest = new_total
+            h.to_act = [p for p in _order(t, h.live(), t.seat_of(perm))
+                        if p != perm and p not in h.allin]
+        else:
+            h.to_act = [p for p in h.to_act if p != perm]
+        h.last = (t.seat_of(perm), code, new_total if code in (poker.BET, poker.RAISE, poker.ALLIN) else value)
+        h.current = None
+    log(f"  [POKER] table {t.key}: {perm} {_ACTION_NAMES.get(code, hex(code))}"
+        f"{' ' + str(h.last[2]) if h.last[2] else ''} (stack {t.credits.get(perm, 0)})")
+    _poker_next_turn(io, t)
+
+
+_ACTION_NAMES = {poker.CALL: "calls", poker.FOLD: "folds", poker.RAISE: "raises to", poker.CHECK: "checks",
+                 poker.BET: "bets", poker.ALLIN: "all-in", poker.SMALL_BLIND: "small blind",
+                 poker.BIG_BLIND: "big blind"}
+
+
+def _poker_end_street(io, t):
+    """Phase 8: this street's bets go into the pots (with each pot's per-seat wagers for the animation)."""
+    with _lock:
+        h = t.hand
+        live = set(h.live())
+        before = dict(h.contrib)
+        for p, a in h.street.items():
+            h.contrib[p] = h.contrib.get(p, 0) + a
+        h.collect = [(amount, eligible, poker.street_wagers(before, h.contrib, lo, hi))
+                     for amount, eligible, lo, hi in poker.pot_bands(h.contrib, live)]
+        h.collect = h.collect[:MAX_SEATS]
+        h.street = {}
+        h.highest = 0
+        h.min_raise = h.big_blind
+        h.current = None
+        _enter(t, 8)
+    _update(io, t)
+    io.schedule(POKER_COLLECT_SECS, _guard(t, lambda: _poker_after_collect(io, t)))
+
+
+def _poker_after_collect(io, t):
+    with _lock:
+        h = t.hand
+        h.collect = None
+        live = h.live()
+        if len(live) <= 1:
+            step = "fold"
+        elif h.round == 4:
+            step = "showdown"
+        else:
+            step = "deal"
+            runout = len(h.able(t)) <= 1
+            if runout:
+                h.egr = {1: 1, 2: 2}.get(h.round, 0)
+                h.round = 4
+            else:
+                h.round += 1
+            need = {2: 3, 3: 4, 4: 5}[h.round]
+            while len(h.board) < need:
+                h.board.append(h.deck.pop())
+            h.to_act = [] if runout else _order(t, h.able(t), t.button)
+            _enter(t, 5)
+    if step == "fold":
+        _poker_payout(io, t, by_fold=True)
+        return
+    if step == "showdown":
+        _poker_payout(io, t, by_fold=False)
+        return
+    _update(io, t)
+    _send_hands(io, t)
+    log(f"  [POKER] table {t.key}: board " + " ".join(poker.card_text(c) for c in h.board)
+        + (f" (all-in run-out, egr {h.egr})" if h.egr else ""))
+    nxt = (lambda: _poker_payout(io, t, by_fold=False)) if not h.to_act else (lambda: _poker_next_turn(io, t))
+    io.schedule(POKER_STREET_SECS * (2 if h.egr else 1), _guard(t, nxt))
+
+
+def _poker_payout(io, t, by_fold):
+    """Phase 9. The client splits every pot among the highest hndval of its plrmsk seats; the server
+    books exactly that (remainder to the first winner after the button)."""
+    with _lock:
+        h = t.hand
+        live = h.live()
+        pots = poker.side_pots(h.contrib, set(live)) if not by_fold else \
+            [(sum(h.contrib.values()), frozenset(live))]
+        if by_fold:
+            h.shwcrds = 0xFE                          # no showdown: winners logged without a hand
+            h.showdown = False
+        else:
+            h.showdown = True
+            h.shwcrds = t.seat_of(_order(t, live, t.button)[0])
+        won = {}
+        values = {p: poker.hand_value(h.hole[p] + h.board) for p in live}
+        for amount, eligible in reversed(pots):
+            contenders = [p for p in _order(t, eligible, t.button) if t.seat_of(p) is not None] or \
+                list(eligible)
+            best = max(values[p] for p in contenders)
+            winners = [p for p in contenders if values[p] == best]
+            for p, share in poker.split(amount, winners).items():
+                won[p] = won.get(p, 0) + share
+        _enter(t, 9)
+    _update(io, t)
+    for p, amount in won.items():
+        if t.seat_of(p) is not None:
+            t.credits[p] = t.credits.get(p, 0) + amount
+    log(f"  [POKER] table {t.key}: " + ("won by fold — " if by_fold else "showdown — ")
+        + ", ".join(f"{p} wins {a}" + ("" if by_fold else f" ({poker.describe(values[p])})")
+                    for p, a in won.items()))
+    io.schedule(POKER_POT_SECS * max(1, len(pots)) + POKER_SHOW_SECS, _guard(t, lambda: _poker_end_hand(io, t)))
+
+
+def _poker_end_hand(io, t):
+    with _lock:
+        t.hand = None
+        for p in list(t.seats.values()):
+            if t.credits.get(p, 0) <= 0:
+                log(f"  [POKER] table {t.key}: {p} has no chips left — waits for a top-up (Amount)")
+    _poker_idle(io, t)
+
+
+def _poker_sit_out(io, t, perm, on):
+    """302 enbl: 1 = sit out, 0 = back in (the dialog's toggle starts at 0, S 004483b0) [inferred]."""
+    if t.seat_of(perm) is None:
+        return
+    with _lock:
+        (t.sitting_out.add if on else t.sitting_out.discard)(perm)
+        h = t.hand
+        acting = h is not None and h.current == perm and on
+    log(f"  [POKER] table {t.key}: {perm} {'sits out' if on else 'is back'}")
+    if acting:
+        _poker_auto(io, t, perm)
+    else:
+        _update(io, t)
+        if t.hand is None:
+            _poker_idle(io, t)
+
+
+def _poker_drop(io, t, perm):
+    """A player leaves mid-hand: their cards are folded, their chips in the pot stay there."""
+    h = t.hand
+    if h is None or perm not in h.players:
+        return
+    h.folded.add(perm)
+    h.to_act = [p for p in h.to_act if p != perm]
+    if h.current == perm:
+        h.current = None
+        io.schedule(0.1, _guard(t, lambda: _poker_next_turn(io, t)))
+    elif len(h.live()) <= 1 and t.phase == 6:
+        io.schedule(0.1, _guard(t, lambda: _poker_next_turn(io, t)))
