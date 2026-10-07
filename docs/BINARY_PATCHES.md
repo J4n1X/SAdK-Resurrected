@@ -60,8 +60,8 @@ player count ready, and `PlayerInfo::IsReady` S 00414f50 counts AI and closed sl
 one. `NComm_Manager::RefreshSlots` S 0040b5a0 resets the extra slots of a map with more start positions to
 open (to AI offline), so on such a map the host must close them or add AI players.
 
-The shim (`bridge/wsock32_shim`) applies these patches in memory on the first `connect`, each only where the
-original bytes match exactly:
+The shim (`bridge/wsock32_shim`) applies these patches in memory at start-up (after the exe check), each only
+where the original bytes match exactly:
 
 | Address | Original | Change |
 |---|---|---|
@@ -76,3 +76,32 @@ original bytes match exactly:
 host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpManager::OnReceive` S 00428110
 answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
 for hosts that run it.
+
+## Billboards (bridge shim, in memory)
+
+The three advertising screens in the lobby world (`lobby/scene/scene_ad.xml`, models `ad0.KEX` / `ad1.KEX`) are
+web pages. Each model has two materials: the board (`sign ad0` → `sign_ad0.dds`) and the screen
+(`Material #478` → `ad0.tga` / `ad1.tga` / `ad2.tga`). `Lobby::CGfxTextureMgr::GetTexture` S 005046c0 compares
+the texture name against those three literals (S 007e6240 / 007e6208 / 007e61d0, read nowhere else) and, on a
+match, creates the texture with `S2CE::CTexture::CreateFromURL` S 004e7880: an embedded Internet Explorer
+renders `http://www.funatics.de/sadk/forwardingN.html` into it. Those pages return HTTP 404:
+`CSDKIEEvents::Invoke` S 005c8a30 answers NavigateError by clearing the texture to red (`ClearTextureToRed`
+S 005c7790) and then renders IE's own "navigation canceled" page over it. The `ad*.tga` files the game ships are
+never used.
+
+The screen is part of the board mesh, so a transparent screen texture leaves a hole. With
+`DisableBillboards = true` (`[LobbyServer]` in `data\lobby\config\LobbySettings.ini`, set by SAdK-ServerConfig),
+the shim instead shows a plain plank area of the board's own texture:
+
+| Address | Original | Change |
+|---|---|---|
+| 007e6240, 007e6208, 007e61d0 | `"ad0.tga"`, `"ad1.tga"`, `"ad2.tga"` | first letter `#`: no name matches, the screens load from file like any texture |
+| 00504806 (7 bytes) | `MOV EDX,[ESI+0x28]; MOV ECX,EAX; CALL EDX`: virtual `CTexture::CreateFromFile` S 004e80d0 | `MOV ECX,EAX; CALL billboard_load` |
+
+`billboard_load` calls the original `CreateFromFile` (`bool __thiscall (CTexture*, const std::string *path,
+bool, bool, bool)`, `RET 0x10`) with `BillboardTexture` (default `sign_ad0.dds`) in place of `ad0/1/2.tga`,
+then copies the rectangle `BillboardRect` (default `305,680,730,1005`, x0,y0,x1,y1) of the loaded texture into a
+new 512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and
+puts it in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
+All other names pass through unchanged. No game art is shipped or written to disk. Live 2026-10-07: the
+screens show the plank area.

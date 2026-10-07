@@ -2,7 +2,7 @@
  * sets the bridge options and installs the bridge shim (wsock32.dll, embedded) into the game's bin folder.
  *
  * Writes (all plain Windows INI, which is how the game reads them):
- *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port, ForceBridge
+ *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port, ForceBridge, DisableBillboards
  *       read by LobbyProfile::GetSettingString S 00465700 (GetPrivateProfileStringA)
  *   data\game\settings\network.ini       [Basics] gamePort
  *       read by NComm_NetworkConfig_LoadFromIni S 0041ede0
@@ -297,6 +297,10 @@ static void refresh(HWND dlg)
         GetPrivateProfileStringA("LobbyServer", "ForceBridge", "false", v, sizeof v, lobby);
         CheckDlgButton(dlg, IDC_FORCE, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
                                            ? BST_CHECKED : BST_UNCHECKED);
+        /* No key yet: ticked, since the pages behind the billboards are gone for everyone. */
+        GetPrivateProfileStringA("LobbyServer", "DisableBillboards", "true", v, sizeof v, lobby);
+        CheckDlgButton(dlg, IDC_BILLBOARDS, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
+                                                ? BST_CHECKED : BST_UNCHECKED);
     }
     SetDlgItemTextA(dlg, IDC_STATUS, status);
     SetDlgItemTextA(dlg, IDC_MODWARN, warn);
@@ -341,6 +345,8 @@ static void save(HWND dlg)
     ok &= WritePrivateProfileStringA("LobbyServer", "Port", num, lobby);
     ok &= WritePrivateProfileStringA("LobbyServer", "ForceBridge",
                                      IsDlgButtonChecked(dlg, IDC_FORCE) ? "true" : "false", lobby);
+    ok &= WritePrivateProfileStringA("LobbyServer", "DisableBillboards",
+                                     IsDlgButtonChecked(dlg, IDC_BILLBOARDS) ? "true" : "false", lobby);
     snprintf(num, sizeof num, "%u", gport);
     ok &= WritePrivateProfileStringA("Basics", "gamePort", num, network);
     snprintf(num, sizeof num, "%u", bport);
