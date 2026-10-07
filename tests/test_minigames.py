@@ -26,11 +26,22 @@ class FakeIo(mg.Io):
     def __init__(self):
         self.log = []          # (conn, msg, body)
         self.cells = []
+        self.stat_sends = []   # perm_ids that got a StatsUpdate
+        self.timers = []       # (delay, fn) — run by hand with fire()
         self.zone = 3                                 # the creator stands in taverne02 (scene 3)
         super().__init__(send=lambda c, m, b: self.log.append((c, m, b)),
                          everyone=lambda: ["world"],
                          publish_cell=lambda cell, name: self.cells.append((cell, name)),
-                         zone_of=lambda perm_id: self.zone)
+                         zone_of=lambda perm_id: self.zone,
+                         stats=self.stat_sends.append,
+                         schedule=lambda delay, fn: self.timers.append((delay, fn)))
+
+    def fire(self):
+        """Run the newest pending timer (older ones are stale: the table moved on since)."""
+        delay, fn = self.timers[-1]
+        self.timers.clear()
+        fn()
+        return delay
 
     def msgs(self):
         out = [(c, m) for c, m, _ in self.log]
@@ -45,8 +56,8 @@ def decode(body):
     """Read a 0xD9/0xDA body the way the client does."""
     r = BitReader(body)
     mngt = r.read(8)
-    out = {"type": mngt & 0xF, "scntbl": r.read(8), "chtid": mg.read_packed(r),
-           "key": (r.read(16), r.read(8))}
+    out = {"type": mngt & 0xF, "play_money": bool(mngt & 0x20), "scntbl": r.read(8),
+           "chtid": mg.read_packed(r), "key": (r.read(16), r.read(8))}
     if mngt & 0x10:
         out["settings"] = (r.read(8), r.read(32), bytes(r.read(8) for _ in range(r.read(8))).decode(),
                            mg.read_packed(r), mg.read_packed(r), r.read(4))
@@ -63,13 +74,13 @@ def decode(body):
         for _ in range(n):
             players.append((r.read(8), mg.read_packed(r), mg.read_packed(r),
                             [mg.read_packed(r) for _ in range(11)]))
-        out["dice"], out["phase"], out["players"] = dice, phase, players
+        out["dice"], out["dlr"], out["phase"], out["players"] = dice, dlr, phase, players
     return out
 
 
 def _create(io, conn, perm, kind=1, tavern=0xFF, index=0xFF, psswd=0, crc=0):
     """Defaults: no tavern / table from the client, so the stub uses the creator's zone."""
-    w = BitWriter().write(kind, 8).write(1, 8).write(100, 32).write_string("Würfeltisch")
+    w = BitWriter().write(kind, 8).write(0, 8).write(100, 32).write_string("Würfeltisch")
     w.write(10, 32).write(0x7FFFFFFF, 32).write(4, 8).write(tavern, 8).write(index, 8)
     w.write(psswd, 8).write(crc, 32)
     mg.handle_create(io, conn, perm, w.bytes())
@@ -98,59 +109,104 @@ def test_payout_rule():
     print("dice payout rule OK")
 
 
+def _bets_msg(stack, bets):
+    w = BitWriter().write(1, 16).write(0, 8)
+    mg.write_packed(w, stack)
+    for b in bets:
+        mg.write_packed(w, b)
+    return w.bytes()
+
+
+ROLL = BitWriter().write(1, 16).write(0, 8).bytes()
+
+
 def test_dice_table_cycle():
+    """The client's round: 1 betting (15 s) -> 2 the dlr seat rolls -> 3 throw -> 4 result -> 1."""
     mg.reset_for_tests()
     economy.reset_for_tests()
     io = FakeIo()
-    _create(io, "a", A)
+    start = economy.config.START_GOLD
+    _create(io, "a", A)                                           # stake 100, credits (plyMny 0)
     assert io.cells == [(1001, "Würfeltisch")]
     t = mg._tables[(1, 0)]
     created = decode(io.last(mg.MSG_CREATE))
     assert created["type"] == 1 and created["chtid"] == 1001 and created["key"] == (1, 0)
     assert created["scntbl"] == (0 << 4) | 3          # table spot 0 in the tavern of scene 3
-    assert created["settings"][2] == "Würfeltisch"
+    assert created["settings"][2] == "Würfeltisch" and not created["play_money"]
     assert "seats" not in created and "dice" not in created   # 0xDA with seats crashes the client
-    assert decode(io.last(mg.MSG_UPDATE))["seats"] == [(0, 1, A)]   # creator seated by the 0xD9
-    assert t.credits[A] == 100 and economy.wallet(A).gold == economy.config.START_GOLD - 100
-    assert [m for _, m in io.msgs()] == [mg.MSG_CREATE, mg.MSG_UPDATE]
+    first = decode(io.log[1][2])
+    assert first["seats"] == [(0, 1, A)]                     # creator seated by the first 0xD9
+    assert t.credits[A] == 100 and economy.wallet(A).gold == start - 100 and io.stat_sends == [A]
+    assert t.phase == mg.PHASE_BETTING and io.timers[-1][0] == mg.BET_SECS
     io.zone = 0
-    _create(io, "b", B)                            # outdoors → refused (no table spots there)
-    assert io.msgs() == [("b", mg.MSG_NO_TABLE)]
+    _create(io, "b", B)                                       # outdoors → refused (no table spots there)
+    assert io.log[-1][:2] == ("b", mg.MSG_NO_TABLE)
     io.zone = 3
 
-    _join(io, "a", A, t.key, stake=300)            # already seated: no second seat, no second stake
+    _join(io, "a", A, t.key, stake=300)                       # already seated: no second stake
     _join(io, "b", B, t.key, stake=200)
     upd = decode(io.last(mg.MSG_UPDATE))
     assert upd["seats"] == [(0, 1, A), (1, 1, B)]
     assert [(p[0], p[1]) for p in upd["players"]] == [(0, 100), (1, 200)]
-    assert economy.wallet(A).gold == economy.config.START_GOLD - 100
-    io.log.clear()
+    assert economy.wallet(A).gold == start - 100
 
     bets = [0] * 11
-    bets[5] = 50                                   # A bets 50 on 7
-    w = BitWriter().write(1, 16).write(0, 8)
-    mg.write_packed(w, 50)
-    for b in bets:
-        mg.write_packed(w, b)
-    mg.handle_place_bets(io, "a", A, w.bytes())
-    assert t.credits[A] == 50 and t.bets[A][5] == 50
+    bets[5] = 50                                              # A bets 50 on 7
+    mg.handle_place_bets(io, "a", A, _bets_msg(100, bets))
+    assert t.bets[A][5] == 50 and t.credits[A] == 100         # the stack still includes the bet
+    mg.handle_place_bets(io, "a", A, _bets_msg(100, [101] + [0] * 10))   # over the stack: ignored
+    assert t.bets[A][5] == 50
+    mg.handle_roll(io, "a", A, ROLL)                          # rolling while betting: ignored
+    assert t.phase == mg.PHASE_BETTING
 
-    later = []
+    io.fire()                                                 # betting over → seat 0 rolls
+    upd = decode(io.last(mg.MSG_UPDATE))
+    assert upd["phase"] == mg.PHASE_ROLL and upd["dlr"] == 0
+    mg.handle_place_bets(io, "a", A, _bets_msg(100, [0] * 11))   # too late
+    assert t.bets[A][5] == 50
+    mg.handle_roll(io, "b", B, ROLL)                          # not the roller
+    assert t.phase == mg.PHASE_ROLL
     mg.random.seed(3)
-    mg.handle_roll(io, "a", A, BitWriter().write(1, 16).write(0, 8).bytes(), schedule=later.append)
+    mg.handle_roll(io, "a", A, ROLL)
+    mg.handle_roll(io, "a", A, ROLL)                          # held button: the repeat is dropped
     res = decode(io.last(mg.MSG_UPDATE))
     total = (res["dice"] >> 4) + (res["dice"] & 0xF)
-    assert res["phase"] == mg.PHASE_RESULT
-    assert t.credits[A] == 50 + (150 if total == 7 else 0)
-    later[0]()                                     # the timer fires: back to betting, bets cleared
+    assert res["phase"] == mg.PHASE_THROW and t.credits[A] == 100
+    assert io.fire() == mg.THROW_SECS
+    assert decode(io.last(mg.MSG_UPDATE))["phase"] == mg.PHASE_RESULT
+    io.fire()                                                 # next round: settled, bets cleared
     assert t.phase == mg.PHASE_BETTING and t.bets[A] == [0] * 11
+    assert t.credits[A] == 100 - 50 + mg.payout(bets, total)
+    io.fire()
+    assert decode(io.last(mg.MSG_UPDATE))["dlr"] == 1         # the roller rotates
 
     io.log.clear()
-    mg.handle_leave(io, "b", B, BitWriter().write(1, 16).write(0, 8).bytes())
-    assert economy.wallet(B).gold == economy.config.START_GOLD
+    mg.handle_leave(io, "b", B, ROLL)                         # the roller leaves in phase 2
+    assert economy.wallet(B).gold == start and t.dealer == 0
+    assert t.phase == mg.PHASE_ROLL and io.timers[-1][0] == mg.ROLL_TIMEOUT_SECS
+    io.fire()                                                 # nobody rolls: the server rolls
+    assert t.phase == mg.PHASE_THROW
     mg.leave_all(io, A)
     assert io.msgs()[-1] == ("world", mg.MSG_REMOVE) and mg._tables == {}
-    print(f"dice table create / join / bet / roll ({total}) / leave / remove OK")
+    io.fire()                                                 # a timer of a removed table: no-op
+    assert not io.log
+    print(f"dice round 1→2→3→4→1, rotation, roll timeout, leave / remove ({total}) OK")
+
+
+def test_play_money_table():
+    mg.reset_for_tests()
+    economy.reset_for_tests()
+    io = FakeIo()
+    w = BitWriter().write(mg.DICE, 8).write(1, 8).write(70, 32).write_string("Spass")
+    w.write(10, 32).write(0x7FFFFFFF, 32).write(4, 8).write(1, 8).write(0xFF, 8).write(0, 8).write(0, 32)
+    mg.handle_create(io, "a", A, w.bytes())
+    t = next(iter(mg._tables.values()))
+    assert decode(io.last(mg.MSG_CREATE))["play_money"]       # mngt bit5 (S 004712b0)
+    assert economy.wallet(A).glod == economy.config.START_GOLD - 70
+    assert economy.wallet(A).gold == economy.config.START_GOLD
+    assert decode(io.last(mg.MSG_UPDATE))["players"][0][2] == economy.wallet(A).glod   # accnt
+    assert t.mxplyr == 4
+    print("play-money tables use glod and set mngt bit5 OK")
 
 
 def test_full_and_protected_tables():
@@ -223,6 +279,7 @@ def test_late_entrant_gets_existing_tables():
 
 
 if __name__ == "__main__":
+    test_play_money_table()
     test_late_entrant_gets_existing_tables()
     test_tables_are_listed_by_the_matchmaking_dialog()
     test_tables_fill_the_tavern_spots()
