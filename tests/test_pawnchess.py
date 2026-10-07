@@ -146,10 +146,9 @@ def _game(io):
     mg.handle_create(io, "a", A, w.bytes())
     t = next(iter(mg._tables.values()))
     mg.handle_join(io, "b", B, _key(t).write(500, 32).write(0, 32).bytes())
-    assert io.state()["phase"] == 1
-    _send(io, t, A, mg.MSG_CHESS_NEWGAME, 0)
-    assert io.state()["phase"] == 1                               # one player ready: still waiting
-    st = _send(io, t, B, mg.MSG_CHESS_NEWGAME, 1)
+    # The first game starts by itself: a freshly seated client's new-game request is already pending
+    # (proxy ctor S 00489f92), so it cannot press NewGame before the first game over.
+    st = io.state()
     assert st["phase"] == 2 and t.credits[A] == 450 and t.credits[B] == 450
     return t
 
@@ -175,7 +174,12 @@ def test_game_flow_and_edge_win():
     st = _send(io, t, A, mg.MSG_CHESS_MOVE, 1, pc.sq(7, 1))
     assert st["phase"] == 6 and st["plrstt"] == 0x04               # seat 0 wins
     assert t.credits[A] == 450 + 100 and t.credits[B] == 450
-    print("ready, king placement, moves, rejected moves still unlock, edge win pays the stakes OK")
+    # Rematch: phase 6 clears the clients' pending flag; both must press NewGame (403).
+    _send(io, t, A, mg.MSG_CHESS_NEWGAME, 0)
+    assert io.state()["phase"] == 6
+    st = _send(io, t, B, mg.MSG_CHESS_NEWGAME, 1)
+    assert st["phase"] == 2 and t.credits[A] == 500 and t.credits[B] == 400
+    print("auto start, king placement, moves, rejected moves still unlock, edge win, rematch OK")
 
 
 def test_capture_conversion_and_king_capture():
