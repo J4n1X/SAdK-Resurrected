@@ -1457,7 +1457,7 @@ def _h_avatar_location(conn, data):
     and hides the avatar (proven the hard way in round 2, ER 2026-08-01_avatar-location-refresh).
     Position/rotation/animation flags are relayed verbatim; only the timebase is ours.
 
-    Arrival rate is ~3/s per client, so this is the real movement stream; the 1 Hz ticker stays as
+    Arrival rate is ~15/s per client at 60 fps (S 0051ace0), so this is the real movement stream; the 1 Hz ticker stays as
     a keepalive for anyone who has stopped reporting."""
     try:
         loc = village.parse_avatar_location(data)
@@ -1471,7 +1471,7 @@ def _h_avatar_location(conn, data):
         _poses[me.perm_id] = loc
     x, y, z = loc["pos"]
     if prev is None:
-        log(f"  [WORLD] {me.char_name!r} is reporting its position (msg 2000, ~3/s) — first fix "
+        log(f"  [WORLD] {me.char_name!r} is reporting its position (msg 2000, ~15/s) — first fix "
             f"({x:.1f}, {y:.1f}, {z:.1f}) rot={loc['rot_deg']:.0f}° "
             f"zone={loc['zone']} ghstzne={loc['ghost_zone']}; relaying live to the others")
     elif (prev["zone"], prev["ghost_zone"]) != (loc["zone"], loc["ghost_zone"]):
