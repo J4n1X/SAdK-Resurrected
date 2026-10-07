@@ -93,6 +93,10 @@ pip install -r requirements.txt     # cryptography, twofish
 python -m sadk_lobby                # or as a systemd service, see below
 ```
 
+The server reads the game's own message schema, `msgdefs.ini`, from `sadk_lobby/data/msgdefs.ini` and refuses to
+start without it. This repository includes a copy; the release archive does not, so copy `bin\msgdefs.ini` from
+your game installation into `server/sadk_lobby/data/` (the release's `server/README.md` walks through it).
+
 | Port (TCP) | Role |
 |---|---|
 | 7070 | lobby (login, characters, game browser, mail, friends) |
