@@ -89,7 +89,7 @@ Two tracks:
 | In-world content: NPCs | ⚠️ implemented, parked by `config.VILLAGE_NPCS_ENABLED = False` |
 | Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07; tailor ✅ live 2026-10-07 (owner and others see the new look); shop/inventory `[TODO]` |
 | Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
-| Minigame tables: Dice create → second player joins → rounds with rotating roller | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`); settlement display, leaving and Poker/PawnChess `[TODO]` |
+| Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |

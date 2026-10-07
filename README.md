@@ -32,8 +32,8 @@ that the real client connects to, plus a small optional client add-on for hostin
 - Other players' avatars appear, move and animate; their outfits and levels show correctly.
 - NPCs, the tailor (clothing colours, live-tested) and the shops (buying and selling; not yet verified
   in live play).
-- Tavern minigames in both taverns: **Dice** (live-tested with two players), **Poker** and
-  **Pawn Chess** (implemented from the client's own rules code).
+- Tavern minigames in both taverns: **Dice**, **Poker** and **Pawn Chess**, all live-tested with two
+  players.
 - Funnies (play money for the minigames): 500 per day on the first visit.
 
 **Matches**
