@@ -191,7 +191,8 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
   — offline decoders for captured traffic
 - `tools/frida_mcp/` — **the live-debugging MCP** (Frida): call client functions, hook handlers, read
   objects and catch crashes in the running SADK.exe. Needs frida-server 17.22.2 (windows-x86) running as
-  Administrator on the game PC; registered in `.mcp.json` as `frida-sadk`
+  Administrator on the game PC; registered at USER scope as `frida-sadk` (`claude mcp add -s user`; a
+  project `.mcp.json` entry is skipped in background sessions, which never show the approval prompt)
 - `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
   the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
 
