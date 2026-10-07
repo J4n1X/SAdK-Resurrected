@@ -12,6 +12,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
+import tempfile  # noqa: E402
+os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
 from sadk_lobby import economy, minigames as mg  # noqa: E402
 
 # Table creation is switched off live (it crashed the client); the logic is still tested with Dice on.

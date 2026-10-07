@@ -13,6 +13,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
+import tempfile  # noqa: E402
+os.environ.setdefault("SADK_STORE_PATH", os.path.join(tempfile.mkdtemp(), "players.json"))  # never touch the real store
 from sadk_lobby import codec, config, log as logmod  # noqa: E402
 from sadk_lobby.connection import Conn  # noqa: E402
 from sadk_lobby.tincat import app_payload, build_frame, parse_header  # noqa: E402

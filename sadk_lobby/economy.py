@@ -44,6 +44,7 @@ INVENTORY_SLOTS = 20
 ACTIVE_SLOTS = 4                 # Pet, Head, RightHand, LeftHand (S 0048abe0)
 CONTAINER_BACKPACK = 0
 EQUIP_CONTAINERS = (2, 3, 4, 5)  # [inferred] container ids of the four equipment slots
+UNEQUIP_SETTLE_SECS = 0.5
 UNKNOWN_SLTT = 1                 # backpack item never equipped yet: no known equipment type
 TAILOR_PRICE = 50
 SELL_MOD = 0.9                   # V27: the client's built-in default (007db9d0)
@@ -169,29 +170,33 @@ def stats_body(perm_id, w):
         .write(w.gold, 32).write(w.glod, 32).bytes()
 
 
-def _active_slots(bw, w):
-    """The 4 equipped slots. An EMPTY one is sent as {sltt = its container, cnt 0, itmid 0}:
-    SyncEquipmentSlot (S 00507f60) switches on sltt FIRST and only then clears an empty slot, so an
-    empty record with sltt 0 is skipped and the previously worn item stays drawn (live bug
-    2026-10-07: unequipping did not remove the item)."""
+def _active_slots(bw, w, clear=()):
+    """The 4 equipped slots. Empty ones are normally {sltt 0, cnt 0, itmid 0}.
+
+    Unequipping needs a TWO-STEP update (live 2026-10-07): SyncEquipmentSlot (S 00507f60) switches on
+    sltt first and only clears a slot whose sltt names its container, so sltt 0 leaves the old item
+    drawn; but an empty slot that KEEPS its container sltt makes the inventory screen treat it as
+    occupied, and equipping stops working. So a just-emptied slot (`clear`) is sent once with its
+    container sltt — the client redraws and drops the item — and then again with sltt 0, a moment
+    later (UNEQUIP_SETTLE_SECS) so the second state lands in a later client tick."""
     for i, rec in enumerate(w.active):
         if rec is None:
-            bw.write(EQUIP_CONTAINERS[i], 8).write(0, 8).write(0, 32)
+            bw.write(EQUIP_CONTAINERS[i] if i in clear else 0, 8).write(0, 8).write(0, 32)
         else:
             _slot(bw, rec)
 
 
-def active_items_body(perm_id, w):
+def active_items_body(perm_id, w, clear=()):
     """3100 ActiveItemsUpdate: ownr + exactly 4 records (S 0048abe0) — what OTHER players need to
     redraw this avatar's gear (their CLobbyClient observer calls UpdateAppearance)."""
     bw = BitWriter().write(perm_id, 32)
-    _active_slots(bw, w)
+    _active_slots(bw, w, clear)
     return bw.bytes()
 
 
-def items_full_body(perm_id, w):
+def items_full_body(perm_id, w, clear=()):
     bw = BitWriter().write(perm_id, 32)
-    _active_slots(bw, w)
+    _active_slots(bw, w, clear)
     bw.write(INVENTORY_SLOTS, 8)                     # sltcnt — read and ignored by the client
     for rec in w.backpack:
         _slot(bw, rec)
@@ -215,11 +220,23 @@ def send_stats(conn, perm_id):
           f"StatsUpdate(3201) ownr={perm_id} gold={w.gold} glod={w.glod} lvl={w.level}")
 
 
-def send_items(conn, perm_id):
+def send_items(conn, perm_id, clear=()):
     w = wallet(perm_id)
     used = sum(1 for r in w.backpack if r) + sum(1 for r in w.active if r)
-    _send(conn, MSG_ITEMS_FULL, items_full_body(perm_id, w),
-          f"ItemsFullSync(3102) ownr={perm_id} ({used} item(s))")
+    _send(conn, MSG_ITEMS_FULL, items_full_body(perm_id, w, clear),
+          f"ItemsFullSync(3102) ownr={perm_id} ({used} item(s)){' clearing ' + str(sorted(clear)) if clear else ''}")
+    if clear:
+        settle(lambda: send_items(conn, perm_id))
+
+
+#: Runs `fn` after UNEQUIP_SETTLE_SECS (tests replace it to run immediately or collect the calls).
+def settle(fn):
+    threading.Timer(UNEQUIP_SETTLE_SECS, fn).start()
+
+
+def emptied_slots(before, w):
+    """Indices of worn slots that were occupied in `before` and are empty now."""
+    return {i for i, (b, a) in enumerate(zip(before, w.active)) if b is not None and a is None}
 
 
 def send_owner_state(conn, perm_id):
@@ -241,6 +258,7 @@ def handle_move_item(conn, perm_id, data):
     r = BitReader(data)
     srcslt, srcidx, dstslt, dstidx, _cnt = (r.read(8) for _ in range(5))
     w = wallet(perm_id)
+    before = list(w.active)
     src, dst = w.container(srcslt), w.container(dstslt)
     si, di = _equip_index(srcslt, srcidx), _equip_index(dstslt, dstidx)
     with _lock:
@@ -254,22 +272,25 @@ def handle_move_item(conn, perm_id, data):
                 if c[i] is not None and slt in EQUIP_CONTAINERS:
                     c[i] = (c[i][0], c[i][1], slt)    # worn in container slt = its equipment type
     log(f"  [ECON] MoveItem {srcslt}/{srcidx} → {dstslt}/{dstidx}: {'applied' if ok else 'refused, re-sync'}")
-    send_items(conn, perm_id)
-    return ok and (srcslt in EQUIP_CONTAINERS or dstslt in EQUIP_CONTAINERS)   # gear changed
+    cleared = emptied_slots(before, w)
+    send_items(conn, perm_id, cleared)
+    return (ok and (srcslt in EQUIP_CONTAINERS or dstslt in EQUIP_CONTAINERS)), cleared
 
 
 def handle_delete_item(conn, perm_id, data):
     r = BitReader(data)
     slt, idx = r.read(8), r.read(8)
     w = wallet(perm_id)
+    before = list(w.active)
     c = w.container(slt)
     i = _equip_index(slt, idx)
     with _lock:
         if c is not None and 0 <= i < len(c):
             c[i] = None
     log(f"  [ECON] DeleteItem {slt}/{idx}")
-    send_items(conn, perm_id)
-    return slt in EQUIP_CONTAINERS                     # gear changed
+    cleared = emptied_slots(before, w)
+    send_items(conn, perm_id, cleared)
+    return slt in EQUIP_CONTAINERS, cleared
 
 
 def handle_open_shop(conn, perm_id, data, shops):
@@ -325,8 +346,10 @@ def handle_sell(conn, perm_id, data):
         if rec is not None:
             item_id, count, sltt = rec
             qty = min(max(qty, 1), count)
-            stock = {i: s for i, _b, s in (w.open_shop[2] if w.open_shop else ())}
-            price = int(stock.get(item_id, 0) * SELL_MOD) * qty
+            # Any trader buys any item at half its listed price (× SellMod) — selling a hat to the
+            # pet trader paid 0 when only the open shop's stock was consulted (live 2026-10-07).
+            listed = {i: p for i, _n, _m, p in ITEMS}
+            price = int(listed.get(item_id, 0) // 2 * SELL_MOD) * qty
             w.gold += price
             w.backpack[backpack] = (item_id, count - qty, sltt) if count > qty else None
             ok, why = True, f"item {item_id} x{qty} for {price} gold"

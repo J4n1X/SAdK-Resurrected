@@ -77,18 +77,20 @@ def _clean(name):
 
 
 def _create_legacy(name):
-    """The pre-persistence identity: an in-memory sequential perm_id, char_id == perm_id, and
-    the shared `NICKNAME_DATA` appearance. Used while `config.PERSISTENT_CHARACTERS_ENABLED` is
-    False — this is the exact shape that was working before persistent characters landed, kept
-    verbatim so the rollback restores known-good behaviour rather than an approximation of it.
-    Caller holds `_lock`."""
-    global _next_perm
-    while _next_perm in _by_perm:          # never reuse an id already handed out
-        _next_perm += 1
-    perm = _next_perm
-    _next_perm += 1
+    """The pre-persistence identity shape: char_id == perm_id and the shared `NICKNAME_DATA`
+    appearance, used while `config.PERSISTENT_CHARACTERS_ENABLED` is False.
+
+    The perm_id comes from the account store (`store.get_or_create_account`), so it is STABLE per
+    login name across server restarts. It used to be an in-memory sequential id: after a restart a
+    client that reconnected its UC/world sockets with its old token became a "Player N" placeholder,
+    and its next real login got a different id, which sent it into a broken character-creation
+    screen (live 2026-10-07 10:17-10:20). Caller holds `_lock`."""
+    perm = int(store.get_or_create_account(name)["user_id"])
     p = Player(perm_id=perm, char_id=perm, user_id=perm, username=name,
                char_name=name, data=config.NICKNAME_DATA)
+    stale = _by_perm.get(perm)
+    if stale is not None:                  # a placeholder made from this id's token: same player
+        _by_user.pop(stale.username.lower(), None)
     _by_perm[perm] = p
     _by_user[name.lower()] = p
     return p
@@ -166,11 +168,15 @@ def resolve_by_perm(perm_id):
         if p is not None:
             return p
         if not config.PERSISTENT_CHARACTERS_ENABLED:
-            # LEGACY: an id we never issued keeps its value, so the client's avatar id and ours
-            # stay in agreement instead of silently becoming a different player.
+            # LEGACY: the id keeps its value, so the client's avatar id and ours stay in agreement.
+            # The name comes from the account store when the id is known there (a client that
+            # reconnects with its old token after a server restart keeps its name).
+            rec = next((a for a in store.all_players() if int(a["user_id"]) == int(perm_id)), None)
+            if rec is None:
+                rec = store.reserve_user_id(perm_id)
+            name = rec.get("username") or f"Player {perm_id}"
             p = Player(perm_id=perm_id, char_id=perm_id, user_id=perm_id,
-                       username=f"Player {perm_id}", char_name=f"Player {perm_id}",
-                       data=config.NICKNAME_DATA)
+                       username=name, char_name=name, data=config.NICKNAME_DATA)
             _by_perm[perm_id] = p
             _by_user.setdefault(p.username.lower(), p)
             return p
