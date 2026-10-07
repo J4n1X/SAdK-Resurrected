@@ -251,6 +251,36 @@ def set_password(username, password):
         return True
 
 
+# ── Buddy lists ──────────────────────────────────────────────────────────────
+# One list per ACCOUNT (the client's own id in 56/98/99 is the 207 perm_id); the entries are the
+# CHARACTER ids the player picked in the world (FriendIgnoreListDialog::HandleButtonClicks S 00452400
+# adds the selected avatar's id).
+def buddies_of(user_id):
+    with _lock:
+        for rec in _load_locked()["players"].values():
+            if int(rec["user_id"]) == int(user_id):
+                return [int(b) for b in rec.get("buddies") or []]
+    return []
+
+
+def set_buddies(user_id, ids):
+    with _lock:
+        state = _load_locked()
+        for rec in state["players"].values():
+            if int(rec["user_id"]) == int(user_id):
+                rec["buddies"] = [int(b) for b in ids]
+                _save_locked()
+                return True
+    return False
+
+
+def owners_listing(char_id):
+    """user_ids of every account whose buddy list holds `char_id`."""
+    with _lock:
+        return [int(r["user_id"]) for r in _load_locked()["players"].values()
+                if int(char_id) in [int(b) for b in r.get("buddies") or []]]
+
+
 def reserve_user_id(user_id, username=None):
     """Record an id we did not allocate (a stale token, or a client reconnecting across a
     restart) so it is never handed to somebody else."""

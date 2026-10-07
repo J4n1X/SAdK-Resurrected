@@ -89,16 +89,13 @@ def on_conn_closed(conn):
         except ValueError:
             pass
     _gchat_drop(conn)                             # global-chat subscribers must not leak
-    if getattr(conn, "role", "") == "lobby":
-        gone = _player(conn).perm_id
-        if _lobby_conn_of(gone) is None:          # no newer lobby socket for this player
-            buddies.push_presence(gone, False, _lobby_conn_of)
     # A village conn going away means that player's avatar must be despawned for everyone still
     # in-world, or they are left staring at a ghost that never moves.
     if getattr(conn, "is_village", False) and getattr(conn, "_enter_world_sent", False):
         gone = _player(conn)
         minigames.leave_all(_minigame_io(), gone.perm_id)     # credits go back to gold
         _save_position(gone.perm_id)              # the character save keeps where they left
+        buddies.set_location(gone.perm_id, None, _lobby_conn_of)   # friends see them go offline
         for other in _in_world_conns(exclude_player=gone.perm_id, exclude_conn=conn):
             village.send_entity_remove(other, gone.perm_id,
                                        label=f"[{gone.char_name!r} left the world]")
@@ -887,8 +884,6 @@ def _h_remove_private_message(conn, fields, ticket):
 @handler(157)  # RequestUserIgnoreList — the LAST message of the lobby-connection login
 def _h_ignore_list(conn, fields, ticket):
     conn.ok(ticket)
-    # The lobby login is complete: tell this player's watchers it is online (T25).
-    buddies.push_presence(_player(conn).perm_id, True, _lobby_conn_of)
 
 
 # ── MOTD ──────────────────────────────────────────────────────────────────────
@@ -1349,6 +1344,9 @@ def _h_send_token(conn, fields, ticket):
             time.sleep(config.AVATAR_SPAWN_DELAY)
             minigames.sync_tables(_minigame_io(), c)
             _welcome(c)
+            # Friends see this character as online in this world (61 status 3 + server id/name).
+            buddies.set_location(_player(c).perm_id, (FAKE_VILLAGE["id"], FAKE_VILLAGE["name"]),
+                                 _lobby_conn_of)
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")
