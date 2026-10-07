@@ -1443,7 +1443,11 @@ def _minigame_io():
         everyone=lambda: _in_world_conns(),
         publish_cell=lambda cell, name: chat.publish_cell(
             cell, name, _find_live(lambda c: getattr(c, "is_chat", False))),
-        zone_of=_zone_of)
+        zone_of=_zone_of,
+        # The owner's gold/glod after a stake moves: the matchmaking dialog checks the balance it
+        # reads from the own avatar (+0xd0 / +0xd4, S 004447f0), which only 3201 updates.
+        stats=lambda perm_id: [economy.send_stats(c, perm_id) for c in _in_world_conns()
+                               if _player(c).perm_id == perm_id])
 
 
 def _zone_of(perm_id):
