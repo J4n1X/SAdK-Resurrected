@@ -221,6 +221,9 @@ AVATAR_SPAWN_DELAY = 2.0
 #     sim cannot start; all clients in a match must receive the SAME seed (a fixed value is fine).
 # [VERIFY LIVE] The exact assign discrimination (UC vs referee 189) and the referee-channel framing were
 # never nailed by the prior (removed) attempt without live captures — re-confirm against the real client.
+BRIDGE_PORT = 7072            # host bridge: shim control + data channels (bridge.py, docs/bridge-protocol.md)
+BRIDGE_RELAY_PORT = 7073      # host bridge: joiners, redirected here by their shim
+BRIDGE_VPORT_BASE = 40000     # a bridged game is advertised at ADVERTISED_IP : BRIDGE_VPORT_BASE + game id
 REFEREE_PORT = 5481           # the RefereeServerConnection dials here (distinct from WORLD_PORT 5479)
 REF_SERVER_ID = 77            # the referee's server_id (unique; must resolve on the type-4 server list)
 # NOTE: the referee's ip:port is NOT pushed — the client ASKS for it with 221 RequestConnectionData

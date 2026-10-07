@@ -12,7 +12,7 @@ import struct
 import threading
 from datetime import datetime
 
-from . import chat, codec, config, dispatch, msgdefs, players, referee, registry, village
+from . import bridge, chat, codec, config, dispatch, msgdefs, players, referee, registry, village
 from .log import log, routed_to_unhandled
 from .tincat import (BinaryReader, app_payload, build_frame,
                      build_handshake_payload, crc32, parse_header)
@@ -43,7 +43,10 @@ class Conn:
         self.role = ("uc" if is_chat else "world" if is_village
                      else "referee" if is_referee else "lobby")
         self._buf = b""
-        self._state = "PREFIX"
+        # A lobby connection from a client with the bridge shim starts with one "SADKB1 LOBBY <token>"
+        # line before the first TinCat frame (bridge.py).
+        self._state = "PREAMBLE" if self.role == "lobby" else "PREFIX"
+        self.bridge_token = None
         self._hdr = None
         self.shared = None          # ECDH shared secret
         self.session_key = None     # 32B session key issued in 207 (likely the token 213/214 key; s31)
@@ -158,7 +161,15 @@ class Conn:
 
     def _process(self):
         while True:
-            if self._state == "PREFIX":
+            if self._state == "PREAMBLE":
+                token, rest, complete = bridge.split_preamble(self._buf)
+                if not complete:
+                    break
+                self._buf, self._state = rest, "PREFIX"
+                if token:
+                    self.bridge_token = token
+                    log(f"  [#{self.id}] bridge shim token {token[:8]}…")
+            elif self._state == "PREFIX":
                 if len(self._buf) < config.PREFIX_SIZE:
                     break
                 self._hdr = parse_header(self._buf)
