@@ -290,9 +290,10 @@ VILLAGE_TABLE_AMOUNT_MSGTYPE  = 0x50DE   # 222 Amount (credit top-up)
 VILLAGE_DICE_BETS_MSGTYPE     = 0x50DC   # 220 Dice PlaceBets
 VILLAGE_DICE_ROLL_MSGTYPE     = 0x50DD   # 221 Dice Roll
 VILLAGE_GAME_ACTION_MSGTYPES  = (0x512C, 0x512D, 0x512E, 0x5190, 0x5191, 0x5192, 0x5193)  # Poker / PawnChess
-# Starting purse (gold and glod) of every player — a server decision (catalog V17). The client's
-# own default for a freshly created character is 50; 1000 lets the shop and tailor be tested.
-START_GOLD = 1000
+# Purse (gold and glod) every player gets on EVERY world entry — a server decision (catalog V17).
+# Gold is not a meaningful economy for testing (maintainer, 2026-10-07), so it is refilled to this
+# value each time a player enters the world, whatever they spent before.
+START_GOLD = 100000
 
 VILLAGE_AVATAR_LOCATION_MSGTYPE = 0x27D0   # 10192 = (cat 2 << 12) | 0x7d0 -> NETMSG **2000, AVATAR LOCATION**
 #   [PROVEN 2026-08-01] The client's OWN position report - where the player actually IS. Sent ~3/s by
