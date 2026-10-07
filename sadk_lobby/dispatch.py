@@ -1447,7 +1447,11 @@ def _minigame_io():
         # The owner's gold/glod after a stake moves: the matchmaking dialog checks the balance it
         # reads from the own avatar (+0xd0 / +0xd4, S 004447f0), which only 3201 updates.
         stats=lambda perm_id: [economy.send_stats(c, perm_id) for c in _in_world_conns()
-                               if _player(c).perm_id == perm_id])
+                               if _player(c).perm_id == perm_id],
+        # Poker hole cards (303) go to their owner only.
+        send_to=lambda perm_id, msg, body: [
+            village._send_village(c, msg, body, None, f"minigame msg 0x{msg:x}", quiet=True)
+            for c in _in_world_conns() if _player(c).perm_id == perm_id])
 
 
 def _zone_of(perm_id):
