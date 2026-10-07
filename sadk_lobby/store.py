@@ -208,6 +208,49 @@ def get_or_create_account(username):
         return _account_copy(rec)
 
 
+# ── Passwords ────────────────────────────────────────────────────────────────
+# The first login with a new name registers it with the password typed (maintainer rule 2026-10-07);
+# afterwards the password must match, and only the in-game "!setpwd" command changes it. Stored as a
+# salted PBKDF2-SHA256 hash, never in clear. The client sends the password as raw bytes in the
+# AuthenticateUser cipher (Authenticator::EncryptCredentials T 1002b560).
+_PBKDF2_ROUNDS = 100_000
+
+
+def _hash_password(password, salt):
+    import hashlib
+    return hashlib.pbkdf2_hmac("sha256", password, salt, _PBKDF2_ROUNDS).hex()
+
+
+def check_password(username, password):
+    """True when `password` (bytes) opens the account; an account without a password yet takes it
+    (that login is the registration). False on a mismatch."""
+    with _lock:
+        rec = _load_locked()["players"].get(_key(username))
+        if rec is None or not rec.get("password_hash"):
+            return True
+        return _hash_password(password, bytes.fromhex(rec["password_salt"])) == rec["password_hash"]
+
+
+def has_password(username):
+    with _lock:
+        rec = _load_locked()["players"].get(_key(username))
+        return bool(rec and rec.get("password_hash"))
+
+
+def set_password(username, password):
+    """Set (or replace) the account's password. Returns False when there is no such account."""
+    with _lock:
+        state = _load_locked()
+        rec = state["players"].get(_key(username))
+        if rec is None:
+            return False
+        salt = os.urandom(16)
+        rec["password_salt"] = salt.hex()
+        rec["password_hash"] = _hash_password(password, salt)
+        _save_locked()
+        return True
+
+
 def reserve_user_id(user_id, username=None):
     """Record an id we did not allocate (a stale token, or a client reconnecting across a
     restart) so it is never handed to somebody else."""
@@ -232,7 +275,7 @@ def _decode(ch):
 
 
 def _account_copy(rec):
-    out = dict(rec)
+    out = {k: v for k, v in rec.items() if k not in ("password_hash", "password_salt")}
     out["characters"] = [_decode(c) for c in (rec.get("characters") or [])]
     return out
 

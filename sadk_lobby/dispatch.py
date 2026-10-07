@@ -520,8 +520,17 @@ def _h_auth_start(conn, fields, ticket):
         log(f"  !! ECDH failed: {e}")
 
 
-@handler(203, 204, 206)  # SelfRegistration / AuthenticateUser / AuthenticateServer
-def _h_auth_cipher(conn, fields, ticket):
+@handler(203, 204)  # SelfRegistration / AuthenticateUser — a person logging in: password checked
+def _h_auth_user(conn, fields, ticket):
+    _auth_cipher(conn, fields, ticket, check_password=True)
+
+
+@handler(206)  # AuthenticateServer
+def _h_auth_server(conn, fields, ticket):
+    _auth_cipher(conn, fields, ticket, check_password=False)
+
+
+def _auth_cipher(conn, fields, ticket, check_password):
     cipher = fields.get("cipher")
     if not cipher:
         log("  !! No cipher in auth message"); return
@@ -537,12 +546,25 @@ def _h_auth_cipher(conn, fields, ticket):
         log(f"  !! {e} — accepting anyway")
     except Exception as e:  # noqa: BLE001
         log(f"  !! Decryption failed: {e}")
+    name = creds.get("username")
+    if check_password and name and "password_raw" in creds:
+        # The first login with a new name registers it with this password; later logins must match
+        # (store.check_password). A refusal is Result(42) on the auth ticket: the client treats ANY
+        # Result there as a failed login, shows its error and closes (T 10023cc0). [known]
+        password = bytes.fromhex(creds["password_raw"])
+        if not store.check_password(name, password):
+            conn.result(1, ticket)
+            log(f"  [AUTH] {name!r}: wrong password — login refused (Result 42)")
+            return
     conn.logged_in = True
     # Bind this lobby connection to the account it logged in as, so the SessionKey(207) perm_id
     # and the char/user replies serve that player. The perm_id propagates to this client's UC +
     # village conns via the token (213).
     conn.player = players.resolve_by_username(creds.get("username"))
     log(f"  [PLAYER] lobby #{conn.id} → {conn.player.username!r} (perm_id={conn.player.perm_id})")
+    if check_password and name and "password_raw" in creds and not store.has_password(name):
+        store.set_password(name, bytes.fromhex(creds["password_raw"]))
+        log(f"  [AUTH] {name!r}: first login — registered with this password (change it with !setpwd)")
     session = None
     if crypto.TWOFISH_AVAILABLE and conn.shared:
         # KEEP the 32B session key (the token 213/214 crypto almost certainly uses it as the key,
@@ -1311,6 +1333,7 @@ def _h_send_token(conn, fields, ticket):
             # naming an avatar the client has no 3D object for is dropped whole (ReadSeats S 00471f00).
             time.sleep(config.AVATAR_SPAWN_DELAY)
             minigames.sync_tables(_minigame_io(), c)
+            _welcome(c)
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")
@@ -1478,6 +1501,24 @@ _MINIGAME_HANDLERS = {
 NPC_POSITIONS_FILE = os.path.join(config.REPO_DIR, "npc_positions.json")
 
 
+def _welcome(conn):
+    """On entering the world: a server whisper listing the commands (maintainer request 2026-10-07).
+    Sent through the player's chat (UC) connection, the one that shows "!command" replies."""
+    me = _player(conn)
+    uc = chat._uc_conn_of(me.perm_id)
+    if uc is None:
+        log(f"  [WELCOME] no chat connection for {me.char_name!r} yet — welcome skipped")
+        return
+    chat.whisper_from_server(uc, players.of(uc), f"Welcome, {me.char_name}! " + HELP_TEXT)
+    log(f"  [WELCOME] command list whispered to {me.char_name!r}")
+
+
+#: The server commands, as the welcome whisper and "!help" list them.
+HELP_TEXT = ("Server commands: !help - this list | !setpwd <new> - change your password | "
+             "!level <1-5> - your avatar's level/look | !pos <name> - save your spot | "
+             "!poslist - list saved spots")
+
+
 def _chat_command(conn, player, text):
     # The client sends chat as UTF-8 while the codec decodes STRING fields as ISO-8859-15, so
     # "Händler" arrives as "HÃ€ndler"; undo that for the command text.
@@ -1529,6 +1570,17 @@ def _chat_command(conn, player, text):
                 village._send_village(c, 3100, active, None, "ActiveItemsUpdate(3100)", quiet=True)
         log(f"  [STATS] {player.char_name!r} level -> {w.level}")
         return f"Level set to {w.level} (looks change for levels 1-5)"
+    if cmd == "!setpwd":
+        # The only way to change a password once set (maintainer rule 2026-10-07). The new one counts
+        # from the next login; the client sends login passwords as raw bytes, chat as UTF-8, so the
+        # two agree for every ASCII password.
+        if not arg or " " in arg:
+            return "Usage: !setpwd <new password>  (one word; used from your next login on)"
+        store.set_password(player.username, arg.encode("utf-8"))
+        log(f"  [AUTH] {player.username!r} changed the password (!setpwd)")
+        return "Password changed. Use it from your next login on."
+    if cmd == "!help":
+        return HELP_TEXT
     if cmd == "!poslist":
         if not saved:
             return "No positions saved yet."

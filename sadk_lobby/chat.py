@@ -268,7 +268,7 @@ def _handle_message(conn, body):
             f"assumed layout {{module u16, msg u16, except u32, data blob, cell u32}} is wrong:")
         log(hex_dump(body))
         return
-    if not getattr(conn, "_chat_msg_seen", False):
+    if not getattr(conn, "_chat_msg_seen", False) and b"setpwd" not in (data or b""):   # no passwords in logs
         conn._chat_msg_seen = True
         log(f"  [CHAT] ⭐ FIRST chat message parsed: msg_id={message_id} cell={cell_id} "
             f"data={data[:64]!r} — raw {len(body)}B:")
