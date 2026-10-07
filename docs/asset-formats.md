@@ -135,3 +135,14 @@ python3 tools/kex.py check <dir>                          parse all .KEX, report
 python3 tools/kex.py info <file.KEX>                      structure as JSON
 python3 tools/kex.py split <dir> <out>                    per KEX: scene.json + indices, streams, tracks
 ```
+
+## Next: conversion for other engines [TODO]
+
+Planned, not started (2026-10-07): a `tools/kex.py` exporter to **glTF 2.0** so models, skeletons and animations
+import into Unity (glTFast / UnityGLTF) or Blender. Points to handle:
+- convert from each file's stored source axes (`axisX/Y/Z`, `origin`, `unitScale`) to the target's convention;
+- pair animation-only KEX files with their skeleton by bone name; the game's XML (e.g. `animals.xml`: `model=`,
+  `mesh=`, `<Animation filename=…>`) says which files belong together;
+- map materials to PBR: `DiffuseColor` → base colour, `Opacity` → alpha, `Self-Illumination` → emission,
+  `Bump` → normal map; textures (`.dds`, `.tga`) import into Unity as they are;
+- confirm the stream types (table above) in the renderer's vertex-declaration code first.
