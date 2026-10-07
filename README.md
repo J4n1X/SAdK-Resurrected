@@ -94,8 +94,8 @@ python -m sadk_lobby                # or as a systemd service, see below
 ```
 
 The server reads the game's own message schema, `msgdefs.ini`, from `sadk_lobby/data/msgdefs.ini` and refuses to
-start without it. This repository includes a copy; the release archive does not, so copy `bin\msgdefs.ini` from
-your game installation into `server/sadk_lobby/data/` (the release's `server/README.md` walks through it).
+start without it. It is copyrighted game data, so neither this repository nor the release includes it: copy
+`bin\msgdefs.ini` from your game installation into `sadk_lobby/data/` (in the release: `server/sadk_lobby/data/`).
 
 | Port (TCP) | Role |
 |---|---|
@@ -169,7 +169,7 @@ LobbyMessage field scalars are big-endian; the surrounding TinCat message fields
 | `STRING N` | int32 length (incl. NUL) + ISO-8859-15 bytes |
 | `MEMBLOCK` | int32 length + raw bytes |
 
-The message schema comes from the game's own `msgdefs.ini` (a copy is at `sadk_lobby/data/msgdefs.ini`),
+The message schema comes from the game's own `msgdefs.ini` (supplied from your install into `sadk_lobby/data/`),
 so one generic codec encodes and decodes every message.
 
 ## Repo map
@@ -194,8 +194,8 @@ assets are © their respective owners (Funatics / Blue Byte / Ubisoft).
 
 - **No game code, assets, executables or memory dumps are distributed here.** You need a legal copy.
   The sourcemap contains only names, types and comments keyed by address, no game bytes.
-- The only game-derived file in the tree is `sadk_lobby/data/msgdefs.ini`, a plain-text message schema
-  used for protocol interoperability.
+- The server needs the game's own message schema `msgdefs.ini`, which every player has in the game's `bin`
+  folder. It is not distributed here: you copy it from your own installation.
 - Third-party community tools (e.g. `AdKEd.exe` for the game's encrypted asset files) are not shipped.
 
 ## Credits

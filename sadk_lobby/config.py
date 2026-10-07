@@ -16,7 +16,7 @@ import os
 PKG_DIR   = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR  = os.path.dirname(PKG_DIR)
 DATA_DIR  = os.path.join(PKG_DIR, "data")
-MSGDEFS_PATH = os.path.join(DATA_DIR, "msgdefs.ini")   # the game's own NETMSG schema, bundled
+MSGDEFS_PATH = os.path.join(DATA_DIR, "msgdefs.ini")   # the game's own NETMSG schema (copied from bin\, not committed)
 
 LOG_FILE = os.path.join(REPO_DIR, "tincat_server.log")
 BIN_DIR  = os.path.join(REPO_DIR, "sadk_captures")

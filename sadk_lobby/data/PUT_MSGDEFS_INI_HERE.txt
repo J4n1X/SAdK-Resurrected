@@ -1,0 +1,3 @@
+Copy msgdefs.ini from the bin folder of your game installation into this folder.
+The server reads the game's own message definitions from it and will not start without it.
+The file is copyrighted game data and is never committed (see .gitignore).

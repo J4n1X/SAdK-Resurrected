@@ -128,7 +128,7 @@ python -m sadk_lobby
 - `players.py` — multi-user identities · `registry.py` — process-global hosted-game store
 - `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
 - `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
-- `data/msgdefs.ini` — authoritative NETMSG schema copy
+- `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 
 ---
 
