@@ -11,7 +11,7 @@ conn.send_chat). Frame handlers take the owning Conn and use conn.send_chat().
 import struct
 import threading
 
-from . import config, players
+from . import codec, config, players
 from .log import hex_dump, log
 from .tincat import BinaryReader, str_field, bytes_field
 
@@ -122,8 +122,19 @@ def channel_joined(cell_id, ticket, option=0):
     return chat_payload(config.CHAT_CHANNEL_JOINED, body)
 
 
+def channel_left(cell_id, ticket, option=0):
+    """Template 10 Left — same shape as Joined (9) {cell_id, ticket_id, option u16}. On a known cell
+    the client queues event 11 (left). [known, T 1000e4a0]"""
+    body = struct.pack("<I", cell_id) + struct.pack("<I", ticket) + struct.pack("<H", option)
+    return chat_payload(config.CHAT_CHANNEL_LEFT, body)
+
+
 def status_reply(cell_id, ticket, result_id=0):
-    body = struct.pack("<I", cell_id) + struct.pack("<I", ticket) + struct.pack("<H", result_id)
+    """Template 11 StatusReply {cell_id, ticket_id, result_id} — all three are read as u32 (UNLONG
+    accessor, T 1000ef30 case 11). result_id was packed as u16 before 2026-10-07; joins still
+    completed live with 0 from the 2-byte-short body, but non-zero codes need the full u32. The client
+    sends its own StatusReply in this same 12-byte shape. [known]"""
+    body = struct.pack("<III", cell_id, ticket, result_id)
     return chat_payload(config.CHAT_STATUS_REPLY, body)
 
 
@@ -142,6 +153,11 @@ def inner_user_info(perm_id, cell_id, nick):
     b += struct.pack("<I", cell_id)
     b += str_field(nick)
     return b
+
+
+def netmsg(type_num, values):
+    """A full NETMSG PropertySet (type u16 + body) for a template-3 relay's `data`."""
+    return struct.pack("<H", type_num) + codec.encode_body(type_num, values)
 
 
 def inner_user_left(perm_id, cell_id):
@@ -177,10 +193,14 @@ def handle_frame(conn, payload):
     body = payload[6:]
     log(f"  [CHAT] ← chat frame id={chat_id}")
     if chat_id == config.CHAT_CREATE_CHANNEL:
+        # Template 7 requestCreateCell {data, ticket_id}. Success is reported ONLY by publishing the
+        # new cell (template 0); on this kind-3 ticket a StatusReply handles only 0x11 (the client's
+        # failure 0x8C) and drops every other code. Until a channel-creation feature exists, refuse
+        # (L26) so the client shows the failure instead of waiting forever. [inferred, T 10017640]
         r = BinaryReader(body); _data = r.blob()
         ticket = r.u32() if r.remaining() >= 4 else 0
-        conn.send_chat(status_reply(3, ticket, 0))
-        log("  → [CHAT] StatusReply(create channel) OK")
+        conn.send_chat(status_reply(0, ticket, 0x11))
+        log("  → [CHAT] create channel refused: StatusReply(result 0x11)")
     elif chat_id == config.CHAT_MESSAGE:
         _handle_message(conn, body)
     else:
@@ -226,6 +246,9 @@ def _handle_message(conn, body):
             f"data={data[:64]!r} — raw {len(body)}B:")
         log(hex_dump(body))
     p = players.of(conn)
+    if message_id == 30:
+        _handle_whisper(conn, p, data or b"")
+        return
     targets = _roster_members(cell_id)              # already one per player
     if not any(players.of(c).perm_id == p.perm_id for c in targets):
         targets.append(conn)           # author not rostered — still echo their own line back
@@ -282,3 +305,63 @@ def handle_join_channel(conn, fields, ticket):
             pass
     log(f"  → [CHAT] JoinChatChannel cell={cell_id}: {p.char_name!r} joined; "
         f"exchanged ChatUserInfo with {len(others)} existing member(s)")
+
+
+def _uc_conn_of(perm_id):
+    """The live UC/chat connection of a player (newest), found through the cell rosters."""
+    with _roster_lock:
+        members = [c for lst in _roster.values() for c in lst]
+    found = [c for c in members if getattr(c, "alive", False) and players.of(c).perm_id == perm_id]
+    return found[-1] if found else None
+
+
+def _handle_whisper(conn, p, data):
+    """WhisperChatMessage (30) arrives as template 2 on cell 1 {mode 3|4, txt, cell_id 1, from_id,
+    perm_id = target} (T 10017100). The client has NO receive case for 30: a whisper is delivered as
+    NETMSG 3 PrivateChatMessage {mode, txt, cell_id, from_id, to_id, from_name} inside template 3, to
+    the target only, and echoed to the sender so the outgoing line shows (from_id == local perm).
+    [inferred, S 004810a0] An offline target is dropped silently (L22): the client has no error path."""
+    try:
+        w = codec.decode_body(30, data[2:])
+    except Exception as e:  # noqa: BLE001
+        log(f"  [CHAT] ⚠ could not parse whisper ({e}):")
+        log(hex_dump(data))
+        return
+    target = w.get("perm_id", 0)
+    msg = netmsg(3, {"mode": w.get("mode", 3), "txt": w.get("txt") or "", "cell_id": 1,
+                     "from_id": p.perm_id, "to_id": target, "from_name": p.char_name})
+    frame = reply(3, msg, 1, p.perm_id, ispropset=True)
+    dest = _uc_conn_of(target)
+    if dest is None:
+        log(f"  [CHAT] whisper {p.char_name!r} → {target}: target offline, dropped (L22)")
+        return
+    dest.send_chat(frame)
+    if dest is not conn:
+        conn.send_chat(frame)                       # the sender's own outgoing line
+    log(f"  → [CHAT] whisper {p.char_name!r} → {players.of(dest).char_name!r} delivered")
+
+
+def handle_leave_channel(conn, fields, ticket):
+    """RequestLeaveChannel (259) {cell_id, ticket_id = a CellManager ticket, from_id} arrives on the
+    NETMSG layer of the UC connection, but its ticket is a CellManager one: a NETMSG Result(42) is
+    ignored there and the leave never completes. Complete it like a join, with template 10 Left +
+    template 11 StatusReply(0), and tell the other members with NETMSG 6. [known, T 10016f10 /
+    T 10017640]"""
+    cell_id = fields.get("cell_id", 0) or 0
+    p = players.of(conn)
+    with _roster_lock:
+        members = _roster.get(cell_id, [])
+        if conn in members:
+            members.remove(conn)
+    conn.send_chat(channel_left(cell_id, ticket))
+    conn.send_chat(status_reply(cell_id, ticket, 0))
+    others = _roster_members(cell_id)
+    for c in others:
+        if players.of(c).perm_id == p.perm_id:
+            continue                                # the same player on another socket
+        try:
+            c.send_chat(reply(6, inner_user_left(p.perm_id, cell_id), cell_id, config.FROM_SERVER,
+                              ispropset=True))
+        except Exception:  # noqa: BLE001
+            pass
+    log(f"  → [CHAT] {p.char_name!r} left cell {cell_id} (Left + StatusReply 0); told {len(others)} member(s)")

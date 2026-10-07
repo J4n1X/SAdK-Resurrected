@@ -130,6 +130,7 @@ CHAT_MESSAGE        = 2
 CHAT_REPLY          = 3
 CHAT_CREATE_CHANNEL = 7
 CHAT_CHANNEL_JOINED = 9
+CHAT_CHANNEL_LEFT   = 10
 CHAT_STATUS_REPLY   = 11
 
 # (cell_id, name, subject, creator, creator_id, protected)

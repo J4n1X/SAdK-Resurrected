@@ -1379,6 +1379,11 @@ def _h_avatar_location(conn, data):
 
 
 # ── Chat over lobby magic ─────────────────────────────────────────────────────
+@handler(259)  # RequestLeaveChannel — completed on the CellManager layer, not with a Result(42)
+def _h_leave_channel(conn, fields, ticket):
+    chat.handle_leave_channel(conn, fields, ticket)
+
+
 @handler(17)  # RequestJoinChannel
 def _h_join_channel(conn, fields, ticket):
     chat.handle_join_channel(conn, fields, ticket)
