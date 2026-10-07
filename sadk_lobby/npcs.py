@@ -243,11 +243,21 @@ def make_village_npcs(center):
         # ── Walkers (1001 avatars) — ambient motion via the waypoint ring.
         #    trbgndr now VARIES (high nibble = body part 0..2, low = gender): 0x00 left both
         #    walkers on model index (tribe−1)×3, i.e. the identical default look.
+        *model_lineup(),
         Npc(NPC_ID_BASE + 4, "Wächter Wilhelm", tribe_gender=0x10,
             colours=(3, 1, 2, 0, 1, 2, 3, 4),
             anchor=at(6.0, 6.0), path=loop((6, 6), (6, -6), (-6, -6), (-6, 6)),
             speed=1.0),
     ]
+
+
+def model_lineup():
+    """TEMPORARY (2026-10-07): one record NPC per npcidx 0..15, labelled "Modell N", in a row between
+    the tailor and trader spots (measured ground y ~2.75), so the maintainer can read the npcidx ->
+    model table off in-world. Remove once the models are chosen."""
+    return [Npc(NPC_ID_BASE + 100 + i, f"Modell {i}", npctyp=NPCTYP_SETTLER,
+                anchor=(-40.0 + i * 1.0, 2.75, 18.0), rot_deg=180.0, colours=(0, 0, 0, 0), npcidx=i)
+            for i in range(16)]
 
 
 def record_npcs(npc_list):
