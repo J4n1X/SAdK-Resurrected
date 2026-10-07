@@ -106,7 +106,10 @@ def test_character_token_of_a_logged_in_account_is_accepted():
     conn = FakeConn(41)
     dispatch._h_send_token(conn, {"perm_id": cid, "ticket_id": TICKET}, TICKET)
     st = conn.sent_of("153")[0]
-    assert st["errorcode"] == 0 and st["id"] == cid and conn.player.char_name == "Ritter"
+    # The connection belongs to the character, but the 153 id is the ACCOUNT's (207 perm_id): a
+    # non-zero id on a server-id connection overwrites the client's own perm id (T 10023460).
+    assert st["errorcode"] == 0 and st["id"] == owner.perm_id and conn.player.char_name == "Ritter"
+    assert conn.player.perm_id == cid
     # A character of an account that has not logged in on this run is still refused.
     store.get_or_create_account("absent")
     other = store.create_character("absent", "Fremder", b"\x00" * 24)

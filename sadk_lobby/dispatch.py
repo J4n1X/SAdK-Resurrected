@@ -1299,7 +1299,15 @@ def _h_send_token(conn, fields, ticket):
         conn.player = players.resolve_by_perm(fields["perm_id"])
         perm_id = conn.player.perm_id
         log(f"  [PLAYER] token #{conn.id} → {conn.player.username!r} (perm_id={perm_id})")
-    conn.status_with_id(0, perm_id, ticket)   # NETMSG 153 AddResult, errorcode=0 → the 0x99 ACK
+    # The 153 `id` is the ACCOUNT's id (the 207 perm_id), never the character's: on server-id
+    # connections (village, referee) a non-zero id overwrites the client's own perm id
+    # (ConnectionManager+0x24, HandlerGS T 10023460), which the main connection then reports as its
+    # logout reason. The avatar screen leaves for the main menu only when that reason equals the
+    # 207 handle (AvatarScreen::OnLobbyServerLoggedOut S 00439c20 vs LobbyManager+0x548); with the
+    # character id there, "Back" after a village visit cleared the list and opened creation
+    # [PROVEN live 2026-10-07: reason 2 before a village visit, 100000 after]. UC discards the id.
+    ack_id = getattr(conn.player, "user_id", 0) or perm_id if fields.get("perm_id") else perm_id
+    conn.status_with_id(0, ack_id, ticket)   # NETMSG 153 AddResult, errorcode=0 → the 0x99 ACK
     log("  → SendToken → AckResult(153) errorcode=0 [the 0x99 ACK → state 8 AUTHORIZED → LoggedIn]")
     # Post-login: push the chat ChannelInfo (deferred from the handshake so it lands in a
     # fully-constructed channel container instead of corrupting a half-built one; s31).
