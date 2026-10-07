@@ -108,29 +108,31 @@ def test_dice_table_cycle():
     created = decode(io.last(mg.MSG_CREATE))
     assert created["type"] == 1 and created["chtid"] == 1001 and created["key"] == (1, 0)
     assert created["scntbl"] == (0 << 4) | 3          # table spot 0 in the tavern of scene 3
-    assert created["settings"][2] == "Würfeltisch" and created["seats"] == []
+    assert created["settings"][2] == "Würfeltisch"
+    assert created["seats"] == [(0, 1, A)]           # the creator sits down with the 2001 stake
+    assert t.credits[A] == 100 and economy.wallet(A).gold == economy.config.START_GOLD - 100
     assert [m for _, m in io.msgs()] == [mg.MSG_CREATE, mg.MSG_UPDATE]
     io.zone = 0
     _create(io, "b", B)                            # outdoors → refused (no table spots there)
     assert io.msgs() == [("b", mg.MSG_NO_TABLE)]
     io.zone = 3
 
-    _join(io, "a", A, t.key, stake=300)
+    _join(io, "a", A, t.key, stake=300)            # already seated: no second seat, no second stake
     _join(io, "b", B, t.key, stake=200)
     upd = decode(io.last(mg.MSG_UPDATE))
     assert upd["seats"] == [(0, 1, A), (1, 1, B)]
-    assert [(p[0], p[1]) for p in upd["players"]] == [(0, 300), (1, 200)]
-    assert economy.wallet(A).gold == economy.config.START_GOLD - 300
+    assert [(p[0], p[1]) for p in upd["players"]] == [(0, 100), (1, 200)]
+    assert economy.wallet(A).gold == economy.config.START_GOLD - 100
     io.log.clear()
 
     bets = [0] * 11
     bets[5] = 50                                   # A bets 50 on 7
     w = BitWriter().write(1, 16).write(0, 8)
-    mg.write_packed(w, 250)
+    mg.write_packed(w, 50)
     for b in bets:
         mg.write_packed(w, b)
     mg.handle_place_bets(io, "a", A, w.bytes())
-    assert t.credits[A] == 250 and t.bets[A][5] == 50
+    assert t.credits[A] == 50 and t.bets[A][5] == 50
 
     later = []
     mg.random.seed(3)
@@ -138,7 +140,7 @@ def test_dice_table_cycle():
     res = decode(io.last(mg.MSG_UPDATE))
     total = (res["dice"] >> 4) + (res["dice"] & 0xF)
     assert res["phase"] == mg.PHASE_RESULT
-    assert t.credits[A] == 250 + (150 if total == 7 else 0)
+    assert t.credits[A] == 50 + (150 if total == 7 else 0)
     later[0]()                                     # the timer fires: back to betting, bets cleared
     assert t.phase == mg.PHASE_BETTING and t.bets[A] == [0] * 11
 
@@ -205,7 +207,20 @@ def test_tables_are_listed_by_the_matchmaking_dialog():
     print("tables carry the dialog's tavern id, NPC matchmakers match their tavern OK")
 
 
+def test_late_entrant_gets_existing_tables():
+    mg.reset_for_tests()
+    io = FakeIo()
+    _create(io, "a", A)
+    io.log.clear()
+    mg.sync_tables(io, "late")                                    # B enters the world afterwards
+    assert io.msgs() == [("late", mg.MSG_CREATE), ("late", mg.MSG_UPDATE)]
+    mg.leave_all(io, A)                                           # the creator leaves → table gone
+    assert mg._tables == {}
+    print("late entrants receive existing tables; a table closes when its creator leaves OK")
+
+
 if __name__ == "__main__":
+    test_late_entrant_gets_existing_tables()
     test_tables_are_listed_by_the_matchmaking_dialog()
     test_tables_fill_the_tavern_spots()
     test_packed_round_trip()

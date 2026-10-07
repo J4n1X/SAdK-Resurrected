@@ -1307,6 +1307,10 @@ def _h_send_token(conn, fields, ticket):
             # Now that this client is in the world, exchange avatars with everyone else who is.
             time.sleep(config.AVATAR_SPAWN_DELAY)
             _spawn_world_avatars(c)
+            # Then the minigame tables that already exist. After the avatars, because a seat block
+            # naming an avatar the client has no 3D object for is dropped whole (ReadSeats S 00471f00).
+            time.sleep(config.AVATAR_SPAWN_DELAY)
+            minigames.sync_tables(_minigame_io(), c)
         threading.Thread(target=_push_enter_world, daemon=True).start()
         log(f"  [ENTER] (VILLAGE) pushing EnterWorld(1000) in {config.ENTER_WORLD_DELAY}s "
             "→ HandleEnterWorld → SetState(VillageEntered=9).")
