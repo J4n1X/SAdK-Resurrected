@@ -13,7 +13,7 @@
 ## 0. Prerequisites
 
 - Debugger backend up (elevated, on the machine running the game):
-  `cd C:\Users\user\Downloads\ghidra-mcp && python -m debugger`   → binds `127.0.0.1:8099`
+  `cd C:\Users\<you>\Downloads\ghidra-mcp && python -m debugger`   → binds `127.0.0.1:8099`
 - Game running (any state; the probe works even when disconnected).
 - Ghidra MCP connected with `sadk_noav.exe` open.
 
@@ -151,7 +151,7 @@ See **§9** for the full runbook. The rule of thumb:
 
 ## 5. Correlating with the stub
 
-The stub logs unbuffered (`python -u`) to `~/projects/sadk-resurrected/stub*.out` on `linux-server`
+The stub logs unbuffered (`python -u`) to `~/projects/sadk-resurrected/stub*.out` on the Linux server
 with millisecond timestamps; trace hits are timestamped too. Line the two up to see *"client sent 2002 at
 T, we answered at T+2 ms, client did X at T+40 ms."*
 
@@ -315,7 +315,7 @@ the game already runs elevated, so live debugging already required this. Start i
 
 ```powershell
 # elevated PowerShell
-cd C:\Users\user\Downloads\ghidra-mcp
+cd C:\Users\<you>\Downloads\ghidra-mcp
 python -m debugger
 ```
 

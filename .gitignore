@@ -89,3 +89,25 @@ tincat_server.log
 
 # Ghidra project (SFTP'd in; embeds the copyrighted game binary)
 sadk/
+
+# ── Assembled GitHub release (packaging/make_release.sh) ──
+/release/
+
+# ── Live server data: accounts, password hashes, mail (never publish) ──
+/sadk_players.json*
+/sadk_mail.json*
+/stub*.out
+/status-cur/
+tincat_lobby_unhandled.log*
+
+# ── Mapping run: derived bulk (decompiled game code, batches, run state) ──
+/mapping/cache/
+/mapping/work/
+/mapping/queue/
+/mapping/dumps/
+/mapping/rebase/
+/mapping/state.db*
+
+# ── Sourcemap test exports ──
+/sourcemap/SADK.exe/
+!/sourcemap/sadk_noav.exe/

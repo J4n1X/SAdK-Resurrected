@@ -1,6 +1,6 @@
 # Headless Ghidra + Ghidra Server + MCP on Linux — reproducible runbook
 
-This documents the **headless** RE backend that runs on the Linux box (`linux-server`),
+This documents the **headless** RE backend that runs on the Linux box (the Linux server),
 so a future clone can reproduce it. It complements the Windows-GUI runbook in
 [`decomp/GHIDRA_MCP_SETUP.md`](../decomp/GHIDRA_MCP_SETUP.md).
 
@@ -39,7 +39,7 @@ See [the server memory] for the full story; key points:
 - `server/server.conf` parameters: `-a0` (password auth), `-u` (prompt for user ID, so clients
   log in as an account rather than their OS username), `-ip 127.0.0.1` (so a remote Windows GUI
   reaches it over an SSH tunnel; use the LAN IP for direct LAN access).
-- Runs as a **systemd service** (`/etc/systemd/system/ghidra-server.service`, `User=user`,
+- Runs as a **systemd service** (`/etc/systemd/system/ghidra-server.service`, `User=<user>`,
   `ExecStart=…/server/ghidraSvr console`, `Type=simple`). Persistent across reboots.
 - Accounts (`server/svrAdmin`): `sadk` (the Windows GUI), `mcp` (the headless MCP — write access
   to the `sadk` repo via `svrAdmin -grant mcp +w sadk`). New accounts get default password
