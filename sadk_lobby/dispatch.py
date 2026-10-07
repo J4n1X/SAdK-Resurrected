@@ -18,8 +18,8 @@ import struct
 import threading
 import time
 
-from . import (chat, codec, config, crypto, mail, msgdefs, npcs, players, referee, registry,
-               store, village)
+from . import (chat, codec, config, crypto, economy, mail, msgdefs, npcs, players, referee,
+               registry, store, village)
 from .log import log
 
 HANDLERS = {}
@@ -211,7 +211,8 @@ def _avatar_style(player):
     and gender into one byte and the packing is **[TODO]** — 0 is the safest first guess. The name is
     the real character name, so a rendered avatar should also be labelled correctly.
     """
-    return {"name": player.char_name, "tribe_gender": 0, "colours": (0,) * 8}
+    return {"name": player.char_name, "tribe_gender": 0,
+            "colours": tuple(economy.wallet(player.perm_id).colours)}   # tailor changes (3950)
 
 
 # Avatar movement-ring refresh — WHY THIS EXISTS (proven 2026-08-01, TTD avatar_vanish_diag.run):
@@ -320,6 +321,10 @@ def _spawn_world_avatars(conn):
     # (ER 2026-08-01_worldtick-clock-sync). The others-branch resend below is a no-op
     # client-side once the clock is slewed (250 ms tolerance).
     village.send_world_tick(conn, _now_ms())
+    # The owner's purse and items (3201 + 3102), so the client's own checks — e.g. the tailor's
+    # gold >= 50 — see the server's values. Discarded silently if the client has no avatar with
+    # this id in its map, so it is harmless either way.
+    economy.send_owner_state(conn, me.perm_id)
     # Record NPCs (PlayerCreate 1004): one message each — the consumer builds the
     # object from its template immediately, no waypoint stream involved.
     for npc in npcs.record_npcs(_npcs):
@@ -1329,8 +1334,52 @@ def _h_send_game_data(conn, fields, ticket):
         # 1006 is now sent ONLY as the answer to a leave request (msg 2002), above.
     elif msg_type == config.VILLAGE_AVATAR_LOCATION_MSGTYPE:   # 0x27D0 — msg 2000 AVATAR LOCATION
         _h_avatar_location(conn, data)
+    elif msg_type in _ECONOMY_HANDLERS:                         # 3001/3002/3600/3610/3620
+        try:
+            _ECONOMY_HANDLERS[msg_type](conn, _player(conn).perm_id, data)
+        except Exception as exc:  # noqa: BLE001 — a malformed request must not kill the conn
+            log(f"  [ECON] msg 0x{msg_type:x} from conn #{conn.id} failed: {exc} ({data[:16].hex()})")
+    elif msg_type == config.VILLAGE_COLOR_CHANGE_MSGTYPE:      # 0x2F6E — msg 3950 tailor
+        _h_color_change(conn, data)
+    elif msg_type == config.VILLAGE_CHAT_COMMAND_MSGTYPE:      # 0x2FA0 — msg 4000, nothing required
+        log(f"  [WORLD] ChatCommand (msg 4000) from {_player(conn).char_name!r}: {data[:64].hex()}")
     else:
         log(f"  (SendGameData[74] msg_type=0x{msg_type:x} on conn #{conn.id} — logged, no in-world handler)")
+
+
+def _shops():
+    """npc_id -> (shop_id, name, stock) for the shop NPCs in the world (catalog V25/V28)."""
+    return {n.perm_id: (n.shop[0], n.shop[1], n.shop[3]) for n in _npcs if getattr(n, "shop", None)}
+
+
+_ECONOMY_HANDLERS = {
+    config.VILLAGE_MOVE_ITEM_MSGTYPE: economy.handle_move_item,
+    config.VILLAGE_DELETE_ITEM_MSGTYPE: economy.handle_delete_item,
+    config.VILLAGE_OPEN_SHOP_MSGTYPE: lambda conn, pid, data: economy.handle_open_shop(conn, pid, data, _shops()),
+    config.VILLAGE_SHOP_BUY_MSGTYPE: economy.handle_buy,
+    config.VILLAGE_SHOP_SELL_MSGTYPE: economy.handle_sell,
+}
+
+
+def _h_color_change(conn, data):
+    """Tailor (msg 3950). The client recoloured its own avatar locally; nobody else sees it until a
+    1001 with the style block arrives (no reply handler exists). On an accepted change, re-broadcast
+    the style to every other in-world player with the current pose. [inferred, catalog V15]"""
+    me = _player(conn)
+    try:
+        accepted = economy.handle_color_change(conn, me.perm_id, data)
+    except Exception as exc:  # noqa: BLE001
+        log(f"  [ECON] AvatarColorChange from conn #{conn.id} unparseable: {exc} ({data.hex()})")
+        return
+    if not accepted:
+        return
+    tick = (_now_tick16() - 1000) & 0xFFFF
+    for other in _in_world_conns(exclude_player=me.perm_id, exclude_conn=conn):
+        try:
+            village.send_entity_create(other, me.perm_id, tick=tick, quiet=True,
+                                       style=_avatar_style(me), **_live_pose(me.perm_id))
+        except Exception as exc:  # noqa: BLE001
+            log(f"  [ECON] style re-broadcast to conn #{other.id} failed: {exc}")
 
 
 def _h_avatar_location(conn, data):
