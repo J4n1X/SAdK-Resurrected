@@ -58,6 +58,9 @@ Control connection, after `HELLO`:
 1. Read `data\lobby\config\LobbySettings.ini [LobbyServer] Host/Port` and `data\game\settings\network.ini [Basics] gamePort`.
 2. Connect to the lobby host's bridge port and send `HELLO`. With no answer, the shim only forwards.
 3. Listen on the game port and send `CHECK`. With no matching `PROBE` within 10 s, send `BRIDGED`.
+4. `LobbySettings.ini [LobbyServer] ForceBridge = true` skips step 3 and sends `BRIDGED` at once. The
+   game reads only the keys it knows from that section (`LobbyProfile::GetLobbyServerHost` S 00466280),
+   so the extra key does not affect it.
 
 **Hosting.**
 1. The game's `connect` to the lobby is tagged with `LOBBY <token>`.
