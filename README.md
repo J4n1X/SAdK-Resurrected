@@ -56,6 +56,7 @@ that the real client connects to, plus a small optional client add-on for hostin
 | `!fasttrack` | maximum level plus 100,000 gold and 100,000 funnies |
 | `!level <1-5>` | sets your level (which also changes your avatar's look) |
 | `!pos <name>` / `!poslist` | saves / lists positions (used to place NPCs) |
+| `!npc <set> <index>` | puts an NPC with that model next to you (sets 1-3 need the npcmodels mod) |
 
 ## What doesn't work yet
 
@@ -139,7 +140,8 @@ against fake sockets. Live behaviour is only ever proven against a real client.
   game's functions, classes and globals generated from the sourcemap (17,000+ callable functions, 2,300
   types with checked layouts), byte patches that check what they replace, MinHook-based hooks, mirrors of
   the MSVC 2005 `std::string` / `vector` / `list`, and a verify mode that checks a mod's patches against
-  `SADK.exe` without running it. The bridge shim is built on it. See `sadkmod/README.md`.
+  `SADK.exe` without running it. The bridge shim is built on it and loads **mods** from the game's `mods`
+  folder: replacement data files and `mod.dll` code (`mods/README.md`). See `sadkmod/README.md`.
 - **`docs/message-catalog.md`** — the protocol reference: every message the client sends or handles,
   what it expects back, and why, with binary addresses.
 - `docs/types.md` (structs and classes), `docs/subsystems.md`, `docs/village-and-character-protocol.md`,
@@ -184,7 +186,8 @@ so one generic codec encodes and decodes every message.
 ```
 sadk_lobby/          the server (Python package)
 sadkmod/             C++ modding library: generated game declarations, patches, hooks (sadkmod/README.md)
-bridge/wsock32_shim/ the host bridge's client side and the game patches (proxy wsock32.dll, C++ on sadkmod)
+bridge/wsock32_shim/ the host bridge's client side, map sharing and the mod host (proxy wsock32.dll, C++)
+mods/                the repo's mods (billboards, npcmodels) and how to write one (mods/README.md)
 bridge/serverconfig/ SAdK-ServerConfig, the Windows setup tool (C, Win32)
 sourcemap/           Ghidra map of SADK.exe and tincat3.dll + its import script
 docs/                protocol and RE reference

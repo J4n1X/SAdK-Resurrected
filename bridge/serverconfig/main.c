@@ -7,7 +7,8 @@
  *   data\game\settings\network.ini       [Basics] gamePort
  *       read by NComm_NetworkConfig_LoadFromIni S 0041ede0
  *   bin\sadk_bridge.ini                  [Bridge] port   (the shim's bridge port)
- *   bin\wsock32.dll                      the bridge shim (docs/bridge-protocol.md)
+ *   bin\wsock32.dll                      the bridge shim and mod host (docs/bridge-protocol.md, mods/README.md)
+ *   mods\billboards\mod.dll, billboards.ini  the billboards mod, when "Disable billboards" is ticked
  *
  * The "modified" check recomputes the game's own build checksum (GameData_ComputeBuildChecksum
  * S 005ab800): the host kicks a joiner whose value differs ("!CHECKSUM MISMATCH"), so a different value
@@ -202,24 +203,24 @@ static unsigned build_checksum(int *count)
     return cs;
 }
 
-/* ── Embedded shim ───────────────────────────────────────────────────────── */
-static const void *shim_data(DWORD *size)
+/* ── Embedded files: the shim and the billboards mod ─────────────────────── */
+static const void *resource(int id, DWORD *size)
 {
-    HRSRC r = FindResourceA(NULL, MAKEINTRESOURCEA(IDR_SHIM), (LPCSTR)RT_RCDATA);
+    HRSRC r = FindResourceA(NULL, MAKEINTRESOURCEA(id), (LPCSTR)RT_RCDATA);
     HGLOBAL g = r ? LoadResource(NULL, r) : NULL;
     *size = r ? SizeofResource(NULL, r) : 0;
     return g ? LockResource(g) : NULL;
 }
 
-/* 1 = installed and identical, 0 = missing, -1 = a different file */
-static int shim_state(void)
+/* <root>\rel compared with resource id: 1 = identical, 0 = missing, -1 = a different file */
+static int file_state(const char *rel, int id)
 {
     char p[MAX_PATH];
-    join(p, root, "bin\\wsock32.dll");
+    join(p, root, rel);
     HANDLE f = CreateFileA(p, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (f == INVALID_HANDLE_VALUE) return 0;
     DWORD size, got = 0, have = GetFileSize(f, NULL);
-    const void *want = shim_data(&size);
+    const void *want = resource(id, &size);
     int same = 0;
     if (want && have == size) {
         void *buf = HeapAlloc(GetProcessHeap(), 0, size);
@@ -230,17 +231,40 @@ static int shim_state(void)
     return same ? 1 : -1;
 }
 
-static int install_shim(void)
+static int install_file(const char *rel, int id)
 {
     char p[MAX_PATH];
     DWORD size, put = 0;
-    const void *data = shim_data(&size);
-    join(p, root, "bin\\wsock32.dll");
+    const void *data = resource(id, &size);
+    join(p, root, rel);
     if (!data) return 0;
     HANDLE f = CreateFileA(p, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) return 0;
     int ok = WriteFile(f, data, size, &put, NULL) && put == size;
     CloseHandle(f);
+    return ok;
+}
+
+static int shim_state(void) { return file_state("bin\\wsock32.dll", IDR_SHIM); }
+static int install_shim(void) { return install_file("bin\\wsock32.dll", IDR_SHIM); }
+
+/* The billboards mod (mods\billboards): installed when "Disable billboards" is ticked, its mod.dll removed when
+   not (its billboards.ini, which a player may have edited, stays). */
+#define BILLBOARDS_DLL "mods\\billboards\\mod.dll"
+#define BILLBOARDS_INI "mods\\billboards\\billboards.ini"
+static int set_billboards_mod(int on)
+{
+    char p[MAX_PATH];
+    if (!on) {
+        join(p, root, BILLBOARDS_DLL);
+        return DeleteFileA(p) || GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
+    }
+    join(p, root, "mods");
+    CreateDirectoryA(p, NULL);
+    join(p, root, "mods\\billboards");
+    CreateDirectoryA(p, NULL);
+    int ok = file_state(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS) == 1 || install_file(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS);
+    if (file_state(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI) == 0) ok &= install_file(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI);
     return ok;
 }
 
@@ -297,9 +321,11 @@ static void refresh(HWND dlg)
         GetPrivateProfileStringA("LobbyServer", "ForceBridge", "false", v, sizeof v, lobby);
         CheckDlgButton(dlg, IDC_FORCE, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
                                            ? BST_CHECKED : BST_UNCHECKED);
-        /* No key yet: ticked, since the pages behind the billboards are gone for everyone. */
+        /* Ticked when the billboards mod is installed; otherwise the last choice saved (DisableBillboards), and
+           ticked when there is none, since the pages behind the billboards are gone for everyone. */
         GetPrivateProfileStringA("LobbyServer", "DisableBillboards", "true", v, sizeof v, lobby);
-        CheckDlgButton(dlg, IDC_BILLBOARDS, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
+        int choice = !lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes");
+        CheckDlgButton(dlg, IDC_BILLBOARDS, file_state(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS) || choice
                                                 ? BST_CHECKED : BST_UNCHECKED);
     }
     SetDlgItemTextA(dlg, IDC_STATUS, status);
@@ -352,8 +378,9 @@ static void save(HWND dlg)
     snprintf(num, sizeof num, "%u", bport);
     ok &= WritePrivateProfileStringA("Bridge", "port", num, bridge);
     int shim_ok = !exe_supported || shim_state() == 1 || install_shim();
+    int mods_ok = !exe_supported || set_billboards_mod(IsDlgButtonChecked(dlg, IDC_BILLBOARDS) == BST_CHECKED);
 
-    if (ok && shim_ok) {
+    if (ok && shim_ok && mods_ok) {
         MessageBoxA(dlg, exe_supported
                     ? "Settings saved and the bridge shim is installed.\n\nStart the game to use the new lobby server."
                     : "Settings saved. The bridge shim was NOT installed: this SADK.exe is not the supported "
@@ -362,9 +389,10 @@ static void save(HWND dlg)
                     "SAdK-ServerConfig", exe_supported ? MB_ICONINFORMATION : MB_ICONWARNING);
     } else {
         char m[512];
-        snprintf(m, sizeof m, "%s%s\nIs the game still running? Close it and try again.",
+        snprintf(m, sizeof m, "%s%s%s\nIs the game still running? Close it and try again.",
                  ok ? "" : "Some settings could not be written.\n",
-                 shim_ok ? "" : "The bridge shim (bin\\wsock32.dll) could not be installed.\n");
+                 shim_ok ? "" : "The bridge shim (bin\\wsock32.dll) could not be installed.\n",
+                 mods_ok ? "" : "The billboards mod (mods\\billboards) could not be installed or removed.\n");
         MessageBoxA(dlg, m, "SAdK-ServerConfig", MB_ICONERROR);
     }
     refresh(dlg);

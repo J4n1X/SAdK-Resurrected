@@ -1,22 +1,26 @@
-// Checks every patch the shim applies against a copy of the DRM-free SADK.exe, without running the game:
-// verify_patches.exe <SADK.exe>. The shim's own patch code runs unchanged in sadkmod's verify mode.
-#include "../shim.hpp"
-
+// Checks every patch of the repo's mods against a copy of the DRM-free SADK.exe, without running the game:
+// verify_mods.exe <SADK.exe>. The mods' start functions run unchanged in sadkmod's verify mode.
 #include <sadkmod/game/sadk_noav/module.hpp>
+#include <sadkmod/sadkmod.hpp>
+
+#include <windows.h>
 
 #include <cstdio>
+#include <cstring>
 
-void *real_ptrs[N_EXPORTS];   // unused here; the patch code does not touch sockets
+bool billboards_start();
+bool npcmodels_start();
+bool nomeshcache_start();
 
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        std::printf("usage: verify_patches.exe <SADK.exe>\n");
+        std::printf("usage: verify_mods.exe <SADK.exe>\n");
         return 2;
     }
     char log[MAX_PATH];
     GetTempPathA(MAX_PATH, log);
-    std::strcat(log, "verify_patches.log");
+    std::strcat(log, "verify_mods.log");
     DeleteFileA(log);
     sadk::log_open(log);
     if (sadk::file_md5(argv[1]) != sadk::game::md5) {
@@ -26,14 +30,17 @@ int main(int argc, char **argv)
     static sadk::MappedImage image;
     if (!sadk::map_image(argv[1], image)) return 2;
     sadk::verify_with(sadk::Module::sadk, &image);
-    apply_map_sharing();
+    billboards_start();
+    npcmodels_start();
+    nomeshcache_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    std::printf("%d patches match, %d do not (9 expected to match; log: %s)\n", n.matched, n.mismatched, log);
+    const int expected = 4 + 1 + 1;   // billboards 4, npcmodels 1, nomeshcache 1 (hook target)
+    std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];
         while (std::fgets(line, sizeof line, f)) std::fputs(line, stdout);
         std::fclose(f);
     }
-    return n.matched == 9 && n.mismatched == 0 ? 0 : 1;
+    return n.matched == expected && n.mismatched == 0 ? 0 : 1;
 }

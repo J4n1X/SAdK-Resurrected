@@ -3,6 +3,8 @@
 
 IDI_APP  ICON   "sadk.ico"
 IDR_SHIM RCDATA "../wsock32_shim/wsock32.dll"
+IDR_MOD_BILLBOARDS     RCDATA "../../mods/build/billboards/mod.dll"
+IDR_MOD_BILLBOARDS_INI RCDATA "../../mods/billboards/billboards.ini"
 1        24     "serverconfig.manifest"
 
 IDD_MAIN DIALOGEX 0, 0, 260, 250

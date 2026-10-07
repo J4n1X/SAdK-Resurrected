@@ -348,7 +348,7 @@ def _spawn_world_avatars(conn):
     economy.send_owner_state(conn, me.perm_id)
     # Record NPCs (PlayerCreate 1004): one message each — the consumer builds the
     # object from its template immediately, no waypoint stream involved.
-    for npc in npcs.record_npcs(_npcs):
+    for npc in npcs.record_npcs(_npcs) + _model_showcase():
         village.send_player_create(conn, npc.perm_id, npc.name, quiet=True,
                                    **npc.record_kwargs())
         # ⛔ Do NOT push the NPC's shop here. ShopInventoryData(0xE11) is not a stock cache —
@@ -1683,10 +1683,44 @@ def _send_stats_everywhere(player):
             village._send_village(c, 3100, active, None, "ActiveItemsUpdate(3100)", quiet=True)
 
 
+# ── !npc: look at the NPC models (maintainer request 2026-10-08) ─────────────
+# "!npc <set> <index>" puts a record NPC (1004) with that model next to the speaker, for everyone in the
+# village and for later entrants, until the server restarts (no message removes an NPC record). The set is
+# the <bodypartset> of npc_bodyparts.xml, sent in the bdyprt nibble: only clients with the npcmodels
+# mod honour it (mods/npcmodels); the stock client always uses set 0. The client does
+# no bounds check, so the server only accepts entries that exist in the shipped file (indices 0-15 of the
+# male set: npcidx is 4 bits).
+NPC_MODEL_SETS = (("male", 16), ("female", 6), ("MacDoyleJr", 1), ("MacGabhan", 1))
+_showcase = []
+_showcase_lock = threading.Lock()
+
+
+def _model_showcase():
+    with _showcase_lock:
+        return list(_showcase)
+
+
+def _spawn_showcase_npc(player, set_idx, index):
+    with _poses_lock:
+        loc = _poses.get(player.perm_id)
+    if loc is None:
+        return None
+    x, y, z = loc["pos"]
+    with _showcase_lock:
+        npc = npcs.Npc(npcs.NPC_ID_BASE + 900 + len(_showcase), f"{NPC_MODEL_SETS[set_idx][0]} {index}",
+                       npctyp=npcs.NPCTYP_SETTLER, anchor=(x + 1.5, y, z), rot_deg=loc["rot_deg"],
+                       zone=loc["zone"], npcidx=index, bdyprt=set_idx)
+        _showcase.append(npc)
+    for c in _in_world_conns():
+        village.send_player_create(c, npc.perm_id, npc.name, quiet=True, **npc.record_kwargs())
+    log(f"  [NPC] {player.char_name!r} spawned showcase {npc.name!r} (id {npc.perm_id})")
+    return npc
+
+
 #: The server commands, as the welcome whisper and "!help" list them.
 HELP_TEXT = ("Server commands: !help - this list | !setpwd <new> - change your password | "
              "!fasttrack - max level, 100k gold and funnies | !level <1-5> - your level/look | "
-             "!pos <name> - save your spot | !poslist")
+             "!pos <name> - save your spot | !poslist | !npc <set> <index> - show an NPC model")
 _WALLET_MAX = 2**31 - 1                       # 3201 gold/glod are 32-bit; stay clear of the sign bit
 
 
@@ -1758,6 +1792,20 @@ def _chat_command(conn, player, text):
         store.set_password(player.username, arg.encode("utf-8"))
         log(f"  [AUTH] {player.username!r} changed the password (!setpwd)")
         return "Password changed. Use it from your next login on."
+    if cmd == "!npc":
+        parts = arg.split()
+        sets = ", ".join(f"{i} {n} (0-{k - 1})" for i, (n, k) in enumerate(NPC_MODEL_SETS))
+        try:
+            set_idx, index = int(parts[0]), int(parts[1])
+        except (IndexError, ValueError):
+            return f"Usage: !npc <set> <index>  sets: {sets}"
+        if not (0 <= set_idx < len(NPC_MODEL_SETS) and 0 <= index < NPC_MODEL_SETS[set_idx][1]):
+            return f"No such model. Sets: {sets}"
+        npc = _spawn_showcase_npc(player, set_idx, index)
+        if npc is None:
+            return "No position reported yet - walk a step first."
+        return (f"Spawned '{npc.name}' next to you (sets other than 0 need the npcmodels mod, "
+                f"else it shows male {index}).")
     if cmd == "!help":
         return HELP_TEXT
     if cmd == "!poslist":

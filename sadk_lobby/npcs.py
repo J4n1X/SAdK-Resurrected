@@ -28,8 +28,10 @@ Appearance + interaction, all [PROVEN 2026-08-02] against `AvatarVisual_RefreshS
   * **act = a LobbyAction id, not an emote** (see the ACT_* constants) — this is why every v2
     NPC opened the minigame dialog.
 
-[TODO] npcidx→appearance and the colour palette are only knowable by eyeball (or from the
-encrypted game data); whether `actChat` is a button label or a spoken line is unresolved —
+npcidx → model: the male set of npc_bodyparts.xml, file order (docs/village-and-character-protocol.md
+§5.1, read from the client 2026-10-08: the set index is the constant 0 for every NPCProxy, so the female,
+MacDoyleJr and MacGabhan sets are unreachable). [TODO] the colour palette; whether `actChat` is a button
+label or a spoken line is unresolved —
 the button-fill path bottoms out in unreliable decompilation and was NOT guessed at.
 """
 import math
@@ -109,16 +111,15 @@ class Npc:
     #: for type-2 (NPC) objects, skipping the avatar tribe/gender/bodypart math entirely.
     #: 4 bits on the wire ⇒ 0..15 is the whole space. [TODO] which index looks like what.
     npcidx: int = 0
-    #: ⚠️ Written to proxy+0x48, which for AVATARS is the tribe/gender/bodypart byte — but the
-    #: NPC branch of the style refresh never reads it. Kept because the wire field exists;
-    #: it does NOT affect a record NPC's appearance. [PROVEN 2026-08-02]
+    #: Written to proxy+0x48, which for AVATARS is the tribe/gender/bodypart byte. The stock client's
+    #: NPC branch never reads it [PROVEN 2026-08-02]; with the shim's NPC model patch it is the
+    #: npc_bodyparts.xml set: 0 male, 1 female, 2 MacDoyleJr, 3 MacGabhan (mods/npcmodels).
     bdyprt: int = 0
     #: Up to 3 (act_id, act_text) pairs — record NPCs only. `act_id` is a LobbyAction (see the
     #: ACT_* constants); it decides which dialog the NPC's button opens.
-    #: [TODO] whether `actChat` is the BUTTON LABEL or a spoken line is unresolved — the
-    #: button-fill path (`FUN_00433f60`) reads at the limit of reliable static analysis, so it
-    #: was left unreversed rather than guessed. Keep the strings short and label-like until a
-    #: live look settles it.
+    #: `actChat` is the NPC's line for that button: DispatchSlotAction (S 00434230) shows it with
+    #: ShowNpcSlotText after codes 2-6, 10 and 11, and code 16 shows only the text
+    #: (docs/village-and-character-protocol.md §5.2) [known statically; not yet seen live].
     actions: tuple = ()
     #: Shop NPCs only: (shop_id, shop_name, sell_mod, ((item_id, buy, sell), ...)). When set, the
     #: server pushes a ShopInventoryData(0xE11) bound to this NPC's id at world entry — clicking

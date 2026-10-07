@@ -86,7 +86,7 @@ Two tracks:
 | Room-assign → village entry joinable in the browser | ✅ working |
 | Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
 | Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
-| In-world content: NPCs | ⚠️ implemented, parked by `config.VILLAGE_NPCS_ENABLED = False` |
+| In-world content: NPCs (shops, tailor, hall of fame, games, matchmakers, mail) | ✅ on (`config.VILLAGE_NPCS_ENABLED = True`); models: only the male set of `npc_bodyparts.xml` is reachable (`docs/village-and-character-protocol.md` §5.1) |
 | Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07; tailor ✅ live 2026-10-07 (owner and others see the new look); shop/inventory `[TODO]` |
 | Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
 | Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
@@ -130,8 +130,9 @@ python -m sadk_lobby
 - `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
 
 Outside the server: `sadkmod/` is the C++ library for code running inside SADK.exe (generated game
-declarations, patches, hooks; `sadkmod/README.md`). The bridge shim `bridge/wsock32_shim/` is built on it (C++);
-the setup tool `bridge/serverconfig/` (C, Win32) embeds the shim.
+declarations, patches, hooks, the mod host; `sadkmod/README.md`). The bridge shim `bridge/wsock32_shim/` is built
+on it (C++) and loads mods from the game's `mods` folder; the repo's mods (billboards, npcmodels) live in `mods/`
+(`mods/README.md`). The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim and the billboards mod.
 - `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 
 ---

@@ -77,7 +77,7 @@ host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpMa
 answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
 for hosts that run it.
 
-## Billboards (bridge shim, in memory)
+## Billboards (mod `mods/billboards`, in memory)
 
 The three advertising screens in the lobby world (`lobby/scene/scene_ad.xml`, models `ad0.KEX` / `ad1.KEX`) are
 web pages. Each model has two materials: the board (`sign ad0` → `sign_ad0.dds`) and the screen
@@ -89,9 +89,9 @@ renders `http://www.funatics.de/sadk/forwardingN.html` into it. Those pages retu
 S 005c7790) and then renders IE's own "navigation canceled" page over it. The `ad*.tga` files the game ships are
 never used.
 
-The screen is part of the board mesh, so a transparent screen texture leaves a hole. With
-`DisableBillboards = true` (`[LobbyServer]` in `data\lobby\config\LobbySettings.ini`, set by SAdK-ServerConfig),
-the shim instead shows a plain plank area of the board's own texture:
+The screen is part of the board mesh, so a transparent screen texture leaves a hole. The billboards mod
+(`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig's "Disable billboards") instead
+shows a plain plank area of the board's own texture:
 
 | Address | Original | Change |
 |---|---|---|
@@ -99,9 +99,29 @@ the shim instead shows a plain plank area of the board's own texture:
 | 00504806 (7 bytes) | `MOV EDX,[ESI+0x28]; MOV ECX,EAX; CALL EDX`: virtual `CTexture::CreateFromFile` S 004e80d0 | `MOV ECX,EAX; CALL billboard_load` |
 
 `billboard_load` calls the original `CreateFromFile` (`bool __thiscall (CTexture*, const std::string *path,
-bool, bool, bool)`, `RET 0x10`) with `BillboardTexture` (default `sign_ad0.dds`) in place of `ad0/1/2.tga`,
-then copies the rectangle `BillboardRect` (default `305,680,730,1005`, x0,y0,x1,y1) of the loaded texture into a
+bool, bool, bool)`, `RET 0x10`) with `Texture` (`billboards.ini` next to the mod's `mod.dll`, default
+`sign_ad0.dds`) in place of `ad0/1/2.tga`, then copies the rectangle `Rect` (default `305,680,730,1005`,
+x0,y0,x1,y1) of the loaded texture into a
 new 512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and
 puts it in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
 All other names pass through unchanged. No game art is shipped or written to disk. Live 2026-10-07: the
 screens show the plank area.
+
+## NPC model sets (mod `mods/npcmodels`, in memory)
+
+`Lobby::CGfxObjAvatar::UpdateAppearance` S 00508090 takes an NPC's model from `npc_bodyparts.xml` with
+`AvatarBodyParts::AcquireVariant(set, 0, npcidx)` S 004fd2a0 but always passes set 0, so the file's female,
+MacDoyleJr and MacGabhan sets are never shown (`docs/village-and-character-protocol.md` §5.1). The NPC
+record's `bdyprt` nibble reaches the NPCProxy (`+0x48`, `NPCProxy::ReadFromMessage` S 0047b5c0) and is unused
+for NPCs. The npcmodels mod makes it the set number:
+
+| Address | Original | Change |
+|---|---|---|
+| 005081db (13 bytes) | `MOV EDX,[EAX]; MOV ECX,EAX; MOV EAX,[EDX+0x1C]; XOR EBX,EBX; CALL EAX; MOV EBP,EAX` | `MOVZX EBX,BYTE [EAX+0x48]; MOV EDX,[EAX]; MOV ECX,EAX; CALL [EDX+0x1C]; MOV EBP,EAX` |
+
+`EAX` is the NPCProxy (`ActorProxy::AsType2` S 0046b6d0 returns the proxy itself), `EBX` the set, `EBP` the
+NPC index. A record with `bdyprt` 0 behaves as before. There is no bounds check (there was none for the index
+either): the server must send only a set that exists and an index below its size (shipped file: male 17, of
+which 16 are reachable through the 4-bit `npcidx`; female 6; MacDoyleJr 1; MacGabhan 1). The expected bytes
+are verified against the DRM-free `SADK.exe` (`make verify` in `mods/`); not yet live-tested.
+

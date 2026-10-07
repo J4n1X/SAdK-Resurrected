@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Assembles release/ for a GitHub release (zip its contents):
-#   release/SAdK-ServerConfig.exe   the players' setup tool (embeds the bridge shim)
+#   release/SAdK-ServerConfig.exe   the players' setup tool (embeds the bridge shim and the billboards mod)
+#   release/mods/<name>/            the repo's mods, to copy into <game>\mods (optional extras)
 #   release/LICENSE
 #   release/server/                 the Python server, WITHOUT the game's msgdefs.ini, + a quick guide
 set -euo pipefail
@@ -8,12 +9,16 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$REPO/release"
 
 make -C "$REPO/bridge/wsock32_shim" -B
+make -C "$REPO/mods" -B
 make -C "$REPO/bridge/serverconfig" -B
 
 rm -rf "$OUT"
 mkdir -p "$OUT/server"
 cp "$REPO/bridge/serverconfig/SAdK-ServerConfig.exe" "$OUT/"
 cp "$REPO/LICENSE" "$OUT/"
+mkdir -p "$OUT/mods"
+cp -r "$REPO"/mods/build/*/ "$OUT/mods/"
+cp "$REPO/mods/README.md" "$OUT/mods/"
 
 # The package's tracked .py files (working-tree contents), minus the game's msgdefs.ini: players
 # supply their own copy.

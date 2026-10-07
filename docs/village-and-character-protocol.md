@@ -507,13 +507,14 @@ LobbyAction table (S 004325b0):
 | `act` | Action |
 |---|---|
 | 0, 19, other | None (button hidden) |
-| 1 | HairColor (tailor) |
+| 1 | HairColor: labels the button only; `DispatchSlotAction` S 00434230 has no case for it, so the button does nothing (live 2026-10-07) |
 | 2–6 | MinigameMatchmaking |
 | 7 | Mailbox |
 | 8, 18 | HostGame |
 | 9 | ListGames |
 | 10 | Hall of Fame |
 | 11 | OpenShop |
+| 17 | Tailor (clothes): checks gold ≥ 50, asks `!TAYLOR_QUESTION`, opens the tailor (S 00434230) |
 
 - No message for **removing** an NPC record has been identified. [TODO]
 - "Walkers" (moving ambient figures) are ordinary 1001 avatars with ids in the NPC range. They have
@@ -535,7 +536,7 @@ LobbyAction table (S 004325b0):
   | 8 | bavarian_soldier2_mesh | Bavarian halberdier, unarmed, blond moustache, blue clothes |
   | 9 | bavarian_soldier3_mesh | Bavarian halberdier, unarmed, golden armour, grey clothes |
   | 10 | egypt_male_5 | Egyptian original character; idle animation sits as if mounted (floats on flat ground), model turned 270° |
-  | 11 | egypt_soldier2_mesh | Egyptian generic (easy computer opponent) |
+  | 11 | egypt_soldier2_mesh | Egyptian generic (medium computer opponent) |
   | 12 | egypt_soldier3_mesh | Egyptian generic (hard computer opponent) |
   | 13 | scot_soldier1_mesh | Scottish generic (easy) |
   | 14 | scot_soldier2_mesh | Scottish generic (medium) |
@@ -545,14 +546,100 @@ LobbyAction table (S 004325b0):
   (female, every tribe, items) are only possible as 1001 avatars, which have no action buttons
   (AvatarProxy slot 5 zeroes the codes, S 00482490). The colour palette per model is still [TODO].
 
-**Stub:** NPC spawning is implemented but currently switched off (`config.VILLAGE_NPCS_ENABLED =
-False`, at the maintainer's request) until the appearance and `actChat` questions are settled.
+#### How the client picks an NPC model (why only the male set)
+
+[known: Ghidra, sadk_noav.exe, 2026-10-08]
+
+- **Two model databases.** `CLobby::StartUp` S 004f8c90 loads two `AvatarBodyParts` catalogues:
+  `[data]/config/bodyparts.xml` into `CLobby+0x124` (players) and `[data]/config/npc_bodyparts.xml` into
+  `CLobby+0x128` (NPCs). A `CGfxObjAvatar` sees them at `gfxContext+0x64` / `+0x68`.
+- **Which database.** `CGfxObjAvatar::SetActorProxy` S 00505550 (and the constructor S 005084b0) sets
+  `bAltModelTable` (`+0x630`) when the proxy's `ActorID` kind is 2 (an `NPCProxy`), and
+  `UpdateAppearance` S 00508090 then uses `npc_bodyparts.xml`.
+- **Which entry.** `UpdateAppearance` calls `AvatarBodyParts::AcquireVariant(set, slot 0, index)`
+  S 004fd2a0, where `set` is the `<bodypartset>` in file order:
+  - players (`GetActorType` 1): `set` = gender, `index` = body part + (level − 1) × 3 (in `bodyparts.xml`);
+  - everything else, i.e. every `NPCProxy`: **`set` is the constant 0**, `index` = the proxy's NPC index
+    (`+0xc0`).
+
+  `DrawRenderItem` S 00507580, the only other caller, reuses the stored pair. No code path passes another
+  set, so the **female, MacDoyleJr and MacGabhan sets of `npc_bodyparts.xml` are never used by this
+  build**: Sakhmet, Moppet, the three tribe women, MacDoyleJr and MacGabhan cannot appear as NPCs
+  without a client patch.
+- **Loader.** `AvatarBodyParts::LoadFromXml` S 004fd760 numbers the entries in file order and silently
+  skips an entry missing any of `meshLod0`, `meshLod1`, `meshLod2`, `texture` (`slotMap` defaults to
+  `default`). Every entry of the shipped file is complete, so the numbering is plain file order:
+
+  | set | entries (index: `meshLod0`) |
+  |---|---|
+  | 0 `male` (`avatars/model.KEX`) | 0–15 as in the table above; **16: `egypt_soldier1_mesh`** |
+  | 1 `female` (`avatars/model_woman.KEX`) | 0: Sakhmet, 1: Sakhmet (same entry twice), 2: Moppet, 3: `bavarian_woman_1`, 4: `scot_woman_1`, 5: `egypt_woman_1` |
+  | 2 `MacDoyleJr` (`avatars/model_MacDoyleJr.KEX`) | 0: MacDoyleJr |
+  | 3 `MacGabhan` (`avatars/MacGabhan_model.KEX`) | 0: MacGabhan |
+
+- **Where entry 16 is used: computer opponents.** In the pre-game room,
+  `SetupGameDialog::RefreshPlayerRows` S 00455fd0 shows each AI slot as a client-side `NPCProxy` whose
+  NPC index comes from the table at **`0087a6f8`**, `[tribe × 3 + AI level]` (no bounds check):
+
+  | tribe (slot value) | easy | medium | hard |
+  |---|---|---|---|
+  | 0 | 7 `bavarian_soldier1_mesh` | 8 `bavarian_soldier2_mesh` | 9 `bavarian_soldier3_mesh` |
+  | 1 | 13 `scot_soldier1_mesh` | 14 `scot_soldier2_mesh` | 15 `scot_soldier3_mesh` |
+  | 2 | 16 `egypt_soldier1_mesh` | 11 `egypt_soldier2_mesh` | 12 `egypt_soldier3_mesh` |
+
+  The tribe names per row follow the mesh names [inferred]. So the soldier meshes are the computer
+  players' portraits, and `egypt_soldier1_mesh` (easy Egyptian) can only be seen there.
+- **Developer preview.** `CLobby::ApplyCustomizeAvatarLook` S 004f84b0 has a debug path behind the CVar
+  `Evil Hacks/CustomizeNPCHack` (`008882c8`): it puts a static `NPCProxy` with NPC index
+  `Evil Hacks/NPCIndex` (0–32, unchecked) and colours `color1`–`color8` on the character-creation
+  preview, and `Evil Hacks/SAVE` writes it as an avatar file `CustomizedNPC`. CVars are only reachable
+  with the optional CVar-server patch (`docs/BINARY_PATCHES.md`, `tools/cvar_client.py`). It still only
+  shows set 0 (indices 17+ read past the set) [inferred from the code; not tried live].
+- **No other source of the set.** An `ActorID` kind is read from the wire only for minigame seats
+  (`ActorID::ReadFromMessage` S 00490e40, sole caller `MiniGameProxy::ReadSeats`), so no server message can
+  give a player-type proxy the NPC table either.
+- **Client patch** (the npcmodels mod, `mods/npcmodels`, `docs/BINARY_PATCHES.md` "NPC model sets"): the
+  record's `bdyprt` nibble reaches the `NPCProxy` (`+0x48`) but is unused for NPCs; the patch makes it the
+  set number. With `bdyprt` 0 nothing changes. The client checks neither number, so a server must send only
+  sets and indices that exist. Verified offline against the binary; **not yet live-tested** [TODO]. The
+  stub's `!npc <set> <index>` spawns such an NPC next to the speaker; a client without the mod shows
+  male entry `index` instead.
+- **Other NPC-ready characters.** `data/lobby/avatars` also holds meshes and colour maps (`color_slots.xml`
+  slot maps) for Garibald, Hatschipsut, MacDoyle, the pirate (`pirat`) and Theofanos, which no body-part list
+  references. All lobby character meshes use the same 46 bone names as the four base models, so they could be
+  added to `npc_bodyparts.xml` by a mod [inferred from the bone names; untested].
+
+**Stub:** NPC spawning is on (`config.VILLAGE_NPCS_ENABLED = True`): eight record NPCs at the
+maintainer's measured spots (shops, tailor, hall of fame, games, both taverns' matchmakers, mail) and one
+walker (`sadk_lobby/npcs.py`).
 
 ### 5.2 NPC interaction
 
 Clicking an NPC fills the three action buttons from its `act` list. Each button runs a local
 LobbyAction (matchmaking dialog, host/list games, hall of fame, mailbox, tailor). Only **OpenShop**
 is known to put a village message on the wire (§6.1). [inferred]
+
+The chain, read in Ghidra on 2026-10-08 [known statically]:
+- `WorldScreen::RefreshActionSlots` S 00433f60 (every frame) takes the codes from a selected scene object
+  first (letterbox: 7; minigame table spot: create 12/13 or join 14/15), else from the selected actor through
+  its vtbl+0x14: `NPCProxy::GetActionSlots` S 0047b200 copies the record's `act` ids unchanged; a player
+  (`AvatarProxy` S 00482490) gives none. With nothing or yourself selected: host 8 and list 9.
+- `WorldScreen::SetActionButton` S 004325b0 applies the button template `LobbyAction_*` (all present in
+  `game/ui/layout/templates.xml`, codes 2-6 → `LobbyAction_MinigameMatchmaking`) and enables the button.
+- `WorldScreen::DispatchSlotAction` S 00434230 runs the clicked code. Codes 2-6 call
+  `MiniGameMatchMakingDialog::Open(true, tavernId = code - 2, table 0xFF, mode 0 = search, 0)` S 00444cb0
+  (phase 1, "create" / "search"). Its `Update` S 00445cf0 lists only tables whose `scntblLo - 2` equals the
+  tavernId, so a tavern's matchmaker needs code = the tavern's scene id (stub: 3 for taverne02, 2 for
+  taverne03). A game created there goes out as 2001 with `tvrn` = tavernId and `tblidx` 0xFF, which the stub
+  handles (first free table). `Open` also registers a 2-unit walk-away watch (`CLobby::AddDistanceWatch`
+  S 004fb5f0) that closes the dialog once the avatar moves farther than that from where it was opened.
+- **`actChat`** is the NPC's line for that button: codes 2-6, 10 and 11 fall through to
+  `ShowNpcSlotText(npc, actChat[slot])`, and code 16 shows only that text. [known statically; not seen live]
+
+**Open: the matchmaker NPC does nothing when clicked** (maintainer, live). Statically every step above
+holds, and nothing in it touches the network, so the stub's log cannot show where it stops. [TODO] Live
+trace with the Frida MCP: hook `DispatchSlotAction` S 00434230 (slot and code), `MiniGameMatchMakingDialog::Open`
+S 00444cb0 and the walk-away callback S 00443090 to see which step does not happen.
 
 ---
 

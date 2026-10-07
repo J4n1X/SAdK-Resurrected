@@ -12,14 +12,16 @@ Kulturen" install at a revival lobby server and installs the bridge shim.
   `!CHECKSUM MISMATCH`, so a different value means only players with the same modifications can play
   together. Reference `0x555bfa51` = the unmodified data (computed from the repo's reference install).
 - **Save** writes, with the Windows INI functions the game itself reads them with:
-  `data\lobby\config\LobbySettings.ini [LobbyServer] Host / Port / ForceBridge / DisableBillboards`,
+  `data\lobby\config\LobbySettings.ini [LobbyServer] Host / Port / ForceBridge / DisableBillboards` (the last only
+  remembers the checkbox),
   `data\game\settings\network.ini [Basics] gamePort`, `bin\sadk_bridge.ini [Bridge] port`,
   and installs the embedded shim as `bin\wsock32.dll` when it is missing or different.
 - **Shim only on the DRM-free build:** the shim calls game functions at fixed addresses, so it is installed
   only when `bin\SADK.exe` has MD5 `d4832bc5103c14f5445471af29b8d778` (the DRM-free build). On any other
   build Save writes the settings but not the shim, and says why.
-- "Disable billboards" is ticked when the setting is missing: the pages behind the lobby's advertising
-  screens are gone for everyone.
+- "Disable billboards" installs the billboards mod (`mods\billboards\mod.dll` + `billboards.ini`, embedded) and
+  unticking it removes the `mod.dll` (an edited `billboards.ini` stays). It is ticked when nothing was chosen yet:
+  the pages behind the lobby's advertising screens are gone for everyone. Like the shim, only on the DRM-free build.
 - Ports are only editable with "Advanced configuration" ticked. The tool asks for admin rights: the game
   lives under Program Files, and without them Windows would silently redirect the writes elsewhere.
 
