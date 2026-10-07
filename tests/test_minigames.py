@@ -201,6 +201,7 @@ def test_tables_are_listed_by_the_matchmaking_dialog():
     assert matchmakers
     for npc, code in matchmakers:
         assert npc.zone in mg.TAVERN_ZONES and code - 2 == npc.zone - 2, (npc.name, code, npc.zone)
+    assert sorted(n.zone for n, _ in matchmakers) == sorted(mg.TAVERN_ZONES)   # one per tavern
     print("tables carry the dialog's tavern id, NPC matchmakers match their tavern OK")
 
 
