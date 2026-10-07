@@ -33,7 +33,7 @@ ADVERTISED_IP = os.environ.get("SADK_ADVERTISE_IP", "127.0.0.1")
 
 # ── Ambient village NPCs ──────────────────────────────────────────────────────
 # ⚠️ THE ONE FEATURE FLAG IN THIS FILE, and it exists by EXPLICIT USER INSTRUCTION
-# (J4n1X, 2026-08-02: "let's move NPC spawning behind a flag and disable it in the
+# (the maintainer, 2026-08-02: "let's move NPC spawning behind a flag and disable it in the
 # config for now, I wanna pursue something else"). HARNESS.md §5 forbids an agent
 # adding a flag on its own initiative — it does NOT forbid the maintainer asking for
 # one. Recorded here so a later session reads this as authorised, not as drift.
