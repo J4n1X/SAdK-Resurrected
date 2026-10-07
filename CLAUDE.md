@@ -86,10 +86,12 @@ Two tracks:
 | Room-assign → village entry joinable in the browser | ✅ working |
 | Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
 | Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
-| In-world content (NPCs, entities, populated browsers) | ❌ not implemented |
+| In-world content: NPCs | ⚠️ implemented, parked by `config.VILLAGE_NPCS_ENABLED = False` |
+| Village economy (gold, items, shop, tailor) and minigame tables (Dice playable) | ⚠️ implemented 2026-10-07 from `docs/message-catalog.md`, not live-tested — `[TODO]` |
+| Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
-| In-match referee msgs `0xDD4` / `0xDC0` (GiveUp / FinishGame) | ⚠️ logged, not acked — `[TODO]` |
+| In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ⚠️ answered per the catalog since 2026-10-07, not live-tested — `[TODO]` |
 
 The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
 arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The

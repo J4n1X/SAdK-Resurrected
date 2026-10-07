@@ -205,7 +205,7 @@ VILLAGE_MSG_WORLD_TICK = 1005               # 0x3ED — HandleWorldTick (sim hea
 # AvatarProxy into VillageServerConnection+0x170. 1004 populates a separate *player* map at +0x174
 # and is NOT the visible avatar. All are still UNPROVEN on the wire — spec is static-only.
 VILLAGE_MSG_ENTITY_CREATE = 1001            # 0x3E9 — HandleEntityCreate@0x0046e1d0 (avatar spawn)
-VILLAGE_MSG_ENTITY_UPDATE = 1002            # 0x3EA — HandleEntityUpdate@0x0046e390 (movement)
+VILLAGE_MSG_ENTITY_UPDATE = 1002            # 0x3EA — AvatarLoggedIn@0x0046e390 (empty proxy; NOT movement — movement is a repeated 1001)
 VILLAGE_MSG_ENTITY_REMOVE = 1003            # 0x3EB — HandleEntityRemove@0x0046e570 (despawn)
 VILLAGE_MSG_PLAYER_CREATE = 1004            # 0x3EC — HandlePlayerCreate@0x0046f8c0 (player record)
 # Where other players are spawned relative to the world origin, until real positions exist.
