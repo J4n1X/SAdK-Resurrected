@@ -346,6 +346,8 @@ def _seat(t, perm_id, stake):
     _book(t, perm_id, -moved)
     t.credits[perm_id] = moved
     t.bets[perm_id] = [0] * 11
+    if t.kind == PAWNCHESS:
+        t.ready.add(perm_id)                     # its client's new-game request starts pending
     return True
 
 
@@ -368,6 +370,8 @@ def handle_join(io, conn, perm_id, data):
         f"with {t.credits.get(perm_id)}")
     if t.kind == POKER and t.hand is None:
         _poker_idle(io, t)
+    if t.kind == PAWNCHESS:
+        _chess_try_start(io, t)
 
 
 def leave(io, perm_id, t):
@@ -433,6 +437,8 @@ def handle_amount(io, conn, perm_id, data):
     log(f"  [MINIGAME] {perm_id} topped up {moved} at table {t.key}")
     if t.kind == POKER and t.hand is None:
         _poker_idle(io, t)
+    if t.kind == PAWNCHESS:
+        _chess_try_start(io, t)
 
 
 # ── Dice round ────────────────────────────────────────────────────────────────
@@ -1009,11 +1015,22 @@ def _chess_side(t, perm):
 
 
 def _chess_new_game(io, t, perm, r):
-    """403: this player is ready. Both seated and able to pay the stake -> the game starts."""
+    """403: this player wants a (re)match."""
     if _chess_side(t, perm) is None or t.phase not in (1, 6):
+        log(f"  [CHESS] table {t.key}: NewGame from {perm} ignored (phase {t.phase})")
+        return
+    t.ready.add(perm)
+    _chess_try_start(io, t, perm)
+
+
+def _chess_try_start(io, t, perm=None):
+    """Start a game when both seats are ready and can pay the stake. A player counts as ready from the
+    moment it sits down: the client's proxy starts with its new-game request already pending (ctor
+    S 00489f92 sets +0x2b5 = 1, so the NewGame button stays hidden) until the first phase 6 clears it
+    (S 0048a774). So the first game starts by itself and NewGame (403) is the rematch request."""
+    if t.phase not in (1, 6):
         return
     with _lock:
-        t.ready.add(perm)
         players = [t.seats.get(0), t.seats.get(1)]
         start = None not in players and all(p in t.ready for p in players) and \
             all(t.credits.get(p, 0) >= t.lmtmn for p in players)
@@ -1027,7 +1044,11 @@ def _chess_new_game(io, t, perm, r):
             _chess_bump(t)
             _enter(t, 2)
     _update(io, t)
-    log(f"  [CHESS] table {t.key}: {perm} ready" + (" — game starts, seat 0 places its king" if start else ""))
+    if start:
+        log(f"  [CHESS] table {t.key}: game starts ({players[0]} vs {players[1]}, stake {t.lmtmn} each)"
+            " — seat 0 places its king")
+    elif perm is not None:
+        log(f"  [CHESS] table {t.key}: {perm} ready, waiting for the other player")
 
 
 def _chess_place_king(io, t, perm, r):
