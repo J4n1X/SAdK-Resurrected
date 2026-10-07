@@ -340,14 +340,20 @@ def find_character(char_id):
 def claim_daily(char_id, day):
     """True the first time `char_id` claims on `day` (a date string); records it. Used for the daily
     funnies allowance."""
+    return claim_once(char_id, "allowance_day", day)
+
+
+def claim_once(char_id, key, value=True):
+    """True when the character's `key` was not yet `value`; then records it (persisted). False for an
+    unknown character or a repeat."""
     with _lock:
         state = _load_locked()
         for rec in state["players"].values():
             for ch in rec.get("characters") or []:
                 if int(ch["char_id"]) == int(char_id):
-                    if ch.get("allowance_day") == day:
+                    if ch.get(key) == value:
                         return False
-                    ch["allowance_day"] = day
+                    ch[key] = value
                     _save_locked()
                     return True
     return False
