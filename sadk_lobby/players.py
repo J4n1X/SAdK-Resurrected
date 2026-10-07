@@ -66,6 +66,11 @@ class Player:
 _lock = threading.RLock()
 _by_perm = {}                       # perm_id           -> Player
 _by_user = {}                       # username.lower()  -> Player
+#: perm_ids whose LOBBY login (204 -> 207) happened in this server process. A token (213/224) is only
+#: honoured for these: a client that reconnects its UC/world sockets with a token from an earlier
+#: server run would otherwise silently become whoever owns that id now (live 2026-10-07 11:04: the
+#: VM's stale token named J4n1X's id, took over J4n1X's chat roster slots and broke chat and presence).
+_issued = set()
 _guest_seq = 0                      # for logins that arrive without a usable username
 _next_perm = 1                      # LEGACY path only: first player logging in becomes perm_id 1
 
@@ -151,10 +156,17 @@ def resolve_by_username(username):
             _guest_seq += 1
             name = f"Guest {_guest_seq}"
         existing = _by_user.get(name.lower())
-        if existing is not None:
-            return existing
-        return (_from_store(name) if config.PERSISTENT_CHARACTERS_ENABLED
-                else _create_legacy(name))
+        if existing is None:
+            existing = (_from_store(name) if config.PERSISTENT_CHARACTERS_ENABLED
+                        else _create_legacy(name))
+        _issued.add(existing.perm_id)
+        return existing
+
+
+def issued(perm_id):
+    """Whether this perm_id logged in through the lobby in this server process."""
+    with _lock:
+        return perm_id in _issued
 
 
 def resolve_by_perm(perm_id):

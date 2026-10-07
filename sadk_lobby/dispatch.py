@@ -1259,6 +1259,14 @@ def _h_send_token(conn, fields, ticket):
     # The UC + village connections carry the perm_id the lobby issued in 207; bind this connection
     # to that player (its chat user-info / world identity).
     if fields.get("perm_id"):
+        if not players.issued(fields["perm_id"]):
+            # A stale token (issued before a server restart, or to someone else): refuse it so the
+            # client goes back through a real login instead of impersonating the id's current owner.
+            # A non-zero errorcode is the client's own failure path (UC: OnError + Disconnect).
+            conn.status_with_id(1, 0, ticket)
+            log(f"  [PLAYER] token #{conn.id} names perm_id {fields['perm_id']}, which did not log in "
+                f"on this server run — REFUSED (errorcode 1); the client must log in again")
+            return
         conn.player = players.resolve_by_perm(fields["perm_id"])
         perm_id = conn.player.perm_id
         log(f"  [PLAYER] token #{conn.id} → {conn.player.username!r} (perm_id={perm_id})")
