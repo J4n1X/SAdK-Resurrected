@@ -75,6 +75,10 @@ You need a legal install of the game and the **SAdK-ServerConfig** tool (`bridge
    (`bin\wsock32.dll`).
 3. Start the game and log in with any new name and password; the first login registers it.
 
+The bridge shim and map sharing need the **DRM-free build of `SADK.exe`** (MD5
+`d4832bc5103c14f5445471af29b8d778`), because the shim calls game functions at fixed addresses. On any other
+build the tool still configures the server but doesn't install the shim.
+
 The tool warns when your game data differs from the original: the game kicks joiners whose data
 checksum differs from the host's, so only players with the same modifications can play together.
 

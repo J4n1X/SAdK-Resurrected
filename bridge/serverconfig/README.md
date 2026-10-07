@@ -15,6 +15,9 @@ Kulturen" install at a revival lobby server and installs the bridge shim.
   `data\lobby\config\LobbySettings.ini [LobbyServer] Host / Port / ForceBridge`,
   `data\game\settings\network.ini [Basics] gamePort`, `bin\sadk_bridge.ini [Bridge] port`,
   and installs the embedded shim as `bin\wsock32.dll` when it is missing or different.
+- **Shim only on the DRM-free build:** the shim calls game functions at fixed addresses, so it is installed
+  only when `bin\SADK.exe` has MD5 `d4832bc5103c14f5445471af29b8d778` (the DRM-free build). On any other
+  build Save writes the settings but not the shim, and says why.
 - Ports are only editable with "Advanced configuration" ticked. The tool asks for admin rights: the game
   lives under Program Files, and without them Windows would silently redirect the writes elsewhere.
 

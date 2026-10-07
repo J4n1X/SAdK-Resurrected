@@ -20,15 +20,46 @@
 #include <shlwapi.h>
 #include <stdio.h>
 #include <string.h>
+#include <wincrypt.h>
 #include "resource.h"
 
 /* Build checksum of an unmodified install (data\game + data\lobby scripts *.lua and settings *.xml). */
 #define VANILLA_BUILD_CHECKSUM 0x555bfa51u
+/* The bridge shim calls game functions at fixed addresses: it is only installed on this exact build. */
+#define SUPPORTED_EXE_MD5 "d4832bc5103c14f5445471af29b8d778"
 #define BUILD_VERSION_CONST    0x06091812u      /* Crypto_GetVersionConst S 006ee670: encrypted-file header */
 
 static const char *GAME_SUBDIR = "Ubisoft\\Die Siedler - Aufbruch der Kulturen";
 static char root[MAX_PATH];                     /* the install folder (holds bin\SADK.exe) */
-static int modded, have_game;
+static int modded, have_game, exe_supported;
+/* MD5 of a file as 32 lowercase hex digits; 0 on failure. */
+static int file_md5(const char *path, char out[33])
+{
+    HCRYPTPROV prov = 0;
+    HCRYPTHASH hash = 0;
+    int ok = 0;
+    HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 0;
+    if (CryptAcquireContextA(&prov, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) &&
+        CryptCreateHash(prov, CALG_MD5, 0, 0, &hash)) {
+        static unsigned char buf[65536];
+        DWORD got;
+        ok = 1;
+        while (ReadFile(f, buf, sizeof buf, &got, NULL) && got)
+            if (!CryptHashData(hash, buf, got, 0)) { ok = 0; break; }
+        unsigned char digest[16];
+        DWORD len = sizeof digest;
+        if (ok && CryptGetHashParam(hash, HP_HASHVAL, digest, &len, 0))
+            for (int i = 0; i < 16; i++) sprintf(out + 2 * i, "%02x", digest[i]);
+        else
+            ok = 0;
+    }
+    if (hash) CryptDestroyHash(hash);
+    if (prov) CryptReleaseContext(prov, 0);
+    CloseHandle(f);
+    return ok;
+}
+
 static HBRUSH bg_brush;
 
 /* ── Paths ───────────────────────────────────────────────────────────────── */
@@ -245,8 +276,14 @@ static void refresh(HWND dlg)
         if (modded)
             lstrcpyA(warn, "Your game data differs from the original: only players with the same "
                            "modifications installed can join your games, and you can only join theirs.");
+        char exe[MAX_PATH], md5[33] = "";
+        join(exe, root, "bin\\SADK.exe");
+        exe_supported = file_md5(exe, md5) && strcmp(md5, SUPPORTED_EXE_MD5) == 0;
         int st = shim_state();
-        lstrcpyA(shim, st == 1 ? "Bridge shim (wsock32.dll): installed and up to date."
+        if (!exe_supported)
+            lstrcpyA(shim, st ? "Unsupported SADK.exe - remove bin\\wsock32.dll; the shim needs the DRM-free build."
+                              : "Unsupported SADK.exe - the shim needs the DRM-free build and is not installed.");
+        else lstrcpyA(shim, st == 1 ? "Bridge shim (wsock32.dll): installed and up to date."
                       : st == 0 ? "Bridge shim (wsock32.dll): not installed - Save installs it."
                                 : "Bridge shim (wsock32.dll): a different version - Save replaces it.");
 
@@ -308,11 +345,15 @@ static void save(HWND dlg)
     ok &= WritePrivateProfileStringA("Basics", "gamePort", num, network);
     snprintf(num, sizeof num, "%u", bport);
     ok &= WritePrivateProfileStringA("Bridge", "port", num, bridge);
-    int shim_ok = shim_state() == 1 || install_shim();
+    int shim_ok = !exe_supported || shim_state() == 1 || install_shim();
 
     if (ok && shim_ok) {
-        MessageBoxA(dlg, "Settings saved and the bridge shim is installed.\n\nStart the game to use the new lobby server.",
-                    "SAdK-ServerConfig", MB_ICONINFORMATION);
+        MessageBoxA(dlg, exe_supported
+                    ? "Settings saved and the bridge shim is installed.\n\nStart the game to use the new lobby server."
+                    : "Settings saved. The bridge shim was NOT installed: this SADK.exe is not the supported "
+                      "DRM-free build, and the shim only works with that exact version.\n\nYou can still play "
+                      "on the server, but hosting needs a reachable port and map sharing is unavailable.",
+                    "SAdK-ServerConfig", exe_supported ? MB_ICONINFORMATION : MB_ICONWARNING);
     } else {
         char m[512];
         snprintf(m, sizeof m, "%s%s\nIs the game still running? Close it and try again.",
