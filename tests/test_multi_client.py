@@ -85,6 +85,17 @@ def test_player_resolution_login_name_is_identity():
     assert stray.perm_id == 0xDEAD and stray.char_id == 0xDEAD
 
 
+def test_stale_token_is_refused():
+    # A token whose perm_id never logged in on this server run must not become that id's owner.
+    owner = players.resolve_by_username("tok_owner")            # logs in -> issued
+    conn = FakeConn(31)
+    dispatch._h_send_token(conn, {"perm_id": owner.perm_id + 777, "ticket_id": TICKET}, TICKET)
+    assert conn.sent_of("153") == [{"errorcode": 1, "id": 0, "ticket": TICKET}], conn.sent
+    conn2 = FakeConn(32)
+    dispatch._h_send_token(conn2, {"perm_id": owner.perm_id, "ticket_id": TICKET}, TICKET)
+    assert conn2.sent_of("153")[0]["errorcode"] == 0 and conn2.player is owner
+
+
 def test_empty_username_gets_own_guest_identity():
     # Undecodable logins must not collapse onto one perm_id (they would be one settler).
     g1 = players.resolve_by_username("")
