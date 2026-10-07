@@ -218,8 +218,8 @@ def make_village_npcs(center):
     return [
         # ── Record NPCs (1004) — labelled, model-varied, each opening a real lobby dialog.
         Npc(NPC_ID_BASE + 1, "Händler Hinnerk", npctyp=NPCTYP_SETTLER,
-            # model 10 (seated Egyptian) is turned 270° in its own idle pose: compensate the facing.
-            anchor=(-24.61, 2.75, 26.51), rot_deg=(233.4 - 270.0) % 360.0, colours=(2, 1, 3, 1), npcidx=10,
+            # Not model 10: that seated Egyptian floats (built to sit on a mount or carriage).
+            anchor=(-24.61, 2.75, 26.51), rot_deg=233.4, colours=(2, 1, 3, 1), npcidx=6,
             actions=((ACT_OPEN_SHOP, "Zum Laden"),),
             shop=(1, "Hinnerks Krämerladen", 1.0, SHOP_STOCK)),
         Npc(NPC_ID_BASE + 2, "Schneiderin Mathilde", npctyp=NPCTYP_SETTLER,
