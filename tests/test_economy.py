@@ -16,7 +16,7 @@ from sadk_lobby.village import BitReader, BitWriter  # noqa: E402
 
 PERM = 4242
 NPC = 900001
-STOCK = ((7, 100, 60), (8, 5000, 10))
+STOCK = ((7, 100, 60), (8, 10 ** 8, 10))      # item 8 is never affordable
 SHOPS = {NPC: (31, "Laden", STOCK)}
 
 sent = []

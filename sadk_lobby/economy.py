@@ -20,8 +20,8 @@ discarded silently by the client, so these are harmless if the own avatar is not
 Server decisions (catalog V15–V30):
   * State lives in memory per perm_id for the process lifetime (perm_ids are not stable across
     restarts; see mail.py for the same reasoning).
-  * Starting purse: config.START_GOLD gold and glod (V17; the client's own default for a fresh
-    character is 50, raised here so the shop can be tested).
+  * Purse: refilled to config.START_GOLD gold and glod on every world entry (V17; maintainer
+    decision 2026-10-07 — gold is not a meaningful economy for testing).
   * INVENTORY_SLOTS records are ALWAYS sent. The client reads exactly its own slot count (0 before the
     character data blocks, max(20, n) after; our character blob carries no inventory part, so n = 0)
     and ignores extra records, while FEWER records make it read past the end. 20 is safe for both.
@@ -153,7 +153,11 @@ def send_items(conn, perm_id):
 
 def send_owner_state(conn, perm_id):
     """Gold and items for the owner — sent at world entry so the client's own checks (e.g. the
-    tailor's gold >= 50, S 00434230) see the server's values."""
+    tailor's gold >= 50, S 00434230) see the server's values. The purse is refilled to
+    config.START_GOLD on every entry (maintainer decision: gold is not a real economy for testing)."""
+    w = wallet(perm_id)
+    with _lock:
+        w.gold = w.glod = config.START_GOLD
     send_stats(conn, perm_id)
     send_items(conn, perm_id)
 
