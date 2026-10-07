@@ -15,6 +15,7 @@ visible to another.
 import math
 import os
 import struct
+import json
 import threading
 import time
 
@@ -1434,6 +1435,47 @@ _MINIGAME_HANDLERS = {
     config.VILLAGE_DICE_BETS_MSGTYPE: minigames.handle_place_bets,
     config.VILLAGE_DICE_ROLL_MSGTYPE: minigames.handle_roll,
 }
+
+
+# ── Position capture for NPC placement (maintainer tool, 2026-10-07) ──────────
+# Stand where an NPC should be, face the right way, stop, then type "!pos <name>" in chat: the server
+# stores the speaker's latest reported pose (msg 2000: position, facing, zone) in npc_positions.json.
+# "!poslist" whispers back what is stored. Command lines are not relayed to other players.
+NPC_POSITIONS_FILE = os.path.join(config.REPO_DIR, "npc_positions.json")
+
+
+def _chat_command(conn, player, text):
+    cmd, _, arg = text.partition(" ")
+    cmd, arg = cmd.lower(), arg.strip()
+    try:
+        saved = json.load(open(NPC_POSITIONS_FILE, encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    if cmd == "!pos":
+        if not arg:
+            return "Usage: !pos <name>  (stand still at the spot, facing the right way)"
+        with _poses_lock:
+            loc = _poses.get(player.perm_id)
+        if loc is None:
+            return "No position reported yet - walk a step first."
+        x, y, z = loc["pos"]
+        saved[arg] = {"pos": [round(x, 2), round(y, 2), round(z, 2)], "rot_deg": round(loc["rot_deg"], 1),
+                      "zone": loc["zone"], "ghost_zone": loc["ghost_zone"], "by": player.char_name,
+                      "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        with open(NPC_POSITIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump(saved, f, indent=1, ensure_ascii=False)
+        log(f"  [POS] {player.char_name!r} saved {arg!r}: ({x:.2f}, {y:.2f}, {z:.2f}) rot={loc['rot_deg']:.0f} "
+            f"zone={loc['zone']}/{loc['ghost_zone']}")
+        return f"Saved '{arg}': ({x:.1f}, {y:.1f}, {z:.1f}) facing {loc['rot_deg']:.0f} deg, zone {loc['zone']}"
+    if cmd == "!poslist":
+        if not saved:
+            return "No positions saved yet."
+        return " | ".join(f"{k}: ({v['pos'][0]:.0f},{v['pos'][2]:.0f}) {v['rot_deg']:.0f}deg"
+                          for k, v in saved.items())
+    return None                                   # not a server command: relay as normal chat
+
+
+chat.COMMAND_HOOK = _chat_command
 
 
 def _h_color_change(conn, data):
