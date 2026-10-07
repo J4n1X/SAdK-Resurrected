@@ -51,15 +51,14 @@ import random
 import threading
 import time
 
-from . import economy, poker
+from . import economy, pawnchess, poker
 from .log import log
 from .village import BitReader, BitWriter
 
 DICE, POKER, PAWNCHESS = 1, 2, 3
 MSG_REMOVE, MSG_UPDATE, MSG_CREATE = 0xD8, 0xD9, 0xDA
 MSG_NO_TABLE, MSG_NO_SEAT = 0xDB, 0xDC
-# PawnChess updates would carry no game state; it is refused (0xDB) until its state block is implemented.
-PLAYABLE = (DICE, POKER)
+PLAYABLE = (DICE, POKER, PAWNCHESS)
 #: Table spots (2026-10-07). A table's key byte `scntbl` is {low nibble = GROUP, high nibble = TABLE}
 #: and the client places the table at NodeTagTable[group][table][slot 'c'] (Generic_Grid2D_ApplyTransformAt
 #: S 004fbd90 — no NULL check, so an empty cell crashes). The cells are filled from model nodes named
@@ -74,6 +73,7 @@ SMALL_TABLES = tuple(range(13))          # 4 seats
 BIG_TABLES = (13, 14)                    # 8 seats (the dialog offers 5-8 players only there)
 MAX_SEATS = 8
 DICE_SEATS = 4
+PAWNCHESS_SEATS = 2              # seats 0/1 are the two sides (IsPrimarySeat S 004715f0) [decision: no spectators]
 FIRST_TABLE_CELL = 1000          # chat cells for tables: 1000, 1001, ... (must not collide with lobby/zone cells)
 MNGT_PLAY_MONEY = 0x20
 PHASE_BETTING, PHASE_ROLL, PHASE_THROW, PHASE_RESULT = 1, 2, 3, 4
@@ -95,7 +95,7 @@ class Table:
         self.tavern, self.index = tavern, index
         self.password, self.crc = password, crc
         self.lmtmn, self.lmtmx = lmtmn, lmtmx
-        cap = DICE_SEATS if kind == DICE else MAX_SEATS
+        cap = DICE_SEATS if kind == DICE else PAWNCHESS_SEATS if kind == PAWNCHESS else MAX_SEATS
         self.mxplyr = max(1, min(mxplyr or cap, cap))
         self.chtid, self.key = chtid, key
         self.play_money = bool(play_money)
@@ -112,6 +112,13 @@ class Table:
         self.hand = None         # PokerHand while a hand runs
         self.button = None       # dealer-button seat of the last hand
         self.sitting_out = set()  # perms that asked to sit out (302 enbl=1)
+        # PawnChess
+        self.chess = None        # pawnchess board (list of Piece) of the current / last game
+        self.trnid = 0           # bumped on EVERY answer to 400-402 (the client's input latch)
+        self.plrstt = 0
+        self.pwchkmt = 0xFF
+        self.ready = set()       # perms that pressed NewGame (403) since the last game
+        self.stake_in = {}       # perm -> stake put in for the running game
 
     def seat_of(self, perm_id):
         return next((s for s, p in self.seats.items() if p == perm_id), None)
@@ -179,7 +186,7 @@ def create_body(t):
 def table_body(t, settings=True, seats=True, state=True):
     """0xD9 body: key, then the blocks the mngt flags announce (settings, seats, game state).
     Game state is only written for Dice."""
-    state = state and t.kind in (DICE, POKER)
+    state = state and t.kind in (DICE, POKER, PAWNCHESS)
     w = BitWriter()
     _key(w, t, settings, seats, state)
     if settings:
@@ -196,6 +203,8 @@ def table_body(t, settings=True, seats=True, state=True):
             write_packed(w, perm)                                 # id = the avatar id = perm_id
     if state and t.kind == POKER:
         _poker_state(w, t)
+    elif state and t.kind == PAWNCHESS:
+        _chess_state(w, t)
     elif state:
         elapsed = _elapsed(t)
         # dlr MUST be a real seat (0..3): the client draws the dice cup at the dealer seat's node, read
@@ -305,6 +314,10 @@ def handle_create(io, conn, perm_id, data):
         _start_betting(io, t)
     elif kind == POKER:
         _poker_idle(io, t)
+    elif kind == PAWNCHESS:
+        with _lock:
+            t.chess = pawnchess.initial_board()
+            _enter(t, 1)
 
 
 def sync_tables(io, conn):
@@ -367,6 +380,8 @@ def leave(io, perm_id, t):
         if t.kind == POKER:
             _poker_drop(io, t, perm_id)
             t.sitting_out.discard(perm_id)
+        if t.kind == PAWNCHESS:
+            _chess_forfeit(io, t, perm_id)
         stack = t.credits.pop(perm_id, 0)
         bets = t.bets.pop(perm_id, [0] * 11)
         if t.kind == DICE and t.phase in (PHASE_THROW, PHASE_RESULT):
@@ -529,6 +544,8 @@ def handle_game_action(io, conn, perm_id, msg_type, data):
         _poker_act(io, t, perm_id, code, wgr)
     elif t is not None and t.kind == POKER and msg_type == MSG_POKER_SITOUT:
         _poker_sit_out(io, t, perm_id, bool(r.read(8)))
+    elif t is not None and t.kind == PAWNCHESS and msg_type in _CHESS_MSGS:
+        _CHESS_MSGS[msg_type](io, t, perm_id, r)
     else:
         log(f"  [MINIGAME] action 0x{msg_type:x} from {perm_id} ({data.hex()}) — game logic not implemented")
 
@@ -955,3 +972,155 @@ def _poker_drop(io, t, perm):
         io.schedule(0.1, _guard(t, lambda: _poker_next_turn(io, t)))
     elif len(h.live()) <= 1 and t.phase == 6:
         io.schedule(0.1, _guard(t, lambda: _poker_next_turn(io, t)))
+
+
+# ── PawnChess ─────────────────────────────────────────────────────────────────
+# The client's side [known] (CMiniGameControllerPawnChess_Actor::Update S 00526260,
+# MinigameDialog_PawnChess S 0044caf0 / S 0044cd10, ReadTableState S 0048a6d0):
+#   phs 1 waiting · 2 / 3 seat 0 / 1 places its king (8 squares of its home column; sends 402 with the
+#   row) · 4 / 5 seat 0 / 1 moves (400 move or take the king, 401 take a pawn + where to put it) ·
+#   6 game over: plrstt bit 0x04 (seat 0) / 0x40 (seat 1) = winner; the bets slide to the winner.
+#   Every 400-402 locks the board until a state arrives with a different trnid; phases 1 and 6 reset
+#   the lock to 0xFF, so trnid is never 0xFF. NewGame (403) hides its button until phase 6: a game
+#   starts when both seated players have pressed it. The bets drawn are the table minimum each.
+MSG_CHESS_MOVE, MSG_CHESS_CAPTURE, MSG_CHESS_KING, MSG_CHESS_NEWGAME = 0x5190, 0x5191, 0x5192, 0x5193
+CHESS_CHECK = (0x01, 0x10)       # plrstt in-check bit per seat (RefreshMovablePieces S 00525c00) [known]
+CHESS_WON = (0x04, 0x40)         # plrstt winner bit per seat (S 0048a490) [known]
+
+
+def _chess_state(w, t):
+    w.write(t.phase, 8).write(t.trnid, 8).write(t.pwchkmt, 8).write(t.plrstt, 8)
+    for p in t.chess or pawnchess.initial_board():
+        w.write(p.byte(), 8)                                   # pwnps x16
+    w.write(len(t.seats), 8)
+    for s, p in sorted(t.seats.items()):
+        w.write(s, 8)
+        write_packed(w, t.credits.get(p, 0))
+        write_packed(w, _balance(t, p))
+
+
+def _chess_bump(t):
+    t.trnid = (t.trnid + 1) % 0xFF                             # 0..254: never the latch reset value
+
+
+def _chess_side(t, perm):
+    s = t.seat_of(perm)
+    return s if s in (0, 1) else None
+
+
+def _chess_new_game(io, t, perm, r):
+    """403: this player is ready. Both seated and able to pay the stake -> the game starts."""
+    if _chess_side(t, perm) is None or t.phase not in (1, 6):
+        return
+    with _lock:
+        t.ready.add(perm)
+        players = [t.seats.get(0), t.seats.get(1)]
+        start = None not in players and all(p in t.ready for p in players) and \
+            all(t.credits.get(p, 0) >= t.lmtmn for p in players)
+        if start:
+            for p in players:
+                t.credits[p] -= t.lmtmn
+                t.stake_in[p] = t.lmtmn
+            t.ready.clear()
+            t.chess = pawnchess.initial_board()
+            t.plrstt, t.pwchkmt = 0, 0xFF
+            _chess_bump(t)
+            _enter(t, 2)
+    _update(io, t)
+    log(f"  [CHESS] table {t.key}: {perm} ready" + (" — game starts, seat 0 places its king" if start else ""))
+
+
+def _chess_place_king(io, t, perm, r):
+    row = r.read(8)
+    side = _chess_side(t, perm)
+    with _lock:
+        if side is not None and t.phase == 2 + side and row < 8:
+            t.chess[pawnchess.at(t.chess, pawnchess.sq(pawnchess.SIDE_HOME[side], row))].king = True
+            _enter(t, 3 if side == 0 else 4)                   # then seat 1 places; then seat 0 moves
+            log(f"  [CHESS] table {t.key}: seat {side} places its king on row {row}")
+        else:
+            log(f"  [CHESS] table {t.key}: PlaceKing row {row} from {perm} out of turn — ignored")
+        _chess_bump(t)                                         # always: unlocks the client's board
+    _update(io, t)
+
+
+def _chess_move(io, t, perm, r):
+    _chess_play(io, t, perm, r.read(8), r.read(8), None, None)
+
+
+def _chess_capture(io, t, perm, r):
+    pwn, trgt, cppwn, cptrgt = r.read(8), r.read(8), r.read(8), r.read(8)
+    _chess_play(io, t, perm, pwn, trgt, cppwn, cptrgt)
+
+
+def _chess_play(io, t, perm, pwn, trgt, cppwn, cptrgt):
+    side = _chess_side(t, perm)
+    with _lock:
+        b = t.chess
+        ok = side is not None and t.phase == 4 + side and pwn < 16 and trgt < 64 and b[pwn].side == side \
+            and (pwn, trgt) in pawnchess.legal_moves(b, side)
+        victim = pawnchess.at(b, trgt) if ok else None
+        if ok and victim is not None and not b[victim].king:
+            ok = cppwn == victim and cptrgt in pawnchess.relocation_squares(
+                b, pawnchess.col_row(trgt)[0], side)
+        elif ok and cppwn is not None:
+            ok = False                                          # a 401 that takes nothing
+        winner = None
+        if ok:
+            origin = b[pwn].square
+            event = pawnchess.apply(b, pwn, trgt, cptrgt if victim is not None else None)
+            other = 1 - side
+            if event in ("king", "edge"):
+                winner = side
+                if event == "king":
+                    # All 16 pieces must keep distinct squares on the wire (the client's board is a
+                    # square -> piece table): the game ends on the position before the king is taken.
+                    b[pwn].square, b[victim].square = origin, trgt
+            else:
+                in_check, _, mark = pawnchess.check_mark(b, other)
+                t.pwchkmt = mark
+                t.plrstt = CHESS_CHECK[other] if in_check else 0
+                if pawnchess.is_mated(b, other) or not pawnchess.legal_moves(b, other):
+                    winner = side
+                    event = "checkmate" if in_check else "no moves"
+            if winner is None:
+                _enter(t, 4 + other)
+        _chess_bump(t)
+    if not ok:
+        log(f"  [CHESS] table {t.key}: illegal move {pwn}->{trgt} ({cppwn}->{cptrgt}) from {perm} — rejected")
+        _update(io, t)
+        return
+    log(f"  [CHESS] table {t.key}: seat {side} piece {pwn} -> {trgt}"
+        + (f", takes {cppwn} and puts it on {cptrgt}" if cppwn is not None else "")
+        + (f" — seat {winner} wins ({event})" if winner is not None else ""))
+    if winner is not None:
+        _chess_end(io, t, winner)
+    else:
+        _update(io, t)
+
+
+def _chess_end(io, t, winner):
+    with _lock:
+        t.plrstt = CHESS_WON[winner]
+        t.pwchkmt = 0xFF
+        pot = sum(t.stake_in.values())
+        win_perm = t.seats.get(winner)
+        if win_perm is not None:
+            t.credits[win_perm] = t.credits.get(win_perm, 0) + pot
+        t.stake_in = {}
+        t.ready.clear()
+        _enter(t, 6)
+    _update(io, t)
+
+
+def _chess_forfeit(io, t, perm):
+    """A player leaves during a game: the other side wins the stakes."""
+    side = _chess_side(t, perm)
+    t.ready.discard(perm)
+    if side is not None and t.phase in (2, 3, 4, 5):
+        log(f"  [CHESS] table {t.key}: seat {side} left — seat {1 - side} wins")
+        _chess_end(io, t, 1 - side)
+
+
+_CHESS_MSGS = {MSG_CHESS_MOVE: _chess_move, MSG_CHESS_CAPTURE: _chess_capture,
+               MSG_CHESS_KING: _chess_place_king, MSG_CHESS_NEWGAME: _chess_new_game}
