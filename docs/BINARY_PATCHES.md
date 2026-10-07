@@ -51,7 +51,14 @@ own `Documents\SAdK\maps` (`NComm::Manager::HandleEvent` S 0040e560, game-inform
 the host advertises the map with type 3 (found under `Documents\SAdK\maps`) and "download allowed" (`+0x228`),
 which `SetupGameDialog::OnMapSelected` S 00454ad0 always sends as 0, and the map picker never lists that folder.
 Live 2026-10-07 (Frida, through the bridge): with both values forced, a joiner received a map it did not
-have and the match started — once all empty slots were closed (custom maps only start with no open slots).
+have and the match started. Live 2026-10-07 with the shim: picker, download, progress messages, ready guard
+and refresh all work.
+
+A match never starts while a slot is **open**, on any map (vanilla behaviour, confirmed live): the host starts
+only when `EventGameInformation::AreAllSlotsReady` S 00413400 holds, which needs every slot below the map's
+player count ready, and `PlayerInfo::IsReady` S 00414f50 counts AI and closed slots as ready but never an open
+one. `NComm_Manager::RefreshSlots` S 0040b5a0 resets the extra slots of a map with more start positions to
+open (to AI offline), so on such a map the host must close them or add AI players.
 
 The shim (`bridge/wsock32_shim`) applies these patches in memory on the first `connect`, each only where the
 original bytes match exactly:
