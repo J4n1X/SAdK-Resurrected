@@ -374,7 +374,11 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
     # block). The avatar's outfit is picked by level: model = (level - 1) * 3 + body part, clamped to
     # 1..5 (CGfxObjAvatar::UpdateAppearance S 00508090), so an avatar NPC needs its level here.
     level = style.get("level") if style else None
-    dtblcks = 1 | (2 if style else 0) | (8 if level else 0)
+    # Equipped items (dtblcks bit2): read by the same AvatarItemContainer reader as 3100 (S 0048abe0),
+    # 4 x {sltt 8, cnt 8, itmid 32}. Spawning an avatar without it (and without its level, bit3) shows
+    # it in the default outfit until a later 3100/3201 arrives — what a returning player looked like.
+    active = style.get("active") if style else None
+    dtblcks = 1 | (2 if style else 0) | (4 if active is not None else 0) | (8 if level else 0)
     w = BitWriter()
     w.write(avatar_id, 32)                     # "id"       — peeked by HandleEntityCreate
     w.write(dtblcks, 4)                        # "dtblcks"  — AvatarLocation [+ AvatarStyle]
@@ -391,6 +395,13 @@ def entity_create_body(avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0,
         avatar_style_block(w, style.get("name", ""),
                            style.get("tribe_gender", 0),
                            style.get("colours", ()))
+    if active is not None:
+        for rec in (list(active) + [None] * 4)[:4]:
+            if rec is None:
+                w.write(0, 8).write(0, 8).write(0, 32)
+            else:
+                item_id, count, sltt = rec
+                w.write(sltt, 8).write(min(count, 255), 8).write(item_id, 32)
     if level:
         w.write(level, 32).write(0, 32).write(0, 32).write(0, 32)     # lvl, exp, gold, glod
     return w.bytes()
@@ -538,7 +549,8 @@ def send_entity_create(conn, avatar_id, pos=(0.0, 0.0, 0.0), rot_deg=0.0, tick=0
     body = entity_create_body(avatar_id, pos=pos, rot_deg=rot_deg, tick=tick, style=style,
                               running=running, jumping=jumping,
                               zone=zone, ghost_zone=ghost_zone)
-    blocks = "location+style" if style else "location"
+    blocks = "+".join(["location"] + (["style"] if style else []) + (["items"] if style and style.get("active") is not None else [])
+                      + (["stats"] if style and style.get("level") else []))
     _send_village(conn, config.VILLAGE_MSG_ENTITY_CREATE, body, magic,
                   f"EntityCreate(1001) avatar id={avatar_id} {label}"
                   f" pos=({pos[0]:.1f},{pos[1]:.1f},{pos[2]:.1f}) rot={rot_deg:.0f}°"
