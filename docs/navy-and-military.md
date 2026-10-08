@@ -150,7 +150,9 @@ soldier to that ship's mission (soldier `+0xf8` ↔ mission settler list) [known
 **Start.** `NMilitary::Attack::StartAttack(attacker, target, fraction)` `00576500` (lockstep command `0x2000D`,
 `HandleStartAttack` `00782cb0`; also the AI's `AttackExecution::Update` `005a0dd0`) [known]:
 1. `FightList::CreateFight`, bound to the target.
-2. The defender's fraction is copied into the target (above).
+2. The defender's fraction is copied into the target (above). It is the defending player's own setting, a slider in
+   the game [live 2026-10-08: at 50% every helping building sent (int)(available × 0.5 + 0.5), e.g. 1 of 2, 2 of 4,
+   3 of 6, by land and by sea alike; at 100% all available soldiers].
 3. `g_bSeaAttackDispatch` `0088a4cc` is set to 1, the attackers are dispatched, then it is set back to 0. While it is
    1, a ship of the route that is already on a military mission counts as ready (§5.1).
 4. The message `!You are under attack!` goes to the defender.
