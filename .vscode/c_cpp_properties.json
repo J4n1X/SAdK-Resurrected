@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "SAdK (mingw-w64 i686)",
+            "compilerPath": "/usr/bin/i686-w64-mingw32-g++",
+            "compilerArgs": ["-std=c++23", "-fno-exceptions", "-fno-rtti"],
+            "intelliSenseMode": "windows-gcc-x86",
+            "cStandard": "c17",
+            "cppStandard": "c++23",
+            "includePath": [
+                "${workspaceFolder}/sadkmod/include",
+                "${workspaceFolder}/sadkmod/build/include",
+                "${workspaceFolder}/sadkmod/third_party/minhook/include",
+                "${workspaceFolder}/bridge/wsock32_shim"
+            ],
+            "defines": [],
+            "browse": {
+                "path": [
+                    "${workspaceFolder}/sadkmod",
+                    "${workspaceFolder}/mods",
+                    "${workspaceFolder}/bridge"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            }
+        }
+    ],
+    "version": 4
+}

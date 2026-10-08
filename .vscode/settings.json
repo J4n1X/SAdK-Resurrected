@@ -1,0 +1,26 @@
+{
+    // C/C++: the cross compiler in c_cpp_properties.json; the repo builds with make, not CMake.
+    "C_Cpp.default.configurationProvider": "",
+    "C_Cpp.errorSquiggles": "enabled",
+    "cmake.configureOnOpen": false,
+    "cmake.automaticReconfigure": false,
+    "files.associations": {
+        "*.hpp": "cpp",
+        "*.ipp": "cpp"
+    },
+    // Build output, the generated game declarations (sadkmod/build, ~12 MB) and the mapping caches stay out of
+    // search and file watching; IntelliSense still reads the generated headers through the include path.
+    "search.exclude": {
+        "**/build/**": true,
+        "release/**": true,
+        "mapping/cache/**": true,
+        "mapping/dumps/**": true,
+        "sourcemap/**/*.gz": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "release/**": true,
+        "mapping/**": true
+    },
+    "python.defaultInterpreterPath": "/usr/bin/python3"
+}

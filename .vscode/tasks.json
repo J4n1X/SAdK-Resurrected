@@ -1,0 +1,53 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build: all (shim, mods, ServerConfig)",
+            "type": "shell",
+            "command": "make -C bridge/wsock32_shim && make -C mods && make -C bridge/serverconfig",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": { "base": "$gcc", "fileLocation": ["autoDetect", "${workspaceFolder}"] }
+        },
+        {
+            "label": "build: sadkmod (library + generated headers)",
+            "type": "shell",
+            "command": "make -C sadkmod",
+            "group": "build",
+            "problemMatcher": { "base": "$gcc", "fileLocation": ["autoDetect", "${workspaceFolder}/sadkmod"] }
+        },
+        {
+            "label": "build: mods",
+            "type": "shell",
+            "command": "make -C mods",
+            "group": "build",
+            "problemMatcher": { "base": "$gcc", "fileLocation": ["autoDetect", "${workspaceFolder}/mods"] }
+        },
+        {
+            "label": "test: sadkmod self-test + mod host (Wine)",
+            "type": "shell",
+            "command": "make -C sadkmod test",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: verify shim + mod patches against SADK.exe (Wine)",
+            "type": "shell",
+            "command": "make -C bridge/wsock32_shim verify && make -C mods verify",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "test: server (Python)",
+            "type": "shell",
+            "command": "for t in tests/test_*.py; do python3 \"$t\" > /dev/null || echo \"FAIL $t\"; done; echo done",
+            "group": "test",
+            "problemMatcher": []
+        },
+        {
+            "label": "release: packaging/make_release.sh",
+            "type": "shell",
+            "command": "bash packaging/make_release.sh",
+            "problemMatcher": []
+        }
+    ]
+}
