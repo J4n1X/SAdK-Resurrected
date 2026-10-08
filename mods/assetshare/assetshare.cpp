@@ -763,10 +763,8 @@ bool SADK_THISCALL on_handle_event(Manager *m, game::NComm::EventBase *ev)
         state = State::waiting_manifest;
         manifest_asked_at = GetTickCount();
         Download d{Kind::manifest, in_dir + "manifest.sas", "the host's list of server mods"};
-        if (!request(m, std::string(share_rel) + "manifest." + capability(), d)) {
-            state = State::legacy;
-            flush_deferred_maps(m);
-        }
+        if (!request(m, std::string(share_rel) + "manifest." + capability(), d))
+            state = State::idle;   // not connected yet (RequestFileFromHost refuses): again at the next one
     }
     return ok;
 }
