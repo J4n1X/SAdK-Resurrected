@@ -19,6 +19,24 @@ cp "$REPO/LICENSE" "$OUT/"
 mkdir -p "$OUT/mods"
 cp -r "$REPO"/mods/build/*/ "$OUT/mods/"
 cp "$REPO/mods/README.md" "$OUT/mods/"
+cat > "$OUT/mods/INSTALL.txt" <<'TXT'
+Optional mods for "Die Siedler - Aufbruch der Kulturen" (they need the DRM-free SADK.exe and the bridge shim,
+which SAdK-ServerConfig installs).
+
+Install: copy a mod's folder into the game's "mods" folder, e.g.
+    ...\Die Siedler - Aufbruch der Kulturen\mods\borderless\
+Create the "mods" folder next to "bin" and "data" if it is not there. Remove the folder (or rename it so it starts
+with "_") to switch the mod off.
+
+  billboards    plain screens on the lobby's advertising billboards (SAdK-ServerConfig installs it;
+                "Disable billboards" = Enabled in billboards.ini)
+  borderless    the game's fullscreen becomes a borderless window, stretched to the monitor;
+                borderless.ini: Monitor = primary, or the display number (1, 2, ...)
+  nomeshcache   models are always read from their .KEX files (no cache); for model makers, loads slower
+  npcmodels     lets the server show the female, MacDoyleJr and MacGabhan NPC models (chat: !npc <set> <index>)
+
+README.md describes how mods work and how to write one.
+TXT
 
 # The package's tracked .py files (working-tree contents), minus the game's msgdefs.ini: players
 # supply their own copy.
