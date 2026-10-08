@@ -58,6 +58,27 @@ The block size is chosen by the **sender** (the host) from its own connection ty
 `OnData`). Block numbers and the total are u16, so a file can have at most 65535 blocks (32 MB at 512 bytes, 256 MB at
 4 KB).
 
+## What else the connection type changes [known]
+
+The option travels to the host: `ConnectAndJoin` 0040ad60 puts it into the joiner's `UserInformation` (0x30001),
+it is kept per slot (`NComm::PlayerInfo` `+0x1d`, `GetConnectionType` 00414d50), shown in the in-game net info
+(`nMenu::NetInfo::RefreshInfo` 005fd5a0) and stored as the user's "level" in the network's user list
+(`NComm::TinCatNetwork::UIS_SetUserData` 0041a720, called from `NComm_Manager::HandleEvent` at 0040f9ef; TinCatNetwork
+vtable 007d58f4, slot `+0x50`).
+
+Besides the block size, one thing uses it: the **host's lockstep tuning**. `NComm_Manager::Process_MainLoop`
+00410f70 (at 004117cc) periodically sets the net tick length (event `0x3000d` NE_InGame_ChangeNetTickLength,
+1..10) from the measured latency and the **lowest** connection type of all players (`GetMinUserLevel` 004198e0,
+vtable slot `+0x60`):
+
+    tick length = ceil(manager+0x388 * latency * 0.5 * factor * 0.01), clamped to 1..10
+    factor: 0 none / 1 modem 1.7, 2 ISDN 1.4, 3 DSL/cable 1.1, 4 LAN 1.0
+
+So "LAN" removes a 10 % safety margin (against DSL) from the command delay of the whole match, and only if every
+player has it set; one player on DSL keeps 1.1 for everyone. Nothing else reads the value [known: the readers of
+`UserProfile_GetConnectionType` 0041f220 and of `PlayerInfo::GetConnectionType` 00414d50 are all listed above;
+other readers of the user list's level field through the vtable are [TODO], only slot `+0x60` was traced].
+
 ## Pitfalls [inferred]
 
 - A file whose size is an exact multiple of the block size ends without a short block: the receiver only completes
