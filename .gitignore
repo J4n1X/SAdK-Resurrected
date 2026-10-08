@@ -114,6 +114,3 @@ tincat_lobby_unhandled.log*
 
 # ── The game's own message schema: copyrighted, never commit (copy it from your game's bin folder) ──
 /sadk_lobby/data/msgdefs.ini
-
-# ── Game files a mod replaces (copyrighted game data; each mod's README says where to get them) ──
-mods/foresterfix/data/
