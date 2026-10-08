@@ -366,7 +366,15 @@ A pair counts only if **its own route has a ship for these soldiers**, by the ch
   still at one of the route's harbours (sent to its player's end first if it lies elsewhere): state 1 reads the
   route's opposite end from the ship's target harbour (`NavyShipRoute::GetOppositeHarbor` `005b91f0`) and crashes on
   a ship that has none [live 2026-10-08: crash at `005b91f7` when the ship was set to 1 while still at sea]. This bookkeeping is not
-  saved with the game. A ship sunk after a defeat is not put back;
+  saved with the game. A ship sunk after a defeat is not put back.
+  "Docked" is the ship's cell equal to the harbour's docking cell for it (`Harbor::FindDockingPositionOf`, as
+  `MoveToHarbor` tests): a ship stopped mid-voyage also reads movement state 4 (AtHarbor) and keeps its target
+  harbour [live 2026-10-08]. A lent ship that is not docked at its route, or whose route is no longer a sea street
+  (an end lost), goes the game's own way home (`Ship::ReturnToOwnHarbor` `005bab60`: nearest home harbour, a route of
+  it, state 3), as does any ship left in state 0 without a route after stopping mid-voyage: when a harbour changes
+  hands, `Ship::Update` ends the missions of the ships on its routes and sets state 0 without sending them anywhere,
+  so a ship under way stays where it stopped, out of every idle-ship search [live 2026-10-08: a defending ship stopped
+  at sea after its harbour fell];
 - an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually
 take. A blocked route falls back to the next-best pair and its ship.
