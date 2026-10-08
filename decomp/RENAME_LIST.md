@@ -1294,3 +1294,9 @@ reload safety `[TODO]`). Findings: `docs/data-loading.md`.
 Type change: `ai::lobby::GfxTextureEntry` (0x24) `+0x4` `std::string name` (was padding). `Lobby::CGfxTextureMgr::GetTexture`
 `0x00504650` passes `&entry->name` as the `std::string*` path to `CTexture` vtbl `+0x28` (`CreateFromFile`) and compares
 its buffer with `ad0/ad1/ad2.tga` `[known]`. Used by the billboards mod's `GetTexture` hook.
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x0041f220` | `FUN_0041f220` | `UserProfile_GetConnectionType` (`int __cdecl(void)`) | returns UserProfile `+0x94`; `nMenu::NetInfo::RefreshInfo` `0x005fd5a0` labels the per-slot copy 0 `!NONE` … 4 `!LAN`; `S2TftpSession::BeginSend` `0x00426a30` maps it to the transfer block size `[known]` |
+
+S2TFTP findings: `docs/s2tftp.md`.

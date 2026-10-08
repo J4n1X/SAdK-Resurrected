@@ -380,3 +380,18 @@ Full picture and status tags: `docs/data-loading.md`.
 | `0x007842e0` | `nGame::System::BuildScene` | from `BuildWorld` `0x00784d40`: `terrain_static_data.xml`, `map_objects.xml`, then `Scene::Init` |
 | `0x005ab800` | `GameData_ComputeBuildChecksum` | not cached: `NComm_GetBuildChecksum` `0x0041f240` recomputes on each join |
 | `0x006e4310` | `FileScanHolder::FindFilesInDirectory` | lists the disk live (`FindFirstFileA` / `FindNextFileA`) |
+
+## 7. S2TFTP, the in-match file transfer (`sadk_noav.exe`, 2026-10-08)
+
+Packets, flow, speed and pitfalls: `docs/s2tftp.md`.
+
+| Address | Name | What |
+|---|---|---|
+| `0x004190f0` | `NComm::TinCatNetwork::RequestFileFromHost` | vtable `+0xa4`: `RequestFile(host 0xEFFFFFCC, remote, local, queueIfBusy)` |
+| `0x00427140` | `ai::net::S2TftpManager::RequestFile` | start or queue a ReadRequest; one transfer per peer |
+| `0x00427400` | `ai::net::S2TftpManager::ProcessQueue` | starts the next queued request |
+| `0x00428110` | `ai::net::S2TftpManager::OnReceive` | all `0x3eb` packets; a ReadRequest serves `<My Documents>\<name>` |
+| `0x00426a30` | `ai::net::S2TftpSession::BeginSend` | block size from the connection type: 512 / 1K / 2K / 4K |
+| `0x00427f10` | `ai::net::S2TftpSession::OnAck` | stop-and-wait: next block only after the ack |
+| `0x00427cf0` | `ai::net::S2TftpSession::OnData` | acks each block; completes on a short block |
+| `0x0041f220` | `UserProfile_GetConnectionType` | UserProfile `+0x94`, option `cConnectionType` (0 none … 4 LAN); was `FUN_0041f220` |
