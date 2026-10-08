@@ -545,6 +545,10 @@ void use_manifest(Manager *m, const std::string &text)
     apply_host_set(m, host_mods);
 }
 
+// Our copy is the host's when name, version and content hash agree. The hash (sadk::mods::content_hash) covers every
+// file of the folder, the mod's .ini included, and a download packs the whole folder (archive::read_folder): a copy
+// whose settings differ from the host's is switched off for the game and the host's copy, its .ini with it, is
+// downloaded and run instead. A server mod's settings are the host's for the whole match.
 bool same_as_host(const LocalMod &l, const HostMod &h)
 {
     return !_stricmp(l.name.c_str(), h.name.c_str()) && l.version == h.version && mod_hash(l.folder) == h.hash;
