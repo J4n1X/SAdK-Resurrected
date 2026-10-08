@@ -6,6 +6,7 @@
 bool combat_start();    // combat.cpp: soldiers cross the water through their own harbours
 bool retreat_start();   // retreat.cpp: ships pick up soldiers left with nowhere to go
 bool proximity_start(); // proximity.cpp: own routes count for the distance to the enemy (stripes, attackability)
+bool invasion_start();  // invasion.cpp: scouting, "Prepare naval invasion", invasion ships
 
 // navalcombatfix.ini (navy.hpp, Settings).
 void load_settings()
@@ -21,10 +22,11 @@ void load_settings()
     s.neutralLandings = ini.get_bool(section, "NeutralLandings", s.neutralLandings);
     s.crossingDistance = ini.get_int(section, "CrossingDistance", s.crossingDistance);
     s.pickupTimeout = ini.get_int(section, "PickupTimeout", s.pickupTimeout);
+    s.shipLostOnDefeat = ini.get_bool(section, "ShipLostOnDefeat", s.shipLostOnDefeat);
     sadk::log("settings: attackers by sea %d, defenders by sea %d, attack from own landing %d, retreat pickup %d, "
-              "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d",
+              "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d, ship lost on defeat %d",
               s.attackersBySea, s.defendersBySea, s.attackFromOwnLanding, s.retreatPickup, s.proximityOverOwnRoutes,
-              s.neutralLandings, s.crossingDistance, s.pickupTimeout);
+              s.neutralLandings, s.crossingDistance, s.pickupTimeout, s.shipLostOnDefeat);
 }
 
 bool navalcombatfix_start()
@@ -33,7 +35,8 @@ bool navalcombatfix_start()
     bool combat = combat_start();
     bool retreat = retreat_start();
     bool proximity = proximity_start();
-    return combat && retreat && proximity;
+    bool invasion = invasion_start();
+    return combat && retreat && proximity && invasion;
 }
 
 SADKMOD_MAIN(navalcombatfix_start, 1, SADKMOD_SERVER)

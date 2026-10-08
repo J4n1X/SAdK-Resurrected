@@ -57,6 +57,8 @@ struct ColonyAnswer {
 ColonyAnswer g_answers[64];
 int g_nextAnswer;
 
+}  // namespace
+
 bool colony_fits(Harbor *harbor, std::int32_t player)
 {
     std::int32_t tick = logic()->tickCounter;
@@ -67,8 +69,6 @@ bool colony_fits(Harbor *harbor, std::int32_t player)
     g_nextAnswer = (g_nextAnswer + 1) % 64;
     return fits;
 }
-
-}  // namespace
 
 bool is_landing(Harbor *harbor, std::int32_t player)
 {

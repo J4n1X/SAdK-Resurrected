@@ -107,11 +107,17 @@ struct Settings {
     bool neutralLandings = true;          // NeutralLandings: neutral harbours without room for a colony are landings
     std::int32_t crossingDistance = 0;    // CrossingDistance: cells a sea crossing counts as (gathering, proximity)
     std::int32_t pickupTimeout = 1200;    // PickupTimeout: ticks a pickup ship waits for its soldiers
+    bool shipLostOnDefeat = true;         // ShipLostOnDefeat: a lost naval invasion sinks its ship
 };
 extern Settings g_settings;
 
 // A harbour `player`'s soldiers may land at: one of the player's own, or a neutral one where the player could not
 // found a colony (landing.cpp).
 bool is_landing(Harbor *harbor, std::int32_t player);
+// Room for `player`'s colony building at `harbor` (the game's colony placement test; landing.cpp).
+bool colony_fits(Harbor *harbor, std::int32_t player);
+
+// A naval invasion ship loaded and waiting at home for an attack (invasion.cpp).
+bool invasion_ready(Ship *ship);
 
 }  // namespace navalcombatfix

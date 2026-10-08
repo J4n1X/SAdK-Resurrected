@@ -66,6 +66,7 @@ struct SeaLink {
     NavyShipRoute *route = nullptr; // the route from H2's exit to H1
     Ship *ship = nullptr;           // the player's ship for this route
     bool onRoute = false;           // already on the route (carrying this fight), else idle and still to be linked
+    bool invasion = false;          // a naval invasion ship waiting at home (invasion.cpp), still to be linked
     std::int32_t distance = 0;      // d(target, H1) + d(H2, building)
 };
 
@@ -75,7 +76,7 @@ struct SeaLink {
 //   - the player already has a ship on it: usable only while its mission is active and carries this fight;
 //   - else the nearest idle ship of the player at H2's exit (NNavy::System::FindNearestIdleShipAtHarborExit
 //     S 005b3450), linked to the route only when the soldiers are actually sent.
-bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight, SeaLink *link)
+bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight, bool attacking, SeaLink *link)
 {
     HarborExit *exit = fn::ai::navy::Harbor::FindExitConnectedTo(home, landing);
     if (!exit) return false;
@@ -84,9 +85,14 @@ bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight
     Ship *ship;
     bool onRoute = fn::ai::navy::NavyShipRoute::HasPlayerEntry(route, player);
     if (onRoute) {
-        if (!fight) return false;   // outside a dispatch a busy ship never counts
         ship = fn::ai::navy::NavyShipRoute::GetPlayerEntryOrFirst(route, player);
-        if (!ship->military->bActive || !carries(ship->military, fight)) return false;
+        bool waitingInvasion = attacking && invasion_ready(ship) && !ship->military->bActive;
+        if (waitingInvasion) {
+            link->invasion = true;
+        } else {
+            if (!fight) return false;   // outside a dispatch a busy ship never counts
+            if (!ship->military->bActive || !carries(ship->military, fight)) return false;
+        }
     } else {
         ship = fn::NNavy::System::FindNearestIdleShipAtHarborExit(logic()->navy, player, &exit->posX);
         if (!ship) return false;
@@ -116,7 +122,7 @@ bool own_sea_link(Building *building, Building *target, Fight *fight, SeaLink *b
             std::int32_t d = distance(landing, target) + g_settings.crossingDistance + distance(home, building);
             if (d >= kAttackRange || (found && d >= best->distance)) continue;
             SeaLink link;
-            if (!route_ship(home, landing, player, fight, &link)) continue;
+            if (!route_ship(home, landing, player, fight, !defending, &link)) continue;
             link.landing = landing;
             link.home = home;
             link.distance = d;
@@ -157,7 +163,7 @@ bool own_landing_in_range(Building *target, std::int32_t player)
         for (Harbor *home : harbors()) {
             SeaLink link;
             if (home->playerIdx == player && region(home) != targetRegion &&
-                route_ship(home, landing, player, g_dispatchFight, &link))
+                route_ship(home, landing, player, g_dispatchFight, true, &link))
                 return true;
         }
     }
@@ -222,6 +228,8 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
     if (!own_sea_link(building, target, connector->fight, &link)) return;
     if (!link.onRoute) {   // the first building of this fight on the route brings the ship in
         fn::NavyLink_LinkMilitaryRoute(link.route, link.ship);
+        fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
+    } else if (link.invasion) {   // the invasion ship is on its route already; the fight starts its boarding
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
     }
     // __thiscall on the connector: binds each soldier to connector->fight and to the ship.

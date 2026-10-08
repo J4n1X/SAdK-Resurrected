@@ -298,6 +298,39 @@ only through harbours owned by the **target's** owner, so the colonist cannot at
 possible are on foot from the expedition building's garrison, against targets whose land its small territory touches
 [inferred].
 
+### 6.1 The buoy's buttons and the ship-route commands
+
+A selected ship route (its buoy) shows the in-game action panel: 4 button slots
+(`nMenu::ActionButtonPanel.actionButtons`, at `nMenu::Game+0x8000`).
+- `MenuSelection::SetSelectionKind` `00616f40` fills them per selection kind. A ship route (menu kind 0) gets actions 1
+  start expedition, 2 stop, 3 found colony; **slot 4 stays empty** [known].
+- An action is a number 0..30 (`ActionButton.action`). `ActionButton::RefreshAvailability` `00623da0` decides, per
+  action, whether it is possible and why not. `ActionButton::ExecuteAction` `00623730` turns it into a lockstep game
+  command for the selection [known].
+- Static tables indexed by the action give its name (`g_ActionNames`, used by the layout XML
+  `game\ui\layout\menuingame.xml`), icon (`g_ActionIconRects`), tooltip (`g_IngameCommandNames`, e.g.
+  `!START EXPEDITION`) and failure texts (`Action_<name>_<code>` tags in the XML) [known].
+
+Ship-route commands (`EventInt64_1Integer`: the route's id and the player) [inferred]:
+
+| Id | Sent by | Run by |
+|---|---|---|
+| `0x2001A` | `SendCommand_2001A` `00782d80` | `HandleAssignShipToRoute` `00781ad0`: if `NavyShipRouteBackRef::CanAssignShip`, `AssignNearestIdleShip`. Assigning (`0053c010`) also switches the ship's expedition on (state 0) |
+| `0x2001B` | `SendCommand_2001B` | `HandleAbortShipRouteJob` `00781b70`: `AbortPlayerExpedition` (state 7) |
+| `0x2001C` | `SendCommand_2001C` | `OrderPlayerExpeditionFoundColony` `005ba8f0`: state 5 → 6 |
+
+**Assigning a ship to a route is starting an expedition.** Manual assignment is refused for a route whose ends both
+belong to the player (`GetAssignShipBlockReason` reason 2), so it only exists for routes toward someone else's or a
+free harbour [inferred]. Every command passes `nGame::System::HandleGameCommand` `007845a0`, which handles ids
+`0x20002`..`0x2002B` and **ignores any other** [known].
+
+The expedition (`NNavy::Expedition`, `Ship+0x30`):
+- `+0xc` its soldier orders, `+0x20` its requests for the building's goods, `+0x38` its soldiers, `+0x4c` its state.
+- All of it is saved (`Expedition::Store` `005b7d30`) [known].
+- A ship runs either its expedition (ship state 4) or its military mission (state 5), never both (`Ship::Update`
+  `005bb500`) [known].
+- `Ship::SinkImmediately` `005bb250` (used by the Lua `na_sinkShipOnRoute`) sinks the ship at its next stop [inferred].
+
 ## 7. The `navalcombatfix` mod: soldiers cross through their own harbours
 
 `mods/navalcombatfix/` (`combat.cpp`, `retreat.cpp`; a server mod: every player of a match needs it). These are rules the maintainer
@@ -375,8 +408,45 @@ not just the display.
 |---|---|
 | `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` | Also over routes between two harbours of the same player (both directions above) |
 
+**Naval invasion** (`invasion.cpp`; rules in `mods/navalcombatfix/CONCEPT.md`):
+- **Scouting:** in the expedition's arrival (state 4), a free harbour without room for a colony is revealed. The
+  ship then sends the game's "No Valid Position for Building found!" and returns (state 7), instead of waiting for
+  orders.
+- **The button:** "Prepare naval invasion" goes in the ship-route panel's free slot 4 as action 31.
+  - Enabled for a route from an own harbour to a neutral one that the player has explored (radius 3), where no colony
+    fits, with an idle ship for the route.
+  - The game's tables stop at action 30, so the button takes the attack button's icon and look (action 11) and gets
+    its own texts.
+- **The command:** pressing it sends command `0x20040` (`EventInt64_1Integer`, built like `SendCommand_2001A`). Each
+  peer's hook on `HandleGameCommand` assigns a ship as `0x2001A` does, which starts its expedition, and puts the
+  expedition into state 100.
+- **The invasion's states** are expedition states, so they are saved:
+
+| State | Action |
+|---|---|
+| 100 | sail to the route's own end (`ChooseStartHarbor`) |
+| 101 | unload |
+| 102 | `GatherCargo`: the soldier and the building's goods |
+| 103 | ready, waiting at home. An attack whose sea link uses this route links its fight to the ship (`combat.cpp`; only for attackers) |
+| 104 | the attackers board (`BoardSettlersAtHarbor`, up to `PickupTimeout`); nobody came → back to 103 |
+| 105 | sail; on arrival only the mission's soldiers land (`NavyLink_UnlinkCargoSettler` + `DisembarkAt`) |
+| 106 | until all have left the fight. Won (the fight's target is the player's) → 107. Lost → `ShipLostOnDefeat`: `SinkImmediately`, else state 7 |
+| 107 | the survivors board again, then the game's state 6 founds the colony |
+
+- **After the colony:** the ship switches to its military mission, state 6, which takes the attackers home and
+  unloads them. If there is still no room, the game's own failure path (message, return, unload) applies.
+
+To check in the game:
+- the scouting message;
+- the button's states;
+- loading and waiting;
+- boarding and landing (only the attackers land);
+- the colony after a win, and the attackers' trip home;
+- sinking and the cancelled return after a defeat;
+- saving and loading while an invasion waits.
+
 **Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,
-`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; with one
+`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ShipLostOnDefeat` decides a lost invasion's ship; with one
 off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
 soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
 waits. Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole
