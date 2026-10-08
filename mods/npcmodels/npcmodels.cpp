@@ -24,4 +24,4 @@ bool npcmodels_start()
     return ok;
 }
 
-SADKMOD_MAIN(npcmodels_start)
+SADKMOD_MAIN(npcmodels_start, 1, SADKMOD_LOBBY)

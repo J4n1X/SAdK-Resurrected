@@ -23,4 +23,4 @@ bool nomeshcache_start()
     return MeshLoad::install(load_without_cache, "CMesh::Load without the .mshraw cache");
 }
 
-SADKMOD_MAIN(nomeshcache_start)
+SADKMOD_MAIN(nomeshcache_start, 1, SADKMOD_CLIENT)

@@ -158,4 +158,4 @@ bool borderless_start()
            CursorSetPixel::install(set_pixel) && Warp::install(warp) && MouseLook::install(mouse_look);
 }
 
-SADKMOD_MAIN(borderless_start)
+SADKMOD_MAIN(borderless_start, 1, SADKMOD_CLIENT)

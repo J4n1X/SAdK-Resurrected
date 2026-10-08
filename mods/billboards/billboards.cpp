@@ -111,4 +111,4 @@ bool billboards_start()
     return ok == 4;
 }
 
-SADKMOD_MAIN(billboards_start)
+SADKMOD_MAIN(billboards_start, 1, SADKMOD_CLIENT)
