@@ -29,6 +29,7 @@ namespace {
 
 using AddInitialStock = sadk::Hook<fn::NVillage::Depot::AddInitialStock>;
 
+constexpr std::int32_t kNoGood = -1;
 constexpr std::int32_t kSoldierKinds = 2;   // MilitaryConfig: 0 melee, 1 ranged (Player_Update's loop)
 
 std::int32_t g_goods = 1000;
@@ -36,7 +37,8 @@ std::int32_t g_soldiers = 99;
 
 void add(game::NLogic::Stock *stock, std::int32_t good, std::int32_t count)
 {
-    if (good < 0 || count <= 0) return;
+    // Good ids are hashes and half of them are negative; only -1 means "no good" (GoodAmountList_AddAmount S 00552aa0).
+    if (good == kNoGood || count <= 0) return;
     std::int32_t entry[2] = {good, count};   // the GoodAmount pair Stock::AddEntry reads
     fn::NLogic::Stock::AddEntry(stock, entry);
 }
