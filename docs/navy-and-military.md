@@ -512,7 +512,10 @@ taken and the harbour lost]. So a defenders' ship waits at the landing in state 
   `00571090`);
 - after the building is taken, until the harbour changes hands (then it sinks), at most 300 ticks: another building
   of the player may still hold the harbour's territory.
-A target that is gone, or the attackers gone, ends the wait; the game's state 5 then boards the survivors. A ship at a harbour that is still its
+A target that is gone, or the attackers gone, ends the wait; the game's state 5 then boards the survivors.
+The wait remembers its landing harbour: losing the harbour clears the ship's own target harbour (`005b5370` →
+`Movement::ClearRoute`) before the next ship update, so the sinking check falls back to the remembered landing
+[live 2026-10-09: without it the check found no harbour, and the game ended the mission for want of a route]. A ship at a harbour that is still its
 player's is safe. Checked in the `Ship::Update` hook before the game's update: when a harbour's territory changes
 hands, `005b5370` unlinks the ships from its routes, and `Ship::Update` would then end the mission for want of a
 route. Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat

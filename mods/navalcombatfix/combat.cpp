@@ -416,6 +416,8 @@ constexpr std::int32_t kHarbourWait = 300;   // ticks [inferred: the territory c
 
 struct DefenceHold {
     Ship *ship;
+    Harbor *landing;           // the harbour the ship waits at; kept because losing the harbour clears the ship's own
+                               // target harbour (005b5370 -> Movement::ClearRoute) [live 2026-10-09]
     std::int32_t takenSince;   // tick the building was first seen taken; -1 while it holds
 };
 DefenceHold g_holds[64];
@@ -426,7 +428,7 @@ DefenceHold *hold_of(Ship *ship, bool create)
     for (int i = 0; i < g_holdCount; ++i)
         if (g_holds[i].ship == ship) return &g_holds[i];
     if (!create || g_holdCount == 64) return nullptr;
-    g_holds[g_holdCount] = {ship, -1};
+    g_holds[g_holdCount] = {ship, fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor), -1};
     return &g_holds[g_holdCount++];
 }
 
@@ -500,8 +502,14 @@ bool sink_after_lost_defence(Ship *ship)
     if (!g_settings.shipLostOnDefeat || !m->bActive || !carries_fight(m)) return false;
     Fight *fight = m->fight.cachedFight;
     std::int32_t player = ship->player->index;
-    if (!fight || fight->defenderPlayer != player || at_own_harbor(ship)) return false;
-    if (!fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor)) return false;
+    if (!fight || fight->defenderPlayer != player) return false;
+    // Where the ship lies: its target harbour, or (once losing the harbour has cleared that) the landing it waits at.
+    Harbor *at = fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor);
+    if (!at) {
+        DefenceHold *hold = hold_of(ship, false);
+        at = hold ? hold->landing : nullptr;
+    }
+    if (!at || at->playerIdx == player) return false;
     Building *target = fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
     if (target && owner(target) == player) return false;   // the defence still holds the building
     fn::NNavy::Military::Finish(m);
