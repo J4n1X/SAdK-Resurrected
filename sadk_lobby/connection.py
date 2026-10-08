@@ -43,7 +43,7 @@ class Conn:
         self.role = ("uc" if is_chat else "world" if is_village
                      else "referee" if is_referee else "lobby")
         self._buf = b""
-        # A lobby connection from a client with the bridge shim starts with one "SADKB1 LOBBY <token>"
+        # A lobby connection from a client with the gamehostbridge mod starts with one "SADKB1 LOBBY <token>"
         # line before the first TinCat frame (bridge.py).
         self._state = "PREAMBLE" if self.role == "lobby" else "PREFIX"
         self.bridge_token = None
@@ -168,7 +168,7 @@ class Conn:
                 self._buf, self._state = rest, "PREFIX"
                 if token:
                     self.bridge_token = token
-                    log(f"  [#{self.id}] bridge shim token {token[:8]}…")
+                    log(f"  [#{self.id}] gamehostbridge token {token[:8]}…")
             elif self._state == "PREFIX":
                 if len(self._buf) < config.PREFIX_SIZE:
                     break

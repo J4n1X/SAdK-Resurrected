@@ -5,6 +5,10 @@ IDI_APP  ICON   "sadk.ico"
 IDR_SHIM RCDATA "../wsock32_shim/wsock32.dll"
 IDR_MOD_BILLBOARDS     RCDATA "../../mods/build/billboards/mod.dll"
 IDR_MOD_BILLBOARDS_INI RCDATA "../../mods/billboards/billboards.ini"
+IDR_MOD_GAMEHOSTBRIDGE     RCDATA "../../mods/build/gamehostbridge/mod.dll"
+IDR_MOD_GAMEHOSTBRIDGE_INI RCDATA "../../mods/gamehostbridge/gamehostbridge.ini"
+IDR_MOD_ASSETSHARE         RCDATA "../../mods/build/assetshare/mod.dll"
+IDR_MOD_ASSETSHARE_INI     RCDATA "../../mods/assetshare/assetshare.ini"
 1        24     "serverconfig.manifest"
 
 IDD_MAIN DIALOGEX 0, 0, 260, 250

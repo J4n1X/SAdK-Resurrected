@@ -1,4 +1,5 @@
-// Map sharing: patches to SADK.exe in memory (docs/BINARY_PATCHES.md, "Map sharing").
+// assetshare: shares what a match needs between its players. So far: maps (docs/BINARY_PATCHES.md, "Map sharing").
+// [TODO: a match's server mods, over the same S2TFTP transfer]
 // The client already transfers a missing map from the host (S2TFTP over the match connection,
 // NComm::Manager::HandleEvent S 0040e560), but only for maps the host advertises with type 3
 // (Documents\SAdK\maps) AND "download allowed" (+0x228), which OnMapSelected always sends as 0.
@@ -14,8 +15,9 @@
 // pre-game room through the game's own NComm_SendUINotification S 0040e3d0 (the "Player joined game" channel).
 // When the last download completes the joiner sends PlayerReady(0) once: the host answers every ready change by
 // re-broadcasting the game information, and the joiner then finds the map and refreshes the room.
-#include "shim.hpp"
+#include <windows.h>
 
+#include <sadkmod/sadkmod.hpp>
 #include <sadkmod/game/sadk_noav/fn/NComm.hpp>
 #include <sadkmod/game/sadk_noav/fn/NComm_Manager.hpp>
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
@@ -26,6 +28,8 @@
 #include <cstring>
 
 using sadk::log;
+
+static bool accept_maps = true;   // assetshare.ini [AssetShare] AcceptServerMaps
 namespace fn = sadk::game::fn;
 using GameFILE = sadk::game::mbstring_h::FILE;   // the game's C runtime FILE, not ours
 
@@ -97,8 +101,15 @@ static bool session_map_present(void *mgr)
     return found;
 }
 
+// No temp file: S2Tftp_Session_WriteBlock S 00426c70 answers the host with Error 2 (!TFTP_ERROR_WRITEERROR) and
+// receives nothing more, the game's own refusal.
 static GameFILE *SADK_CDECL shim_open_temp(sadk::msvc::string *out_path)
 {
+    if (!accept_maps) {
+        room_message("Map downloads are switched off (assetshare.ini: AcceptServerMaps).");
+        log("map share: download refused (AcceptServerMaps = false)");
+        return nullptr;
+    }
     GameFILE *f = fn::S2Tftp_OpenTempFile(out_path);
     if (f) {
         InterlockedIncrement(&downloads_active);
@@ -190,8 +201,9 @@ static void SADK_STDCALL shim_append_maps(std::int32_t location, void *list, voi
     fn::SelectMapDialog_AppendMapFiles(MAP_LOCATION_USER, list, names, user_colour);
 }
 
-void apply_map_sharing()
+bool assetshare_start()
 {
+    accept_maps = sadk::mod_settings().get_bool("AssetShare", "AcceptServerMaps", true);
     char docs[MAX_PATH];
     if (SHGetFolderPathA(nullptr, CSIDL_PERSONAL, nullptr, 0, docs) == S_OK) {   // as Sys_GetMyDocumentsPath
         char d[MAX_PATH];
@@ -216,5 +228,9 @@ void apply_map_sharing()
     ok += sadk::patch_call(0x00426ca5, fn::S2Tftp_OpenTempFile.address, (void *)shim_open_temp, "download start");
     ok += sadk::patch_call(0x00426d14, fn::_fwrite, (void *)shim_fwrite, "download progress");
     ok += sadk::patch_call(0x00427a08, THUNK_REMOVE, (void *)shim_abort_remove, "download abort");
-    log("map sharing: %d of 9 patches active (maps folder %s)", ok, maps_dir);
+    log("map sharing: %d of 9 patches active (maps folder %s, downloads %s)", ok, maps_dir,
+        accept_maps ? "accepted" : "refused");
+    return ok == 9;
 }
+
+SADKMOD_MAIN(assetshare_start, 1, SADKMOD_CLIENT)

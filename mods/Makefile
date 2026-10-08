@@ -8,7 +8,7 @@ SADKMOD = ../sadkmod
 CXXFLAGS = -std=c++23 -O2 -Wall -Wextra -fno-exceptions -fno-rtti -I$(SADKMOD)/include -I$(SADKMOD)/build/include
 LIB = $(SADKMOD)/build/libsadkmod.a
 GENERATED = $(SADKMOD)/build/include/.generated
-LIBS = $(LIB) -lkernel32 -ladvapi32 -lshell32 -luser32
+LIBS = $(LIB) -lkernel32 -ladvapi32 -lshell32 -luser32 -lws2_32
 SADK_EXE ?= $(HOME)/sadk_game/bin/SADK.exe
 
 MODS = $(patsubst %/,%,$(filter-out tests/ build/,$(wildcard */)))

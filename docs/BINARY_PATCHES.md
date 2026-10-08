@@ -43,7 +43,7 @@ S 004f84b0).
 - **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
   patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
 
-## Map sharing (bridge shim, in memory)
+## Map sharing (mod `mods/assetshare`, in memory)
 
 The client already contains a map transfer: a joiner that lacks the host's map asks the host for
 `SAdK\maps\<map>.s2m` and `.bmp` over the match connection (S2TFTP, message `0x3eb`) and stores them in its
