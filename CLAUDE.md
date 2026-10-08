@@ -93,6 +93,7 @@ Two tracks:
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
+| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); in the game `[TODO]` (property reload between offline matches ✅ live) |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
 | In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ⚠️ answered per the catalog since 2026-10-07, not live-tested — `[TODO]` |
 

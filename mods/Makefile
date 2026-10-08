@@ -1,6 +1,7 @@
 # The repo's own mods, each built into build/<name>/ as the folder to copy to <game>\mods\<name>\.
 #   make          every mod (builds sadkmod first)
 #   make verify   checks every mod's patches against a DRM-free SADK.exe under Wine (SADK_EXE=<path>)
+#   make test     assetshare's archive format under Wine
 # A mod is a folder here with one or more .cpp files (and optionally files to ship next to mod.dll, e.g. .ini,
 # and a data/ folder that is copied as is).
 CXX = i686-w64-mingw32-g++
@@ -33,9 +34,16 @@ build/verify_mods.exe: tests/verify_mods.cpp $(wildcard */*.cpp) $(LIB) $(GENERA
 verify: build/verify_mods.exe
 	WINEDEBUG=-all wine build/verify_mods.exe "$(SADK_EXE)"
 
+build/test_archive.exe: tests/test_archive.cpp assetshare/archive.cpp assetshare/archive.hpp
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) -static -o $@ tests/test_archive.cpp assetshare/archive.cpp
+
+test: build/test_archive.exe
+	WINEDEBUG=-all wine build/test_archive.exe
+
 clean:
 	rm -rf build
 
 FORCE:
 
-.PHONY: all verify clean FORCE
+.PHONY: all verify test clean FORCE

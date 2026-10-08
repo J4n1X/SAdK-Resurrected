@@ -43,8 +43,8 @@ int main(int argc, char **argv)
     assetshare_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 1 + 6 + 1 + 1 + 1 + 9;   // billboards 1 hook, borderless 6 hooks, npcmodels 1, nomeshcache 1
-                                                 // hook, propreload 1 hook, assetshare 9 (map sharing)
+    const int expected = 1 + 6 + 1 + 1 + 1 + 15;   // billboards 1 hook, borderless 6 hooks, npcmodels 1, nomeshcache
+                                                  // 1 hook, propreload 1 hook, assetshare 8 patches + 7 hooks
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

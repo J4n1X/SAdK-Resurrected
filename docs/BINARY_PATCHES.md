@@ -67,10 +67,10 @@ no file, and `S2Tftp_Session_WriteBlock` S 00426c70 answers the host with the ga
 
 | Address | Original | Change |
 |---|---|---|
-| 00454c37 (17 bytes) | push of the found-under type and of `0` to `SetGameSettings` | push type `3` and "download allowed" `1` for every map |
+| hook `NComm_Manager::SetGameSettings` 0040bfd0 | the map's location type and "download allowed" `0` from `OnMapSelected` | while hosting a network game: type `3` and "download allowed" `1` for every map |
 | 0045a381 | `call SelectMapDialog_AppendMapFiles(0, …)` | also lists location 3 (`Documents\SAdK\maps`, warm-tinted rows) |
-| 00426b14 | `fopen_s` of the file a peer asked for (S2Tftp_Session_ReadNextBlock) | only `<Documents>\SAdK\maps\<name>.s2m/.bmp`; a map not found there is served from `data\game\maps\Freegamemaps` |
-| 00427b29, 00427b7e | `rename` of a finished download (S2TftpSession::CloseFile) | only into `Documents\SAdK\maps` as `.s2m/.bmp`, else the temp file is deleted |
+| 00426b14 | `fopen_s` of the file a peer asked for (S2Tftp_Session_ReadNextBlock) | only `<Documents>\SAdK\maps\<name>.s2m/.bmp` (a map not found there is served from `data\game\maps\Freegamemaps`) and assetshare's own archives below `<Documents>\SAdK\assetshare\` (built on request: the manifest, a server mod, a map file) |
+| 00427b29, 00427b7e | `rename` of a finished download (S2TftpSession::CloseFile) | only into `Documents\SAdK\maps` as `.s2m/.bmp` or into assetshare's download folder, else the temp file is deleted |
 | 00457f51 | `SendPlayerReadyEvent` from the Ready button | refused (sends not-ready) while a download runs or the map is missing — starting without the map crashes the client |
 | 00426ca5, 00426d14, 00427a08 | temp-file open, block `fwrite`, abort `remove` | progress messages in the pre-game room; after the last file a not-ready event makes the host re-broadcast, so the joiner finds the map |
 
