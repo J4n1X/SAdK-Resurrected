@@ -362,7 +362,10 @@ A pair counts only if **its own route has a ship for these soldiers**, by the ch
   only from state 0 (→ 5), and a route ship cycles through 1-3 (wait, load, unload) [live 2026-10-08: left in 1, the
   mission never ran and the ship stayed stuck]. When the mission ends, `Military::Finish` takes the ship off the
   route and `Ship::Update` sets 0; the mod's hook on `Ship::Update` puts it back (`NavyLink_LinkMovementRoute`
-  `0053c3d0`) in state 1, as the game does for an expedition's ship, so the sea street stays. This bookkeeping is not
+  `0053c3d0`) in state 1, as the game does for an expedition's ship, so the sea street stays. Only once the ship lies
+  still at one of the route's harbours (sent to its player's end first if it lies elsewhere): state 1 reads the
+  route's opposite end from the ship's target harbour (`NavyShipRoute::GetOppositeHarbor` `005b91f0`) and crashes on
+  a ship that has none [live 2026-10-08: crash at `005b91f7` when the ship was set to 1 while still at sea]. This bookkeeping is not
   saved with the game. A ship sunk after a defeat is not put back;
 - an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually

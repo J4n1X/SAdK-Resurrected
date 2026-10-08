@@ -95,8 +95,10 @@ bool idle_on_route(Ship *ship)
 // ship stayed stuck]. When the mission ends, Ship::Update sets 0 and sends the ship to its own harbour, and
 // NNavy::Military::Finish S 005ba190 has taken it off its route (NavyLink_UnlinkMilitaryRoute), which would end the
 // route's sea street. So the mod's Ship::Update hook puts it back on its route in state 1, as Expedition::Finish and
-// Ship::Update's state 4 do for an expedition's ship (NavyLink_LinkMovementRoute S 0053c3d0). Kept by the mod, not
-// saved with the game; every peer runs the same updates, so it stays in lockstep.
+// Ship::Update's state 4 do for an expedition's ship (NavyLink_LinkMovementRoute S 0053c3d0) - but only once the ship
+// lies still at a harbour of that route: state 1 reads the opposite end of the route from the ship's target harbour
+// (NavyShipRoute::GetOppositeHarbor S 005b91f0) and crashed on a ship still at sea [live 2026-10-08, crash at
+// 005b91f7]. Kept by the mod, not saved with the game; every peer runs the same updates, so it stays in lockstep.
 struct LentShip {
     Ship *ship;
     NavyShipRoute *route;
@@ -117,13 +119,30 @@ void forget_lent(Ship *ship)
         if (g_lent[i].ship == ship) g_lent[i] = g_lent[--g_lentCount];
 }
 
-// After a ship update: a lent ship whose mission has ended (back in state 0) returns to its route, unless it sank.
+bool lies_still(game::NNavy::Movement *mv)
+{
+    return !(mv->base.interpolator.progress > 0.0f) && (mv->state == 0 || mv->state == 4);   // Ship::Update's test
+}
+
+// After a ship update: a lent ship whose mission has ended (back in state 0) returns to its route once it lies at one
+// of the route's harbours; if it lies elsewhere, it is sent to the route's harbour of its player first.
 void return_lent(Ship *ship)
 {
-    if (ship->military->bActive || ship->state != kShipIdle) return;
+    if (ship->military->bActive || ship->state != kShipIdle || !lies_still(ship->movement)) return;
     for (int i = 0; i < g_lentCount; ++i) {
         if (g_lent[i].ship != ship) continue;
-        fn::NavyLink_LinkMovementRoute(ship, g_lent[i].route);
+        NavyShipRoute *route = g_lent[i].route;
+        Harbor *at = fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor);
+        Harbor *a = fn::NLogic::ReferenceHarbor::Resolve(&route->harborA);
+        Harbor *b = fn::NLogic::ReferenceHarbor::Resolve(&route->harborB);
+        if (!at || (at != a && at != b)) {
+            if (Harbor *home = fn::ai::navy::NavyShipRoute::GetEndHarborOwnedBy(route, ship->player->index))
+                fn::NNavy::Movement::MoveToHarbor(ship->movement, home);
+            else
+                g_lent[i] = g_lent[--g_lentCount];   // the route has no harbour of the player any more
+            return;
+        }
+        fn::NavyLink_LinkMovementRoute(ship, route);
         ship->state = kShipWaiting;
         g_lent[i] = g_lent[--g_lentCount];
         return;
