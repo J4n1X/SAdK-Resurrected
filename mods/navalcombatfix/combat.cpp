@@ -22,6 +22,9 @@
 #include "navy.hpp"
 
 namespace navalcombatfix {
+
+Settings g_settings;
+
 namespace {
 
 using game::NMilitary::AttackConnector;
@@ -101,12 +104,14 @@ bool own_sea_link(Building *building, Building *target, Fight *fight, SeaLink *b
 {
     std::int32_t player = owner(building), targetRegion = region(target), buildingRegion = region(building);
     if (buildingRegion == targetRegion) return false;
+    bool defending = player == owner(target);
+    if (defending ? !g_settings.defendersBySea : !g_settings.attackersBySea) return false;
     bool found = false;
     for (Harbor *landing : harbors()) {
         if (landing->playerIdx != player || region(landing) != targetRegion) continue;
         for (Harbor *home : harbors()) {
             if (home->playerIdx != player || region(home) != buildingRegion) continue;
-            std::int32_t d = distance(landing, target) + distance(home, building);
+            std::int32_t d = distance(landing, target) + g_settings.crossingDistance + distance(home, building);
             if (d >= kAttackRange || (found && d >= best->distance)) continue;
             SeaLink link;
             if (!route_ship(home, landing, player, fight, &link)) continue;
@@ -160,7 +165,8 @@ bool own_landing_in_range(Building *target, std::int32_t player)
 // Military_IsEnemyTerritoryInRange S 00575850 (the attack button): also true for an own landing harbour in range.
 bool SADK_CDECL territory_in_range(Building *target, std::int32_t *attacker)
 {
-    return TerritoryInRange::original(target, attacker) || own_landing_in_range(target, *attacker);
+    return TerritoryInRange::original(target, attacker) ||
+           (g_settings.attackFromOwnLanding && own_landing_in_range(target, *attacker));
 }
 
 // ---- Hooks: dispatch ---------------------------------------------------------------------------------------------
@@ -178,6 +184,7 @@ void SADK_THISCALL dispatch_attackers(game::NMilitary::Attack *attack, ISoldierC
 void SADK_THISCALL dispatch_defenders(game::NMilitary::Attack *attack, ISoldierConnector *connector,
                                       float soldierFraction)
 {
+    if (!g_settings.defendersBySea) return DispatchDefenders::original(attack, connector, soldierFraction);
     DispatchScope scope(connector);
     game::NMilitary::ISoldierConnector_vftable *slots = connector->vftable;
     Building *target = slots->GetTarget(connector);

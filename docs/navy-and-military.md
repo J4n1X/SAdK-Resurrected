@@ -39,6 +39,25 @@ assigned to a route per player [known: `NavyShipRoute::HasPlayerEntry` `005b6bb0
 | 0 / 8 | `Military_IsEnemyTerritoryInRange` (below) is true: 0 if `Military_CountAttackersByKind` finds any soldier, else 8 ("no soldiers") [known] |
 | 2, 4, 1 | Otherwise the sea reason from `Military_IsHarborWithinBuildingRange` `00574f70`: route but no ship → 2; ship busy → 4; no route, or no harbour in range → 1 [known] |
 
+**Proximity zones and the flag stripes.** Every military building caches two distances to the enemy, refreshed
+every 11 military ticks by `NMilitary::Distances::UpdateBuildingEnemyDistances` `00574e40` [known]:
+`GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` `005337e0`, with the diplomacy filter (`Military+0x5c`) and
+without it (`+0x58`). Each is the smaller of:
+- the distance to the nearest **enemy military building** (cap 1000);
+- the distance to the nearest **own harbour** on the building's landmass that has a route to an **enemy-owned**
+  harbour (`HarborList::FindNearestWithEnemyRoute` `005b5e00` → `Harbor::HasRouteToEnemyHarbor` `005b47d0`).
+
+`ClassifyIndex_0_1_2` turns a distance into a zone: **2 below 19 cells, 1 from 19 to 24, 0 beyond** [inferred:
+thresholds `0x13`/`0x18`].
+- **Zone A** (`+0x5c`, `GetProximityZoneA` `0055fbb0`) draws the stripes on the building's flag (`DrawFlags`
+  `006d2820`): two stripes = zone 2, one = zone 1, none = zone 0 [known]. It also enables soldier upgrades in
+  `NVillage::Military::Update` `005609b0`.
+- **Zone B** (`+0x58`, `GetProximityZoneB` `0055fbe0`) gates attacks on the building: a target outside zone 2 cannot
+  be attacked (`GetAttackTargetState` 2 → button code 1) [known].
+
+The stripes are a separate measure from the soldier-count falloff of §3.2, which is full only up to 12 cells. A
+building with two stripes (enemy within 18 cells) can still send fewer than all of its soldiers [inferred].
+
 **Reach test** `Military_IsEnemyTerritoryInRange(target, attacker)` `00575850` [known]:
 1. The attacker owns a cell on the hex ring at distance `R + 1` around the target, where `R` is the target's
    territory range: `NVillage::Military::GetTerritoryRange` `0055fca0`, i.e. `bp_setTerritoryRange`
@@ -67,7 +86,7 @@ assigned to a route per player [known: `NavyShipRoute::HasPlayerEntry` `005b6bb0
 
 `Military_GetAttackReachFactor(building, target)` `00575320` returns a float in 0..1 [known]:
 - **Same landmass:** `Military_DistanceFalloff(building cell, target cell)`. If that is 0, it tries the sea branch.
-- **Other landmass (or overland 0):** only if the target's owner is an enemy (`Player_IsEnemyOf` `005be280`: different
+- **Other landmass (or overland 0):** only if the target's owner is an enemy (`ai::player::Player::IsEnemyOf` `005be280`: different
   ids and different or no team), a landing harbour is in range (`Military_IsHarborWithinBuildingRange`), and
   `HarborList::FindOwnHarborConnectedToTargetHarbor` `005b65d0` finds the building owner's harbour **H2** within 25
   cells of the building with a route to that landing harbour **H1**: then `Military_DistanceFalloff(building, H2)`.
@@ -325,6 +344,31 @@ pickup. The game would read a null fight in its state 3, so the mod handles ever
 |---|---|
 | `NSettlers::Settler::StartDying` | The retreat pickup above |
 | `NNavy::Military::Update` | Also: missions without a fight (pickups) wait in state 2 with a timeout, and sail to the other route end in state 3 |
+
+**Proximity zones** (§2; `proximity.cpp`). `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` is hooked. With
+`includeHarbors`, the distance to the enemy is also measured over routes whose ends belong to the same player, with
+the sum the soldier count uses. Like the game, there's no ship requirement: the route only has to exist.
+- **Own route:** an own harbour H2 on this landmass, a route to an own harbour H1 elsewhere:
+  d(here, H2) + d(H1, nearest enemy military building on H1's landmass). Buildings whose soldiers cross through their
+  owner's harbours get the stripes for it.
+- **The enemy's own route:** an enemy's harbour H1 on this landmass, a route to that enemy's harbour H2 elsewhere:
+  d(here, H1) + d(H2, nearest military building of that enemy on H2's landmass). A target near a colony's harbour
+  reaches zone 2 through the colonist's route home, so the zone-B gate no longer blocks the new attacks.
+
+The game's own distance stays when it is smaller. The enemy filters are the game's (`Player::IsEnemyOf`, the
+diplomacy flags, an active territory). Because the zones also enable soldier upgrades (zone A), this changes play,
+not just the display.
+
+| Hooked | Change |
+|---|---|
+| `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` | Also over routes between two harbours of the same player (both directions above) |
+
+**Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,
+`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup` and `ProximityOverOwnRoutes` switch each rule; with one
+off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
+soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
+waits. Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole
+folder and downloads the host's copy when anything differs.
 
 Several ships: a route still takes one ship per player, but buildings whose best usable pairs differ use different
 routes, and so different ships. When the nearest route's ship is busy with another fight, a building falls back to

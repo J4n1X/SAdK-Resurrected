@@ -11,6 +11,7 @@
 #include <sadkmod/game/sadk_noav/vars.hpp>
 #include <sadkmod/sadkmod.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
 
@@ -92,5 +93,19 @@ inline bool carries(NavyMission *m, Fight *fight)
 
 // For a pickup mission (no fight; retreat.cpp): the game's Update cannot run it in every state.
 bool retreat_update(NavyMission *m);
+
+// navalcombatfix.ini, [NavalCombatFix]. Read once at start-up; the defaults are the rules as decided. Every player
+// of a match runs the host's copy of the mod, ini included (assetshare compares the whole folder), so the match
+// stays in lockstep.
+struct Settings {
+    bool attackersBySea = true;           // AttackersBySea: attackers gather through their own harbours
+    bool defendersBySea = true;           // DefendersBySea: defenders cross the water through their own harbours
+    bool attackFromOwnLanding = true;     // AttackFromOwnLanding: an own harbour in the target's range counts
+    bool retreatPickup = true;            // RetreatPickup: ships pick up soldiers left with nowhere to go
+    bool proximityOverOwnRoutes = true;   // ProximityOverOwnRoutes: own routes count for the distance to the enemy
+    std::int32_t crossingDistance = 0;    // CrossingDistance: cells a sea crossing counts as (gathering, proximity)
+    std::int32_t pickupTimeout = 1200;    // PickupTimeout: ticks a pickup ship waits for its soldiers
+};
+extern Settings g_settings;
 
 }  // namespace navalcombatfix

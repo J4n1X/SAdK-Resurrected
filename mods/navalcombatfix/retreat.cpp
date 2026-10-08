@@ -32,7 +32,6 @@ constexpr std::int32_t kSailHome = 3;             // for a fight: sail to the la
 constexpr std::int32_t kUnload = 7;
 constexpr std::int32_t kLeavingMap = 3;           // NSettlers::Settler state: MoveToHome running (see above)
 constexpr std::int32_t kWalkToShip = 0x21;        // Soldier::Update: walk to the linked ship's harbour
-constexpr std::int32_t kPickupTimeout = 1200;     // ticks a pickup ship waits [TODO: tune in the game]
 constexpr std::int32_t kNobody = -1;              // owner of a neutral harbour / of nobody's territory
 
 // ---- Pickup bookkeeping ------------------------------------------------------------------------------------------
@@ -157,7 +156,7 @@ bool stranded_soldier(game::NSettlers::Settler *settler)
 // Settler::StartDying S 00656760: a ship picks the stranded soldier up instead, when the rule allows.
 void SADK_THISCALL start_dying(game::NSettlers::Settler *settler)
 {
-    if (stranded_soldier(settler)) {
+    if (g_settings.retreatPickup && stranded_soldier(settler)) {
         std::int32_t *cell = &settler->movement->cellX;   // {cellX, cellY}
         if (Ship *ship = pickup_ship(settler->ownerPlayer->index, cell)) {
             fn::NavyLink_LinkMilitarySoldier(settler, ship);   // as AttackConnector::AssignBestSoldiers does
@@ -177,7 +176,7 @@ bool retreat_update(NavyMission *m)
 {
     if (m->state == kWaitingForSoldiers) {
         Pickup *p = pickup(m);
-        if (!p || logic()->tickCounter - p->since < kPickupTimeout) return NavyMilitaryUpdate::original(m);
+        if (!p || logic()->tickCounter - p->since < g_settings.pickupTimeout) return NavyMilitaryUpdate::original(m);
         m->state = kSailHome;   // leave with whoever is aboard
     }
     forget_pickup(m);

@@ -1,6 +1,7 @@
 # Naval combat fix
 
-Fixes for how soldiers cross the water in fights (`combat.cpp`) and on retreat (`retreat.cpp`).
+Fixes for how soldiers cross the water in fights (`combat.cpp`), on retreat (`retreat.cpp`), and for the distance to
+the enemy behind the flag stripes and the attack gate (`proximity.cpp`).
 
 ## Reported bugs
 
