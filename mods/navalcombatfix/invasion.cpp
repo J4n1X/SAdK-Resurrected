@@ -18,7 +18,7 @@
 //      one soldier); the expedition soldier and the goods stay aboard.
 //   5. Won (the fight's target is the player's): the survivors board again and the game's state 6 founds the colony;
 //      the ship's military mission then takes them home. No room after all: the game's own failure path (message,
-//      return, unload). Lost: ShipLostOnDefeat sinks the ship (Ship::SinkImmediately S 005bb250, as the game's Lua
+//      return, unload). Lost: ShipLostOnDefeat sinks the ship (Ship::ScheduleSinkingNoDelay S 005bb250, as the game's Lua
 //      does), else the game's return (state 7) unloads the expedition at home.
 // The button reuses the attack button's icon; its texts are plain English [TODO: own icon and translated texts].
 #include "navy.hpp"
@@ -301,7 +301,7 @@ void lose(Expedition *e, bool cancelled)
         tell(ship, "!navalcombatfix_invasion_cancelled", "Naval invasion called off: the ship returns home");
     } else if (g_settings.shipLostOnDefeat && !at_own_harbor(ship)) {
         fn::NNavy::Expedition::ReleaseAndDeactivate(e);
-        fn::NNavy::Ship::SinkImmediately(ship);
+        fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);
         sadk::log("naval invasion lost: ship %d sinks", ship->shipNumber);
         tell(ship, "!navalcombatfix_invasion_lost_sunk", "Naval invasion lost: the ship sank");
     } else {

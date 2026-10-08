@@ -349,7 +349,12 @@ The expedition (`NNavy::Expedition`, `Ship+0x30`):
 - All of it is saved (`Expedition::Store` `005b7d30`) [known].
 - A ship runs either its expedition (ship state 4) or its military mission (state 5), never both (`Ship::Update`
   `005bb500`) [known].
-- `Ship::SinkImmediately` `005bb250` (used by the Lua `na_sinkShipOnRoute`) sinks the ship at its next stop [inferred].
+- `Ship::ScheduleSinkingNoDelay` `005bb250` (used by the Lua `na_sinkShipOnRoute`; formerly named `SinkImmediately`) sets
+  ship state 8 (sink scheduled). A moving ship is flagged to stop but **finishes its current step to the next grid
+  cell** [known; maintainer, live]. Once it lies still, `Ship::Update` calls `Ship::BeginSinking` `005bb010`
+  (condition −100, state 6 for `ShipConfig::sinkingTime`); then state 7, and `NNavy::System::Update` deletes it.
+  `Ship::ScheduleSinking` `005bb210` is the same with a 30-tick countdown; its caller is the sacrifice that sinks
+  ships (`ApplySinkTargetShips`).
 
 ## 7. The `navalcombatfix` mod: soldiers cross through their own harbours
 
@@ -472,7 +477,7 @@ not just the display.
 | 103 | ready, waiting at home. An attack whose sea link uses this route links its fight to the ship (`combat.cpp`; only for attackers) |
 | 104 | the attackers board (`BoardSettlersAtHarbor`, up to `PickupTimeout`); nobody came → back to 103 |
 | 105 | sail; on arrival only the mission's soldiers land (`NavyLink_UnlinkCargoSettler` + `DisembarkAt`) |
-| 106 | until all have left the fight. Won (see below) → 107. Cancelled → state 7 (home, unload). Lost → `ShipLostOnDefeat` and the landing not the player's: `SinkImmediately`, else state 7 |
+| 106 | until all have left the fight. Won (see below) → 107. Cancelled → state 7 (home, unload). Lost → `ShipLostOnDefeat` and the landing not the player's: `ScheduleSinkingNoDelay`, else state 7 |
 | 107 | the survivors board again, then the game's state 6 founds the colony |
 
 - **After the colony:** the ship switches to its military mission, state 6, which takes the attackers home and
@@ -495,7 +500,7 @@ lost (ship sank / returns), called off; attack by sea lost (ship sank). The game
 **Lost attacks by sea** (`ShipLostOnDefeat`, `combat.cpp`). A mission of the fight's attacker (`Fight::attackerPlayer`)
 in state 5, at the landing, once all its soldiers have left the fight: if the fight is lost **and the landing harbour
 is not the attacker's** (an attack from an own harbour is a coastal attack), `NNavy::Military::Finish` and
-`Ship::SinkImmediately`. The outcome uses the game's phase, `NMilitary::Fight::GetPhase` `005708a0` [known]:
+`Ship::ScheduleSinkingNoDelay`. The outcome uses the game's phase, `NMilitary::Fight::GetPhase` `005708a0` [known]:
 - Fighting (0): the target still stands and its owner is not the attacker: **lost**;
 - TargetCaptured (3), NoTarget (4, the target is gone), or Ending (2) with the target the attacker's: **won**;
 - Ending with the target not the attacker's: **cancelled**. Calling an attack off (lockstep `0x2000E`,

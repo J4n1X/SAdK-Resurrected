@@ -390,8 +390,8 @@ bool sink_after_defeat(NavyMission *m, Ship *ship)
     if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m)) return false;
     if (battle_outcome(m) != Outcome::lost || at_own_harbor(ship)) return false;
     fn::NNavy::Military::Finish(m);
-    forget_lent(ship);   // it sinks at its next stop: not back on its route
-    fn::NNavy::Ship::SinkImmediately(ship);
+    forget_lent(ship);   // it sinks once it lies still: not back on its route
+    fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);
     sadk::log("attack by sea lost: ship %d sinks", ship->shipNumber);
     tell(ship, "!navalcombatfix_attack_lost_sunk", "Attack by sea lost: the ship sank");
     return true;
@@ -513,9 +513,9 @@ bool sink_after_lost_defence(Ship *ship)
     Building *target = fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
     if (target && owner(target) == player) return false;   // the defence still holds the building
     fn::NNavy::Military::Finish(m);
-    forget_lent(ship);   // it sinks at its next stop: not back on its route
+    forget_lent(ship);   // it sinks once it lies still: not back on its route
     end_hold(ship);
-    fn::NNavy::Ship::SinkImmediately(ship);
+    fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);
     sadk::log("defence by sea lost with its harbour: ship %d sinks", ship->shipNumber);
     tell(ship, "!navalcombatfix_defence_lost_sunk", "Defence lost with the harbour: the ship sank");
     return true;
