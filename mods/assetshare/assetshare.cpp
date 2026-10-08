@@ -256,6 +256,16 @@ const char *map_file_name(const char *path)
     return name;
 }
 
+// A file that may land in the maps folder: a plain name ending in .s2m, .bmp, .bin or .lua.
+bool companion_name(const std::string &n)
+{
+    if (n.size() < 5 || n.size() > 120 || n.find("..") != std::string::npos) return false;
+    for (char c : n)
+        if (c == '\\' || c == '/' || c == ':' || static_cast<unsigned char>(c) < 0x20) return false;
+    const char *ext = n.c_str() + n.size() - 4;
+    return !_stricmp(ext, ".s2m") || !_stricmp(ext, ".bmp") || !_stricmp(ext, ".bin") || !_stricmp(ext, ".lua");
+}
+
 // A plain name: no path, no "..".
 bool plain_name(const std::string &n)
 {
@@ -304,6 +314,25 @@ std::string build_for_request(const std::string &rest)
         }
         entries.push_back({file, std::move(data)});
         label = "map file " + file;
+        // A map comes with files of the same name next to it: <map>.bin, its environment data
+        // (CEnviromentMgr::LoadMapEnvData S 00685580), <map>.lua, its script (GameFile_LoadMap S 005aa7b0), and
+        // <map>_<name>.lua, its cutscene scripts (Cutscene_BuildScriptPath S 0078a940). They go with the .s2m.
+        if (file.size() > 4 && !_stricmp(file.c_str() + file.size() - 4, ".s2m")) {
+            std::string dir = path.substr(0, path.find_last_of('\\') + 1), base = file.substr(0, file.size() - 4);
+            std::vector<std::string> names{base + ".bin", base + ".lua"};
+            WIN32_FIND_DATAA fd;
+            HANDLE h = FindFirstFileA((dir + base + "_*.lua").c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) {
+                do names.push_back(fd.cFileName);
+                while (FindNextFileA(h, &fd));
+                FindClose(h);
+            }
+            for (auto &n : names) {
+                std::vector<std::uint8_t> extra;
+                if (archive::read_file(dir + n, extra)) entries.push_back({n, std::move(extra)});
+            }
+            if (entries.size() > 1) label += " with " + std::to_string(entries.size() - 1) + " file(s) that belong to it";
+        }
     } else {
         return {};
     }
@@ -351,6 +380,13 @@ std::uint32_t SADK_CDECL serve_fopen(GameFILE **f, char *path, char *mode)
 }
 
 // ── Host: who has assetshare ─────────────────────────────────────────────────────────────────────────────────────
+bool runs_server_mods()
+{
+    for (auto &m : local_mods())
+        if (m.active && (m.flags & SADKMOD_SERVER) && !starts_with_icase(m.folder, ".temp_")) return true;
+    return false;
+}
+
 struct Joiner {
     std::int32_t net_id;
     DWORD joined_at;
@@ -396,6 +432,18 @@ void finish_sync(Manager *m)
 
 void flush_deferred_maps(Manager *m);
 
+void apply_host_set(Manager *m, const std::vector<HostMod> &host_mods);
+
+// No manifest (no assetshare on the host, or an older one): the host runs no server mods we could get, so ours are
+// switched off for this game, as for a host that runs none. Its stock checksum still matches ours, since server mods'
+// files are left out of it.
+void no_manifest(Manager *m, const char *why)
+{
+    log("no manifest from the host (%s): this game runs without server mods", why);
+    host_shares = false;
+    apply_host_set(m, {});
+}
+
 void use_manifest(Manager *m, const std::string &text)
 {
     std::vector<HostMod> host_mods;
@@ -417,12 +465,15 @@ void use_manifest(Manager *m, const std::string &text)
         }
     }
     if (!header) {
-        log("manifest: not understood - treating the host as one without assetshare");
-        state = State::legacy;
-        flush_deferred_maps(m);
+        no_manifest(m, "not understood");
         return;
     }
     host_shares = true;
+    apply_host_set(m, host_mods);
+}
+
+void apply_host_set(Manager *m, const std::vector<HostMod> &host_mods)
+{
     state = State::syncing;
     auto locals = local_mods();
     // 1. Our server mods that the host does not run (or runs in another version): off for this game. First, so
@@ -616,9 +667,7 @@ std::int32_t SADK_CDECL on_abort_remove(char *path)
         Download d = pending.front();
         pending.pop_front();
         if (d.kind == Kind::manifest) {
-            log("the host sent no manifest - it has no assetshare that shares server mods");
-            state = State::legacy;
-            flush_deferred_maps(manager());
+            no_manifest(manager(), "the transfer failed");
         } else if (d.kind == Kind::mod) {
             char ver[16];
             std::snprintf(ver, sizeof ver, "%u", d.version);
@@ -677,11 +726,18 @@ std::int32_t SADK_CDECL on_rename(char *from, char *to)
                 if (!more && state == State::syncing) finish_sync(m);
             }
         } else if (d.kind == Kind::map) {
-            if (ok && entries.size() == 1 && map_file_name(d.final_path.c_str()) &&
-                archive::write_file(d.final_path, entries[0].data.data(), entries[0].data.size())) {
+            std::size_t written = 0, bytes = 0;
+            if (ok && map_file_name(d.final_path.c_str()))
+                for (auto &e : entries)   // the map file and what belongs to it: plain names into the maps folder
+                    if (companion_name(e.path) && archive::write_file(maps_dir + e.path, e.data.data(), e.data.size())) {
+                        written++;
+                        bytes += e.data.size();
+                    }
+            if (written) {
                 char msg[200];
-                std::snprintf(msg, sizeof msg, "Map file received: %s (%lu KB, %u KB unpacked).", d.name.c_str(),
-                              download_bytes / 1024, unsigned(entries[0].data.size() / 1024));
+                std::snprintf(msg, sizeof msg, "Map file received: %s%s (%lu KB, %u KB unpacked).", d.name.c_str(),
+                              written > 1 ? (" and " + std::to_string(written - 1) + " file(s) of the map").c_str() : "",
+                              download_bytes / 1024, unsigned(bytes / 1024));
                 room_message(msg);
             } else {
                 room_message("The map file " + d.name + " could not be unpacked" + (ok ? "." : ": " + error + "."));
@@ -741,13 +797,10 @@ void on_frame(void *)
     Manager *m = manager();
     if (!m) return;
     DWORD now = GetTickCount();
-    if (state == State::waiting_manifest && now - manifest_asked_at > MANIFEST_TIMEOUT_MS) {
-        log("no manifest from the host within %lu s - it has no assetshare that shares server mods",
-            MANIFEST_TIMEOUT_MS / 1000);
-        state = State::legacy;
-        flush_deferred_maps(m);
-    }
-    if (is_host_online(m))
+    if (state == State::waiting_manifest && now - manifest_asked_at > MANIFEST_TIMEOUT_MS)
+        no_manifest(m, "none within 15 s");
+    // A joiner without assetshare is only kicked by a host that runs server mods: without them it can play anyway.
+    if (is_host_online(m) && !joiners.empty() && runs_server_mods())
         for (auto it = joiners.begin(); it != joiners.end();) {
             if (!it->has_assetshare && now - it->joined_at > KICK_AFTER_MS) {
                 log("kicking net id %08x: it never asked for the manifest (no assetshare)", unsigned(it->net_id));
