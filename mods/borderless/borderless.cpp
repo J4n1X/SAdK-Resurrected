@@ -1,5 +1,6 @@
-// borderless: "fullscreen" becomes a borderless window covering the monitor, at the monitor's resolution. Switching
-// to other windows is instant and the device is never lost; windowed mode is unchanged.
+// borderless: "fullscreen" becomes a borderless window covering the monitor. The game keeps rendering at the
+// resolution chosen in its options, stretched over the whole monitor (distorted if the shapes differ). Switching to
+// other windows is instant and the device is never lost; windowed mode is unchanged.
 //
 // S2CE::CGraphicDevice keeps its display settings as a 9-dword block at +0xa8: width, height, and in the third
 // dword's low byte the windowed flag (+0xb0); +0xc8 marks a window the game does not own. Init S 004da2a0 takes such
@@ -9,9 +10,11 @@
 // fullscreen mode); ApplyWindowStyle S 004d4190 then shapes the window (windowed: a caption window sized to the
 // backbuffer; fullscreen: a topmost popup at 0,0).
 //
-// This mod: when Init is asked for fullscreen, it asks for a windowed device at the size of the game window's monitor
-// instead and remembers that borderless is on; ApplyWindowStyle then makes the window a borderless popup over that
-// monitor. Init calls with the device's own block (the re-initialisation after a desktop change) keep the mode.
+// This mod: when Init is asked for fullscreen, it asks for a windowed device at the same resolution instead and
+// remembers that borderless is on (Init calls with the device's own block keep the mode); ApplyWindowStyle then
+// makes the window a borderless popup over the monitor, and Direct3D stretches the picture to it. The mouse needs no
+// help: in windowed mode the game divides cursor positions by the window's client size (nUi::Cursor::
+// SetPositionFromPixels S 00492300, UiCursor_QueryRelativePosition S 00492410).
 #include <sadkmod/game/sadk_noav/fn/S2CE.hpp>
 #include <sadkmod/sadkmod.hpp>
 
@@ -21,7 +24,6 @@
 
 namespace game = sadk::game;
 using Device = game::S2CE::CGraphicDevice;
-using Init = sadk::Hook<game::fn::S2CE::CGraphicDevice::Init>;
 using ApplyStyle = sadk::Hook<game::fn::S2CE::CGraphicDevice::ApplyWindowStyle>;
 
 namespace {
@@ -39,20 +41,18 @@ RECT monitor_of(Device *dev)
     return RECT{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
 }
 
-bool SADK_THISCALL init(Device *dev, std::int32_t *mode)
+// Before Init: a fullscreen request becomes a windowed one at the same resolution.
+void before_init(Device *&dev, std::int32_t *&mode)
 {
-    if (!mode || *sadk::at<std::uint8_t>(dev, EXTERNAL_WINDOW)) return Init::original(dev, mode);
+    static std::int32_t windowed[9];
+    if (!mode || *sadk::at<std::uint8_t>(dev, EXTERNAL_WINDOW)) return;
     bool own_block = mode == reinterpret_cast<std::int32_t *>(&dev->backBufferWidth);
     if (!own_block) borderless = (mode[2] & 0xff) == 0;            // the caller asks for fullscreen
-    if (!borderless) return Init::original(dev, mode);
-    std::int32_t changed[9];
-    std::memcpy(changed, mode, sizeof changed);
-    RECT r = monitor_of(dev);
-    changed[0] = r.right - r.left;
-    changed[1] = r.bottom - r.top;
-    changed[2] = (changed[2] & ~0xff) | 1;                          // windowed device
-    sadk::log("fullscreen %dx%d -> borderless %dx%d", mode[0], mode[1], changed[0], changed[1]);
-    return Init::original(dev, changed);
+    if (!borderless || (mode[2] & 0xff)) return;
+    std::memcpy(windowed, mode, sizeof windowed);
+    windowed[2] |= 1;
+    mode = windowed;
+    sadk::log("fullscreen %dx%d -> borderless window, picture stretched to the monitor", mode[0], mode[1]);
 }
 
 void SADK_THISCALL apply_style(Device *dev)
@@ -69,8 +69,8 @@ void SADK_THISCALL apply_style(Device *dev)
 
 bool borderless_start()
 {
-    return Init::install(init, "CGraphicDevice::Init: fullscreen -> borderless window") &&
-           ApplyStyle::install(apply_style, "CGraphicDevice::ApplyWindowStyle: borderless popup");
+    return sadk::before<game::fn::S2CE::CGraphicDevice::Init>(before_init, "CGraphicDevice::Init: fullscreen -> windowed") &&
+           ApplyStyle::install(apply_style, "CGraphicDevice::ApplyWindowStyle: borderless popup over the monitor");
 }
 
 SADKMOD_MAIN(borderless_start)

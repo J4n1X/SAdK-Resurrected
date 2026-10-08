@@ -146,10 +146,11 @@ S 004da2a0 takes such a block from start-up (`CApplicationEx::InitEngineLayer` S
 (`Windowed = 1`) or picks the nearest exclusive fullscreen mode; `ApplyWindowStyle` S 004d4190 then makes the window
 a caption window sized to the backbuffer (windowed) or a topmost popup at 0,0 (fullscreen).
 
-The mod hooks both. When `Init` is asked for fullscreen it passes a windowed block at the size of the game window's
-monitor instead (and keeps that mode for re-initialisations with the device's own block); `ApplyWindowStyle` then
-makes the window a `WS_POPUP` covering that monitor, not topmost. Mouse input uses window pixels
-(`CApplicationEx::HandleWindowMessage` S 00401f30 → `nUi::Cursor::SetPositionFromPixels`), which match the
-monitor-sized backbuffer. Not yet live-tested [TODO]: in particular whether the UI handles large desktop
-resolutions, and what reads `CApplicationEx::displayWidth/Height` (`+0x20/+0x24`), which keeps the size the game
-asked for.
+The mod hooks both. When `Init` is asked for fullscreen it passes the same block with the windowed flag set
+(and keeps that mode for re-initialisations with the device's own block), so the game renders at the resolution
+chosen in its options; `ApplyWindowStyle` then makes the window a `WS_POPUP` covering the window's monitor, not
+topmost, and Direct3D stretches the picture to it (distorted when the shapes differ: the maintainer's choice).
+The cursor needs no correction: in windowed mode the game divides window pixels by the client size
+(`nUi::Cursor::SetPositionFromPixels` S 00492300, `UiCursor_QueryRelativePosition` S 00492410). Not yet live-tested
+[TODO]; to check: `nUi::Cursor::SetPixelPosition` S 00492620 places the cursor at window pixels taken from the
+picture, and what reads `CApplicationEx::displayWidth/Height` (`+0x20/+0x24`).
