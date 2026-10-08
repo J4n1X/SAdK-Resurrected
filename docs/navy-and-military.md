@@ -347,8 +347,15 @@ decided, not a restoration of lost behaviour. Every case the game already handle
 **Own sea link.** For a building of player P on another landmass than the target, the mod considers every pair of
 P's own harbours: H1 on the target's landmass, H2 on the building's landmass, and the route from H2's exit to H1.
 A pair counts only if **its own route has a ship for these soldiers**, by the checks `SendSoldiersBySea` makes
-(§5.2). Either P's ship already on that route carries the fight being dispatched, or P has no ship there and an idle
-one is found at H2's exit. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
+(§5.2). The ship is one of these:
+- P's ship already on that route, carrying the fight being dispatched;
+- P's ship on that route lying idle there (ship state 0 or 1, no mission): the ship of the route's sea street. The
+  game's idle-ship search skips it, because a route takes one ship per player [live 2026-10-08: such a ship made every
+  attack over its route count only the target's landmass]. The fight starts its mission
+  (`NNavy::Military::Activate` `005b9cd0`). When the mission ends, `Military::Finish` takes the ship off the route;
+  the mod puts it back (`NavyLink_LinkMovementRoute` `0053c3d0`, as `Expedition::Finish` does), so the sea street
+  stays. This bookkeeping is not saved with the game. A ship sunk after a defeat is not put back;
+- an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually
 take. A blocked route falls back to the next-best pair and its ship.
 

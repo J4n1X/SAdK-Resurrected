@@ -67,15 +67,65 @@ struct SeaLink {
     Ship *ship = nullptr;           // the player's ship for this route
     bool onRoute = false;           // already on the route (carrying this fight), else idle and still to be linked
     bool invasion = false;          // a naval invasion ship waiting at home (invasion.cpp), still to be linked
+    bool routeIdle = false;         // the route's own ship, idle on it (its sea street), still to be linked
     std::int32_t distance = 0;      // d(target, H1) + d(H2, building)
 };
 
 // The ship of `player` that can carry soldiers of `fight` over the route from `home` to `landing`: the checks of
 // AttackConnector::SendSoldiersBySea S 00575510, made for this one route. A route takes one ship per player
 // (NavyShipRoute::CanPlayerAssignShip S 005b6d30):
-//   - the player already has a ship on it: usable only while its mission is active and carries this fight;
+//   - the player already has a ship on it: usable while its mission is active and carries this fight, or while it
+//     lies idle on the route (ship state idle or waiting, no mission): the ship of a sea street between two of the
+//     player's harbours, which FindNearestIdleShipAtHarborExit skips because it serves the route already [live
+//     2026-10-08: such a ship, state 1, made every attack over its route count only the target's landmass];
 //   - else the nearest idle ship of the player at H2's exit (NNavy::System::FindNearestIdleShipAtHarborExit
 //     S 005b3450), linked to the route only when the soldiers are actually sent.
+constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (docs/navy-and-military.md §5.3)
+constexpr std::int32_t kShipWaiting = 1;
+
+constexpr std::int32_t kShipSinking = 6;   // 6 sinking, 7 sunk, 8 doomed
+
+bool idle_on_route(Ship *ship)
+{
+    return (ship->state == kShipIdle || ship->state == kShipWaiting) && !ship->military->bActive;
+}
+
+// Route ships lent to a fight. NNavy::Military::Finish S 005ba190 takes a ship off its route
+// (NavyLink_UnlinkMilitaryRoute), which would end the route's sea street; when the mission ends, the ship goes back
+// on its route as Expedition::Finish puts an expedition's ship back (NavyLink_LinkMovementRoute S 0053c3d0). Kept by
+// the mod, not saved with the game; every peer runs the same updates, so it stays in lockstep.
+struct LentShip {
+    Ship *ship;
+    NavyShipRoute *route;
+};
+LentShip g_lent[64];
+int g_lentCount;
+
+void lend(Ship *ship, NavyShipRoute *route)
+{
+    for (int i = 0; i < g_lentCount; ++i)
+        if (g_lent[i].ship == ship) return;
+    if (g_lentCount < 64) g_lent[g_lentCount++] = {ship, route};
+}
+
+void forget_lent(Ship *ship)
+{
+    for (int i = 0; i < g_lentCount; ++i)
+        if (g_lent[i].ship == ship) g_lent[i] = g_lent[--g_lentCount];
+}
+
+// After a mission update: a lent ship whose mission has ended returns to its route (unless it sank).
+void return_lent(Ship *ship)
+{
+    if (ship->military->bActive) return;
+    for (int i = 0; i < g_lentCount; ++i) {
+        if (g_lent[i].ship != ship) continue;
+        if (ship->state < kShipSinking) fn::NavyLink_LinkMovementRoute(ship, g_lent[i].route);
+        g_lent[i] = g_lent[--g_lentCount];
+        return;
+    }
+}
+
 bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight, bool attacking, SeaLink *link)
 {
     HarborExit *exit = fn::ai::navy::Harbor::FindExitConnectedTo(home, landing);
@@ -89,6 +139,8 @@ bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight
         bool waitingInvasion = attacking && invasion_ready(ship) && !ship->military->bActive;
         if (waitingInvasion) {
             link->invasion = true;
+        } else if (idle_on_route(ship)) {
+            link->routeIdle = true;
         } else {
             if (!fight) return false;   // outside a dispatch a busy ship never counts
             if (!ship->military->bActive || !carries(ship->military, fight)) return false;
@@ -231,6 +283,10 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
     } else if (link.invasion) {   // the invasion ship is on its route already; the fight starts its boarding
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
+    } else if (link.routeIdle) {   // the route's own ship: linked to the route already, so only its mission starts
+        fn::NNavy::Military::Activate(link.ship->military);   // what NavyLink_LinkMilitaryRoute does last
+        fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
+        lend(link.ship, link.route);
     }
     // __thiscall on the connector: binds each soldier to connector->fight and to the ship.
     fn::NMilitary::AttackConnector::SendSoldiersFromBuilding(connector, building, count, link.ship);
@@ -269,6 +325,7 @@ bool sink_after_defeat(NavyMission *m, Ship *ship)
     Fight *fight = m->fight.cachedFight;
     if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m) || !battle_lost(m)) return false;
     fn::NNavy::Military::Finish(m);
+    forget_lent(ship);   // it sinks at its next stop: not back on its route
     fn::NNavy::Ship::SinkImmediately(ship);
     sadk::log("attack by sea lost: ship %d sinks", ship->shipNumber);
     return true;
@@ -279,7 +336,7 @@ bool sink_after_defeat(NavyMission *m, Ship *ship)
 // the landing end is the one on the target's landmass. A mission without a fight is a pickup (retreat.cpp). The guard is
 // the game's: the mission is active and the ship stands still (its step interpolator not running, movement state 0
 // or 4).
-bool SADK_THISCALL navy_military_update(NavyMission *m)
+bool update_mission(NavyMission *m)
 {
     auto *ship = static_cast<Ship *>(m->ship);
     game::NNavy::Movement *mv = ship->movement;
@@ -299,6 +356,13 @@ bool SADK_THISCALL navy_military_update(NavyMission *m)
     fn::NNavy::Movement::MoveToHarbor(mv, loading ? home : landing);
     m->state = loading ? kWaitForCargo : kDisembark;
     return false;
+}
+
+bool SADK_THISCALL navy_military_update(NavyMission *m)
+{
+    bool finished = update_mission(m);
+    return_lent(static_cast<Ship *>(m->ship));
+    return finished;
 }
 
 }  // namespace
