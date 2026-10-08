@@ -374,7 +374,7 @@ Full picture and status tags: `docs/data-loading.md`.
 | `0x004075d0` | `CApplicationEx::Initialize` | once: `FileScanHolder::ScanDirectory("data\\")`, the property database (`Properties_RegisterLuaLibrary` `0x00550e40`, `PropertiesDb::RunPropertyScript("data")` `0x0054f8d0`), sound, lobby, menus |
 | `0x0054a140` | `NProperties::StaticAccess::EnsureInstance` | the `PropertiesDb` singleton `0x00889dd8` (0xc4 bytes) |
 | `0x005494a0` | `Properties_Db_ClearAll` | empties every property table, `bLoaded` (+0xc0) = 0; only caller `CApplicationEx::Shutdown` `0x00401cb0` |
-| `0x0067e800` | `Scene_CreateGlobal` | `new S2CG::Scene` into `g_pScene` `0x0088ca60`; caller `nMenu::Game::OnEnter` `0x005eed00` |
+| `0x0067e7e0` | `Scene_CreateGlobal` | `new S2CG::Scene` into `g_pScene` `0x0088ca60`; caller `nMenu::Game::OnEnter` `0x005eed00` |
 | `0x0067e8a0` | `Scene_DestroyGlobal` | frees `g_pScene`; caller `nMenu::Game::OnLeave` `0x005eb030` (was `ProgressBroadcaster_Destroy`) |
 | `0x006824c0` | `S2CG::Scene::Init` | scene vtable `0x007f8f2c` slot 0; per match: `graphics.xml`, `items.xml`, `settler_config.xml`, `settler_animations.xml`, `buildings.xml`, `animals.xml`, `ships.xml` |
 | `0x007842e0` | `nGame::System::BuildScene` | from `BuildWorld` `0x00784d40`: `terrain_static_data.xml`, `map_objects.xml`, then `Scene::Init` |

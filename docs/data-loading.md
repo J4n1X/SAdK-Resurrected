@@ -30,7 +30,7 @@ property table, the config flags, `bLoaded` `+0xc0` = 0), called only from `CApp
 [known].
 
 **Reloading between matches works offline** [live, maintainer's test 2026-10-08, test mod `mods/propreload`]: every
-time a match is entered (hook on `Scene_CreateGlobal` `0067e800`, before the world is built), `Properties_Db_ClearAll`,
+time a match is entered (hook on `Scene_CreateGlobal` `0067e7e0`, before the world is built), `Properties_Db_ClearAll`,
 `Properties_RegisterLuaLibrary` and `PropertiesDb::RunPropertyScript("data")` ran; two offline matches in a row, no
 crash, and the record counts after each reload equal those before (104 buildings, 176 goods, 3 tribes, 12 animals,
 6 AI, 77 sacrifices). Not yet established: an online match after a reload [TODO], and whether every value (not just
@@ -40,7 +40,7 @@ the record counts) is the same as after start-up [TODO: not compared].
 
 | What | Where | Status |
 |---|---|---|
-| `S2CG::Scene` (global `g_pScene` `0088ca60`) | created by `Scene_CreateGlobal` `0067e800` from `nMenu::Game::OnEnter` `005eed00`, freed by `Scene_DestroyGlobal` `0067e8a0` from `nMenu::Game::OnLeave` `005eb030` | [known] |
+| `S2CG::Scene` (global `g_pScene` `0088ca60`) | created by `Scene_CreateGlobal` `0067e7e0` from `nMenu::Game::OnEnter` `005eed00`, freed by `Scene_DestroyGlobal` `0067e8a0` from `nMenu::Game::OnLeave` `005eb030` | [known] |
 | `[data]\settings\graphics.xml` (scene settings), `items.xml` (new `ItemMgr`), `[data]\character\settler_config.xml` and `settler_animations.xml` (new `CCharacterMgr`), `buildings.xml`, `animals.xml` (new `AnimalMgr`), `ships.xml` (new `ShipMgr`) | `S2CG::Scene::Init` `006824c0`, slot 0 of the scene's vtable `007f8f2c`, called by `nGame::System::BuildScene` | [known] |
 | Except: tile scaling, map-render and environment settings from `graphics.xml` | parsed on the first `Scene::Init` only (latch byte `0088ca6a`) | [known] |
 | `[data]\settings\terrain_static_data.xml`, `map_objects.xml` | `nGame::System::BuildScene` `007842e0`, from `nGame::System::BuildWorld` `00784d40`, which also constructs `g_pGameSystem` | [known] |

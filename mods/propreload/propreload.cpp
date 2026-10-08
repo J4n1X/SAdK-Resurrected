@@ -6,7 +6,7 @@
 // S 00550e40 (defaults + the Lua library "properties"), then PropertiesDb::RunPropertyScript("data") S 0054f8d0. Its
 // bindings append, so the database is emptied first with the game's own Properties_Db_ClearAll S 005494a0 (otherwise
 // only called at shutdown). This mod runs those three steps every time a match is entered: in Scene_CreateGlobal
-// S 0067e800, which nMenu::Game::OnEnter S 005eed00 calls once per match (offline and online), before the world is
+// S 0067e7e0, which nMenu::Game::OnEnter S 005eed00 calls once per match (offline and online), before the world is
 // built. If something kept pointers into the old records (menus, sound, music), it now reads freed memory: a crash,
 // or wrong names / values in the menus, is the answer "not safe". The log shows the record counts before and after.
 #include <sadkmod/game/sadk_noav/fn/NProperties.hpp>
@@ -16,7 +16,6 @@
 
 namespace game = sadk::game;
 namespace fn = sadk::game::fn;
-using SceneCreate = sadk::Hook<fn::Scene_CreateGlobal>;
 
 namespace {
 
@@ -28,7 +27,7 @@ void log_counts(const char *when, game::ai::properties::PropertiesDb *db)
               db->goodMapSize, db->tribeMapSize, db->animalMapSize, db->aiMapSize, db->sacrificeMapSize);
 }
 
-void SADK_CDECL scene_create()
+void match_enter(void *)
 {
     auto *db = fn::NProperties::StaticAccess::EnsureInstance();
     reloads++;
@@ -40,7 +39,6 @@ void SADK_CDECL scene_create()
     sadk::msvc::string name = sadk::msvc::string::small("data");
     fn::ai::properties::PropertiesDb::RunPropertyScript(db, &name);
     log_counts("after", db);
-    SceneCreate::original();
 }
 
 }  // namespace
@@ -48,7 +46,7 @@ void SADK_CDECL scene_create()
 bool propreload_start()
 {
     sadk::log("TEST MOD: the property database is reloaded every time a match is entered");
-    return SceneCreate::install(scene_create, "Scene_CreateGlobal: reload the properties first");
+    return sadk::events::on_match_enter(match_enter);   // Scene_CreateGlobal, before the world is built
 }
 
 SADKMOD_MAIN(propreload_start, 1, SADKMOD_SERVER)

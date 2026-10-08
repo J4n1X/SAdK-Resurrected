@@ -1286,7 +1286,7 @@ every class's `Deserialize` now decompiles with named field access (`this->field
 
 | Address | Old name | New name | Evidence |
 |---|---|---|---|
-| `0x0067e8a0` | `ProgressBroadcaster_Destroy` | `Scene_DestroyGlobal` (`void __cdecl(void)`) | frees `g_pScene` `0x0088ca60` through `S2CG::Scene::dtor`; counterpart of `Scene_CreateGlobal` `0x0067e800`; caller `nMenu::Game::OnLeave` `0x005eb030` `[known]` |
+| `0x0067e8a0` | `ProgressBroadcaster_Destroy` | `Scene_DestroyGlobal` (`void __cdecl(void)`) | frees `g_pScene` `0x0088ca60` through `S2CG::Scene::dtor`; counterpart of `Scene_CreateGlobal` `0x0067e7e0`; caller `nMenu::Game::OnLeave` `0x005eb030` `[known]` |
 
 Plate comment added on `Properties_Db_ClearAll` `0x005494a0` (the only way the game empties the property database;
 reload safety `[TODO]`). Findings: `docs/data-loading.md`.

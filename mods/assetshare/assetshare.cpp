@@ -747,13 +747,11 @@ bool SADK_THISCALL on_send_ready(Manager *mgr, bool ready)
     return fn::NComm_Manager::SendPlayerReadyEvent(mgr, ready);
 }
 
-// ── Session events ───────────────────────────────────────────────────────────────────────────────────────────────
-using HandleEvent = sadk::Hook<fn::NComm_Manager::HandleEvent>;
-bool SADK_THISCALL on_handle_event(Manager *m, game::NComm::EventBase *ev)
+// ── Session events (sadk::events) ────────────────────────────────────────────────────────────────────────────────
+void on_net_event(void *, Manager *m, game::NComm::EventBase *ev)
 {
-    auto type = static_cast<std::uint32_t>(ev->typeId);   // read first: the handler may consume the event
+    auto type = static_cast<std::uint32_t>(ev->typeId);
     std::int32_t source = ev->sourceNetId;
-    bool ok = HandleEvent::original(m, ev);
     // Someone joins this host. The host handles its own UserInformation too, under the host id 0xEFFFFFCC (the id
     // RequestFileFromHost sends to; KickPlayer S 0040b470 never kicks it): only remote players count.
     if (type == EV_USER_INFORMATION && is_host_online(m) && static_cast<std::uint32_t>(source) != HOST_NET_ID &&
@@ -769,13 +767,12 @@ bool SADK_THISCALL on_handle_event(Manager *m, game::NComm::EventBase *ev)
         if (!request(m, std::string(share_rel) + "manifest." + capability(), d))
             state = State::idle;   // not connected yet (RequestFileFromHost refuses): again at the next one
     }
-    return ok;
 }
 
-using MainLoop = sadk::Hook<fn::NComm_Manager::Process_MainLoop>;
-bool SADK_THISCALL on_main_loop(Manager *m)
+void on_frame(void *)
 {
-    bool ok = MainLoop::original(m);
+    Manager *m = manager();
+    if (!m) return;
     DWORD now = GetTickCount();
     if (state == State::waiting_manifest && now - manifest_asked_at > MANIFEST_TIMEOUT_MS) {
         log("no manifest from the host within %lu s - it has no assetshare that shares server mods",
@@ -793,14 +790,11 @@ bool SADK_THISCALL on_main_loop(Manager *m)
                 ++it;
             }
         }
-    return ok;
 }
 
 // The end of a network session: everything this game changed is put back.
-using Shutdown = sadk::Hook<fn::NComm_Manager::Shutdown>;
-bool SADK_THISCALL on_shutdown(Manager *m, bool keep)
+void on_session_end(void *)
 {
-    bool ok = Shutdown::original(m, keep);
     if (state != State::idle || !downloaded.empty() || !switched_off.empty() || !switched_on.empty()) {
         for (auto &f : downloaded) discard_temp(f);
         for (auto &f : switched_on) host().deactivate_mod(f.c_str());
@@ -820,7 +814,6 @@ bool SADK_THISCALL on_shutdown(Manager *m, bool keep)
     missing.clear();
     joiners.clear();
     InterlockedExchange(&downloads_active, 0);
-    return ok;
 }
 
 // The build checksum leaves out server mods' files (see the top).
@@ -903,15 +896,14 @@ bool assetshare_start()
     ok += sadk::patch_calls(net::S2TftpSession::CloseFile, fn::_remove, (void *)on_abort_remove, "download abort", 1);
     int hooks = BeginSend::install(on_begin_send, "S2TFTP: 4 KB blocks; who asks for the manifest") +
                 RequestFile::install(on_request_file, "map requests as archives") +
-                HandleEvent::install(on_handle_event, "join: fetch the manifest / note a joiner") +
-                MainLoop::install(on_main_loop, "manifest timeout, kick joiners without assetshare") +
-                Shutdown::install(on_shutdown, "session end: put the mods back") +
                 Checksum::install(on_checksum, "build checksum without server mods' files") +
                 GameSettings::install(on_game_settings, "maps advertised as downloadable");
-    log("%d of 8 patches, %d of 7 hooks active (maps folder %s; maps %s, server mods %s; this side %s LZMS)", ok, hooks,
+    int subscribed = sadk::events::on_net_event(on_net_event) + sadk::events::on_frame(on_frame) +   // join, manifest
+                     sadk::events::on_session_end(on_session_end);   // timeout and kick; put the mods back
+    log("%d of 8 patches, %d of 4 hooks, %d of 3 events active (maps folder %s; maps %s, server mods %s; this side %s LZMS)", ok, hooks, subscribed,
         maps_dir.c_str(), accept_maps ? "accepted" : "refused", accept_mods ? "accepted" : "refused",
         archive::can_compress() ? "can use" : "cannot use");
-    return ok == 8 && hooks == 7;
+    return ok == 8 && hooks == 4 && subscribed == 3;
 }
 
 SADKMOD_MAIN(assetshare_start, 2, SADKMOD_CLIENT)
