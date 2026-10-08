@@ -362,3 +362,39 @@ layout, and evidence: `decomp/RENAME_LIST.md` "2026-07-28 (cont.)". **`AvatarPro
 `LobbyComm::ActorProxy : LobbyComm::IActor` (a distinct, widely-shared actor interface used by 4+
 other class hierarchies), not this Block family — its own 7-slot vtable (`0x007dd038`) needs a
 dedicated pass rather than a rushed partial binding.
+
+---
+
+## 6. Data loading: start-up vs per match (`sadk_noav.exe`, 2026-10-08)
+
+Full picture and status tags: `docs/data-loading.md`.
+
+| Address | Name | What |
+|---|---|---|
+| `0x004075d0` | `CApplicationEx::Initialize` | once: `FileScanHolder::ScanDirectory("data\\")`, the property database (`Properties_RegisterLuaLibrary` `0x00550e40`, `PropertiesDb::RunPropertyScript("data")` `0x0054f8d0`), sound, lobby, menus |
+| `0x0054a140` | `NProperties::StaticAccess::EnsureInstance` | the `PropertiesDb` singleton `0x00889dd8` (0xc4 bytes) |
+| `0x005494a0` | `Properties_Db_ClearAll` | empties every property table, `bLoaded` (+0xc0) = 0; only caller `CApplicationEx::Shutdown` `0x00401cb0` |
+| `0x0067e7e0` | `Scene_CreateGlobal` | `new S2CG::Scene` into `g_pScene` `0x0088ca60`; caller `nMenu::Game::OnEnter` `0x005eed00` |
+| `0x0067e8a0` | `Scene_DestroyGlobal` | frees `g_pScene`; caller `nMenu::Game::OnLeave` `0x005eb030` (was `ProgressBroadcaster_Destroy`) |
+| `0x006824c0` | `S2CG::Scene::Init` | scene vtable `0x007f8f2c` slot 0; per match: `graphics.xml`, `items.xml`, `settler_config.xml`, `settler_animations.xml`, `buildings.xml`, `animals.xml`, `ships.xml` |
+| `0x007842e0` | `nGame::System::BuildScene` | from `BuildWorld` `0x00784d40`: `terrain_static_data.xml`, `map_objects.xml`, then `Scene::Init` |
+| `0x005ab800` | `GameData_ComputeBuildChecksum` | not cached: `NComm_GetBuildChecksum` `0x0041f240` recomputes on each join |
+| `0x006e4310` | `FileScanHolder::FindFilesInDirectory` | lists the disk live (`FindFirstFileA` / `FindNextFileA`) |
+
+## 7. S2TFTP, the in-match file transfer (`sadk_noav.exe`, 2026-10-08)
+
+Packets, flow, speed and pitfalls: `docs/s2tftp.md`.
+
+| Address | Name | What |
+|---|---|---|
+| `0x004190f0` | `NComm::TinCatNetwork::RequestFileFromHost` | vtable `+0xa4`: `RequestFile(host 0xEFFFFFCC, remote, local, queueIfBusy)` |
+| `0x004084d0` | `NComm_Manager::RequestFileFromHost` | the joiner's map requests (from `HandleEvent`); was `NComm_Manager_NetworkVcall_A4` |
+| `0x0040b410` | `NComm_Manager::Shutdown` | the end of every network session |
+| `0x0040b470` | `NComm_Manager::KickPlayer` | host only: `(peer, reason, sendKickEvent)` |
+| `0x00427140` | `ai::net::S2TftpManager::RequestFile` | start or queue a ReadRequest; one transfer per peer |
+| `0x00427400` | `ai::net::S2TftpManager::ProcessQueue` | starts the next queued request |
+| `0x00428110` | `ai::net::S2TftpManager::OnReceive` | all `0x3eb` packets; a ReadRequest serves `<My Documents>\<name>` |
+| `0x00426a30` | `ai::net::S2TftpSession::BeginSend` | block size from the connection type: 512 / 1K / 2K / 4K |
+| `0x00427f10` | `ai::net::S2TftpSession::OnAck` | stop-and-wait: next block only after the ack |
+| `0x00427cf0` | `ai::net::S2TftpSession::OnData` | acks each block; completes on a short block |
+| `0x0041f220` | `UserProfile_GetConnectionType` | UserProfile `+0x94`, option `cConnectionType` (0 none … 4 LAN); was `FUN_0041f220` |

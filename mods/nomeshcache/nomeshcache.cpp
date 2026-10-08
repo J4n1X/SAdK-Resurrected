@@ -13,7 +13,7 @@ namespace game = sadk::game;
 using MeshLoad = sadk::Hook<game::fn::S2CE::CMesh::Load>;
 
 static bool SADK_THISCALL load_without_cache(game::S2CE::CMesh *mesh, sadk::msvc::string *path, std::int32_t *decl,
-                                             float param30, bool merge, bool rebase, char *mesh_name, bool)
+                                             float param30, bool merge, bool rebase, char *mesh_name, bool /*noCache*/)
 {
     return MeshLoad::original(mesh, path, decl, param30, merge, rebase, mesh_name, true);
 }
@@ -23,4 +23,4 @@ bool nomeshcache_start()
     return MeshLoad::install(load_without_cache, "CMesh::Load without the .mshraw cache");
 }
 
-SADKMOD_MAIN(nomeshcache_start)
+SADKMOD_MAIN(nomeshcache_start, 1, SADKMOD_CLIENT)

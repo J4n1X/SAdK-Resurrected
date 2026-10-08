@@ -1,14 +1,18 @@
-/* SAdK-ServerConfig: points a "Die Siedler - Aufbruch der Kulturen" install at a revival lobby server,
- * sets the bridge options and installs the bridge shim (wsock32.dll, embedded) into the game's bin folder.
+/* SAdK-ServerConfig: points a "Die Siedler - Aufbruch der Kulturen" install at a revival lobby server and installs
+ * the shim (wsock32.dll, the mod host) and the mods every player of the revival needs (all embedded).
  *
  * Writes (all plain Windows INI, which is how the game reads them):
- *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port, ForceBridge
+ *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port
  *       read by LobbyProfile::GetSettingString S 00465700 (GetPrivateProfileStringA)
  *   data\game\settings\network.ini       [Basics] gamePort
  *       read by NComm_NetworkConfig_LoadFromIni S 0041ede0
- *   bin\sadk_bridge.ini                  [Bridge] port   (the shim's bridge port)
- *   bin\wsock32.dll                      the bridge shim and mod host (docs/bridge-protocol.md, mods/README.md)
- *   mods\billboards\mod.dll, billboards.ini  the billboards mod; "Disable billboards" = [Billboards] Enabled
+ *   bin\wsock32.dll                      the shim: proxy and mod host (mods/README.md)
+ *   mods\gamebridge\                 hosting through the lobby server (docs/bridge-protocol.md);
+ *                                        gamebridge.ini [Bridge] ForceBridge, Port
+ *   mods\assetshare\                     map sharing; assetshare.ini as shipped
+ *   mods\billboards\                     the billboards mod; "Disable billboards" = billboards.ini [Billboards] Enabled
+ * A mod's mod.dll is replaced when it differs from the embedded one; its .ini is only written when missing, and then
+ * only the keys set here change, so other edits stay.
  *
  * The "modified" check recomputes the game's own build checksum (GameData_ComputeBuildChecksum
  * S 005ab800): the host kicks a joiner whose value differs ("!CHECKSUM MISMATCH"), so a different value
@@ -203,7 +207,7 @@ static unsigned build_checksum(int *count)
     return cs;
 }
 
-/* ── Embedded files: the shim and the billboards mod ─────────────────────── */
+/* ── Embedded files: the shim and the mods ────────────────────────────── */
 static const void *resource(int id, DWORD *size)
 {
     HRSRC r = FindResourceA(NULL, MAKEINTRESOURCEA(id), (LPCSTR)RT_RCDATA);
@@ -248,30 +252,73 @@ static int install_file(const char *rel, int id)
 static int shim_state(void) { return file_state("bin\\wsock32.dll", IDR_SHIM); }
 static int install_shim(void) { return install_file("bin\\wsock32.dll", IDR_SHIM); }
 
-/* The billboards mod (mods\billboards): always installed (on the DRM-free build); "Disable billboards" is its
-   [Billboards] Enabled in mods\billboards\billboards.ini, which the mod reads at start-up. The .ini is only written
-   when missing (from the embedded default) and then only its Enabled key is changed, so other edits stay. */
-#define BILLBOARDS_DLL "mods\\billboards\\mod.dll"
-#define BILLBOARDS_INI "mods\\billboards\\billboards.ini"
-static int billboards_enabled(void)
+/* The mods installed with the shim (on the DRM-free build): mods\<name>\mod.dll and <name>.ini. */
+static const struct {
+    const char *name;
+    int dll, ini;
+} shipped[] = {
+    {"gamebridge", IDR_MOD_GAMEBRIDGE, IDR_MOD_GAMEBRIDGE_INI},
+    {"assetshare", IDR_MOD_ASSETSHARE, IDR_MOD_ASSETSHARE_INI},
+    {"billboards", IDR_MOD_BILLBOARDS, IDR_MOD_BILLBOARDS_INI},
+};
+
+/* <root>\mods\<name>\<file> */
+static void mod_path(char *out, const char *name, const char *file)
 {
-    char p[MAX_PATH], v[16];
-    join(p, root, BILLBOARDS_INI);
-    GetPrivateProfileStringA("Billboards", "Enabled", "true", v, sizeof v, p);   /* none yet: on */
+    char rel[MAX_PATH];
+    snprintf(rel, sizeof rel, "mods\\%s\\%s", name, file);
+    join(out, root, rel);
+}
+
+static void mod_ini(char *out, const char *name)
+{
+    char file[64];
+    snprintf(file, sizeof file, "%s.ini", name);
+    mod_path(out, name, file);
+}
+
+static int ini_bool(const char *path, const char *section, const char *key, int fallback)
+{
+    char v[16];
+    GetPrivateProfileStringA(section, key, fallback ? "true" : "false", v, sizeof v, path);
     return !lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes");
 }
 
-static int install_billboards_mod(int enabled)
+/* gamebridge was called gamehostbridge before: its settings move over (the new .ini only if there is none yet), and
+   the old folder goes, since both mods would tag the same connections. */
+static void replace_old_bridge(void)
+{
+    char old_dir[MAX_PATH], old_dll[MAX_PATH], old_ini[MAX_PATH], new_dir[MAX_PATH], new_ini[MAX_PATH];
+    join(old_dir, root, "mods\\gamehostbridge");
+    if (GetFileAttributesA(old_dir) == INVALID_FILE_ATTRIBUTES) return;
+    join(old_dll, root, "mods\\gamehostbridge\\mod.dll");
+    join(old_ini, root, "mods\\gamehostbridge\\gamehostbridge.ini");
+    join(new_dir, root, "mods\\gamebridge");
+    join(new_ini, root, "mods\\gamebridge\\gamebridge.ini");
+    CreateDirectoryA(new_dir, NULL);
+    if (GetFileAttributesA(new_ini) == INVALID_FILE_ATTRIBUTES) MoveFileA(old_ini, new_ini);
+    DeleteFileA(old_dll);
+    DeleteFileA(old_ini);
+    RemoveDirectoryA(old_dir);   /* only if nothing else is left in it */
+}
+
+static int install_mods(void)
 {
     char p[MAX_PATH];
+    int ok = 1;
     join(p, root, "mods");
     CreateDirectoryA(p, NULL);
-    join(p, root, "mods\\billboards");
-    CreateDirectoryA(p, NULL);
-    int ok = file_state(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS) == 1 || install_file(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS);
-    if (file_state(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI) == 0) ok &= install_file(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI);
-    join(p, root, BILLBOARDS_INI);
-    ok &= WritePrivateProfileStringA("Billboards", "Enabled", enabled ? "true" : "false", p) != 0;
+    replace_old_bridge();
+    for (int i = 0; i < (int)(sizeof shipped / sizeof shipped[0]); i++) {
+        char dir[MAX_PATH], rel_dll[MAX_PATH], rel_ini[MAX_PATH];
+        snprintf(rel_dll, sizeof rel_dll, "mods\\%s", shipped[i].name);
+        join(dir, root, rel_dll);
+        CreateDirectoryA(dir, NULL);
+        snprintf(rel_dll, sizeof rel_dll, "mods\\%s\\mod.dll", shipped[i].name);
+        snprintf(rel_ini, sizeof rel_ini, "mods\\%s\\%s.ini", shipped[i].name, shipped[i].name);
+        ok &= file_state(rel_dll, shipped[i].dll) == 1 || install_file(rel_dll, shipped[i].dll);
+        if (file_state(rel_ini, shipped[i].ini) == 0) ok &= install_file(rel_ini, shipped[i].ini);
+    }
     return ok;
 }
 
@@ -280,7 +327,7 @@ static void ini_paths(char *lobby, char *network, char *bridge)
 {
     join(lobby, root, "data\\lobby\\config\\LobbySettings.ini");
     join(network, root, "data\\game\\settings\\network.ini");
-    join(bridge, root, "bin\\sadk_bridge.ini");
+    mod_ini(bridge, "gamebridge");
 }
 
 static void set_advanced(HWND dlg, int on)
@@ -314,9 +361,9 @@ static void refresh(HWND dlg)
         if (!exe_supported)
             lstrcpyA(shim, st ? "Unsupported SADK.exe - remove bin\\wsock32.dll; the shim needs the DRM-free build."
                               : "Unsupported SADK.exe - the shim needs the DRM-free build and is not installed.");
-        else lstrcpyA(shim, st == 1 ? "Bridge shim (wsock32.dll): installed and up to date."
-                      : st == 0 ? "Bridge shim (wsock32.dll): not installed - Save installs it."
-                                : "Bridge shim (wsock32.dll): a different version - Save replaces it.");
+        else lstrcpyA(shim, st == 1 ? "Shim (wsock32.dll): up to date. Save installs or updates the mods."
+                      : st == 0 ? "Shim (wsock32.dll): not installed - Save installs it and the mods."
+                                : "Shim (wsock32.dll): a different version - Save replaces it, updates the mods.");
 
         char lobby[MAX_PATH], network[MAX_PATH], bridge[MAX_PATH], v[256];
         ini_paths(lobby, network, bridge);
@@ -324,13 +371,14 @@ static void refresh(HWND dlg)
         SetDlgItemTextA(dlg, IDC_HOST, v);
         SetDlgItemInt(dlg, IDC_LOBBYPORT, GetPrivateProfileIntA("LobbyServer", "Port", 7070, lobby), FALSE);
         SetDlgItemInt(dlg, IDC_GAMEPORT, GetPrivateProfileIntA("Basics", "gamePort", 5479, network), FALSE);
-        SetDlgItemInt(dlg, IDC_BRIDGEPORT, GetPrivateProfileIntA("Bridge", "port", 7072, bridge), FALSE);
-        GetPrivateProfileStringA("LobbyServer", "ForceBridge", "false", v, sizeof v, lobby);
-        CheckDlgButton(dlg, IDC_FORCE, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
-                                           ? BST_CHECKED : BST_UNCHECKED);
+        SetDlgItemInt(dlg, IDC_BRIDGEPORT, GetPrivateProfileIntA("Bridge", "Port", 7072, bridge), FALSE);
+        CheckDlgButton(dlg, IDC_FORCE, ini_bool(bridge, "Bridge", "ForceBridge", 0) ? BST_CHECKED : BST_UNCHECKED);
         /* The billboards mod's Enabled key; ticked when there is none yet, since the pages behind the billboards
            are gone for everyone. */
-        CheckDlgButton(dlg, IDC_BILLBOARDS, billboards_enabled() ? BST_CHECKED : BST_UNCHECKED);
+        char billboards[MAX_PATH];
+        mod_ini(billboards, "billboards");
+        CheckDlgButton(dlg, IDC_BILLBOARDS,
+                       ini_bool(billboards, "Billboards", "Enabled", 1) ? BST_CHECKED : BST_UNCHECKED);
     }
     SetDlgItemTextA(dlg, IDC_STATUS, status);
     SetDlgItemTextA(dlg, IDC_MODWARN, warn);
@@ -373,28 +421,36 @@ static void save(HWND dlg)
     int ok = WritePrivateProfileStringA("LobbyServer", "Host", h, lobby);
     snprintf(num, sizeof num, "%u", lport);
     ok &= WritePrivateProfileStringA("LobbyServer", "Port", num, lobby);
-    ok &= WritePrivateProfileStringA("LobbyServer", "ForceBridge",
-                                     IsDlgButtonChecked(dlg, IDC_FORCE) ? "true" : "false", lobby);
     snprintf(num, sizeof num, "%u", gport);
     ok &= WritePrivateProfileStringA("Basics", "gamePort", num, network);
-    snprintf(num, sizeof num, "%u", bport);
-    ok &= WritePrivateProfileStringA("Bridge", "port", num, bridge);
     int shim_ok = !exe_supported || shim_state() == 1 || install_shim();
-    int mods_ok = !exe_supported || install_billboards_mod(IsDlgButtonChecked(dlg, IDC_BILLBOARDS) == BST_CHECKED);
+    int mods_ok = 1;
+    if (exe_supported) {   /* the mods first (their .ini files may be new), then their settings */
+        char billboards[MAX_PATH];
+        mods_ok = install_mods();
+        snprintf(num, sizeof num, "%u", bport);
+        mods_ok &= WritePrivateProfileStringA("Bridge", "Port", num, bridge) != 0;
+        mods_ok &= WritePrivateProfileStringA("Bridge", "ForceBridge",
+                                              IsDlgButtonChecked(dlg, IDC_FORCE) ? "true" : "false", bridge) != 0;
+        mod_ini(billboards, "billboards");
+        mods_ok &= WritePrivateProfileStringA("Billboards", "Enabled",
+                                              IsDlgButtonChecked(dlg, IDC_BILLBOARDS) ? "true" : "false", billboards) != 0;
+    }
 
     if (ok && shim_ok && mods_ok) {
         MessageBoxA(dlg, exe_supported
-                    ? "Settings saved and the bridge shim is installed.\n\nStart the game to use the new lobby server."
-                    : "Settings saved. The bridge shim was NOT installed: this SADK.exe is not the supported "
-                      "DRM-free build, and the shim only works with that exact version.\n\nYou can still play "
+                    ? "Settings saved; the shim and the mods (gamebridge, assetshare, billboards) are "
+                      "installed.\n\nStart the game to use the new lobby server."
+                    : "Settings saved. The shim and its mods were NOT installed: this SADK.exe is not the supported "
+                      "DRM-free build, and they only work with that exact version.\n\nYou can still play "
                       "on the server, but hosting needs a reachable port and map sharing is unavailable.",
                     "SAdK-ServerConfig", exe_supported ? MB_ICONINFORMATION : MB_ICONWARNING);
     } else {
         char m[512];
         snprintf(m, sizeof m, "%s%s%s\nIs the game still running? Close it and try again.",
                  ok ? "" : "Some settings could not be written.\n",
-                 shim_ok ? "" : "The bridge shim (bin\\wsock32.dll) could not be installed.\n",
-                 mods_ok ? "" : "The billboards mod (mods\\billboards) could not be installed or removed.\n");
+                 shim_ok ? "" : "The shim (bin\\wsock32.dll) could not be installed.\n",
+                 mods_ok ? "" : "The mods (mods\\gamebridge, assetshare, billboards) could not all be installed.\n");
         MessageBoxA(dlg, m, "SAdK-ServerConfig", MB_ICONERROR);
     }
     refresh(dlg);

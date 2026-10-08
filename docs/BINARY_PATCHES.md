@@ -43,7 +43,7 @@ S 004f84b0).
 - **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
   patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
 
-## Map sharing (bridge shim, in memory)
+## Map sharing (mod `mods/assetshare`, in memory)
 
 The client already contains a map transfer: a joiner that lacks the host's map asks the host for
 `SAdK\maps\<map>.s2m` and `.bmp` over the match connection (S2TFTP, message `0x3eb`) and stores them in its
@@ -60,22 +60,24 @@ player count ready, and `PlayerInfo::IsReady` S 00414f50 counts AI and closed sl
 one. `NComm_Manager::RefreshSlots` S 0040b5a0 resets the extra slots of a map with more start positions to
 open (to AI offline), so on such a map the host must close them or add AI players.
 
-The shim (`bridge/wsock32_shim`) applies these patches in memory at start-up (after the exe check), each only
-where the original bytes match exactly:
+The assetshare mod applies these patches in memory at start-up, each only where the original bytes match exactly
+(`assetshare.ini [AssetShare] AcceptServerMaps = false` makes a joiner refuse downloads: its temp-file open returns
+no file, and `S2Tftp_Session_WriteBlock` S 00426c70 answers the host with the game's own Error 2,
+`!TFTP_ERROR_WRITEERROR`):
 
 | Address | Original | Change |
 |---|---|---|
-| 00454c37 (17 bytes) | push of the found-under type and of `0` to `SetGameSettings` | push type `3` and "download allowed" `1` for every map |
+| hook `NComm_Manager::SetGameSettings` 0040bfd0 | the map's location type and "download allowed" `0` from `OnMapSelected` | while hosting a network game: type `3` and "download allowed" `1` for every map |
 | 0045a381 | `call SelectMapDialog_AppendMapFiles(0, …)` | also lists location 3 (`Documents\SAdK\maps`, warm-tinted rows) |
-| 00426b14 | `fopen_s` of the file a peer asked for (S2Tftp_Session_ReadNextBlock) | only `<Documents>\SAdK\maps\<name>.s2m/.bmp`; a map not found there is served from `data\game\maps\Freegamemaps` |
-| 00427b29, 00427b7e | `rename` of a finished download (S2TftpSession::CloseFile) | only into `Documents\SAdK\maps` as `.s2m/.bmp`, else the temp file is deleted |
+| 00426b14 | `fopen_s` of the file a peer asked for (S2Tftp_Session_ReadNextBlock) | only `<Documents>\SAdK\maps\<name>.s2m/.bmp` (a map not found there is served from `data\game\maps\Freegamemaps`) and assetshare's own archives below `<Documents>\SAdK\assetshare\` (built on request: the manifest, a server mod, a map file; a `.s2m` with its `<map>.bin`, `<map>.lua` and `<map>_*.lua`) |
+| 00427b29, 00427b7e | `rename` of a finished download (S2TftpSession::CloseFile) | only into `Documents\SAdK\maps` as `.s2m/.bmp` or into assetshare's download folder, else the temp file is deleted |
 | 00457f51 | `SendPlayerReadyEvent` from the Ready button | refused (sends not-ready) while a download runs or the map is missing — starting without the map crashes the client |
 | 00426ca5, 00426d14, 00427a08 | temp-file open, block `fwrite`, abort `remove` | progress messages in the pre-game room; after the last file a not-ready event makes the host re-broadcast, so the joiner finds the map |
 
 **Security note (vanilla game):** without the shim, any peer in a host's match can read any file below the
 host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpManager::OnReceive` S 00428110
 answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
-for hosts that run it.
+for hosts that run assetshare.
 
 ## Billboards (mod `mods/billboards`, in memory)
 
@@ -91,21 +93,23 @@ never used.
 
 The screen is part of the board mesh, so a transparent screen texture leaves a hole. The billboards mod
 (`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig, on unless `[Billboards] Enabled = false` in its `billboards.ini`) instead
-shows a plain plank area of the board's own texture:
+shows a plain plank area of the board's own texture. It changes no bytes; it hooks `GetTexture`:
 
-| Address | Original | Change |
-|---|---|---|
-| 007e6240, 007e6208, 007e61d0 | `"ad0.tga"`, `"ad1.tga"`, `"ad2.tga"` | first letter `#`: no name matches, the screens load from file like any texture |
-| 00504806 (7 bytes) | `MOV EDX,[ESI+0x28]; MOV ECX,EAX; CALL EDX`: virtual `CTexture::CreateFromFile` S 004e80d0 | `MOV ECX,EAX; CALL billboard_load` |
+- An entry (`GfxTextureEntry`, 0x24 bytes: `+0` texture, `+4` `std::string` name, `+0x20..0x23` four flags) whose
+  texture is not made yet and whose name is `ad0.tga`, `ad1.tga` or `ad2.tga` (compared as the game does,
+  case-sensitively) is made by the mod the way `GetTexture` makes every other texture:
+  `S2CE::CResourceMgr::CreateTexture(device, 0)` S 004db310, then `CreateFromFile` (texture vtable `+0x28`,
+  `bool __thiscall (CTexture*, const std::string *path, bool, bool, bool)`) with the entry's first three flags, and
+  `LobbyGfx_Texture_DecrementRedChannel` S 005042e0 when the fourth is set. The path is `Texture`
+  (`billboards.ini` next to the mod's `mod.dll`, default `sign_ad0.dds`) instead of the screen's name.
+- The rectangle `Rect` (default `305,680,730,1005`, x0,y0,x1,y1) of the loaded texture is copied into a new
+  512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and put
+  in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
+- Every other entry goes to the game's `GetTexture` unchanged.
 
-`billboard_load` calls the original `CreateFromFile` (`bool __thiscall (CTexture*, const std::string *path,
-bool, bool, bool)`, `RET 0x10`) with `Texture` (`billboards.ini` next to the mod's `mod.dll`, default
-`sign_ad0.dds`) in place of `ad0/1/2.tga`, then copies the rectangle `Rect` (default `305,680,730,1005`,
-x0,y0,x1,y1) of the loaded texture into a
-new 512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and
-puts it in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
-All other names pass through unchanged. No game art is shipped or written to disk. Live 2026-10-07: the
-screens show the plank area.
+No game art is shipped or written to disk. The earlier version of the mod (literal and call-site patches, same
+result) showed the plank area in the game (live 2026-10-07); the hook version is verified against the binary
+(`make verify` in `mods/`) and ran in the game (maintainer's test, 2026-10-08: both screens made and cropped, per the log).
 
 ## NPC model sets (mod `mods/npcmodels`, in memory)
 

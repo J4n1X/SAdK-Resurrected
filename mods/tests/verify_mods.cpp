@@ -12,6 +12,12 @@ bool billboards_start();
 bool borderless_start();
 bool npcmodels_start();
 bool nomeshcache_start();
+bool propreload_start();
+bool gamebridge_start();
+bool assetshare_start();
+bool combat_start();
+bool retreat_start();
+bool proximity_start();
 
 int main(int argc, char **argv)
 {
@@ -35,9 +41,17 @@ int main(int argc, char **argv)
     borderless_start();
     npcmodels_start();
     nomeshcache_start();
+    propreload_start();
+    gamebridge_start();   // nothing in SADK.exe: returns at once in verify mode
+    assetshare_start();
+    combat_start();       // navalcombatfix
+    retreat_start();
+    proximity_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 4 + 6 + 1 + 1;   // billboards 4, borderless 6 hooks, npcmodels 1, nomeshcache 1 hook
+    const int expected = 1 + 6 + 1 + 1 + 12 + 9;   // billboards 1 hook, borderless 6 hooks, npcmodels 1, nomeshcache 1
+                                                  // hook, assetshare 8 patches + 4 hooks, navalcombatfix 9 hooks (events
+                                                  // are not verified)
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

@@ -1281,3 +1281,26 @@ Created `IAvatarDataBlock_vftable` (32B, 8 typed slots) and applied it at all 7 
 namespaced all 27 member functions (3 shared + `Deserialize`/`Serialize`/`GetSize`/`Clear` × 7). Verified:
 every class's `Deserialize` now decompiles with named field access (`this->field1`, `this->base.pVftable
 ->pGetVariant()`, etc.) instead of raw offset arithmetic.
+
+## 2026-10-08 — data loading for mods (`sadk_noav.exe`)
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x0067e8a0` | `ProgressBroadcaster_Destroy` | `Scene_DestroyGlobal` (`void __cdecl(void)`) | frees `g_pScene` `0x0088ca60` through `S2CG::Scene::dtor`; counterpart of `Scene_CreateGlobal` `0x0067e7e0`; caller `nMenu::Game::OnLeave` `0x005eb030` `[known]` |
+
+Plate comment added on `Properties_Db_ClearAll` `0x005494a0` (the only way the game empties the property database;
+reload safety `[TODO]`). Findings: `docs/data-loading.md`.
+
+Type change: `ai::lobby::GfxTextureEntry` (0x24) `+0x4` `std::string name` (was padding). `Lobby::CGfxTextureMgr::GetTexture`
+`0x00504650` passes `&entry->name` as the `std::string*` path to `CTexture` vtbl `+0x28` (`CreateFromFile`) and compares
+its buffer with `ad0/ad1/ad2.tga` `[known]`. Used by the billboards mod's `GetTexture` hook.
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x0041f220` | `FUN_0041f220` | `UserProfile_GetConnectionType` (`int __cdecl(void)`) | returns UserProfile `+0x94`; `nMenu::NetInfo::RefreshInfo` `0x005fd5a0` labels the per-slot copy 0 `!NONE` … 4 `!LAN`; `S2TftpSession::BeginSend` `0x00426a30` maps it to the transfer block size `[known]` |
+
+S2TFTP findings: `docs/s2tftp.md`.
+| `0x004084d0` | `NComm_Manager_NetworkVcall_A4` (`void __fastcall(void*)`) | `NComm_Manager::RequestFileFromHost` (`bool __thiscall(NComm_Manager*, std::string *remoteName, std::string *localPath)`) | `JMP [handler vtbl+0xa4]` = `TinCatNetwork::RequestFileFromHost`, `RET 8`; callers the map download in `HandleEvent` `[known]` |
+| `0x0054f8d0` | `Properties_RunPropertyScript` (`void __stdcall(void*)`) | `ai::properties::PropertiesDb::RunPropertyScript` (`void __thiscall(PropertiesDb*, std::string *scriptName)`) | the only call site passes the database in ECX and the name on the stack (`RET 4`); the body never reads ECX `[known]` |
+
+Type change: `NComm_Manager` `+0xdc` `NComm::EventGameInformation gameInformation` (0x24f, was undefined): `GetGameInformation` returns its address, `HandleEvent` 0x30003 assigns into it `[known]`.

@@ -93,6 +93,7 @@ Two tracks:
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
+| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); in the game `[TODO]` (property reload between offline matches ✅ live) |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
 | In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ⚠️ answered per the catalog since 2026-10-07, not live-tested — `[TODO]` |
 
@@ -131,9 +132,11 @@ python -m sadk_lobby
 - `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
 
 Outside the server: `sadkmod/` is the C++ library for code running inside SADK.exe (generated game
-declarations, patches, hooks, the mod host; `sadkmod/README.md`). The bridge shim `bridge/wsock32_shim/` is built
-on it (C++) and loads mods from the game's `mods` folder; the repo's mods (billboards, npcmodels) live in `mods/`
-(`mods/README.md`). The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim and the billboards mod.
+declarations, patches, hooks, the mod host; `sadkmod/README.md`). The shim `bridge/wsock32_shim/` is built on it
+(C++): a proxy wsock32.dll that only loads mods from the game's `mods` folder. Everything else is a mod in `mods/`
+(`mods/README.md`): the host bridge's client side (`gamebridge`), map sharing (`assetshare`), billboards,
+npcmodels, ... The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim, gamebridge, assetshare and
+billboards.
 - `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 
 ---
