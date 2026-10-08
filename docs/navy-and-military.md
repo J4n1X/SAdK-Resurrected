@@ -352,9 +352,12 @@ A pair counts only if **its own route has a ship for these soldiers**, by the ch
 - P's ship on that route lying idle there (ship state 0 or 1, no mission): the ship of the route's sea street. The
   game's idle-ship search skips it, because a route takes one ship per player [live 2026-10-08: such a ship made every
   attack over its route count only the target's landmass]. The fight starts its mission
-  (`NNavy::Military::Activate` `005b9cd0`). When the mission ends, `Military::Finish` takes the ship off the route;
-  the mod puts it back (`NavyLink_LinkMovementRoute` `0053c3d0`, as `Expedition::Finish` does), so the sea street
-  stays. This bookkeeping is not saved with the game. A ship sunk after a defeat is not put back;
+  (`NNavy::Military::Activate` `005b9cd0`) and sets the ship to state 0: `Ship::Update` `005bb500` starts a mission
+  only from state 0 (→ 5), and a route ship cycles through 1-3 (wait, load, unload) [live 2026-10-08: left in 1, the
+  mission never ran and the ship stayed stuck]. When the mission ends, `Military::Finish` takes the ship off the
+  route and `Ship::Update` sets 0; the mod's hook on `Ship::Update` puts it back (`NavyLink_LinkMovementRoute`
+  `0053c3d0`) in state 1, as the game does for an expedition's ship, so the sea street stays. This bookkeeping is not
+  saved with the game. A ship sunk after a defeat is not put back;
 - an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually
 take. A blocked route falls back to the next-best pair and its ship.
@@ -445,13 +448,18 @@ not just the display.
 | 103 | ready, waiting at home. An attack whose sea link uses this route links its fight to the ship (`combat.cpp`; only for attackers) |
 | 104 | the attackers board (`BoardSettlersAtHarbor`, up to `PickupTimeout`); nobody came → back to 103 |
 | 105 | sail; on arrival only the mission's soldiers land (`NavyLink_UnlinkCargoSettler` + `DisembarkAt`) |
-| 106 | until all have left the fight. Not lost (`GetPhase`, see below; a target that is gone counts as taken) → 107. Lost → `ShipLostOnDefeat`: `SinkImmediately`, else state 7 |
+| 106 | until all have left the fight. Won (see below) → 107. Cancelled → state 7 (home, unload). Lost → `ShipLostOnDefeat` and the landing not the player's: `SinkImmediately`, else state 7 |
 | 107 | the survivors board again, then the game's state 6 founds the colony |
 
 - **After the colony:** the ship switches to its military mission, state 6, which takes the attackers home and
   unloads them. If there is still no room, the game's own failure path (message, return, unload) applies.
 
-Tested in the game 2026-10-08 (maintainer): naval invasions work. Still to check in detail:
+Tested in the game 2026-10-08 (maintainer): naval invasions work.
+
+Messages in the player's event log (navy type, the ship's name as the subject): invasion ready, won (colony founded),
+lost (ship sank / returns), called off; attack by sea lost (ship sank). The game shows a message's text through
+`Localization::GetText` (`nMenu::Messages::SetupSlot` `005f75a0`), so the mod enters its own keys
+(`!navalcombatfix_*`) with English texts into the localisation table (`Localization::translations`) first. Still to check in detail:
 - the scouting message;
 - the button's states;
 - loading and waiting;
@@ -461,11 +469,15 @@ Tested in the game 2026-10-08 (maintainer): naval invasions work. Still to check
 - saving and loading while an invasion waits.
 
 **Lost attacks by sea** (`ShipLostOnDefeat`, `combat.cpp`). A mission of the fight's attacker (`Fight::attackerPlayer`)
-in state 5, at the landing, once all its soldiers have left the fight: if the fight is lost, `NNavy::Military::Finish`
-and `Ship::SinkImmediately`. Lost is the game's own phase test, `NMilitary::Fight::GetPhase` `005708a0` [known]:
-- phase Fighting (0): the target still stands and its owner is not the attacker. This is the lost case;
-- TargetCaptured (3) or Ending (2): the attacker holds the target, a win;
-- NoTarget (4): the target is gone. This counts as neither, the ship sails home (an invasion tries its colony).
+in state 5, at the landing, once all its soldiers have left the fight: if the fight is lost **and the landing harbour
+is not the attacker's** (an attack from an own harbour is a coastal attack), `NNavy::Military::Finish` and
+`Ship::SinkImmediately`. The outcome uses the game's phase, `NMilitary::Fight::GetPhase` `005708a0` [known]:
+- Fighting (0): the target still stands and its owner is not the attacker: **lost**;
+- TargetCaptured (3), NoTarget (4, the target is gone), or Ending (2) with the target the attacker's: **won**;
+- Ending with the target not the attacker's: **cancelled**. Calling an attack off (lockstep `0x2000E`,
+  `nGame::System::HandleCancelAttack` `00782bf0` → `Military_RequestCancel` `00570900`) sets the fight's ending flag
+  (`Fight::bEnding`) as holding the target does [known]. A cancelled attack never sinks a ship; a cancelled invasion
+  sails home and unloads.
 
 Every attack by sea is covered, the game's own (landing at the defender's harbour) as well as the mod's, and the
 invasion (state 106). Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat

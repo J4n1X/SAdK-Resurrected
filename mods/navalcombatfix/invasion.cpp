@@ -29,6 +29,9 @@
 #include <sadkmod/game/sadk_noav/fn/nGame.hpp>
 #include <sadkmod/game/sadk_noav/fn/nMenu.hpp>
 #include <sadkmod/game/sadk_noav/fn/nUi.hpp>
+#include <sadkmod/game/sadk_noav/fn/std_.hpp>
+
+#include <cstring>
 
 namespace navalcombatfix {
 namespace {
@@ -227,14 +230,28 @@ bool moving(game::NNavy::Movement *mv)
     return mv->base.interpolator.progress > 0.0f || (mv->state != 0 && mv->state != 4);
 }
 
-void tell(Ship *ship, const char *text)
+}  // namespace
+
+// The game shows a message's text through Localization::GetText (nMenu::Messages::SetupSlot S 005f75a0, with the
+// subject as " (subject)"); a key it does not know shows as "(MBT)<key>" once and as the key after. The mod's own
+// keys are therefore entered into the table (Localization::translations, the std::map GetTextCStr S 004961f0 reads)
+// before their first message. English only for now (README.md, to do).
+void tell(Ship *ship, const char *key, const char *text)
 {
-    sadk::msvc::string message = sadk::msvc::string::borrow(text);
+    if (text) {
+        sadk::msvc::string k = sadk::msvc::string::borrow(key);   // copied into the map when it is new
+        sadk::msvc::string *value =
+            fn::ai::stl::MsvcTree::MapStrStr_Subscript(&fn::Localization_GetInstance()->translations, &k);
+        fn::std_::string::assign(value, const_cast<char *>(text), static_cast<std::uint32_t>(std::strlen(text)));
+    }
+    sadk::msvc::string message = sadk::msvc::string::borrow(key);
     sadk::msvc::owned_string subject;
     fn::NNavy::Ship::GetNameKey(ship, &subject);
     fn::PlayerMessages_SendToPlayer(kMessageNavy, ship->player->index, &message, &subject,
                                     &ship->movement->base.currentCellX);
 }
+
+namespace {
 
 // Pickup-style timers for the waits (not saved: after loading a game they start again).
 struct Wait {
@@ -271,18 +288,26 @@ void land_attackers(Ship *ship)
     }
 }
 
-void lose(Expedition *e)
+// A lost or cancelled invasion: the mission ends; the ship sinks (lost, ShipLostOnDefeat, at a harbour that is not
+// its player's) or sails home and unloads the expedition's cargo.
+void lose(Expedition *e, bool cancelled)
 {
     Ship *ship = ship_of(e);
     fn::NNavy::Military::Finish(ship->military);
     stop_waiting(e);
-    if (g_settings.shipLostOnDefeat) {
+    if (cancelled) {
+        e->state = kReturn;   // the game's return: release, sail home, unload
+        sadk::log("naval invasion called off: ship %d returns", ship->shipNumber);
+        tell(ship, "!navalcombatfix_invasion_cancelled", "Naval invasion called off: the ship returns home");
+    } else if (g_settings.shipLostOnDefeat && !at_own_harbor(ship)) {
         fn::NNavy::Expedition::ReleaseAndDeactivate(e);
         fn::NNavy::Ship::SinkImmediately(ship);
         sadk::log("naval invasion lost: ship %d sinks", ship->shipNumber);
+        tell(ship, "!navalcombatfix_invasion_lost_sunk", "Naval invasion lost: the ship sank");
     } else {
         e->state = kReturn;   // the game's return: release, sail home, unload
         sadk::log("naval invasion lost: ship %d returns", ship->shipNumber);
+        tell(ship, "!navalcombatfix_invasion_lost", "Naval invasion lost: the ship returns home");
     }
 }
 
@@ -300,7 +325,10 @@ bool invasion_update(Expedition *e)
         if (!fn::NavyCargo_UnloadStep(ship->cargo)) e->state = kInvLoad;
         break;
     case kInvLoad:
-        if (fn::NNavy::Expedition::GatherCargo(e)) e->state = kInvReady;
+        if (fn::NNavy::Expedition::GatherCargo(e)) {
+            e->state = kInvReady;
+            tell(ship, "!navalcombatfix_invasion_ready", "Naval invasion ready: the ship waits for an attack");
+        }
         break;
     case kInvReady:
         if (m->bActive && carries_fight(m)) e->state = kInvBoard;   // combat.cpp linked an attack
@@ -323,8 +351,8 @@ bool invasion_update(Expedition *e)
         break;
     case kInvBattle:
         if (!battle_over(m)) break;
-        if (battle_lost(m)) {   // a target that is gone counts as taken: try the colony
-            lose(e);
+        if (Outcome outcome = battle_outcome(m); outcome != Outcome::won) {   // a target that is gone counts as taken
+            lose(e, outcome == Outcome::cancelled);
             break;
         }
         e->state = kInvReboard;
@@ -371,6 +399,7 @@ bool SADK_THISCALL expedition_update(Expedition *e)
             if (!ExpeditionUpdate::original(e)) return false;
             e->bActive = 0;   // the invasion is over (Expedition::Finish leaves the flag set)
             if (state == kFoundColony) {
+                tell(ship_of(e), "!navalcombatfix_invasion_won", "Naval invasion won: colony founded");
                 ship_of(e)->state = kShipMilitaryMission;
                 m->state = kMissionSailHome;
                 return false;   // the ship stays in its military state

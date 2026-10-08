@@ -80,8 +80,8 @@ struct SeaLink {
 //     2026-10-08: such a ship, state 1, made every attack over its route count only the target's landmass];
 //   - else the nearest idle ship of the player at H2's exit (NNavy::System::FindNearestIdleShipAtHarborExit
 //     S 005b3450), linked to the route only when the soldiers are actually sent.
-constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (docs/navy-and-military.md §5.3)
-constexpr std::int32_t kShipWaiting = 1;
+constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (docs/navy-and-military.md §5.3); 0 also picks up a
+constexpr std::int32_t kShipWaiting = 1;   // mission (Ship::Update S 005bb500: an active mission -> 5)
 
 constexpr std::int32_t kShipSinking = 6;   // 6 sinking, 7 sunk, 8 doomed
 
@@ -90,10 +90,13 @@ bool idle_on_route(Ship *ship)
     return (ship->state == kShipIdle || ship->state == kShipWaiting) && !ship->military->bActive;
 }
 
-// Route ships lent to a fight. NNavy::Military::Finish S 005ba190 takes a ship off its route
-// (NavyLink_UnlinkMilitaryRoute), which would end the route's sea street; when the mission ends, the ship goes back
-// on its route as Expedition::Finish puts an expedition's ship back (NavyLink_LinkMovementRoute S 0053c3d0). Kept by
-// the mod, not saved with the game; every peer runs the same updates, so it stays in lockstep.
+// Route ships lent to a fight. A route ship cycles through Ship::Update's states 1-3 (wait, load, unload) and only
+// state 0 starts a mission, so the lent ship is set to 0 [live 2026-10-08: left in 1, its mission never ran and the
+// ship stayed stuck]. When the mission ends, Ship::Update sets 0 and sends the ship to its own harbour, and
+// NNavy::Military::Finish S 005ba190 has taken it off its route (NavyLink_UnlinkMilitaryRoute), which would end the
+// route's sea street. So the mod's Ship::Update hook puts it back on its route in state 1, as Expedition::Finish and
+// Ship::Update's state 4 do for an expedition's ship (NavyLink_LinkMovementRoute S 0053c3d0). Kept by the mod, not
+// saved with the game; every peer runs the same updates, so it stays in lockstep.
 struct LentShip {
     Ship *ship;
     NavyShipRoute *route;
@@ -114,13 +117,14 @@ void forget_lent(Ship *ship)
         if (g_lent[i].ship == ship) g_lent[i] = g_lent[--g_lentCount];
 }
 
-// After a mission update: a lent ship whose mission has ended returns to its route (unless it sank).
+// After a ship update: a lent ship whose mission has ended (back in state 0) returns to its route, unless it sank.
 void return_lent(Ship *ship)
 {
-    if (ship->military->bActive) return;
+    if (ship->military->bActive || ship->state != kShipIdle) return;
     for (int i = 0; i < g_lentCount; ++i) {
         if (g_lent[i].ship != ship) continue;
-        if (ship->state < kShipSinking) fn::NavyLink_LinkMovementRoute(ship, g_lent[i].route);
+        fn::NavyLink_LinkMovementRoute(ship, g_lent[i].route);
+        ship->state = kShipWaiting;
         g_lent[i] = g_lent[--g_lentCount];
         return;
     }
@@ -286,6 +290,7 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
     } else if (link.routeIdle) {   // the route's own ship: linked to the route already, so only its mission starts
         fn::NNavy::Military::Activate(link.ship->military);   // what NavyLink_LinkMilitaryRoute does last
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
+        link.ship->state = kShipIdle;   // state 0 picks the mission up at the next stop
         lend(link.ship, link.route);
     }
     // __thiscall on the connector: binds each soldier to connector->fight and to the ship.
@@ -318,16 +323,19 @@ bool own_route_ends(NavyShipRoute *route, std::int32_t player, std::int32_t targ
 
 // ShipLostOnDefeat: an attacker's ship at the landing (state 5, boarding the soldiers coming back) sinks once the
 // attack is lost, with whoever is aboard; soldiers still ashore are left to the game (or a retreat pickup). This
-// holds for every attack by sea, the game's own included; ships carrying defenders are not affected.
+// holds for every attack by sea, the game's own included; ships carrying defenders are not affected, nor is a ship
+// whose landing harbour is still its player's (an attack on a coastal position), nor a cancelled attack.
 bool sink_after_defeat(NavyMission *m, Ship *ship)
 {
     if (!g_settings.shipLostOnDefeat || m->state != kBoardReturning) return false;
     Fight *fight = m->fight.cachedFight;
-    if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m) || !battle_lost(m)) return false;
+    if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m)) return false;
+    if (battle_outcome(m) != Outcome::lost || at_own_harbor(ship)) return false;
     fn::NNavy::Military::Finish(m);
     forget_lent(ship);   // it sinks at its next stop: not back on its route
     fn::NNavy::Ship::SinkImmediately(ship);
     sadk::log("attack by sea lost: ship %d sinks", ship->shipNumber);
+    tell(ship, "!navalcombatfix_attack_lost_sunk", "Attack by sea lost: the ship sank");
     return true;
 }
 
@@ -358,11 +366,14 @@ bool update_mission(NavyMission *m)
     return false;
 }
 
-bool SADK_THISCALL navy_military_update(NavyMission *m)
+bool SADK_THISCALL navy_military_update(NavyMission *m) { return update_mission(m); }
+
+// NNavy::Ship::Update S 005bb500: lent route ships go back on their route once their mission is over.
+using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
+void SADK_FASTCALL ship_update(Ship *ship)
 {
-    bool finished = update_mission(m);
-    return_lent(static_cast<Ship *>(m->ship));
-    return finished;
+    ShipUpdate::original(ship);
+    if (g_lentCount) return_lent(ship);
 }
 
 }  // namespace
@@ -374,7 +385,7 @@ bool combat_start()
     bool ok = ReachFactor::install(reach_factor) && TargetReachable::install(target_reachable) &&
               TerritoryInRange::install(territory_in_range) && DispatchAttackers::install(dispatch_attackers) &&
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
-              NavyMilitaryUpdate::install(navy_military_update);
+              NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update);
     sadk::log("%s", ok ? "combat by sea: soldiers cross through their own harbours" : "combat by sea NOT active");
     return ok;
 }

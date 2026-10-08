@@ -19,10 +19,12 @@ What it does:
 - **Naval invasion** (`invasion.cpp`): an expedition to a free harbour without room for a colony says so and turns
   back. The route's buoy then offers **Prepare naval invasion** (4th button): a ship loads an expedition (soldier and
   building goods) and waits at home. Attack a building near that harbour: the ship carries the attackers, only they
-  land, and when the building is taken the colony is founded.
+  land, and when the building is taken the colony is founded. The event log says when the ship is ready and how the
+  invasion ended.
 - **Lost attacks by sea sink the ship** (`ShipLostOnDefeat`): when an attack by sea fails (the target still stands and
   is not taken), the attacker's ship sinks at the landing with everyone aboard. This holds for every attack by sea,
-  the game's own and invasions; ships carrying defenders are not affected.
+  the game's own and invasions. Not affected: ships carrying defenders, a ship whose landing harbour is still its
+  player's (a coastal attack), and cancelled attacks (a cancelled invasion sails home and unloads).
 
 ## Settings (`navalcombatfix.ini`, `[NavalCombatFix]`)
 
@@ -42,4 +44,5 @@ What it does:
 
 - **The invasion button's look:** it borrows the attack button's icon and shows plain English texts. It needs its
   own icon (the action icon atlas) and translated texts (the game's text database), like the game's buttons.
+- **Translated messages:** the event-log messages (`!navalcombatfix_*`) are English only.
 - Everything above still needs testing in the game; the doc's §7 lists what to check.

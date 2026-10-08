@@ -98,13 +98,31 @@ inline bool battle_over(NavyMission *m)
     return fn::NavyMilitary_AllSoldiersLeftFight(reinterpret_cast<game::ai::stl::MsvcVector *>(&m->soldiers.refs_proxy));
 }
 
-// The mission's fight is lost, in the game's terms (NMilitary::Fight::GetPhase S 005708a0): its target still stands
-// and is not the attacker's (phase Fighting). Captured (TargetCaptured, Ending) is a win; a target that is gone
-// (NoTarget) is neither. Read unresolved, as the game does: ships keep their fight alive (Fight +0xbc).
-inline bool battle_lost(NavyMission *m)
+// How the mission's fight ended, in the game's terms (NMilitary::Fight::GetPhase S 005708a0). Read unresolved, as the
+// game does: ships keep their fight alive (Fight +0xbc).
+//   - Lost: phase Fighting, the target still stands and is not the attacker's;
+//   - Won: TargetCaptured, or a target that is gone (NoTarget), or Ending with the target the attacker's;
+//   - Cancelled: Ending with the target not the attacker's. Calling an attack off (lockstep 0x2000E,
+//     nGame::System::HandleCancelAttack S 00782bf0 -> Military_RequestCancel S 00570900) sets the fight's ending flag
+//     (Fight::bEnding), as holding the target does.
+enum class Outcome { won, lost, cancelled };
+inline Outcome battle_outcome(NavyMission *m)
 {
     Fight *fight = m->fight.cachedFight;
-    return fight && fn::NMilitary::Fight::GetPhase(fight) == game::ai::military::EFightPhase::Fighting;
+    if (!fight) return Outcome::won;
+    using Phase = game::ai::military::EFightPhase;
+    Phase phase = fn::NMilitary::Fight::GetPhase(fight);
+    if (phase == Phase::Fighting) return Outcome::lost;
+    if (phase != Phase::Ending || fight->target.unique.idHi < 0 || !fight->target.cachedBuilding) return Outcome::won;
+    return owner(fight->target.cachedBuilding) == fight->attackerPlayer ? Outcome::won : Outcome::cancelled;
+}
+
+// The harbour the ship lies at (or sails to) is its player's: a lost attack from there is a coastal attack, the ship
+// is safe (maintainer's rule).
+inline bool at_own_harbor(Ship *ship)
+{
+    Harbor *h = fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor);
+    return h && h->playerIdx == ship->player->index;
 }
 
 // For a pickup mission (no fight; retreat.cpp): the game's Update cannot run it in every state.
@@ -131,6 +149,10 @@ extern Settings g_settings;
 bool is_landing(Harbor *harbor, std::int32_t player);
 // Room for `player`'s colony building at `harbor` (the game's colony placement test; landing.cpp).
 bool colony_fits(Harbor *harbor, std::int32_t player);
+
+// A message about `ship` in its player's event log, with the ship's name as its subject (invasion.cpp). `key` is a
+// localisation key; with `text`, the mod's own key and its English text, entered into the game's table first.
+void tell(Ship *ship, const char *key, const char *text = nullptr);
 
 // A naval invasion ship loaded and waiting at home for an attack (invasion.cpp).
 bool invasion_ready(Ship *ship);
