@@ -34,6 +34,7 @@ build/%/mod.dll: $$(wildcard %/*.cpp) $(LIB) $(GENERATED)
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -shared -s -static-libgcc -static-libstdc++ -o $@ $(filter %.cpp,$^) $(LIBS)
 	@for f in $(wildcard $*/*.ini $*/*.txt); do cp $$f $(dir $@); done
+	@rm -rf $(dir $@)data
 	@if [ -d $*/data ]; then cp -r $*/data $(dir $@); fi
 
 build/verify_mods.exe: tests/verify_mods.cpp $(wildcard */*.cpp) $(LIB) $(GENERATED)

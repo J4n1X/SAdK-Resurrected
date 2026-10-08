@@ -29,6 +29,17 @@ names; inferred: append semantics]. The game's own way to empty it is `Propertie
 property table, the config flags, `bLoaded` `+0xc0` = 0), called only from `CApplicationEx::Shutdown` `00401cb0`
 [known].
 
+**Property scripts that mods add.** `data.lua` loads the other scripts by name in a fixed order
+(`loadPropertiesFile("defineTribes")` … `loadPropertiesFile("spawnpoints")`, each through `Default.CallScript`), so
+the game never runs a new file in that folder [known: data.lua]. The sadkmod host hooks
+`PropertiesDb::RunPropertyScript`: after every `"data"` run it runs each `.lua` an active mod adds to
+`scripts\properties\` (one the game does not have), mods in load order, a mod's files in name order
+(`sadkmod/src/host.cpp`). These scripts run as threads of the game's single Lua state, so the globals of the game's
+scripts are visible to them [inferred: Lua 5.0 threads share the globals table]. An added script should change
+records with the `*_set*` bindings and must not call a `*_create` for an existing id: `pa_create`, for one,
+allocates a new record and puts it in the map over the old one (`Properties_CreatePatternProperty` `00549ad0`), so
+every value set before is lost [known].
+
 **Reloading between matches works offline** [live, maintainer's test 2026-10-08, test mod `mods/propreload`]: every
 time a match is entered (hook on `Scene_CreateGlobal` `0067e7e0`, before the world is built), `Properties_Db_ClearAll`,
 `Properties_RegisterLuaLibrary` and `PropertiesDb::RunPropertyScript("data")` ran; two offline matches in a row, no
