@@ -47,9 +47,11 @@ $(VERIFY_OBJ_DIR)/%.o: %.cpp $(SADKMOD_PCH_GCH)
 -include $(SOURCES:%.cpp=$(OBJ_DIR)/%.d) $(SOURCES:%.cpp=$(VERIFY_OBJ_DIR)/%.d)
 
 .SECONDEXPANSION:
-build/%/mod.dll: $$(patsubst %.cpp,$(OBJ_DIR)/%.o,$$(wildcard %/*.cpp)) $(LIB)
+# (no % inside the functions: in a pattern rule make puts the stem there before they run)
+build/%/mod.dll: $$(addprefix $(OBJ_DIR)/,$$(addsuffix .o,$$(basename $$(wildcard $$*/*.cpp)))) $(LIB)
 	@mkdir -p $(dir $@)
 	$(CXX) -shared -s -static-libgcc -static-libstdc++ -o $@ $(filter %.o,$^) $(LIBS)
+	@i686-w64-mingw32-objdump -p $@ | grep -q sadkmod_init || { echo "$@ exports no sadkmod_init"; rm -f $@; exit 1; }
 	@for f in $(wildcard $*/*.ini $*/*.txt); do cp $$f $(dir $@); done
 	@rm -rf $(dir $@)data
 	@if [ -d $*/data ]; then cp -r $*/data $(dir $@); fi
