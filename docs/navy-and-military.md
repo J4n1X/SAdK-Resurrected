@@ -502,7 +502,17 @@ invasion (state 106).
 
 **Lost defences by sea** (`ShipLostOnDefeat`, `combat.cpp`, maintainer's rule): a ship carrying defenders (its
 player is the fight's `defenderPlayer`) sinks when the harbour it lies at or sails to is no longer its player's and
-the attacked building is not the defender's any more (taken or gone). A ship at a harbour that is still its
+the attacked building is not the defender's any more (taken or gone).
+
+The game's mission leaves the landing as soon as its own soldiers are out of the fight (state 5 boards whoever comes
+back, then sails home) [live 2026-10-09: the defenders died, the ship sailed home, and only then was the building
+taken and the harbour lost]. So a defenders' ship waits at the landing in state 5:
+- while the attacked building is still its player's and the attacker side still has soldiers in the fight
+  (`Fight::pSideList0`; a fight stays active while a side list or its ship list is non-empty, `Fight::IsActive`
+  `00571090`);
+- after the building is taken, until the harbour changes hands (then it sinks), at most 300 ticks: another building
+  of the player may still hold the harbour's territory.
+A target that is gone, or the attackers gone, ends the wait; the game's state 5 then boards the survivors. A ship at a harbour that is still its
 player's is safe. Checked in the `Ship::Update` hook before the game's update: when a harbour's territory changes
 hands, `005b5370` unlinks the ships from its routes, and `Ship::Update` would then end the mission for want of a
 route. Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat

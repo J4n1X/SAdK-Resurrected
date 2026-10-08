@@ -402,6 +402,69 @@ bool sink_after_defeat(NavyMission *m, Ship *ship)
 // the landing end is the one on the target's landmass. A mission without a fight is a pickup (retreat.cpp). The guard is
 // the game's: the mission is active and the ship stands still (its step interpolator not running, movement state 0
 // or 4).
+// ShipLostOnDefeat, defenders: a ship that brought defenders waits at the landing until the fight is decided, so that
+// a defence lost with its harbour can sink it. The game's mission leaves as soon as its own soldiers are out of the
+// fight (state 5 boards whoever comes back, then sails home) [live 2026-10-09: the defenders died, the ship sailed
+// home, and only then was the building taken and the harbour lost]. In state 5 the ship waits:
+//   - while the attacked building is still its player's and attackers remain in the fight (the attacker side's
+//     soldier list, Fight::pSideList0; a fight is active while a side list or its ship list is non-empty,
+//     Fight::IsActive S 00571090);
+//   - after the building is taken, until the harbour changes hands (sink_after_lost_defence sinks the ship then), at
+//     most kHarbourWait ticks (another building of the player may still hold the harbour's territory).
+// A target that is gone, or the attackers gone, ends the wait: the game's state 5 boards the survivors and sails home.
+constexpr std::int32_t kHarbourWait = 300;   // ticks [inferred: the territory changes with the occupation]
+
+struct DefenceHold {
+    Ship *ship;
+    std::int32_t takenSince;   // tick the building was first seen taken; -1 while it holds
+};
+DefenceHold g_holds[64];
+int g_holdCount;
+
+DefenceHold *hold_of(Ship *ship, bool create)
+{
+    for (int i = 0; i < g_holdCount; ++i)
+        if (g_holds[i].ship == ship) return &g_holds[i];
+    if (!create || g_holdCount == 64) return nullptr;
+    g_holds[g_holdCount] = {ship, -1};
+    return &g_holds[g_holdCount++];
+}
+
+void end_hold(Ship *ship)
+{
+    for (int i = 0; i < g_holdCount; ++i)
+        if (g_holds[i].ship == ship) g_holds[i] = g_holds[--g_holdCount];
+}
+
+bool attackers_remain(Fight *fight)
+{
+    game::ai::military::FightSoldierList *side = fight->pSideList0;
+    return side && side->soldiers.first != side->soldiers.last;
+}
+
+bool hold_for_defence(NavyMission *m, Ship *ship)
+{
+    Fight *fight = m->fight.cachedFight;
+    std::int32_t player = ship->player->index;
+    Building *target = fight && fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
+    if (!g_settings.shipLostOnDefeat || m->state != kBoardReturning || !fight || fight->defenderPlayer != player ||
+        !target) {
+        end_hold(ship);
+        return false;
+    }
+    DefenceHold *hold = hold_of(ship, true);
+    if (!hold) return false;
+    bool wait;
+    if (owner(target) == player) {
+        wait = attackers_remain(fight);
+    } else {
+        if (hold->takenSince < 0) hold->takenSince = logic()->tickCounter;
+        wait = logic()->tickCounter - hold->takenSince < kHarbourWait;
+    }
+    if (!wait) end_hold(ship);
+    return wait;
+}
+
 bool update_mission(NavyMission *m)
 {
     auto *ship = static_cast<Ship *>(m->ship);
@@ -409,6 +472,7 @@ bool update_mission(NavyMission *m)
     if (!m->bActive || (mv->state != 0 && mv->state != 4) || mv->base.interpolator.progress > 0.0f)
         return NavyMilitaryUpdate::original(m);
     if (!carries_fight(m)) return retreat_update(m);
+    if (hold_for_defence(m, ship)) return false;
     if (sink_after_defeat(m, ship)) return true;   // finished, as the game's state 7 returns
     if (m->state != kSailToLoading && m->state != kSailToLanding) return NavyMilitaryUpdate::original(m);
 
@@ -442,6 +506,7 @@ bool sink_after_lost_defence(Ship *ship)
     if (target && owner(target) == player) return false;   // the defence still holds the building
     fn::NNavy::Military::Finish(m);
     forget_lent(ship);   // it sinks at its next stop: not back on its route
+    end_hold(ship);
     fn::NNavy::Ship::SinkImmediately(ship);
     sadk::log("defence by sea lost with its harbour: ship %d sinks", ship->shipNumber);
     tell(ship, "!navalcombatfix_defence_lost_sunk", "Defence lost with the harbour: the ship sank");
