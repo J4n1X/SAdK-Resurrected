@@ -1300,3 +1300,4 @@ its buffer with `ad0/ad1/ad2.tga` `[known]`. Used by the billboards mod's `GetTe
 | `0x0041f220` | `FUN_0041f220` | `UserProfile_GetConnectionType` (`int __cdecl(void)`) | returns UserProfile `+0x94`; `nMenu::NetInfo::RefreshInfo` `0x005fd5a0` labels the per-slot copy 0 `!NONE` … 4 `!LAN`; `S2TftpSession::BeginSend` `0x00426a30` maps it to the transfer block size `[known]` |
 
 S2TFTP findings: `docs/s2tftp.md`.
+| `0x004084d0` | `NComm_Manager_NetworkVcall_A4` (`void __fastcall(void*)`) | `NComm_Manager::RequestFileFromHost` (`bool __thiscall(NComm_Manager*, std::string *remoteName, std::string *localPath)`) | `JMP [handler vtbl+0xa4]` = `TinCatNetwork::RequestFileFromHost`, `RET 8`; callers the map download in `HandleEvent` `[known]` |

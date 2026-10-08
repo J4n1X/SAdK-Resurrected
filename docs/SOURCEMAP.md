@@ -388,6 +388,9 @@ Packets, flow, speed and pitfalls: `docs/s2tftp.md`.
 | Address | Name | What |
 |---|---|---|
 | `0x004190f0` | `NComm::TinCatNetwork::RequestFileFromHost` | vtable `+0xa4`: `RequestFile(host 0xEFFFFFCC, remote, local, queueIfBusy)` |
+| `0x004084d0` | `NComm_Manager::RequestFileFromHost` | the joiner's map requests (from `HandleEvent`); was `NComm_Manager_NetworkVcall_A4` |
+| `0x0040b410` | `NComm_Manager::Shutdown` | the end of every network session |
+| `0x0040b470` | `NComm_Manager::KickPlayer` | host only: `(peer, reason, sendKickEvent)` |
 | `0x00427140` | `ai::net::S2TftpManager::RequestFile` | start or queue a ReadRequest; one transfer per peer |
 | `0x00427400` | `ai::net::S2TftpManager::ProcessQueue` | starts the next queued request |
 | `0x00428110` | `ai::net::S2TftpManager::OnReceive` | all `0x3eb` packets; a ReadRequest serves `<My Documents>\<name>` |

@@ -34,8 +34,23 @@ All fields little-endian; strings are NComm strings (u16 length + bytes).
   00426a30), the name unchecked in the game (the assetshare mod restricts it to maps).
 - The receiver writes the blocks to a temp file `%LOCALAPPDATA%\s2temps\S2TFTP*` (`S2Tftp_OpenTempFile` 004262e0)
   and renames it to `localPath` when done (`S2TftpSession::CloseFile` 00427990).
-- Progress goes to a listener at NComm manager `+0x3d0`: vtable `+0x4` progress (path, block, total), `+0xc`
-  started, `+0x10` completed.
+- The joiner's map download: on every GameInformation (0x30003) while the map is missing and the host allows
+  downloads, `NComm_Manager::HandleEvent` 0040e560 calls `NComm_Manager::RequestFileFromHost` 004084d0 (a
+  wrapper: the network handler's vtable `+0xa4`) twice, for `SAdK\maps\<map>.s2m` and `.bmp`, into the same
+  path below `<My Documents>`; the request dedupe makes the repeats harmless.
+- Progress would go to a listener at NComm manager `+0x3d0` (vtable `+0x4` progress, `+0xc` started, `+0x10`
+  completed), but the manager's constructor sets it to 0 and nothing else writes the field: the callbacks never
+  run [inferred: every write to `+0x3d0` in the binary].
+
+## Around a transfer [known]
+
+- **Session end:** `NComm_Manager::Shutdown` 0040b410 ends every network session: leaving the match
+  (`nMenu::Game::OnLeave`), leaving the pre-game room, a kick, and the start of a new join or host (19 callers).
+- **The build checksum goes out first:** a joiner sends it in `UserInformation` (0x30001) from `ConnectAndJoin`
+  0040ad60, and the host compares it on arrival (`docs/data-loading.md` §3), before any file can be transferred.
+  Whatever must differ between players' files and be fixed by a transfer cannot be covered by the checksum.
+- **Kicking:** `NComm_Manager::KickPlayer(peer, reason, sendKickEvent)` 0040b470, host only; with
+  `sendKickEvent` the player gets EventKickUser (0x30010) with the reason text.
 
 ## Speed [known; numbers inferred]
 
