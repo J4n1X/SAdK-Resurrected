@@ -511,6 +511,11 @@ is not the attacker's** (an attack from an own harbour is a coastal attack), `NN
 Every attack by sea is covered, the game's own (landing at the defender's harbour) as well as the mod's, and the
 invasion (state 106).
 
+A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `NNavy::Ship::dtor` `005baf20` ends an
+active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
+just leaving it: `MilitaryFightList_Update` deletes an inactive fight the same tick, and a garrison soldier still in
+state `0xF` then reads it (`Fight::OnSoldierEvent_BySide` on a null fight) [live 2026-10-09: crash at `005711cb`].
+
 **Lost defences by sea** (`ShipLostOnDefeat`, `combat.cpp`, maintainer's rule): a ship carrying defenders (its
 player is the fight's `defenderPlayer`) sinks when the harbour it lies at or sails to is no longer its player's and
 the attacked building is not the defender's any more (taken or gone).

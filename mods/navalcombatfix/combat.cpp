@@ -85,7 +85,7 @@ struct SeaLink {
 constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (Ship::Update S 005bb500): 0 picks up a mission
 constexpr std::int32_t kShipWaiting = 1;   // (an active mission -> 5); 1-3 are a route ship's service: wait for
 constexpr std::int32_t kShipCarrying = 3;  // passengers, load, sail and unload; 4 expedition, 5 mission
-constexpr std::int32_t kShipSinking = 6;   // 6 sinking, 7 sunk, 8 doomed
+constexpr std::int32_t kShipSinking = 6;   // 6 sinking, 7 sunk, 8 sink scheduled
 
 bool serves_route(Ship *ship)
 {
@@ -383,13 +383,19 @@ bool own_route_ends(NavyShipRoute *route, std::int32_t player, std::int32_t targ
 // attack is lost, with whoever is aboard; soldiers still ashore are left to the game (or a retreat pickup). This
 // holds for every attack by sea, the game's own included; ships carrying defenders are not affected, nor is a ship
 // whose landing harbour is still its player's (an attack on a coastal position), nor a cancelled attack.
+// The mission is not ended when the ship sinks: the game deletes a sunk ship at state 7 and its destructor
+// (NNavy::Ship::dtor S 005baf20) ends an active mission then. Ending it at once (Military::Finish) released the fight
+// while the last attackers were only just leaving it; MilitaryFightList_Update deleted the fight the same tick, and a
+// garrison soldier still in state 0xF read it (Soldier::Update S 006594a0 -> Fight::OnSoldierEvent_BySide on a null
+// fight) [live 2026-10-09: crash at 005711cb]. Kept until the ship is gone, as when a ship sinks mid-mission in the
+// unmodded game.
+
 bool sink_after_defeat(NavyMission *m, Ship *ship)
 {
     if (!g_settings.shipLostOnDefeat || m->state != kBoardReturning) return false;
     Fight *fight = m->fight.cachedFight;
     if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m)) return false;
     if (battle_outcome(m) != Outcome::lost || at_own_harbor(ship)) return false;
-    fn::NNavy::Military::Finish(m);
     forget_lent(ship);   // it sinks once it lies still: not back on its route
     fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);
     sadk::log("attack by sea lost: ship %d sinks", ship->shipNumber);
@@ -501,7 +507,7 @@ bool SADK_THISCALL navy_military_update(NavyMission *m) { return update_mission(
 bool sink_after_lost_defence(Ship *ship)
 {
     NavyMission *m = ship->military;
-    if (!g_settings.shipLostOnDefeat || !m->bActive || !carries_fight(m)) return false;
+    if (!g_settings.shipLostOnDefeat || !m->bActive || !carries_fight(m) || ship->state >= kShipSinking) return false;
     Fight *fight = m->fight.cachedFight;
     std::int32_t player = ship->player->index;
     if (!fight || fight->defenderPlayer != player) return false;
@@ -514,7 +520,6 @@ bool sink_after_lost_defence(Ship *ship)
     if (!at || at->playerIdx == player) return false;
     Building *target = fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
     if (target && owner(target) == player) return false;   // the defence still holds the building
-    fn::NNavy::Military::Finish(m);
     forget_lent(ship);   // it sinks once it lies still: not back on its route
     end_hold(ship);
     fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);

@@ -293,13 +293,15 @@ void land_attackers(Ship *ship)
 void lose(Expedition *e, bool cancelled)
 {
     Ship *ship = ship_of(e);
-    fn::NNavy::Military::Finish(ship->military);
     stop_waiting(e);
+    bool sinks = !cancelled && g_settings.shipLostOnDefeat && !at_own_harbor(ship);
+    if (!sinks) fn::NNavy::Military::Finish(ship->military);   // a sinking ship keeps its mission until it is
+                                                               // deleted (combat.cpp, sink_after_defeat)
     if (cancelled) {
         e->state = kReturn;   // the game's return: release, sail home, unload
         sadk::log("naval invasion called off: ship %d returns", ship->shipNumber);
         tell(ship, "!navalcombatfix_invasion_cancelled", "Naval invasion called off: the ship returns home");
-    } else if (g_settings.shipLostOnDefeat && !at_own_harbor(ship)) {
+    } else if (sinks) {
         fn::NNavy::Expedition::ReleaseAndDeactivate(e);
         fn::NNavy::Ship::ScheduleSinkingNoDelay(ship);
         sadk::log("naval invasion lost: ship %d sinks", ship->shipNumber);
