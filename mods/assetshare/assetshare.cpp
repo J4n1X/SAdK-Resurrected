@@ -34,6 +34,7 @@
 #include <windows.h>
 
 #include <sadkmod/sadkmod.hpp>
+#include <sadkmod/game/sadk_noav/fn/LobbyMenu.hpp>
 #include <sadkmod/game/sadk_noav/fn/NComm.hpp>
 #include <sadkmod/game/sadk_noav/fn/NComm_Manager.hpp>
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
@@ -58,8 +59,6 @@ namespace game = sadk::game;
 using GameFILE = game::mbstring_h::FILE;   // the game's C runtime FILE, not ours
 using Manager = game::NComm_Manager;
 
-// The call sites below call these CRT jump thunks (JMP to _free / _remove); the patches expect them.
-constexpr std::uintptr_t THUNK_REMOVE = 0x006f6789;   // -> _remove S 006f675f
 constexpr int MAP_LOCATION_USER = 3;
 constexpr std::uint32_t EV_USER_INFORMATION = 0x30001, EV_GAME_INFORMATION = 0x30003;
 constexpr std::uint32_t HOST_NET_ID = 0xEFFFFFCC;   // the host's id in the match network
@@ -890,16 +889,18 @@ bool assetshare_start()
         CreateDirectoryA(in_dir.c_str(), nullptr);
     }
     if (!sadk::verifying()) remove_stale_temp_mods();
-    int ok = sadk::patch_call(0x0045a381, fn::SelectMapDialog_AppendMapFiles, (void *)append_maps,
-                           "map list + Documents\\SAdK\\maps");
-    ok += sadk::patch_call(0x00426b14, fn::_fopen_s, (void *)serve_fopen, "what a host sends");
-    ok += sadk::patch_call(0x00427b29, fn::_rename, (void *)on_rename, "download destination check 1");
-    ok += sadk::patch_call(0x00427b7e, fn::_rename, (void *)on_rename, "download destination check 2");
-    ok += sadk::patch_call(0x00457f51, fn::NComm_Manager::SendPlayerReadyEvent, (void *)on_send_ready,
-                           "ready guard (Ready button)");
-    ok += sadk::patch_call(0x00426ca5, fn::S2Tftp_OpenTempFile.address, (void *)on_open_temp, "download start");
-    ok += sadk::patch_call(0x00426d14, fn::_fwrite, (void *)on_fwrite, "download progress");
-    ok += sadk::patch_call(0x00427a08, THUNK_REMOVE, (void *)on_abort_remove, "download abort");
+    // Single calls inside one function each, found by sadk::calls; the last number is how many there must be.
+    namespace net = fn::ai::net;
+    int ok = sadk::patch_calls(fn::LobbyMenu::SelectMapDialog::RefreshMapList, fn::SelectMapDialog_AppendMapFiles,
+                               (void *)append_maps, "map list + Documents\\SAdK\\maps", 1);
+    ok += sadk::patch_calls(fn::S2Tftp_Session_ReadNextBlock, fn::_fopen_s, (void *)serve_fopen, "what a host sends", 1);
+    ok += sadk::patch_calls(net::S2TftpSession::CloseFile, fn::_rename, (void *)on_rename, "download destination check", 2);
+    ok += sadk::patch_calls(fn::LobbyMenu::SetupGameDialog::HandleButtonClicks, fn::NComm_Manager::SendPlayerReadyEvent,
+                            (void *)on_send_ready, "ready guard (Ready button)", 1);
+    ok += sadk::patch_calls(fn::S2Tftp_Session_WriteBlock, fn::S2Tftp_OpenTempFile, (void *)on_open_temp,
+                            "download start", 1);
+    ok += sadk::patch_calls(fn::S2Tftp_Session_WriteBlock, fn::_fwrite, (void *)on_fwrite, "download progress", 1);
+    ok += sadk::patch_calls(net::S2TftpSession::CloseFile, fn::_remove, (void *)on_abort_remove, "download abort", 1);
     int hooks = BeginSend::install(on_begin_send, "S2TFTP: 4 KB blocks; who asks for the manifest") +
                 RequestFile::install(on_request_file, "map requests as archives") +
                 HandleEvent::install(on_handle_event, "join: fetch the manifest / note a joiner") +
