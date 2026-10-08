@@ -23,7 +23,7 @@ MCP, you do not write a script).
   writes). That is "use the MCP," not "circumvent it."
 - **Writing a standalone Python/PowerShell/shell script to do RE or debugging is
   FORBIDDEN.** Parsing offline decompile dumps, driving Ghidra over raw HTTP,
-  `ReadProcessMemory` probes, module dumps, minidump parsing, breakpoint tracers,
+  `ReadProcessMemory` probes, module dumps, breakpoint tracers,
   remote-thread/force-call injectors, `WriteProcessMemory`, binary byte-patchers —
   **all of that is circumvention and is not allowed.** Those tools were deleted; do
   not recreate them. If you feel the urge to "just write a quick script to read X
