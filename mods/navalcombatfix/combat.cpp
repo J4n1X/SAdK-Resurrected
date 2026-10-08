@@ -242,6 +242,7 @@ constexpr std::int32_t kSailToLoading = 0;   // NNavy::Military states (docs/nav
 constexpr std::int32_t kWaitForCargo = 1;
 constexpr std::int32_t kSailToLanding = 3;
 constexpr std::int32_t kDisembark = 4;
+constexpr std::int32_t kBoardReturning = 5;
 
 // The ends of a route the game's own end-picking cannot handle: the end on the target's landmass belongs to `player`
 // or to nobody (an own or a neutral landing), the other end is the player's. False otherwise (the game's own case,
@@ -259,6 +260,20 @@ bool own_route_ends(NavyShipRoute *route, std::int32_t player, std::int32_t targ
     return (*home)->playerIdx == player && ((*landing)->playerIdx == player || (*landing)->playerIdx == -1);
 }
 
+// ShipLostOnDefeat: an attacker's ship at the landing (state 5, boarding the soldiers coming back) sinks once the
+// attack is lost, with whoever is aboard; soldiers still ashore are left to the game (or a retreat pickup). This
+// holds for every attack by sea, the game's own included; ships carrying defenders are not affected.
+bool sink_after_defeat(NavyMission *m, Ship *ship)
+{
+    if (!g_settings.shipLostOnDefeat || m->state != kBoardReturning) return false;
+    Fight *fight = m->fight.cachedFight;
+    if (!fight || fight->attackerPlayer != ship->player->index || !battle_over(m) || !battle_lost(m)) return false;
+    fn::NNavy::Military::Finish(m);
+    fn::NNavy::Ship::SinkImmediately(ship);
+    sadk::log("attack by sea lost: ship %d sinks", ship->shipNumber);
+    return true;
+}
+
 // NNavy::Military::Update S 005ba250. Its states 0 (sail to the loading end) and 3 (sail to the landing end) pick
 // the end owned by the ship's player and by the fight's defender; for an own or a neutral landing (own_route_ends),
 // the landing end is the one on the target's landmass. A mission without a fight is a pickup (retreat.cpp). The guard is
@@ -271,6 +286,7 @@ bool SADK_THISCALL navy_military_update(NavyMission *m)
     if (!m->bActive || (mv->state != 0 && mv->state != 4) || mv->base.interpolator.progress > 0.0f)
         return NavyMilitaryUpdate::original(m);
     if (!carries_fight(m)) return retreat_update(m);
+    if (sink_after_defeat(m, ship)) return true;   // finished, as the game's state 7 returns
     if (m->state != kSailToLoading && m->state != kSailToLanding) return NavyMilitaryUpdate::original(m);
 
     NavyShipRoute *route = fn::NLogic::ReferenceShipRoute::Resolve(&mv->route);

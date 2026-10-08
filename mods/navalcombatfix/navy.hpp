@@ -92,6 +92,21 @@ inline bool carries(NavyMission *m, Fight *fight)
     return id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
 }
 
+// The fight is over for the mission once every one of its soldiers has left it (or none is left).
+inline bool battle_over(NavyMission *m)
+{
+    return fn::NavyMilitary_AllSoldiersLeftFight(reinterpret_cast<game::ai::stl::MsvcVector *>(&m->soldiers.refs_proxy));
+}
+
+// The mission's fight is lost, in the game's terms (NMilitary::Fight::GetPhase S 005708a0): its target still stands
+// and is not the attacker's (phase Fighting). Captured (TargetCaptured, Ending) is a win; a target that is gone
+// (NoTarget) is neither. Read unresolved, as the game does: ships keep their fight alive (Fight +0xbc).
+inline bool battle_lost(NavyMission *m)
+{
+    Fight *fight = m->fight.cachedFight;
+    return fight && fn::NMilitary::Fight::GetPhase(fight) == game::ai::military::EFightPhase::Fighting;
+}
+
 // For a pickup mission (no fight; retreat.cpp): the game's Update cannot run it in every state.
 bool retreat_update(NavyMission *m);
 
@@ -107,7 +122,7 @@ struct Settings {
     bool neutralLandings = true;          // NeutralLandings: neutral harbours without room for a colony are landings
     std::int32_t crossingDistance = 0;    // CrossingDistance: cells a sea crossing counts as (gathering, proximity)
     std::int32_t pickupTimeout = 1200;    // PickupTimeout: ticks a pickup ship waits for its soldiers
-    bool shipLostOnDefeat = true;         // ShipLostOnDefeat: a lost naval invasion sinks its ship
+    bool shipLostOnDefeat = true;         // ShipLostOnDefeat: a lost attack by sea sinks the attacker's ship
 };
 extern Settings g_settings;
 

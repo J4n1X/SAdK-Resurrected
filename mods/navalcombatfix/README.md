@@ -17,7 +17,10 @@ What it does:
 - **Naval invasion** (`invasion.cpp`): an expedition to a free harbour without room for a colony says so and turns
   back. The route's buoy then offers **Prepare naval invasion** (4th button): a ship loads an expedition (soldier and
   building goods) and waits at home. Attack a building near that harbour: the ship carries the attackers, only they
-  land, and when the building is taken the colony is founded. A lost invasion sinks the ship (`ShipLostOnDefeat`).
+  land, and when the building is taken the colony is founded.
+- **Lost attacks by sea sink the ship** (`ShipLostOnDefeat`): when an attack by sea fails (the target still stands and
+  is not taken), the attacker's ship sinks at the landing with everyone aboard. This holds for every attack by sea,
+  the game's own and invasions; ships carrying defenders are not affected.
 
 ## Settings (`navalcombatfix.ini`, `[NavalCombatFix]`)
 
@@ -31,7 +34,7 @@ What it does:
 | `NeutralLandings` | true | neutral harbours without room for a colony are landings |
 | `CrossingDistance` | 0 | cells a sea crossing counts as |
 | `PickupTimeout` | 1200 | ticks a ship waits for soldiers (pickups, invasion boarding) |
-| `ShipLostOnDefeat` | true | a lost naval invasion sinks its ship; false: it sails home and unloads |
+| `ShipLostOnDefeat` | true | a lost attack by sea sinks the attacker's ship; false: it sails home (an invasion unloads its cargo) |
 
 ## To do
 

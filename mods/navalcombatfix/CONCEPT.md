@@ -52,7 +52,8 @@ For a neutral harbour where a colony cannot be founded (an enemy is in the way),
    rare), the captured building keeps its garrison and the rest sail home with the "not enough space" message: invade
    again.
 5. **Lost:** with `ShipLostOnDefeat` (new setting, harsh: on by default) the ship is destroyed with everything aboard;
-   with it off, the invasion is cancelled and the ship sails home and unloads the expedition cargo.
+   with it off, the invasion is cancelled and the ship sails home and unloads the expedition cargo. The setting holds
+   for **every** lost attack by sea, not only invasions: the attacker's ship sinks at the landing.
 
 "Scouted" means: the player has explored the harbour (an expedition reveals it on arrival), it is neutral, and no
 colony fits. The button borrows the attack icon and shows plain English texts for now (`README.md`, to do).

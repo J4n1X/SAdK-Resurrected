@@ -357,7 +357,7 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 | `NMilitary::Attack::DispatchAttackers` | Unchanged; only records the fight being dispatched |
 | `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building on another landmass than the target sends through slot 1 (by sea) instead of slot 0 |
 | `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code when the game's own reach factor counted the building. Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
-| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's landmass |
+| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's landmass. State 5 (`ShipLostOnDefeat`): see below |
 
 **Retreat pickup.** `NSettlers::Settler::StartDying` is hooked. A healthy soldier in state 3 (dying only for having
 nowhere to go, see §4) is picked up by a ship instead, when there is:
@@ -430,7 +430,7 @@ not just the display.
 | 103 | ready, waiting at home. An attack whose sea link uses this route links its fight to the ship (`combat.cpp`; only for attackers) |
 | 104 | the attackers board (`BoardSettlersAtHarbor`, up to `PickupTimeout`); nobody came → back to 103 |
 | 105 | sail; on arrival only the mission's soldiers land (`NavyLink_UnlinkCargoSettler` + `DisembarkAt`) |
-| 106 | until all have left the fight. Won (the fight's target is the player's) → 107. Lost → `ShipLostOnDefeat`: `SinkImmediately`, else state 7 |
+| 106 | until all have left the fight. Not lost (`GetPhase`, see below; a target that is gone counts as taken) → 107. Lost → `ShipLostOnDefeat`: `SinkImmediately`, else state 7 |
 | 107 | the survivors board again, then the game's state 6 founds the colony |
 
 - **After the colony:** the ship switches to its military mission, state 6, which takes the attackers home and
@@ -445,8 +445,19 @@ To check in the game:
 - sinking and the cancelled return after a defeat;
 - saving and loading while an invasion waits.
 
+**Lost attacks by sea** (`ShipLostOnDefeat`, `combat.cpp`). A mission of the fight's attacker (`Fight::attackerPlayer`)
+in state 5, at the landing, once all its soldiers have left the fight: if the fight is lost, `NNavy::Military::Finish`
+and `Ship::SinkImmediately`. Lost is the game's own phase test, `NMilitary::Fight::GetPhase` `005708a0` [known]:
+- phase Fighting (0): the target still stands and its owner is not the attacker. This is the lost case;
+- TargetCaptured (3) or Ending (2): the attacker holds the target, a win;
+- NoTarget (4): the target is gone. This counts as neither, the ship sails home (an invasion tries its colony).
+
+Every attack by sea is covered, the game's own (landing at the defender's harbour) as well as the mod's, and the
+invasion (state 106). Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat
+pickup.
+
 **Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,
-`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ShipLostOnDefeat` decides a lost invasion's ship; with one
+`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ShipLostOnDefeat` sinks the ship of a lost attack by sea; with one
 off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
 soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
 waits. Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole

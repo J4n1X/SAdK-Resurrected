@@ -271,19 +271,6 @@ void land_attackers(Ship *ship)
     }
 }
 
-// The fight is over for the mission once every soldier has left it (or none is left).
-bool battle_over(NavyMission *m)
-{
-    return fn::NavyMilitary_AllSoldiersLeftFight(reinterpret_cast<game::ai::stl::MsvcVector *>(&m->soldiers.refs_proxy));
-}
-
-bool battle_won(NavyMission *m, std::int32_t player)
-{
-    Fight *fight = m->fight.cachedFight;   // ships keep their fight alive (Fight +0xbc)
-    Building *target = fight ? fight->target.cachedBuilding : nullptr;
-    return target && owner(target) == player;
-}
-
 void lose(Expedition *e)
 {
     Ship *ship = ship_of(e);
@@ -336,7 +323,7 @@ bool invasion_update(Expedition *e)
         break;
     case kInvBattle:
         if (!battle_over(m)) break;
-        if (!battle_won(m, ship->player->index)) {
+        if (battle_lost(m)) {   // a target that is gone counts as taken: try the colony
             lose(e);
             break;
         }
