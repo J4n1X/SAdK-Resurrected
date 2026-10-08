@@ -7,7 +7,9 @@
 # its flag files (.client / .server / .lobby) are copied.
 CXX = i686-w64-mingw32-g++
 SADKMOD = ../sadkmod
-CXXFLAGS = -std=c++23 -O2 -Wall -Wextra -fno-exceptions -fno-rtti -I$(SADKMOD)/include -I$(SADKMOD)/build/include
+include $(SADKMOD)/pch.mk
+MAKEFLAGS += -j$(shell nproc)
+CXXFLAGS = $(SADKMOD_CXXFLAGS) -I$(SADKMOD)/include -I$(SADKMOD)/build/include
 LIB = $(SADKMOD)/build/libsadkmod.a
 GENERATED = $(SADKMOD)/build/include/.generated
 LIBS = $(LIB) -lkernel32 -ladvapi32 -lshell32 -luser32 -lws2_32
@@ -17,6 +19,11 @@ MODS = $(patsubst %/,%,$(filter-out tests/ build/,$(wildcard */)))
 CODE_MODS = $(foreach m,$(MODS),$(if $(wildcard $(m)/*.cpp),$(m)))
 DATA_MODS = $(filter-out $(CODE_MODS),$(MODS))
 DLLS = $(CODE_MODS:%=build/%/mod.dll)
+SOURCES = $(foreach m,$(CODE_MODS),$(wildcard $(m)/*.cpp))
+# Each source once for the mod.dll and once for verify_mods.exe (SADKMOD_NO_ENTRY: no exports, entry.hpp), both from
+# sadkmod's precompiled header; -MMD keeps track of the headers each one includes.
+OBJ_DIR = build/obj
+VERIFY_OBJ_DIR = build/obj-verify
 
 all: $(DLLS) $(DATA_MODS:%=data-%)
 
@@ -26,20 +33,30 @@ data-%: FORCE
 	@if [ -d $*/data ]; then cp -r $*/data build/$*/; fi
 	@for f in $*/.client $*/.server $*/.lobby; do if [ -e $$f ]; then cp $$f build/$*/; fi; done
 
-$(LIB) $(GENERATED): FORCE
+$(LIB) $(GENERATED) $(SADKMOD_PCH_GCH): FORCE
 	$(MAKE) -C $(SADKMOD)
 
-.SECONDEXPANSION:
-build/%/mod.dll: $$(wildcard %/*.cpp) $(LIB) $(GENERATED)
+$(OBJ_DIR)/%.o: %.cpp $(SADKMOD_PCH_GCH)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -shared -s -static-libgcc -static-libstdc++ -o $@ $(filter %.cpp,$^) $(LIBS)
+	$(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -MMD -MP -c -o $@ $<
+
+$(VERIFY_OBJ_DIR)/%.o: %.cpp $(SADKMOD_PCH_GCH)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -DSADKMOD_NO_ENTRY -MMD -MP -c -o $@ $<
+
+-include $(SOURCES:%.cpp=$(OBJ_DIR)/%.d) $(SOURCES:%.cpp=$(VERIFY_OBJ_DIR)/%.d)
+
+.SECONDEXPANSION:
+build/%/mod.dll: $$(patsubst %.cpp,$(OBJ_DIR)/%.o,$$(wildcard %/*.cpp)) $(LIB)
+	@mkdir -p $(dir $@)
+	$(CXX) -shared -s -static-libgcc -static-libstdc++ -o $@ $(filter %.o,$^) $(LIBS)
 	@for f in $(wildcard $*/*.ini $*/*.txt); do cp $$f $(dir $@); done
 	@rm -rf $(dir $@)data
 	@if [ -d $*/data ]; then cp -r $*/data $(dir $@); fi
 
-build/verify_mods.exe: tests/verify_mods.cpp $(wildcard */*.cpp) $(LIB) $(GENERATED)
+build/verify_mods.exe: $(VERIFY_OBJ_DIR)/tests/verify_mods.o $(SOURCES:%.cpp=$(VERIFY_OBJ_DIR)/%.o) $(LIB)
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) -DSADKMOD_NO_ENTRY -static -o $@ tests/verify_mods.cpp $(foreach m,$(MODS),$(wildcard $(m)/*.cpp)) $(LIBS)
+	$(CXX) -static -o $@ $(filter %.o,$^) $(LIBS)
 
 verify: build/verify_mods.exe
 	WINEDEBUG=-all wine build/verify_mods.exe "$(SADK_EXE)"
