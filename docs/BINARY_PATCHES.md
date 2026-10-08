@@ -60,8 +60,10 @@ player count ready, and `PlayerInfo::IsReady` S 00414f50 counts AI and closed sl
 one. `NComm_Manager::RefreshSlots` S 0040b5a0 resets the extra slots of a map with more start positions to
 open (to AI offline), so on such a map the host must close them or add AI players.
 
-The shim (`bridge/wsock32_shim`) applies these patches in memory at start-up (after the exe check), each only
-where the original bytes match exactly:
+The assetshare mod applies these patches in memory at start-up, each only where the original bytes match exactly
+(`assetshare.ini [AssetShare] AcceptServerMaps = false` makes a joiner refuse downloads: its temp-file open returns
+no file, and `S2Tftp_Session_WriteBlock` S 00426c70 answers the host with the game's own Error 2,
+`!TFTP_ERROR_WRITEERROR`):
 
 | Address | Original | Change |
 |---|---|---|
@@ -75,7 +77,7 @@ where the original bytes match exactly:
 **Security note (vanilla game):** without the shim, any peer in a host's match can read any file below the
 host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpManager::OnReceive` S 00428110
 answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
-for hosts that run it.
+for hosts that run assetshare.
 
 ## Billboards (mod `mods/billboards`, in memory)
 
