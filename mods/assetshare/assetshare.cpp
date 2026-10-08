@@ -180,7 +180,7 @@ bool session_map_present(Manager *mgr)
     alignas(4) unsigned char guid[32] = {}, uuid[64] = {};
     sadk::msvc::string name = sadk::msvc::string::small("");
     std::int32_t type = 0;
-    auto *info = sadk::at<game::NComm::EventGameInformation>(mgr, 0xdc);
+    auto *info = &mgr->gameInformation;
     auto *g = static_cast<game::NComm::NetGUID *>(fn::NComm::EventGameInformation::GetMapGuid(info, guid));
     fn::NComm::NetGUID::ToUUID(g, uuid);
     bool found = fn::GameFile_FindMapByGuidAnyType(uuid, &name, &type);

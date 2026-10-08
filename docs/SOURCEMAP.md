@@ -371,7 +371,7 @@ Full picture and status tags: `docs/data-loading.md`.
 
 | Address | Name | What |
 |---|---|---|
-| `0x004075d0` | `CApplicationEx::Initialize` | once: `FileScanHolder::ScanDirectory("data\\")`, the property database (`Properties_RegisterLuaLibrary` `0x00550e40`, `Properties_RunPropertyScript("data")` `0x0054f8d0`), sound, lobby, menus |
+| `0x004075d0` | `CApplicationEx::Initialize` | once: `FileScanHolder::ScanDirectory("data\\")`, the property database (`Properties_RegisterLuaLibrary` `0x00550e40`, `PropertiesDb::RunPropertyScript("data")` `0x0054f8d0`), sound, lobby, menus |
 | `0x0054a140` | `NProperties::StaticAccess::EnsureInstance` | the `PropertiesDb` singleton `0x00889dd8` (0xc4 bytes) |
 | `0x005494a0` | `Properties_Db_ClearAll` | empties every property table, `bLoaded` (+0xc0) = 0; only caller `CApplicationEx::Shutdown` `0x00401cb0` |
 | `0x0067e800` | `Scene_CreateGlobal` | `new S2CG::Scene` into `g_pScene` `0x0088ca60`; caller `nMenu::Game::OnEnter` `0x005eed00` |

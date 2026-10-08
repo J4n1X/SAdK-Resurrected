@@ -18,7 +18,7 @@ before the game starts, a file read per match by any mod active when the match i
 | What | Where | Status |
 |---|---|---|
 | Directory scan of `data\` (the data roots for `[data]` paths) | `FileScanHolder::ScanDirectory` | [known] call; [TODO] what the scan keeps beyond the roots |
-| The property database (`PropertiesDb`, singleton `00889dd8`): every tribe, good, building, animal, ship, doodad, deposit, pattern, sound, AI and game-config value | `Properties_RegisterLuaLibrary` `00550e40` sets defaults and registers the Lua library `properties` (243 bindings); `Properties_RunPropertyScript("data")` `0054f8d0` runs `[data]\scripts\properties\data.lua`, which pulls in the other property scripts (`docs/lua-surface.md` §2.2) | [known] |
+| The property database (`PropertiesDb`, singleton `00889dd8`): every tribe, good, building, animal, ship, doodad, deposit, pattern, sound, AI and game-config value | `Properties_RegisterLuaLibrary` `00550e40` sets defaults and registers the Lua library `properties` (243 bindings); `PropertiesDb::RunPropertyScript("data")` `0054f8d0` runs `[data]\scripts\properties\data.lua`, which pulls in the other property scripts (`docs/lua-surface.md` §2.2) | [known] |
 | Sound system, user profile, `LobbyProfile` | `Sound_Init`, `LobbyProfile::Init` | [known] calls |
 | The lobby (unless `-nolobby`): `LobbyManager`, the lobby's zone table `world1.xml` | `LobbyManager::Initialize`, `CLobby` vtable `LoadZoneTable` | [known] calls |
 | Menus: `[data]\scripts\menu.cfg` | `nMenu::System::Initialize` `005dda30` | [known] |
@@ -31,7 +31,7 @@ property table, the config flags, `bLoaded` `+0xc0` = 0), called only from `CApp
 
 **Reloading between matches works offline** [live, maintainer's test 2026-10-08, test mod `mods/propreload`]: every
 time a match is entered (hook on `Scene_CreateGlobal` `0067e800`, before the world is built), `Properties_Db_ClearAll`,
-`Properties_RegisterLuaLibrary` and `Properties_RunPropertyScript("data")` ran; two offline matches in a row, no
+`Properties_RegisterLuaLibrary` and `PropertiesDb::RunPropertyScript("data")` ran; two offline matches in a row, no
 crash, and the record counts after each reload equal those before (104 buildings, 176 goods, 3 tribes, 12 animals,
 6 AI, 77 sacrifices). Not yet established: an online match after a reload [TODO], and whether every value (not just
 the record counts) is the same as after start-up [TODO: not compared].

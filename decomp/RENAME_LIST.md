@@ -1301,3 +1301,6 @@ its buffer with `ad0/ad1/ad2.tga` `[known]`. Used by the billboards mod's `GetTe
 
 S2TFTP findings: `docs/s2tftp.md`.
 | `0x004084d0` | `NComm_Manager_NetworkVcall_A4` (`void __fastcall(void*)`) | `NComm_Manager::RequestFileFromHost` (`bool __thiscall(NComm_Manager*, std::string *remoteName, std::string *localPath)`) | `JMP [handler vtbl+0xa4]` = `TinCatNetwork::RequestFileFromHost`, `RET 8`; callers the map download in `HandleEvent` `[known]` |
+| `0x0054f8d0` | `Properties_RunPropertyScript` (`void __stdcall(void*)`) | `ai::properties::PropertiesDb::RunPropertyScript` (`void __thiscall(PropertiesDb*, std::string *scriptName)`) | the only call site passes the database in ECX and the name on the stack (`RET 4`); the body never reads ECX `[known]` |
+
+Type change: `NComm_Manager` `+0xdc` `NComm::EventGameInformation gameInformation` (0x24f, was undefined): `GetGameInformation` returns its address, `HandleEvent` 0x30003 assigns into it `[known]`.
