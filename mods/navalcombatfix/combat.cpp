@@ -10,9 +10,11 @@
 //     belongs to the colonist, so no sea attack is possible from it.
 // The rules added here, decided by the maintainer:
 //   - Gathering: a building of player P across the water from the target contributes through a pair of P's harbours,
-//     H1 on the target's landmass and H2 on the building's, joined by a route with a ship of P for it. The crossing
-//     counts as zero length: the game's own distance falloff (Military_DistanceFalloff S 00574fe0) applies to
-//     d(target, H1) + d(H2, building). That holds for attackers and defenders alike.
+//     H1 on the target's landmass and H2 on the building's, joined by a route with a ship of P for it. Each building
+//     picks its own best pair, so buildings near different home harbours reach the same H1 over different routes,
+//     each with its own ship. The crossing counts as zero length: the game's own distance falloff
+//     (Military_DistanceFalloff S 00574fe0) applies to d(target, H1) + d(H2, building). That holds for attackers and
+//     defenders alike.
 //   - Attacking: a target is attackable when such an H1 lies within the target's territory range + 1, the same test
 //     the game uses for an enemy-owned landing harbour (Military_IsHarborWithinBuildingRange S 00574f70).
 //   - The ship's mission (NNavy::Military::Update S 005ba250) picks its route ends by owner; when both ends belong
