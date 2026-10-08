@@ -43,7 +43,9 @@ assigned to a route per player [known: `NavyShipRoute::HasPlayerEntry` `005b6bb0
 every 11 military ticks by `NMilitary::Distances::UpdateBuildingEnemyDistances` `00574e40` [known]:
 `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` `005337e0`, with the diplomacy filter (`Military+0x5c`) and
 without it (`+0x58`). Each is the smaller of:
-- the distance to the nearest **enemy military building** (cap 1000);
+- the distance to the nearest **enemy military building** (cap 1000), in a straight line, **across water too**
+  [live 2026-10-08: buildings on the home island had cached distances equal to the straight hex distance to the
+  enemy's buildings on another island, 19 and 20 cells, so stripes show across the sea without any route];
 - the distance to the nearest **own harbour** on the building's landmass that has a route to an **enemy-owned**
   harbour (`HarborList::FindNearestWithEnemyRoute` `005b5e00` → `Harbor::HasRouteToEnemyHarbor` `005b47d0`).
 
@@ -56,7 +58,9 @@ thresholds `0x13`/`0x18`].
   be attacked (`GetAttackTargetState` 2 → button code 1) [known].
 
 The stripes are a separate measure from the soldier-count falloff of §3.2, which is full only up to 12 cells. A
-building with two stripes (enemy within 18 cells) can still send fewer than all of its soldiers [inferred].
+building with two stripes (enemy within 18 cells) can still send fewer than all of its soldiers [inferred]. And since
+the stripes ignore water while the soldier count does not, a building with stripes across the sea sends nobody
+without a sea link (§5).
 
 **Reach test** `Military_IsEnemyTerritoryInRange(target, attacker)` `00575850` [known]:
 1. The attacker owns a cell on the hex ring at distance `R + 1` around the target, where `R` is the target's
