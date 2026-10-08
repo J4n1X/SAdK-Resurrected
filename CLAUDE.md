@@ -134,8 +134,8 @@ python -m sadk_lobby
 Outside the server: `sadkmod/` is the C++ library for code running inside SADK.exe (generated game
 declarations, patches, hooks, the mod host; `sadkmod/README.md`). The shim `bridge/wsock32_shim/` is built on it
 (C++): a proxy wsock32.dll that only loads mods from the game's `mods` folder. Everything else is a mod in `mods/`
-(`mods/README.md`): the host bridge's client side (`gamehostbridge`), map sharing (`assetshare`), billboards,
-npcmodels, ... The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim, gamehostbridge, assetshare and
+(`mods/README.md`): the host bridge's client side (`gamebridge`), map sharing (`assetshare`), billboards,
+npcmodels, ... The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim, gamebridge, assetshare and
 billboards.
 - `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 

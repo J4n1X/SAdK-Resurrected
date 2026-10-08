@@ -75,7 +75,7 @@ You need a legal install of the game and the **SAdK-ServerConfig** tool (`bridge
 1. Run `SAdK-ServerConfig.exe`. It finds the game folder (or pick it), shows whether your game data is
    modified, and lets you enter the server's address. *Advanced configuration* exposes the ports.
 2. Click **Save**. It writes the game's lobby and network settings and installs the shim (`bin\wsock32.dll`,
-   the mod host) with the mods for hosting through the server (`gamehostbridge`), map sharing (`assetshare`)
+   the mod host) with the mods for hosting through the server (`gamebridge`), map sharing (`assetshare`)
    and the lobby's billboards.
 3. Start the game and log in with any new name and password; the first login registers it.
 
@@ -188,7 +188,7 @@ so one generic codec encodes and decodes every message.
 sadk_lobby/          the server (Python package)
 sadkmod/             C++ modding library: generated game declarations, patches, hooks (sadkmod/README.md)
 bridge/wsock32_shim/ the shim: proxy wsock32.dll and mod host (C++)
-mods/                the repo's mods (gamehostbridge, assetshare, billboards, ...) and how to write one (mods/README.md)
+mods/                the repo's mods (gamebridge, assetshare, billboards, ...) and how to write one (mods/README.md)
 bridge/serverconfig/ SAdK-ServerConfig, the Windows setup tool (C, Win32)
 sourcemap/           Ghidra map of SADK.exe and tincat3.dll + its import script
 docs/                protocol and RE reference

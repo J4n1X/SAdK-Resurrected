@@ -19,13 +19,15 @@ needs.
 - **Shim and mods only on the DRM-free build:** they call game functions at fixed addresses, so they are installed
   only when `bin\SADK.exe` has MD5 `d4832bc5103c14f5445471af29b8d778` (the DRM-free build). On any other
   build Save writes the settings but not the shim, and says why.
-- **Mods** (embedded, installed on the DRM-free build): `mods\gamehostbridge` (hosting through the server; "Bridge
-  port" and "Always host through the bridge" are `[Bridge] Port` / `ForceBridge` in its `gamehostbridge.ini`),
+- **Mods** (embedded, installed on the DRM-free build): `mods\gamebridge` (hosting through the server; "Bridge
+  port" and "Always host through the bridge" are `[Bridge] Port` / `ForceBridge` in its `gamebridge.ini`),
   `mods\assetshare` (map sharing; `assetshare.ini` as shipped) and `mods\billboards` ("Disable billboards" is
   `[Billboards] Enabled` in its `billboards.ini`; ticked when nothing was chosen yet: the pages behind the lobby's
   advertising screens are gone for everyone). A `mod.dll` is replaced when it differs from the embedded one; an
   `.ini` is created from the shipped default only when missing, and then only the keys above are written. The
-  older settings `ForceBridge` in `LobbySettings.ini` and `bin\sadk_bridge.ini` are no longer read.
+  older settings `ForceBridge` in `LobbySettings.ini` and `bin\sadk_bridge.ini` are no longer read. An install that still has `mods\gamehostbridge` (the mod's earlier name) gets it replaced: its `.ini` moves to
+  `mods\gamebridge` when there is none there yet, and the old folder is removed, since both would tag the same
+  connections.
 - Ports are only editable with "Advanced configuration" ticked. The tool asks for admin rights: the game
   lives under Program Files, and without them Windows would silently redirect the writes elsewhere.
 

@@ -13,7 +13,7 @@ bool borderless_start();
 bool npcmodels_start();
 bool nomeshcache_start();
 bool propreload_start();
-bool gamehostbridge_start();
+bool gamebridge_start();
 bool assetshare_start();
 
 int main(int argc, char **argv)
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     npcmodels_start();
     nomeshcache_start();
     propreload_start();
-    gamehostbridge_start();   // nothing in SADK.exe: returns at once in verify mode
+    gamebridge_start();   // nothing in SADK.exe: returns at once in verify mode
     assetshare_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();

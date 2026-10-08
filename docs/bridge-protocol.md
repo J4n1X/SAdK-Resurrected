@@ -2,7 +2,7 @@
 
 Makes a hosted game joinable when the host cannot accept incoming connections. Two parts:
 
-- **Client** — the mod `mods/gamehostbridge`, loaded by the shim (`bridge/wsock32_shim/`, a proxy `wsock32.dll`
+- **Client** — the mod `mods/gamebridge`, loaded by the shim (`bridge/wsock32_shim/`, a proxy `wsock32.dll`
   placed next to `SADK.exe`). It hooks the shim's `connect`, `send`, `listen` and `closesocket` exports, which carry
   all of TinCat's sockets. Below, "the shim" means this client side.
 - **Stub** — `sadk_lobby/bridge.py`.
@@ -56,12 +56,12 @@ Control connection, after `HELLO`:
 
 ## Flows
 
-**Game start (mod `gamehostbridge`).**
+**Game start (mod `gamebridge`).**
 1. Read `data\lobby\config\LobbySettings.ini [LobbyServer] Host/Port` and `data\game\settings\network.ini [Basics] gamePort`.
-2. Connect to the lobby host's bridge port (`gamehostbridge.ini [Bridge] Port`, default 7072) and send `HELLO`.
+2. Connect to the lobby host's bridge port (`gamebridge.ini [Bridge] Port`, default 7072) and send `HELLO`.
    With no answer, the mod changes nothing.
 3. Listen on the game port and send `CHECK`. With no matching `PROBE` within 10 s, send `BRIDGED`.
-4. `gamehostbridge.ini [Bridge] ForceBridge = true` skips step 3 and sends `BRIDGED` at once.
+4. `gamebridge.ini [Bridge] ForceBridge = true` skips step 3 and sends `BRIDGED` at once.
 
 **Hosting.**
 1. The game's `connect` to the lobby is tagged with `LOBBY <token>`.

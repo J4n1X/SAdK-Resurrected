@@ -1,4 +1,4 @@
-// gamehostbridge: lets a player behind NAT host matches, through the lobby server (docs/bridge-protocol.md; the
+// gamebridge: lets a player behind NAT host matches, through the lobby server (docs/bridge-protocol.md; the
 // server side is sadk_lobby/bridge.py).
 //
 // tincat3.dll imports all of its sockets from WSOCK32.dll by ordinal, which is the shim (<game>\bin\wsock32.dll);
@@ -14,7 +14,7 @@
 // "BRIDGED" (this client can only host through the bridge). Then "OPEN <channel>" from the stub: a data connection to
 // the stub, piped to 127.0.0.1:<host port>.
 //
-// Settings: gamehostbridge.ini next to mod.dll, [Bridge] ForceBridge (default false: always host through the bridge,
+// Settings: gamebridge.ini next to mod.dll, [Bridge] ForceBridge (default false: always host through the bridge,
 // without the reachability test) and Port (the stub's bridge port, default 7072). The lobby's address and the game
 // port come from the game's own LobbySettings.ini ([LobbyServer] Host, Port) and network.ini ([Basics] gamePort).
 #include <winsock2.h>
@@ -39,7 +39,7 @@ struct Config {
     std::string host;                     // LobbySettings.ini [LobbyServer] Host
     unsigned short lobby_port = 7070;     //   Port
     unsigned short game_port = 5479;      // network.ini [Basics] gamePort
-    bool force_bridge = false;            // gamehostbridge.ini [Bridge] ForceBridge
+    bool force_bridge = false;            // gamebridge.ini [Bridge] ForceBridge
     unsigned short bridge_port = 7072;    //   Port
 } cfg;
 
@@ -432,7 +432,7 @@ bool hook_export(const char *name, F detour, F *original)
 
 }  // namespace
 
-bool gamehostbridge_start()
+bool gamebridge_start()
 {
     if (sadk::verifying()) return true;   // nothing in SADK.exe to check
     read_config();
@@ -447,4 +447,4 @@ bool gamehostbridge_start()
     return true;
 }
 
-SADKMOD_MAIN(gamehostbridge_start, 1, SADKMOD_CLIENT)
+SADKMOD_MAIN(gamebridge_start, 1, SADKMOD_CLIENT)

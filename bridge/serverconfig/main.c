@@ -7,8 +7,8 @@
  *   data\game\settings\network.ini       [Basics] gamePort
  *       read by NComm_NetworkConfig_LoadFromIni S 0041ede0
  *   bin\wsock32.dll                      the shim: proxy and mod host (mods/README.md)
- *   mods\gamehostbridge\                 hosting through the lobby server (docs/bridge-protocol.md);
- *                                        gamehostbridge.ini [Bridge] ForceBridge, Port
+ *   mods\gamebridge\                 hosting through the lobby server (docs/bridge-protocol.md);
+ *                                        gamebridge.ini [Bridge] ForceBridge, Port
  *   mods\assetshare\                     map sharing; assetshare.ini as shipped
  *   mods\billboards\                     the billboards mod; "Disable billboards" = billboards.ini [Billboards] Enabled
  * A mod's mod.dll is replaced when it differs from the embedded one; its .ini is only written when missing, and then
@@ -257,7 +257,7 @@ static const struct {
     const char *name;
     int dll, ini;
 } shipped[] = {
-    {"gamehostbridge", IDR_MOD_GAMEHOSTBRIDGE, IDR_MOD_GAMEHOSTBRIDGE_INI},
+    {"gamebridge", IDR_MOD_GAMEBRIDGE, IDR_MOD_GAMEBRIDGE_INI},
     {"assetshare", IDR_MOD_ASSETSHARE, IDR_MOD_ASSETSHARE_INI},
     {"billboards", IDR_MOD_BILLBOARDS, IDR_MOD_BILLBOARDS_INI},
 };
@@ -284,12 +284,31 @@ static int ini_bool(const char *path, const char *section, const char *key, int 
     return !lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes");
 }
 
+/* gamebridge was called gamehostbridge before: its settings move over (the new .ini only if there is none yet), and
+   the old folder goes, since both mods would tag the same connections. */
+static void replace_old_bridge(void)
+{
+    char old_dir[MAX_PATH], old_dll[MAX_PATH], old_ini[MAX_PATH], new_dir[MAX_PATH], new_ini[MAX_PATH];
+    join(old_dir, root, "mods\\gamehostbridge");
+    if (GetFileAttributesA(old_dir) == INVALID_FILE_ATTRIBUTES) return;
+    join(old_dll, root, "mods\\gamehostbridge\\mod.dll");
+    join(old_ini, root, "mods\\gamehostbridge\\gamehostbridge.ini");
+    join(new_dir, root, "mods\\gamebridge");
+    join(new_ini, root, "mods\\gamebridge\\gamebridge.ini");
+    CreateDirectoryA(new_dir, NULL);
+    if (GetFileAttributesA(new_ini) == INVALID_FILE_ATTRIBUTES) MoveFileA(old_ini, new_ini);
+    DeleteFileA(old_dll);
+    DeleteFileA(old_ini);
+    RemoveDirectoryA(old_dir);   /* only if nothing else is left in it */
+}
+
 static int install_mods(void)
 {
     char p[MAX_PATH];
     int ok = 1;
     join(p, root, "mods");
     CreateDirectoryA(p, NULL);
+    replace_old_bridge();
     for (int i = 0; i < (int)(sizeof shipped / sizeof shipped[0]); i++) {
         char dir[MAX_PATH], rel_dll[MAX_PATH], rel_ini[MAX_PATH];
         snprintf(rel_dll, sizeof rel_dll, "mods\\%s", shipped[i].name);
@@ -308,7 +327,7 @@ static void ini_paths(char *lobby, char *network, char *bridge)
 {
     join(lobby, root, "data\\lobby\\config\\LobbySettings.ini");
     join(network, root, "data\\game\\settings\\network.ini");
-    mod_ini(bridge, "gamehostbridge");
+    mod_ini(bridge, "gamebridge");
 }
 
 static void set_advanced(HWND dlg, int on)
@@ -420,7 +439,7 @@ static void save(HWND dlg)
 
     if (ok && shim_ok && mods_ok) {
         MessageBoxA(dlg, exe_supported
-                    ? "Settings saved; the shim and the mods (gamehostbridge, assetshare, billboards) are "
+                    ? "Settings saved; the shim and the mods (gamebridge, assetshare, billboards) are "
                       "installed.\n\nStart the game to use the new lobby server."
                     : "Settings saved. The shim and its mods were NOT installed: this SADK.exe is not the supported "
                       "DRM-free build, and they only work with that exact version.\n\nYou can still play "
@@ -431,7 +450,7 @@ static void save(HWND dlg)
         snprintf(m, sizeof m, "%s%s%s\nIs the game still running? Close it and try again.",
                  ok ? "" : "Some settings could not be written.\n",
                  shim_ok ? "" : "The shim (bin\\wsock32.dll) could not be installed.\n",
-                 mods_ok ? "" : "The mods (mods\\gamehostbridge, assetshare, billboards) could not all be installed.\n");
+                 mods_ok ? "" : "The mods (mods\\gamebridge, assetshare, billboards) could not all be installed.\n");
         MessageBoxA(dlg, m, "SAdK-ServerConfig", MB_ICONERROR);
     }
     refresh(dlg);
