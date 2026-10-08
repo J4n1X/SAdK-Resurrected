@@ -32,7 +32,8 @@ with "_") to switch the mod off.
                 "Disable billboards" = Enabled in billboards.ini)
   borderless    the game's fullscreen becomes a borderless window, stretched to the monitor;
                 borderless.ini: Monitor = primary, or the display number (1, 2, ...)
-  nomeshcache   models are always read from their .KEX files (no cache); for model makers, loads slower
+  nomeshcache   models are always read from their .KEX files (no cache); for model makers only: loads slower,
+                and the lobby town flickers while it is on
   npcmodels     lets the server show the female, MacDoyleJr and MacGabhan NPC models (chat: !npc <set> <index>)
 
 README.md describes how mods work and how to write one.

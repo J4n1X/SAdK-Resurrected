@@ -135,7 +135,8 @@ test, 2026-10-08).
 its last argument `noCache` is set. The callers checked (`LoadMesh` 0050b68b, `AcquireMesh` 006945ba,
 `LoadItemTypeMesh` 0069dc80) pass 0. The mod hooks `CMesh::Load` and passes `noCache = true`. `engine.ini`
 `[Engine] useMeshCache` (read into `CGraphicDevice+0xc9` by `CGraphicDevice::Init` S 004da2a0) is not what those
-callers use; its reader is [TODO].
+callers use; its reader is [TODO]. In the game (maintainer's test, 2026-10-08) the mod works, but the lobby town flickers while it is on;
+the cause is not investigated.
 
 ## Borderless fullscreen (mod `mods/borderless`, hooks)
 

@@ -4,7 +4,8 @@
 // S2CE::CMesh::Load S 0076e0d0 (19 callers, every mesh) takes a `noCache` flag: unless it is set, the loader reads
 // the .mshraw when IsPackedCacheUpToDate S 0076cbe0 says it is newer than the .KEX, and writes a fresh one after
 // converting (SavePackedBinary S 0076bdc0). This mod passes noCache = true on every call. Loading takes longer, as
-// every mesh is converted each time; existing cache files are left alone.
+// every mesh is converted each time; existing cache files are left alone. Known side effect: the lobby town flickers
+// while the mod is on (maintainer's test, 2026-10-08; cause not investigated). Meant for model makers, not for play.
 #include <sadkmod/game/sadk_noav/fn/S2CE.hpp>
 #include <sadkmod/sadkmod.hpp>
 
