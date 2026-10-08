@@ -41,6 +41,29 @@ int rect[4] = {305, 680, 730, 1005};
 bool crop = true;
 sadk::msvc::string texture_name;   // Texture as the game's std::string, inline (up to 15 characters)
 
+// A new 512x512 texture holding `part` of `full`, scaled by D3DX (which also decodes DXT sources); null on failure
+// (logged). The game links d3dx9_38.dll itself, so the functions are looked up there instead of linking D3DX.
+IDirect3DTexture9 *crop_texture(IDirect3DDevice9 *device, IDirect3DTexture9 *full, const RECT &part,
+                                d3dx_create_texture_fn create, d3dx_load_surface_fn load)
+{
+    IDirect3DTexture9 *cropped = nullptr;
+    IDirect3DSurface9 *src = nullptr, *dst = nullptr;
+    HRESULT hr = create(device, 512, 512, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cropped);
+    if (SUCCEEDED(hr)) hr = full->GetSurfaceLevel(0, &src);
+    if (SUCCEEDED(hr)) hr = cropped->GetSurfaceLevel(0, &dst);
+    if (SUCCEEDED(hr)) hr = load(dst, nullptr, nullptr, src, nullptr, &part, D3DX_FILTER_LINEAR, 0);
+    if (src) src->Release();
+    if (dst) dst->Release();
+    if (FAILED(hr)) {
+        if (cropped) cropped->Release();
+        log("crop failed (hr %08lx)", static_cast<unsigned long>(hr));
+        return nullptr;
+    }
+    return cropped;
+}
+
+// Replaces the loaded sheet in `tex` by the Rect part of it: the CTexture's D3D texture and its size are swapped for
+// the cropped one, and the full sheet is released.
 void billboard_crop(CTexture *tex)
 {
     if (!crop) return;
@@ -52,20 +75,9 @@ void billboard_crop(CTexture *tex)
         log("crop skipped (d3dx %s, texture %p)", create && load ? "ok" : "missing", static_cast<void *>(full));
         return;
     }
-    RECT r = {rect[0], rect[1], rect[2], rect[3]};
-    IDirect3DTexture9 *cropped = nullptr;
-    IDirect3DSurface9 *src = nullptr, *dst = nullptr;
-    HRESULT hr = create(device, 512, 512, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &cropped);
-    if (SUCCEEDED(hr)) hr = full->GetSurfaceLevel(0, &src);
-    if (SUCCEEDED(hr)) hr = cropped->GetSurfaceLevel(0, &dst);
-    if (SUCCEEDED(hr)) hr = load(dst, nullptr, nullptr, src, nullptr, &r, D3DX_FILTER_LINEAR, 0);
-    if (src) src->Release();
-    if (dst) dst->Release();
-    if (FAILED(hr)) {
-        if (cropped) cropped->Release();
-        log("crop failed (hr %08lx)", static_cast<unsigned long>(hr));
-        return;
-    }
+    RECT part = {rect[0], rect[1], rect[2], rect[3]};
+    IDirect3DTexture9 *cropped = crop_texture(device, full, part, create, load);
+    if (!cropped) return;
     tex->d3dTexture = cropped;
     tex->width = 512;
     tex->height = 512;
@@ -79,6 +91,9 @@ bool is_screen(const sadk::msvc::string &name)
     return name.view() == "ad0.tga" || name.view() == "ad1.tga" || name.view() == "ad2.tga";
 }
 
+// GetTexture S 00504650 for a screen entry not made yet; every other call goes to the game. The steps mirror what the
+// game does for an ordinary file texture: make the CTexture through the resource manager, store it in the entry,
+// load the file with the entry's flags, and apply the entry's red-channel tweak.
 CTexture *SADK_THISCALL get_texture(game::Lobby::CGfxTextureMgr *mgr, std::int32_t index)
 {
     game::ai::lobby::GfxTextureEntry &e = mgr->entries[index];
@@ -100,6 +115,7 @@ void read_settings()
     enabled = ini.get_bool("Billboards", "Enabled", true);
     texture = ini.get("Billboards", "Texture", "sign_ad0.dds");
     std::string r = ini.get("Billboards", "Rect", "305,680,730,1005");
+    // A malformed or empty Rect turns cropping off: the screens then show the whole texture.
     crop = std::sscanf(r.c_str(), "%d,%d,%d,%d", &rect[0], &rect[1], &rect[2], &rect[3]) == 4 && rect[2] > rect[0] &&
            rect[3] > rect[1];
 }

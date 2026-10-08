@@ -17,8 +17,24 @@
 
 bool npcmodels_start()
 {
-    bool ok = sadk::patch(0x005081db, {0x8B, 0x10, 0x8B, 0xC8, 0x8B, 0x42, 0x1C, 0x33, 0xDB, 0xFF, 0xD0, 0x8B, 0xE8},
-                          {0x0F, 0xB6, 0x58, 0x48, 0x8B, 0x10, 0x8B, 0xC8, 0xFF, 0x52, 0x1C, 0x8B, 0xE8},
+    // Same length (13 bytes): the set load (4 bytes) replaces XOR EBX,EBX (2) and folds MOV EAX,[EDX+0x1C] /
+    // CALL EAX (5) into CALL [EDX+0x1C] (3).
+    bool ok = sadk::patch(0x005081db,
+                          {
+                              0x8B, 0x10,         // MOV EDX,[EAX]            proxy vtable
+                              0x8B, 0xC8,         // MOV ECX,EAX              this = NPCProxy
+                              0x8B, 0x42, 0x1C,   // MOV EAX,[EDX+0x1C]
+                              0x33, 0xDB,         // XOR EBX,EBX              set = 0 (the hard-coded part)
+                              0xFF, 0xD0,         // CALL EAX                 NPC index
+                              0x8B, 0xE8,         // MOV EBP,EAX
+                          },
+                          {
+                              0x0F, 0xB6, 0x58, 0x48,   // MOVZX EBX,BYTE [EAX+0x48]   set = the proxy's bdyprt
+                              0x8B, 0x10,               // MOV EDX,[EAX]
+                              0x8B, 0xC8,               // MOV ECX,EAX
+                              0xFF, 0x52, 0x1C,         // CALL [EDX+0x1C]             NPC index
+                              0x8B, 0xE8,               // MOV EBP,EAX
+                          },
                           "NPC model set from bdyprt");
     sadk::log("%s", ok ? "bdyprt selects the npc_bodyparts.xml set" : "patch NOT active");
     return ok;

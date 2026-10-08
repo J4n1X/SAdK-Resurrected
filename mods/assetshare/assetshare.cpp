@@ -31,6 +31,10 @@
 // (GameData_ComputeBuildChecksum S 005ab800): server mods are matched here instead.
 //
 // Settings: assetshare.ini [AssetShare] AcceptServerMaps, AcceptServerMods (false: refuse those downloads).
+//
+// Layout of this file: settings and paths, room messages, the download queue, mods (ours and the host's), the host
+// side (serving, who has assetshare), the joiner side (manifest, plan, requests, finished downloads), the ready
+// guard, session events, the remaining hooks, start-up.
 #include <windows.h>
 
 #include <sadkmod/sadkmod.hpp>
@@ -64,6 +68,8 @@ constexpr std::uint32_t EV_USER_INFORMATION = 0x30001, EV_GAME_INFORMATION = 0x3
 constexpr std::uint32_t HOST_NET_ID = 0xEFFFFFCC;   // the host's id in the match network
 constexpr DWORD MANIFEST_TIMEOUT_MS = 15000;   // joiner: no manifest by then -> the host has no assetshare
 constexpr DWORD KICK_AFTER_MS = 20000;         // host: a joiner that has not asked for the manifest by then
+constexpr DWORD STALL_MS = 60000;              // a download without data for this long no longer blocks "ready"
+constexpr std::int32_t FILE_NOT_FOUND = 2;      // fopen_s result -> the game answers !TFTP_ERROR_FILENOTFOUND
 const char kick_reason[] = "This game needs the assetshare mod: install it with SAdK-ServerConfig.";
 
 bool accept_maps = true, accept_mods = true;   // assetshare.ini
@@ -74,13 +80,51 @@ std::string in_dir;                            // <My Documents>\SAdK\assetshare
 const char share_rel[] = "SAdK\\assetshare\\";  // the same, relative to My Documents (what a joiner asks for)
 
 Manager *manager() { return static_cast<Manager *>(fn::NComm_GetManager()); }
+// NComm_Manager::nMode: 1/3 joined a network game, 2/4 hosting one.
 bool is_joiner(Manager *m) { return m && (m->nMode == 1 || m->nMode == 3); }
 bool is_host_online(Manager *m) { return m && (m->nMode == 2 || m->nMode == 4); }
+// What this side can unpack; the host packs every archive for the joiner that asked (the request's suffix).
 const char *capability() { return archive::can_compress() ? "lzms" : "stored"; }
 
 bool starts_with_icase(const std::string &s, const std::string &prefix)
 {
     return s.size() >= prefix.size() && _strnicmp(s.c_str(), prefix.c_str(), prefix.size()) == 0;
+}
+
+bool has_ext(const std::string &name, const char *ext)   // ext: 4 characters, ".s2m"
+{
+    return name.size() >= 4 && !_stricmp(name.c_str() + name.size() - 4, ext);
+}
+
+std::string file_part(const std::string &path) { return path.substr(path.find_last_of('\\') + 1); }
+
+// ── File names from the other side ──────────────────────────────────────────────────────────────────────────────
+// Names a host asks for or a joiner receives come from another player's machine: none may reach outside its folder.
+
+// A plain name: no path, no drive, no "..", no control characters, at most 120 characters.
+bool plain_name(const std::string &n)
+{
+    if (n.empty() || n.size() > 120 || n.find("..") != std::string::npos) return false;
+    for (char c : n)
+        if (c == '\\' || c == '/' || c == ':' || static_cast<unsigned char>(c) < 0x20) return false;
+    return true;
+}
+
+// The file part of `path` if it is <maps_dir><plain name>.s2m|.bmp, else nullptr.
+const char *map_file_name(const char *path)
+{
+    if (maps_dir.empty() || !starts_with_icase(path, maps_dir)) return nullptr;
+    const char *name = path + maps_dir.size();
+    std::string n = name;
+    if (n.size() < 5 || !plain_name(n) || !(has_ext(n, ".s2m") || has_ext(n, ".bmp"))) return nullptr;
+    return name;
+}
+
+// A file that may land in the maps folder: a plain name ending in .s2m, .bmp, .bin or .lua.
+bool companion_name(const std::string &n)
+{
+    return n.size() >= 5 && plain_name(n) &&
+           (has_ext(n, ".s2m") || has_ext(n, ".bmp") || has_ext(n, ".bin") || has_ext(n, ".lua"));
 }
 
 // ── Messages in the pre-game room ───────────────────────────────────────────────────────────────────────────────
@@ -105,7 +149,12 @@ void room_list(const std::string &head, const std::vector<std::string> &items)
 // ── Our downloads ────────────────────────────────────────────────────────────────────────────────────────────────
 // The game runs one transfer with the host at a time and queues the rest in request order (S2TftpManager::RequestFile
 // S 00427140), so ours finish in the order they were asked for: the head of `pending` is the one running.
-enum class Kind { manifest, mod, map, raw_map };
+enum class Kind {
+    manifest,   // the host's server-mod list (archive)
+    mod,        // one server mod folder (archive)
+    map,        // a map file and the files that belong to it (archive)
+    raw_map     // a map file as the game itself fetches it, from a host without assetshare (no archive)
+};
 struct Download {
     Kind kind;
     std::string local;   // where the game writes it (in_dir\... or, for a raw map, its final path)
@@ -117,9 +166,25 @@ struct Download {
 };
 std::deque<Download> pending;
 
+Download raw_map_download(const std::string &local, const std::string &remote)
+{
+    return Download{Kind::raw_map, local, "the map file " + file_part(remote)};
+}
+
+bool mods_pending()
+{
+    for (auto &p : pending)
+        if (p.kind == Kind::mod) return true;
+    return false;
+}
+
+std::string current_label() { return pending.empty() ? std::string("a map file") : pending.front().label; }
+
 bool request(Manager *m, const std::string &remote, const Download &d);
 
 // ── Joiner state ─────────────────────────────────────────────────────────────────────────────────────────────────
+// idle -> waiting_manifest (asked the host) -> syncing (mods being switched / downloaded) -> ready or failed.
+// `legacy` is not entered at present.
 enum class State { idle, waiting_manifest, syncing, ready, legacy, failed };
 State state = State::idle;
 DWORD manifest_asked_at;
@@ -137,14 +202,18 @@ struct HostMod {
     std::uint32_t version = 0, flags = 0;
 };
 
+std::string mod_label(const std::string &name, std::uint32_t version) { return name + " " + std::to_string(version); }
+
 // ── Download progress (all transfers) ───────────────────────────────────────────────────────────────────────────
+// downloads_active counts the game's open temp files (on_open_temp up, on_rename / on_abort_remove down). A
+// transfer the host stops serving never closes, hence the stall timeout.
 volatile LONG downloads_active;
 unsigned long download_bytes, download_reported;
 DWORD download_last_activity;
 
 bool download_running()
 {
-    if (downloads_active > 0 && GetTickCount() - download_last_activity > 60000) {
+    if (downloads_active > 0 && GetTickCount() - download_last_activity > STALL_MS) {
         log("download stalled for 60 s - no longer blocking ready");
         InterlockedExchange(&downloads_active, 0);
     }
@@ -160,12 +229,13 @@ void download_finished()
     }
 }
 
-std::string current_label() { return pending.empty() ? std::string("a map file") : pending.front().label; }
-
+// Whether this side has the session's map, the game's own lookup: the map's GUID from the game information, as an
+// NCore::UUID, through GameFile_FindMapByGuidAnyType.
 bool session_map_present(Manager *mgr)
 {
-    // NetGUID (vtable + 4 dwords, 0x14 bytes) and NCore::UUID (constructed, GUID at +8..+0x17; the map search
-    // compares it there): both get room to spare. The name comes back as a std::string the game may allocate.
+    // Out-buffers for the game: NetGUID (vtable + 4 dwords, 0x14 bytes) and NCore::UUID (constructed, GUID at
+    // +8..+0x17; the map search compares it there), both with room to spare. The name comes back as a std::string
+    // the game may allocate.
     alignas(4) unsigned char guid[32] = {}, uuid[64] = {};
     sadk::msvc::owned_string name;   // the game may allocate it
     std::int32_t type = 0;
@@ -179,8 +249,11 @@ bool session_map_present(Manager *mgr)
 using LocalMod = sadk::host::ModInfo;
 std::vector<LocalMod> local_mods() { return sadk::mods::list(); }
 std::string mod_hash(const std::string &folder) { return sadk::mods::content_hash(folder); }
-
 std::string mod_dir(const std::string &folder) { return sadk::game_path("mods\\") + folder; }
+
+bool is_temp(const LocalMod &m) { return starts_with_icase(m.folder, ".temp_"); }
+// One of our own server mods running now: what a host announces and serves, what a joiner switches off.
+bool is_own_active_server_mod(const LocalMod &m) { return m.active && (m.flags & SADKMOD_SERVER) && !is_temp(m); }
 
 bool remove_tree(const std::string &dir)
 {
@@ -211,6 +284,7 @@ void discard_temp(const std::string &folder)
     leftovers.push_back(folder);
 }
 
+// The leftovers whose mod.dll has been freed since: out of the list, deleted. Those still in use stay leftovers.
 void retry_leftovers()
 {
     sadk::mods::free_pending();
@@ -230,11 +304,13 @@ void retry_leftovers()
 //   SAdK\assetshare\mod.<name>.<cap>    one of them, the whole folder
 //   SAdK\assetshare\map.<file>.<cap>    a map file (.s2m / .bmp)
 // <cap> is what the joiner can unpack: "lzms" or "stored". The archive goes to share_dir\out\ and is served from there.
+
+// The manifest: a header line, then one tab-separated line per server mod (name, version, content hash, flags).
 std::string manifest_text()
 {
     std::string t = "assetshare 1\n";
     for (auto &m : local_mods())
-        if (m.active && (m.flags & SADKMOD_SERVER) && !starts_with_icase(m.folder, ".temp_")) {
+        if (is_own_active_server_mod(m)) {
             char line[512];
             std::snprintf(line, sizeof line, "mod\t%s\t%u\t%s\t%u\n", m.name.c_str(), m.version,
                           mod_hash(m.folder).c_str(), m.flags);
@@ -243,104 +319,89 @@ std::string manifest_text()
     return t;
 }
 
-// The file part of `path` if it is <maps_dir><plain name>.s2m|.bmp, else nullptr.
-const char *map_file_name(const char *path)
+bool manifest_entries(std::vector<archive::Entry> &entries, std::string &label)
 {
-    if (maps_dir.empty() || !starts_with_icase(path, maps_dir)) return nullptr;
-    const char *name = path + maps_dir.size();
-    std::size_t len = std::strlen(name);
-    if (len < 5 || len > 120 || std::strstr(name, "..")) return nullptr;
-    for (const char *c = name; *c; c++)
-        if (*c == '\\' || *c == '/' || *c == ':' || static_cast<unsigned char>(*c) < 0x20) return nullptr;
-    if (_stricmp(name + len - 4, ".s2m") != 0 && _stricmp(name + len - 4, ".bmp") != 0) return nullptr;
-    return name;
-}
-
-// A file that may land in the maps folder: a plain name ending in .s2m, .bmp, .bin or .lua.
-bool companion_name(const std::string &n)
-{
-    if (n.size() < 5 || n.size() > 120 || n.find("..") != std::string::npos) return false;
-    for (char c : n)
-        if (c == '\\' || c == '/' || c == ':' || static_cast<unsigned char>(c) < 0x20) return false;
-    const char *ext = n.c_str() + n.size() - 4;
-    return !_stricmp(ext, ".s2m") || !_stricmp(ext, ".bmp") || !_stricmp(ext, ".bin") || !_stricmp(ext, ".lua");
-}
-
-// A plain name: no path, no "..".
-bool plain_name(const std::string &n)
-{
-    if (n.empty() || n.size() > 120 || n.find("..") != std::string::npos) return false;
-    for (char c : n)
-        if (c == '\\' || c == '/' || c == ':' || static_cast<unsigned char>(c) < 0x20) return false;
+    std::string t = manifest_text();
+    entries.push_back({"manifest.txt", std::vector<std::uint8_t>(t.begin(), t.end())});
+    label = "the server-mod list";
     return true;
 }
 
-// Builds the archive for a request below share_dir; returns its path, or "" (logged) if there is nothing to send.
+// The whole folder of the running server mod `name` (only those: a joiner cannot fetch anything else of ours).
+bool mod_entries(const std::string &name, std::vector<archive::Entry> &entries, std::string &label)
+{
+    const LocalMod *found = nullptr;
+    auto mods = local_mods();
+    for (auto &m : mods)
+        if (is_own_active_server_mod(m) && !_stricmp(m.name.c_str(), name.c_str())) found = &m;
+    if (!plain_name(name) || !found || !archive::read_folder(mod_dir(found->folder), entries)) {
+        log("serve: no server mod %s to send", name.c_str());
+        return false;
+    }
+    label = "server mod " + name;
+    return true;
+}
+
+// A map comes with files of the same name next to it: <map>.bin, its environment data
+// (CEnviromentMgr::LoadMapEnvData S 00685580), <map>.lua, its script (GameFile_LoadMap S 005aa7b0), and
+// <map>_<name>.lua, its cutscene scripts (Cutscene_BuildScriptPath S 0078a940). They go with the .s2m.
+void add_map_companions(const std::string &path, const std::string &file, std::vector<archive::Entry> &entries)
+{
+    std::string dir = path.substr(0, path.find_last_of('\\') + 1), base = file.substr(0, file.size() - 4);
+    std::vector<std::string> names{base + ".bin", base + ".lua"};
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + base + "_*.lua").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do names.push_back(fd.cFileName);
+        while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    for (auto &n : names) {
+        std::vector<std::uint8_t> extra;
+        if (archive::read_file(dir + n, extra)) entries.push_back({n, std::move(extra)});
+    }
+}
+
+// A map file from Documents\SAdK\maps, else from the game's own free-game maps, with what belongs to it.
+bool map_entries(const std::string &file, std::vector<archive::Entry> &entries, std::string &label)
+{
+    std::vector<std::uint8_t> data;
+    std::string path = maps_dir + file;
+    if (!map_file_name(path.c_str())) return false;
+    if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
+        path = sadk::game_path("data\\game\\maps\\Freegamemaps\\") + file;
+    if (!archive::read_file(path, data)) {
+        log("serve: map file %s not found", file.c_str());
+        return false;
+    }
+    entries.push_back({file, std::move(data)});
+    label = "map file " + file;
+    if (has_ext(file, ".s2m")) {
+        add_map_companions(path, file, entries);
+        if (entries.size() > 1) label += " with " + std::to_string(entries.size() - 1) + " file(s) that belong to it";
+    }
+    return true;
+}
+
+// Builds the archive for a request below share_dir ("manifest.lzms", "mod.<name>.stored", ...); returns its path,
+// or "" (logged) if there is nothing to send.
 std::string build_for_request(const std::string &rest)
 {
     std::size_t dot = rest.find_last_of('.');
     if (dot == std::string::npos) return {};
     std::string what = rest.substr(0, dot), cap = rest.substr(dot + 1);
-    archive::Method method = cap == "lzms" ? archive::lzms : archive::stored;
     std::vector<archive::Entry> entries;
     std::string label;
-    if (what == "manifest") {
-        std::string t = manifest_text();
-        entries.push_back({"manifest.txt", std::vector<std::uint8_t>(t.begin(), t.end())});
-        label = "the server-mod list";
-    } else if (starts_with_icase(what, "mod.")) {
-        std::string name = what.substr(4);
-        const LocalMod *found = nullptr;
-        auto mods = local_mods();
-        for (auto &m : mods)
-            if (m.active && (m.flags & SADKMOD_SERVER) && !_stricmp(m.name.c_str(), name.c_str()) &&
-                !starts_with_icase(m.folder, ".temp_"))
-                found = &m;
-        if (!plain_name(name) || !found || !archive::read_folder(mod_dir(found->folder), entries)) {
-            log("serve: no server mod %s to send", name.c_str());
-            return {};
-        }
-        label = "server mod " + name;
-    } else if (starts_with_icase(what, "map.")) {
-        std::string file = what.substr(4);
-        std::vector<std::uint8_t> data;
-        std::string path = maps_dir + file;
-        if (!map_file_name(path.c_str())) return {};
-        if (GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-            path = sadk::game_path("data\\game\\maps\\Freegamemaps\\") + file;
-        if (!archive::read_file(path, data)) {
-            log("serve: map file %s not found", file.c_str());
-            return {};
-        }
-        entries.push_back({file, std::move(data)});
-        label = "map file " + file;
-        // A map comes with files of the same name next to it: <map>.bin, its environment data
-        // (CEnviromentMgr::LoadMapEnvData S 00685580), <map>.lua, its script (GameFile_LoadMap S 005aa7b0), and
-        // <map>_<name>.lua, its cutscene scripts (Cutscene_BuildScriptPath S 0078a940). They go with the .s2m.
-        if (file.size() > 4 && !_stricmp(file.c_str() + file.size() - 4, ".s2m")) {
-            std::string dir = path.substr(0, path.find_last_of('\\') + 1), base = file.substr(0, file.size() - 4);
-            std::vector<std::string> names{base + ".bin", base + ".lua"};
-            WIN32_FIND_DATAA fd;
-            HANDLE h = FindFirstFileA((dir + base + "_*.lua").c_str(), &fd);
-            if (h != INVALID_HANDLE_VALUE) {
-                do names.push_back(fd.cFileName);
-                while (FindNextFileA(h, &fd));
-                FindClose(h);
-            }
-            for (auto &n : names) {
-                std::vector<std::uint8_t> extra;
-                if (archive::read_file(dir + n, extra)) entries.push_back({n, std::move(extra)});
-            }
-            if (entries.size() > 1) label += " with " + std::to_string(entries.size() - 1) + " file(s) that belong to it";
-        }
-    } else {
-        return {};
-    }
+    bool found = what == "manifest"                 ? manifest_entries(entries, label)
+                 : starts_with_icase(what, "mod.")  ? mod_entries(what.substr(4), entries, label)
+                 : starts_with_icase(what, "map.")  ? map_entries(what.substr(4), entries, label)
+                                                    : false;
+    if (!found) return {};
     CreateDirectoryA((share_dir + "out").c_str(), nullptr);
     std::string out = share_dir + "out\\" + rest + ".sas";
     archive::Method used;
     std::string error;
-    if (!archive::write(out, entries, method, &used, &error)) {
+    if (!archive::write(out, entries, cap == "lzms" ? archive::lzms : archive::stored, &used, &error)) {
         log("serve: %s", error.c_str());
         return {};
     }
@@ -353,18 +414,19 @@ std::string build_for_request(const std::string &rest)
     return out;
 }
 
-// S2Tftp_Session_ReadNextBlock's fopen_s (S 00426b14): only maps and assetshare's files are ever sent.
+// S2Tftp_Session_ReadNextBlock's fopen_s (S 00426b14): only maps and assetshare's files are ever sent. The path is
+// what the joiner asked for, below the host's My Documents; requests for assetshare's files are built on the spot.
 std::uint32_t SADK_CDECL serve_fopen(GameFILE **f, char *path, char *mode)
 {
     *f = nullptr;
     if (starts_with_icase(path, share_dir) && !starts_with_icase(path, in_dir)) {
         std::string file = build_for_request(path + share_dir.size());
-        return file.empty() ? 2 : fn::_fopen_s(f, file.data(), mode);   // 2 = ENOENT -> !TFTP_ERROR_FILENOTFOUND
+        return file.empty() ? FILE_NOT_FOUND : fn::_fopen_s(f, file.data(), mode);
     }
     const char *name = map_file_name(path);
     if (!name) {
         log("serve: refused a request for %s (not a map file)", path);
-        return 2;
+        return FILE_NOT_FOUND;
     }
     if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) {
         log("serve: map file %s (plain)", name);
@@ -376,14 +438,16 @@ std::uint32_t SADK_CDECL serve_fopen(GameFILE **f, char *path, char *mode)
         return fn::_fopen_s(f, stock.data(), mode);
     }
     log("serve: %s not found", name);
-    return 2;
+    return FILE_NOT_FOUND;
 }
 
 // ── Host: who has assetshare ─────────────────────────────────────────────────────────────────────────────────────
+// A joiner with assetshare asks for the manifest as soon as the game information reaches it; one that has not done so
+// KICK_AFTER_MS after joining has no assetshare.
 bool runs_server_mods()
 {
     for (auto &m : local_mods())
-        if (m.active && (m.flags & SADKMOD_SERVER) && !starts_with_icase(m.folder, ".temp_")) return true;
+        if (is_own_active_server_mod(m)) return true;
     return false;
 }
 
@@ -413,6 +477,7 @@ bool SADK_THISCALL on_begin_send(game::ai::net::S2TftpSession *s, std::uint32_t 
 }
 
 // ── Joiner: the manifest and the plan ───────────────────────────────────────────────────────────────────────────
+// The end of the sync: every host mod is either running here or listed in `missing`.
 void finish_sync(Manager *m)
 {
     if (!missing.empty()) {
@@ -430,6 +495,13 @@ void finish_sync(Manager *m)
     if (m) fn::NComm_Manager::SendPlayerReadyEvent(m, false);   // refresh the room
 }
 
+// A host mod that could not be set up (download or unpack failed); the sync ends with the last mod download.
+void mod_failed(Manager *m, const Download &d, const std::string &why)
+{
+    missing.push_back(mod_label(d.name, d.version) + " (" + why + ")");
+    if (!mods_pending() && state == State::syncing) finish_sync(m);
+}
+
 void flush_deferred_maps(Manager *m);
 
 void apply_host_set(Manager *m, const std::vector<HostMod> &host_mods);
@@ -444,6 +516,7 @@ void no_manifest(Manager *m, const char *why)
     apply_host_set(m, {});
 }
 
+// Parses manifest_text()'s format; lines it does not know are skipped, a missing header means "no manifest".
 void use_manifest(Manager *m, const std::string &text)
 {
     std::vector<HostMod> host_mods;
@@ -472,125 +545,133 @@ void use_manifest(Manager *m, const std::string &text)
     apply_host_set(m, host_mods);
 }
 
-void apply_host_set(Manager *m, const std::vector<HostMod> &host_mods)
+bool same_as_host(const LocalMod &l, const HostMod &h)
 {
-    state = State::syncing;
-    auto locals = local_mods();
-    // 1. Our server mods that the host does not run (or runs in another version): off for this game. First, so
-    //    nothing we activate below conflicts with them.
+    return !_stricmp(l.name.c_str(), h.name.c_str()) && l.version == h.version && mod_hash(l.folder) == h.hash;
+}
+
+// 1. Our server mods that the host does not run (or runs in another version): off for this game. First, so nothing
+//    activated afterwards conflicts with them.
+void switch_off_unshared(const std::vector<LocalMod> &locals, const std::vector<HostMod> &host_mods)
+{
     for (auto &l : locals) {
-        if (!l.active || !(l.flags & SADKMOD_SERVER) || starts_with_icase(l.folder, ".temp_")) continue;
+        if (!is_own_active_server_mod(l)) continue;
         bool kept = false;
-        for (auto &h : host_mods)
-            if (!_stricmp(h.name.c_str(), l.name.c_str()) && h.version == l.version && h.hash == mod_hash(l.folder))
-                kept = true;
+        for (auto &h : host_mods) kept |= same_as_host(l, h);
         if (kept) continue;
         auto r = sadk::mods::deactivate(l.folder);
         switched_off.push_back(l.folder);
         room_message("Your server mod " + l.name + " is off for this game" +
                      (r == sadk::host::Unload::busy ? " (its code stays loaded until it can be freed)." : "."));
     }
-    // 2. The host's mods: our own copy if it is the same, else a download.
-    for (auto &h : host_mods) {
-        char ver[16];
-        std::snprintf(ver, sizeof ver, "%u", h.version);
-        const LocalMod *same = nullptr;
-        for (auto &l : locals)
-            if (!starts_with_icase(l.folder, ".temp_") && !_stricmp(l.name.c_str(), h.name.c_str()) &&
-                l.version == h.version && mod_hash(l.folder) == h.hash)
-                same = &l;
-        if (same) {
-            if (!same->active) {
-                if (sadk::mods::activate(same->folder)) switched_on.push_back(same->folder);
-            }
-            summary.push_back(h.name + " " + ver + " (yours)");
-            continue;
-        }
-        if (!accept_mods) {
-            missing.push_back(h.name + " " + ver);
-            continue;
-        }
-        Download d{Kind::mod, in_dir + "mod." + h.name + ".sas", "the server mod " + h.name + " (version " + ver + ")",
-                   h.name, "", h.version, h.hash};
-        if (!request(m, std::string(share_rel) + "mod." + h.name + "." + capability(), d))
-            missing.push_back(h.name + " " + ver + " (could not ask the host)");
-    }
-    flush_deferred_maps(m);
-    bool mods_pending = false;
-    for (auto &p : pending) mods_pending |= p.kind == Kind::mod;
-    if (!mods_pending) finish_sync(m);
 }
 
-// A downloaded mod: unpack into .temp_<name>, check it is what the host announced, activate.
+// 2. One of the host's mods: our own copy if it is the same, else a download (unless refused by the ini).
+void provide_host_mod(Manager *m, const std::vector<LocalMod> &locals, const HostMod &h)
+{
+    std::string label = mod_label(h.name, h.version);
+    const LocalMod *same = nullptr;
+    for (auto &l : locals)
+        if (!is_temp(l) && same_as_host(l, h)) same = &l;
+    if (same) {
+        if (!same->active && sadk::mods::activate(same->folder)) switched_on.push_back(same->folder);
+        summary.push_back(label + " (yours)");
+        return;
+    }
+    if (!accept_mods) {
+        missing.push_back(label);
+        return;
+    }
+    Download d{Kind::mod, in_dir + "mod." + h.name + ".sas",
+               "the server mod " + h.name + " (version " + std::to_string(h.version) + ")", h.name, "", h.version, h.hash};
+    if (!request(m, std::string(share_rel) + "mod." + h.name + "." + capability(), d))
+        missing.push_back(label + " (could not ask the host)");
+}
+
+// The host's set of server mods becomes ours for this game. Maps asked for meanwhile are requested now; the sync ends
+// here unless mods are downloading (then with the last of them, use_mod / mod_failed).
+void apply_host_set(Manager *m, const std::vector<HostMod> &host_mods)
+{
+    state = State::syncing;
+    auto locals = local_mods();
+    switch_off_unshared(locals, host_mods);
+    for (auto &h : host_mods) provide_host_mod(m, locals, h);
+    flush_deferred_maps(m);
+    if (!mods_pending()) finish_sync(m);
+}
+
+// A downloaded mod: unpack into .temp_<name>, check it is what the host announced, activate. A failure goes through
+// mod_failed like a failed download, so the sync still ends with the last mod.
 void use_mod(Manager *m, const Download &d, const std::vector<archive::Entry> &entries)
 {
-    std::string folder = ".temp_" + d.name;
-    char ver[16];
-    std::snprintf(ver, sizeof ver, "%u", d.version);
+    std::string folder = ".temp_" + d.name, label = mod_label(d.name, d.version);
     discard_temp(folder);   // a leftover of an earlier game
     std::string error;
     if (!archive::write_folder(mod_dir(folder), entries, &error)) {
-        missing.push_back(d.name + " " + ver + " (" + error + ")");
+        mod_failed(m, d, error);
         return;
     }
     if (!sadk::mods::add(mod_dir(folder))) {
-        missing.push_back(d.name + " " + ver + " (not a loadable mod)");
         remove_tree(mod_dir(folder));
+        mod_failed(m, d, "not a loadable mod");
         return;
     }
     if (mod_hash(folder) != d.hash) {
-        missing.push_back(d.name + " " + ver + " (the download differs from the host's copy)");
         discard_temp(folder);
+        mod_failed(m, d, "the download differs from the host's copy");
         return;
     }
     if (!sadk::mods::activate(folder)) {
-        missing.push_back(d.name + " " + ver + " (it failed to start, see wsock32_shim.txt)");
         discard_temp(folder);
+        mod_failed(m, d, "it failed to start, see wsock32_shim.txt");
         return;
     }
     downloaded.push_back(folder);
-    summary.push_back(d.name + " " + ver + " (downloaded)");
-    room_message("Server mod " + d.name + " " + ver + " downloaded and activated.");
-    bool more = false;   // (this one has left `pending` already)
-    for (auto &p : pending) more |= p.kind == Kind::mod;
-    if (!more && state == State::syncing) finish_sync(m);
+    summary.push_back(label + " (downloaded)");
+    room_message("Server mod " + label + " downloaded and activated.");
+    if (!mods_pending() && state == State::syncing) finish_sync(m);   // (this one has left `pending` already)
 }
 
 // ── Joiner: requests ─────────────────────────────────────────────────────────────────────────────────────────────
 using RequestFile = sadk::Hook<fn::NComm_Manager::RequestFileFromHost>;
 
+// The game's own request (the original, not our hook); `remote` and `local` are copied by the game.
+bool game_request(Manager *m, const std::string &remote, const std::string &local)
+{
+    sadk::msvc::string r = sadk::msvc::string::borrow(remote.c_str(), remote.size());
+    sadk::msvc::string l = sadk::msvc::string::borrow(local.c_str(), local.size());
+    return m && RequestFile::original(m, &r, &l);
+}
+
+// Asks the host for `remote` (below its My Documents) unless the same download is queued already.
 bool request(Manager *m, const std::string &remote, const Download &d)
 {
     for (auto &p : pending)
         if (!_stricmp(p.local.c_str(), d.local.c_str())) return true;   // asked already
     CreateDirectoryA(in_dir.c_str(), nullptr);
     DeleteFileA(d.local.c_str());
-    sadk::msvc::string r = sadk::msvc::string::borrow(remote.c_str(), remote.size());
-    sadk::msvc::string l = sadk::msvc::string::borrow(d.local.c_str(), d.local.size());
-    if (!m || !RequestFile::original(m, &r, &l)) return false;   // the game copies both strings
+    if (!game_request(m, remote, d.local)) return false;
     pending.push_back(d);
     log("asked the host for %s (%s)", remote.c_str(), d.label.c_str());
     return true;
 }
 
+// A map through a host with assetshare: as an archive (map.<file>.<cap>), unpacked into the maps folder on arrival.
 void request_map(Manager *m, const std::string &remote, const std::string &local)
 {
-    std::string file = remote.substr(remote.find_last_of('\\') + 1);
+    std::string file = file_part(remote);
     Download d{Kind::map, in_dir + "map." + file + ".sas", "the map file " + file, file, local};
     request(m, std::string(share_rel) + "map." + file + "." + capability(), d);
 }
 
+// The maps the game asked for before the manifest came: as archives if the host shares, else the game's own way.
 void flush_deferred_maps(Manager *m)
 {
     for (auto &[remote, local] : deferred_maps) {
-        if (host_shares) {
+        if (host_shares)
             request_map(m, remote, local);
-        } else {
-            sadk::msvc::string r = sadk::msvc::string::borrow(remote.c_str(), remote.size());
-            sadk::msvc::string l = sadk::msvc::string::borrow(local.c_str(), local.size());
-            if (RequestFile::original(m, &r, &l))
-                pending.push_back(Download{Kind::raw_map, local, "the map file " + remote.substr(remote.find_last_of('\\') + 1)});
-        }
+        else if (game_request(m, remote, local))
+            pending.push_back(raw_map_download(local, remote));
     }
     deferred_maps.clear();
 }
@@ -601,7 +682,7 @@ bool SADK_THISCALL on_request_file(Manager *m, sadk::msvc::string *remote, sadk:
     std::string r(remote->view()), l(local->view());
     if (!starts_with_icase(r, "SAdK\\maps\\")) return RequestFile::original(m, remote, local);
     if (!accept_maps) {
-        static DWORD said;
+        static DWORD said;   // the request repeats with every GameInformation: say it at most every 30 s
         if (GetTickCount() - said > 30000) room_message("Map downloads are switched off (assetshare.ini: AcceptServerMaps).");
         said = GetTickCount();
         return true;
@@ -619,13 +700,13 @@ bool SADK_THISCALL on_request_file(Manager *m, sadk::msvc::string *remote, sadk:
     for (auto &p : pending)
         if (!_stricmp(p.local.c_str(), l.c_str())) return true;
     bool ok = RequestFile::original(m, remote, local);
-    if (ok) pending.push_back(Download{Kind::raw_map, l, "the map file " + r.substr(r.find_last_of('\\') + 1)});
+    if (ok) pending.push_back(raw_map_download(l, r));
     return ok;
 }
 
-// ── Joiner: a download completes ────────────────────────────────────────────────────────────────────────────────
-// No temp file: S2Tftp_Session_WriteBlock S 00426c70 answers the host with Error 2 (!TFTP_ERROR_WRITEERROR) and
-// receives nothing more, the game's own refusal.
+// ── Joiner: a download starts, runs, ends ───────────────────────────────────────────────────────────────────────
+// S2Tftp_Session_WriteBlock's temp file for the first block. No temp file: S2Tftp_Session_WriteBlock S 00426c70
+// answers the host with Error 2 (!TFTP_ERROR_WRITEERROR) and receives nothing more, the game's own refusal.
 GameFILE *SADK_CDECL on_open_temp(sadk::msvc::string *out_path)
 {
     bool is_map = pending.empty() || pending.front().kind == Kind::map || pending.front().kind == Kind::raw_map;
@@ -644,6 +725,7 @@ GameFILE *SADK_CDECL on_open_temp(sadk::msvc::string *out_path)
     return f;
 }
 
+// S2Tftp_Session_WriteBlock's fwrite of each block: progress in the room every 256 KB.
 using game_size_t = game::crtdefs_h::size_t;
 game_size_t SADK_CDECL on_fwrite(void *buf, game_size_t size, game_size_t count, GameFILE *f)
 {
@@ -659,6 +741,8 @@ game_size_t SADK_CDECL on_fwrite(void *buf, game_size_t size, game_size_t count,
     return n;
 }
 
+// S2TftpSession::CloseFile's remove of an aborted download's temp file: the running download (head of `pending`)
+// failed.
 std::int32_t SADK_CDECL on_abort_remove(char *path)
 {
     std::string label = current_label();
@@ -666,23 +750,70 @@ std::int32_t SADK_CDECL on_abort_remove(char *path)
     if (!pending.empty()) {
         Download d = pending.front();
         pending.pop_front();
-        if (d.kind == Kind::manifest) {
+        if (d.kind == Kind::manifest)
             no_manifest(manager(), "the transfer failed");
-        } else if (d.kind == Kind::mod) {
-            char ver[16];
-            std::snprintf(ver, sizeof ver, "%u", d.version);
-            missing.push_back(d.name + " " + ver + " (the download failed)");
-            bool more = false;
-            for (auto &p : pending) more |= p.kind == Kind::mod;
-            if (!more && state == State::syncing) finish_sync(manager());
-        }
+        else if (d.kind == Kind::mod)
+            mod_failed(manager(), d, "the download failed");
     }
     room_message("The download of " + label + " was aborted.");
     download_finished();
     return rc;
 }
 
-// S2TftpSession::CloseFile's rename of a finished download (S 00427b29, 00427b7e).
+// The queued download that the game just stored as `to` (taken out of `pending`); a raw map if none matches.
+Download take_pending(const char *to)
+{
+    for (auto it = pending.begin(); it != pending.end(); ++it)
+        if (!_stricmp(it->local.c_str(), to)) {
+            Download d = *it;
+            pending.erase(it);
+            return d;
+        }
+    return Download{Kind::raw_map, to, "a map file"};
+}
+
+// A map archive: the map file and what belongs to it, plain names only, into the maps folder.
+void unpack_map(const Download &d, const std::vector<archive::Entry> &entries, bool ok, const std::string &error)
+{
+    std::size_t written = 0, bytes = 0;
+    if (ok && map_file_name(d.final_path.c_str()))
+        for (auto &e : entries)
+            if (companion_name(e.path) && archive::write_file(maps_dir + e.path, e.data.data(), e.data.size())) {
+                written++;
+                bytes += e.data.size();
+            }
+    if (!written) {
+        room_message("The map file " + d.name + " could not be unpacked" + (ok ? "." : ": " + error + "."));
+        return;
+    }
+    char msg[200];
+    std::snprintf(msg, sizeof msg, "Map file received: %s%s (%lu KB, %u KB unpacked).", d.name.c_str(),
+                  written > 1 ? (" and " + std::to_string(written - 1) + " file(s) of the map").c_str() : "",
+                  download_bytes / 1024, unsigned(bytes / 1024));
+    room_message(msg);
+}
+
+// One of our archives arrived as `to` (in_dir): read it and use it by kind; the archive is deleted afterwards.
+void use_archive(Manager *m, const Download &d, const char *to, bool stored)
+{
+    std::vector<archive::Entry> entries;
+    std::string error;
+    bool ok = stored && archive::read(to, entries, &error);
+    if (!ok) log("%s: %s", d.label.c_str(), error.c_str());
+    if (d.kind == Kind::manifest)
+        use_manifest(m, ok && !entries.empty() ? std::string(entries[0].data.begin(), entries[0].data.end())
+                                               : std::string());
+    else if (d.kind == Kind::mod && ok)
+        use_mod(m, d, entries);
+    else if (d.kind == Kind::mod)
+        mod_failed(m, d, error);
+    else if (d.kind == Kind::map)
+        unpack_map(d, entries, ok, error);
+    DeleteFileA(to);
+}
+
+// S2TftpSession::CloseFile's rename of a finished download (S 00427b29, 00427b7e): `to` is the name the host's side
+// chose, so only our download folder and plain map files in the maps folder are allowed.
 std::int32_t SADK_CDECL on_rename(char *from, char *to)
 {
     bool ours = starts_with_icase(to, in_dir);
@@ -694,62 +825,18 @@ std::int32_t SADK_CDECL on_rename(char *from, char *to)
     }
     DeleteFileA(to);
     std::int32_t rc = fn::_rename(from, to);
-    Download d{Kind::raw_map, to, "a map file"};
-    for (auto it = pending.begin(); it != pending.end(); ++it)
-        if (!_stricmp(it->local.c_str(), to)) {
-            d = *it;
-            pending.erase(it);
-            break;
-        }
-    Manager *m = manager();
-    if (!ours) {   // a plain map file (a host without assetshare)
+    Download d = take_pending(to);
+    if (ours)
+        use_archive(manager(), d, to, rc == 0);
+    else   // a plain map file (a host without assetshare)
         room_message("Map file received: " + std::string(to + maps_dir.size()) + ".");
-    } else {
-        std::vector<archive::Entry> entries;
-        std::string error;
-        bool ok = rc == 0 && archive::read(to, entries, &error);
-        if (!ok) log("%s: %s", d.label.c_str(), error.c_str());
-        if (d.kind == Kind::manifest) {
-            std::string text = ok && !entries.empty()
-                                   ? std::string(entries[0].data.begin(), entries[0].data.end())
-                                   : std::string();
-            use_manifest(m, text);
-        } else if (d.kind == Kind::mod) {
-            if (ok) {
-                use_mod(m, d, entries);
-            } else {
-                char ver[16];
-                std::snprintf(ver, sizeof ver, "%u", d.version);
-                missing.push_back(d.name + " " + ver + " (" + error + ")");
-                bool more = false;
-                for (auto &p : pending) more |= p.kind == Kind::mod;
-                if (!more && state == State::syncing) finish_sync(m);
-            }
-        } else if (d.kind == Kind::map) {
-            std::size_t written = 0, bytes = 0;
-            if (ok && map_file_name(d.final_path.c_str()))
-                for (auto &e : entries)   // the map file and what belongs to it: plain names into the maps folder
-                    if (companion_name(e.path) && archive::write_file(maps_dir + e.path, e.data.data(), e.data.size())) {
-                        written++;
-                        bytes += e.data.size();
-                    }
-            if (written) {
-                char msg[200];
-                std::snprintf(msg, sizeof msg, "Map file received: %s%s (%lu KB, %u KB unpacked).", d.name.c_str(),
-                              written > 1 ? (" and " + std::to_string(written - 1) + " file(s) of the map").c_str() : "",
-                              download_bytes / 1024, unsigned(bytes / 1024));
-                room_message(msg);
-            } else {
-                room_message("The map file " + d.name + " could not be unpacked" + (ok ? "." : ": " + error + "."));
-            }
-        }
-        DeleteFileA(to);
-    }
     download_finished();
     return rc;
 }
 
 // ── Ready guard ──────────────────────────────────────────────────────────────────────────────────────────────────
+// SetupGameDialog's Ready button: "ready" goes out only when this side can start the match; otherwise "not ready"
+// with the reason in the room.
 bool SADK_THISCALL on_send_ready(Manager *mgr, bool ready)
 {
     const char *why = nullptr;
@@ -771,24 +858,46 @@ bool SADK_THISCALL on_send_ready(Manager *mgr, bool ready)
 }
 
 // ── Session events (sadk::events) ────────────────────────────────────────────────────────────────────────────────
+// Host: someone joins. The host handles its own UserInformation too, under the host id 0xEFFFFFCC (the id
+// RequestFileFromHost sends to; KickPlayer S 0040b470 never kicks it): only remote players count.
+// NComm_Manager_NetworkVcall_30 S 004089a0 (network object +0x340, vtable slot 0x30) is excluded as well
+// [inferred: this side's own net id].
+void note_joiner(Manager *m, std::int32_t source)
+{
+    if (static_cast<std::uint32_t>(source) == HOST_NET_ID || source == fn::NComm_Manager_NetworkVcall_30(m)) return;
+    for (auto &j : joiners)
+        if (j.net_id == source) return;
+    joiners.push_back(Joiner{source, GetTickCount(), false});
+}
+
+// Joiner: the host's game information arrived: ask for its manifest (once per session).
+void ask_for_manifest(Manager *m)
+{
+    state = State::waiting_manifest;
+    manifest_asked_at = GetTickCount();
+    Download d{Kind::manifest, in_dir + "manifest.sas", "the host's list of server mods"};
+    if (!request(m, std::string(share_rel) + "manifest." + capability(), d))
+        state = State::idle;   // not connected yet (RequestFileFromHost refuses): again at the next one
+}
+
 void on_net_event(void *, Manager *m, game::NComm::EventBase *ev)
 {
     auto type = static_cast<std::uint32_t>(ev->typeId);
-    std::int32_t source = ev->sourceNetId;
-    // Someone joins this host. The host handles its own UserInformation too, under the host id 0xEFFFFFCC (the id
-    // RequestFileFromHost sends to; KickPlayer S 0040b470 never kicks it): only remote players count.
-    if (type == EV_USER_INFORMATION && is_host_online(m) && static_cast<std::uint32_t>(source) != HOST_NET_ID &&
-        source != fn::NComm_Manager_NetworkVcall_30(m)) {
-        bool known = false;
-        for (auto &j : joiners) known |= j.net_id == source;
-        if (!known) joiners.push_back(Joiner{source, GetTickCount(), false});
-    }
-    if (type == EV_GAME_INFORMATION && is_joiner(m) && state == State::idle) {
-        state = State::waiting_manifest;
-        manifest_asked_at = GetTickCount();
-        Download d{Kind::manifest, in_dir + "manifest.sas", "the host's list of server mods"};
-        if (!request(m, std::string(share_rel) + "manifest." + capability(), d))
-            state = State::idle;   // not connected yet (RequestFileFromHost refuses): again at the next one
+    if (type == EV_USER_INFORMATION && is_host_online(m)) note_joiner(m, ev->sourceNetId);
+    if (type == EV_GAME_INFORMATION && is_joiner(m) && state == State::idle) ask_for_manifest(m);
+}
+
+// Host: a joiner without assetshare is only kicked by a host that runs server mods: without them it can play anyway.
+void kick_joiners_without_assetshare(Manager *m, DWORD now)
+{
+    for (auto it = joiners.begin(); it != joiners.end();) {
+        if (!it->has_assetshare && now - it->joined_at > KICK_AFTER_MS) {
+            log("kicking net id %08x: it never asked for the manifest (no assetshare)", unsigned(it->net_id));
+            fn::NComm_Manager::KickPlayer(m, it->net_id, const_cast<char *>(kick_reason), true);
+            it = joiners.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -799,17 +908,7 @@ void on_frame(void *)
     DWORD now = GetTickCount();
     if (state == State::waiting_manifest && now - manifest_asked_at > MANIFEST_TIMEOUT_MS)
         no_manifest(m, "none within 15 s");
-    // A joiner without assetshare is only kicked by a host that runs server mods: without them it can play anyway.
-    if (is_host_online(m) && !joiners.empty() && runs_server_mods())
-        for (auto it = joiners.begin(); it != joiners.end();) {
-            if (!it->has_assetshare && now - it->joined_at > KICK_AFTER_MS) {
-                log("kicking net id %08x: it never asked for the manifest (no assetshare)", unsigned(it->net_id));
-                fn::NComm_Manager::KickPlayer(m, it->net_id, const_cast<char *>(kick_reason), true);
-                it = joiners.erase(it);
-            } else {
-                ++it;
-            }
-        }
+    if (is_host_online(m) && !joiners.empty() && runs_server_mods()) kick_joiners_without_assetshare(m, now);
 }
 
 // The end of a network session: everything this game changed is put back.
@@ -836,7 +935,9 @@ void on_session_end(void *)
     InterlockedExchange(&downloads_active, 0);
 }
 
-// The build checksum leaves out server mods' files (see the top).
+// ── Other hooks ──────────────────────────────────────────────────────────────────────────────────────────────────
+// The build checksum leaves out server mods' files (see the top): sadkmod's redirection of their files is off while
+// the game computes it.
 using Checksum = sadk::Hook<fn::GameData_ComputeBuildChecksum>;
 std::uint32_t SADK_CDECL on_checksum(std::int32_t *count, std::int32_t *size)
 {
@@ -860,11 +961,28 @@ void SADK_THISCALL on_game_settings(Manager *m, sadk::msvc::string *map, game::N
     GameSettings::original(m, map, guid, max_players, unused, resources, win, fog, location, downloadable, ranked);
 }
 
+// SelectMapDialog::RefreshMapList's one call that lists a location's maps: the custom maps are listed right after.
 void SADK_STDCALL append_maps(std::int32_t location, void *list, void *names, float *rgba)
 {
     static float user_colour[4] = {1.0f, 0.85f, 0.55f, 1.0f};   // custom maps: warm tint
     fn::SelectMapDialog_AppendMapFiles(location, list, names, rgba);
     fn::SelectMapDialog_AppendMapFiles(MAP_LOCATION_USER, list, names, user_colour);
+}
+
+// ── Start-up ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// The folders below My Documents, found as the game finds them (Sys_GetMyDocumentsPath).
+void make_folders()
+{
+    char d[MAX_PATH];
+    if (SHGetFolderPathA(nullptr, CSIDL_PERSONAL, nullptr, 0, d) != S_OK) return;
+    docs = std::string(d) + "\\";
+    CreateDirectoryA((docs + "SAdK").c_str(), nullptr);
+    maps_dir = docs + "SAdK\\maps\\";
+    share_dir = docs + share_rel;
+    in_dir = share_dir + "in\\";
+    CreateDirectoryA(maps_dir.c_str(), nullptr);
+    CreateDirectoryA(share_dir.c_str(), nullptr);
+    CreateDirectoryA(in_dir.c_str(), nullptr);
 }
 
 // Downloaded mods of an earlier run that ended without cleaning up (a crash): <game>\mods\.temp_*.
@@ -890,17 +1008,7 @@ bool assetshare_start()
     sadk::Ini ini = sadk::mod_settings();
     accept_maps = ini.get_bool("AssetShare", "AcceptServerMaps", true);
     accept_mods = ini.get_bool("AssetShare", "AcceptServerMods", true);
-    char d[MAX_PATH];
-    if (SHGetFolderPathA(nullptr, CSIDL_PERSONAL, nullptr, 0, d) == S_OK) {   // as Sys_GetMyDocumentsPath
-        docs = std::string(d) + "\\";
-        CreateDirectoryA((docs + "SAdK").c_str(), nullptr);
-        maps_dir = docs + "SAdK\\maps\\";
-        share_dir = docs + share_rel;
-        in_dir = share_dir + "in\\";
-        CreateDirectoryA(maps_dir.c_str(), nullptr);
-        CreateDirectoryA(share_dir.c_str(), nullptr);
-        CreateDirectoryA(in_dir.c_str(), nullptr);
-    }
+    make_folders();
     if (!sadk::verifying()) remove_stale_temp_mods();
     // Single calls inside one function each, found by sadk::calls; the last number is how many there must be.
     namespace net = fn::ai::net;

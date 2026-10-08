@@ -173,7 +173,8 @@ bool write_file(const std::string &path, const void *data, std::size_t size)
     return ok;
 }
 
-bool write(const std::string &file, const std::vector<Entry> &entries, Method method, Method *used, std::string *error)
+// The raw stream: per entry u16 path length, path, u64 size, the bytes.
+static std::vector<std::uint8_t> pack_entries(const std::vector<Entry> &entries)
 {
     std::vector<std::uint8_t> raw;
     for (auto &e : entries) {
@@ -182,7 +183,31 @@ bool write(const std::string &file, const std::vector<Entry> &entries, Method me
         put_le<std::uint64_t>(raw, e.data.size());
         put(raw, e.data.data(), e.data.size());
     }
-    std::vector<std::uint8_t> packed;
+    return raw;
+}
+
+// The reverse of pack_entries; false if the stream does not hold exactly `count` entries.
+static bool unpack_entries(const std::vector<std::uint8_t> &raw, std::uint32_t count, std::vector<Entry> &out)
+{
+    out.clear();
+    const std::uint8_t *q = raw.data(), *qend = raw.data() + raw.size();
+    for (std::uint32_t i = 0; i < count; i++) {
+        std::uint16_t len = 0;
+        std::uint64_t size = 0;
+        if (!get_le(q, qend, &len) || static_cast<std::size_t>(qend - q) < len) return false;
+        Entry e{std::string(reinterpret_cast<const char *>(q), len), {}};
+        q += len;
+        if (!get_le(q, qend, &size) || size > static_cast<std::uint64_t>(qend - q)) return false;
+        e.data.assign(q, q + size);
+        q += size;
+        out.push_back(std::move(e));
+    }
+    return q == qend;
+}
+
+bool write(const std::string &file, const std::vector<Entry> &entries, Method method, Method *used, std::string *error)
+{
+    std::vector<std::uint8_t> raw = pack_entries(entries), packed;
     Method m = stored;
     if (method == lzms && lzms_compress(raw, packed)) m = lzms;
     const std::vector<std::uint8_t> &body = m == lzms ? packed : raw;
@@ -193,6 +218,8 @@ bool write(const std::string &file, const std::vector<Entry> &entries, Method me
     put_le<std::uint64_t>(out, raw.size());
     put_le<std::uint64_t>(out, body.size());
     put(out, body.data(), body.size());
+    // S2TFTP ends a transfer on a block shorter than the block size (512..4096, a power of two): a file whose size
+    // is a multiple of 512 could end on a full block and never complete. One padding byte avoids that (archive.hpp).
     if (out.size() % 512 == 0) out.push_back(0);
     if (used) *used = m;
     if (!write_file(file, out.data(), out.size())) {
@@ -229,20 +256,7 @@ bool read(const std::string &file, std::vector<Entry> &out, std::string *error)
     } else {
         return fail("unknown compression");
     }
-    out.clear();
-    const std::uint8_t *q = raw.data(), *qend = raw.data() + raw.size();
-    for (std::uint32_t i = 0; i < count; i++) {
-        std::uint16_t len = 0;
-        std::uint64_t size = 0;
-        if (!get_le(q, qend, &len) || static_cast<std::size_t>(qend - q) < len) return fail("damaged archive");
-        Entry e{std::string(reinterpret_cast<const char *>(q), len), {}};
-        q += len;
-        if (!get_le(q, qend, &size) || size > static_cast<std::uint64_t>(qend - q)) return fail("damaged archive");
-        e.data.assign(q, q + size);
-        q += size;
-        out.push_back(std::move(e));
-    }
-    return q == qend ? true : fail("damaged archive");
+    return unpack_entries(raw, count, out) ? true : fail("damaged archive");
 }
 
 bool read_folder(const std::string &dir, std::vector<Entry> &out)

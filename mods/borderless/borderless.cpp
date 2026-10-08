@@ -3,8 +3,8 @@
 // The game's own settings are not changed: it still believes it runs fullscreen, so its options, resolution changes
 // and saved profile behave as without the mod. Windowed mode is unchanged.
 //
-// S2CE::CGraphicDevice keeps its display settings as a 9-dword block at +0xa8: width, height, and in the third
-// dword's low byte the windowed flag (+0xb0); +0xc8 marks a window the game does not own. The block comes from the
+// S2CE::CGraphicDevice keeps its display settings as a 9-dword block at +0xa8: width, height, bWindowed (+0xb0), ...;
+// bExternalWindow (+0xc8) marks a window the game does not shape. The block comes from the
 // player's profile (S2CG::Settings::Load S 006960a0 -> ApplyDisplayMode, options: SetDisplaySize S 00695ab0) and is
 // written back by Settings::Store S 00696270, so the mod never touches it. Instead:
 //   - CGraphicDevice::InitPresentParameter S 004d3f70 (device creation and every reset, e.g. a resolution change):
@@ -28,6 +28,7 @@
 #include <sadkmod/sadkmod.hpp>
 
 #include <windows.h>
+#include <d3d9.h>
 
 #include <cstdio>
 #include <cstring>
@@ -45,12 +46,11 @@ using MouseLook = sadk::Hook<fn::LobbyMenu::LobbyAction::OnMouseMove>;
 
 namespace {
 
-constexpr std::size_t WINDOWED = 0xb0, EXTERNAL_WINDOW = 0xc8;
 std::string monitor_setting = "primary";
 
 Device *device() { return static_cast<Device *>(fn::GetGraphicDevice()); }
-std::uint8_t &windowed_flag(Device *dev) { return *sadk::at<std::uint8_t>(dev, WINDOWED); }
-bool borderless(Device *dev) { return dev && !windowed_flag(dev) && !*sadk::at<std::uint8_t>(dev, EXTERNAL_WINDOW); }
+// The game's fullscreen, on a window it shapes itself: what the mod turns into a borderless window.
+bool borderless(Device *dev) { return dev && !dev->bWindowed && !dev->bExternalWindow; }
 
 struct FindMonitor {
     char name[32];
@@ -94,29 +94,39 @@ RECT target_monitor()
 struct PretendWindowed {
     Device *dev;
     bool active;
-    PretendWindowed() : dev(device()), active(borderless(dev)) { if (active) windowed_flag(dev) = 1; }
-    ~PretendWindowed() { if (active) windowed_flag(dev) = 0; }
+    PretendWindowed() : dev(device()), active(borderless(dev)) { if (active) dev->bWindowed = true; }
+    ~PretendWindowed() { if (active) dev->bWindowed = false; }
 };
 
+// The game fills `pp` (a D3DPRESENT_PARAMETERS) for fullscreen; turning it into a windowed device of the same
+// backbuffer size is what makes D3D stretch the picture to the window.
 bool SADK_THISCALL present_parameters(Device *dev, std::int32_t *pp)
 {
     bool ok = Present::original(dev, pp);
     if (ok && borderless(dev)) {
-        pp[8] = 1;    // D3DPRESENT_PARAMETERS.Windowed
-        pp[12] = 0;   // FullScreen_RefreshRateInHz: must be 0 for a windowed device
-        sadk::log("fullscreen %dx%d -> borderless window (picture stretched to the monitor)", pp[0], pp[1]);
+        auto *params = reinterpret_cast<D3DPRESENT_PARAMETERS *>(pp);
+        params->Windowed = TRUE;
+        params->FullScreen_RefreshRateInHz = 0;   // must be 0 for a windowed device
+        sadk::log("fullscreen %dx%d -> borderless window (picture stretched to the monitor)",
+                  int(params->BackBufferWidth), int(params->BackBufferHeight));
     }
     return ok;
+}
+
+// The window covers the chosen monitor without a frame. Not topmost (unlike the game's fullscreen window), so other
+// windows can come to the front.
+void cover_monitor(HWND w)
+{
+    RECT r = target_monitor();
+    SetWindowLongA(w, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    SetWindowLongA(w, GWL_EXSTYLE, GetWindowLongA(w, GWL_EXSTYLE) & ~WS_EX_TOPMOST);
+    SetWindowPos(w, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
 }
 
 void SADK_THISCALL apply_style(Device *dev)
 {
     if (!borderless(dev) || !dev->hWnd) return ApplyStyle::original(dev);
-    HWND w = static_cast<HWND>(dev->hWnd);
-    RECT r = target_monitor();
-    SetWindowLongA(w, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    SetWindowLongA(w, GWL_EXSTYLE, GetWindowLongA(w, GWL_EXSTYLE) & ~WS_EX_TOPMOST);
-    SetWindowPos(w, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    cover_monitor(static_cast<HWND>(dev->hWnd));
 }
 
 float *SADK_STDCALL query_cursor(float *out)
