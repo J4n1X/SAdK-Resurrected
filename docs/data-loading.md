@@ -40,6 +40,17 @@ records with the `*_set*` bindings and must not call a `*_create` for an existin
 allocates a new record and puts it in the map over the old one (`Properties_CreatePatternProperty` `00549ad0`), so
 every value set before is lost [known].
 
+**Starting goods come from the map, not from `tribes.lua`** [known]:
+- A match's headquarters is filled by `NVillage::Depot::AddInitialStock` `0055b020`. It adds the map's list for the
+  owner's tribe (`NLogic::MapInfo::GetInitialGoods` `005296e0`, `MapInfo+0x1f8`) and, for a player in the default
+  state (`Player_IsStateDefault`), the tribe's bonus goods (`TribeProperty::bonusResources`, `tp_addBonusResources`).
+- Maps of save format 14 and later store that list themselves (`MapInfo::Load` `0052c000`). The tribe's
+  `tp_addStartResources` list is copied in only for older maps and by `MapInfo::Reset`
+  (`MapInfo::ResetInitialGoodsFromTribes` `0052b550`). So a mod changing `tp_addStartResources` does not reach
+  current maps; `mods/cheatstart` hooks `AddInitialStock` instead.
+- `tp_addStartResources` / `tp_addBonusResources` add to an existing entry of the same good
+  (`GoodAmountList_AddAmount` `00552aa0`).
+
 **Reloading between matches works offline** [live, maintainer's test 2026-10-08, test mod `mods/propreload`]: every
 time a match is entered (hook on `Scene_CreateGlobal` `0067e7e0`, before the world is built), `Properties_Db_ClearAll`,
 `Properties_RegisterLuaLibrary` and `PropertiesDb::RunPropertyScript("data")` ran; two offline matches in a row, no
