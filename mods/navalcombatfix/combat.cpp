@@ -544,6 +544,36 @@ void deselect_if_sunk(Ship *ship)
     selection->kind = game::ai::game::ESelectionKind::None;
 }
 
+// NNavy::Military::Finish S 005ba190 ends a ship's mission through NavyLink_UnlinkMilitaryFight S 0053c160 ->
+// NMilitary::Fight::RemoveShip S 00571500, which takes every soldier of the mission still in that fight out of it
+// (0053cfe0), ashore or aboard. The game ends a mission normally only after its soldiers have left the fight, but also
+// when the ship loses its route (a harbour of it changes hands; Ship::Update ends the mission for want of a route),
+// and then soldiers still fighting ashore are pulled out mid-strike: the fight can lose its last members and be
+// deleted (MilitaryFightList_Update), and a soldier finishing its strike reads a null fight
+// (NMovie::Fight::TryApplyStrike -> Fight::ComputeSoldierStrikeValue) [live 2026-10-09: crashes at 005721b1 and
+// 005711cb, the attacker's home harbour taken mid-attack]. The unmodded game has the same path; sea fights make it
+// common. Soldiers of the mission who are ashore and still in its fight are unlinked from the ship first, as
+// Soldier::Update does when they leave the ship (NavyLink_UnlinkMilitarySoldier): they fight on without a ship.
+using MilitaryFinish = sadk::Hook<fn::NNavy::Military::Finish>;
+void SADK_THISCALL finish_mission(NavyMission *m)
+{
+    Fight *fight = m->fight.cachedFight;   // read unresolved, as the game does
+    if (fight && carries_fight(m)) {
+        auto *ship = static_cast<Ship *>(m->ship);
+        // From the end: unlinking removes the entry from this list.
+        for (void **it = m->soldiers.refs_last; it != m->soldiers.refs_first;) {
+            --it;
+            auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::ReferenceSettler_Resolve(*it));
+            if (!soldier) continue;
+            game::NLogic::Unique &id = soldier->fight.unique;
+            bool inFight = id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
+            if (inFight && !fn::Settler_IsAboardShip(soldier->base.movement))
+                fn::NavyLink_UnlinkMilitarySoldier(&soldier->base, ship);
+        }
+    }
+    MilitaryFinish::original(m);
+}
+
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
 // their route once their mission is over; a sunk ship is deselected before the game deletes it.
 using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
@@ -566,7 +596,8 @@ bool combat_start()
     bool ok = ReachFactor::install(reach_factor) && TargetReachable::install(target_reachable) &&
               TerritoryInRange::install(territory_in_range) && DispatchAttackers::install(dispatch_attackers) &&
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
-              NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update);
+              NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update) &&
+              MilitaryFinish::install(finish_mission);
     sadk::log("%s", ok ? "combat by sea: soldiers cross through their own harbours" : "combat by sea NOT active");
     return ok;
 }

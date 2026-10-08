@@ -511,6 +511,17 @@ is not the attacker's** (an attack from an own harbour is a coastal attack), `NN
 Every attack by sea is covered, the game's own (landing at the defender's harbour) as well as the mod's, and the
 invasion (state 106).
 
+**Ending a mission pulls its soldiers out of the fight** [known; live 2026-10-09]: `NNavy::Military::Finish`
+`005ba190` → `NavyLink_UnlinkMilitaryFight` `0053c160` → `NMilitary::Fight::RemoveShip` `00571500` takes every soldier
+of the mission still in that fight out of it (`0053cfe0`), ashore or aboard. The game ends a mission normally only
+after its soldiers have left the fight, but `Ship::Update` also ends it when the ship's route is cut (a harbour of it
+changes hands). Soldiers still fighting ashore are then pulled out mid-strike; the fight can lose its last members and
+be deleted, and a soldier finishing its strike reads a null fight (`NMovie::Fight::TryApplyStrike` →
+`Fight::ComputeSoldierStrikeValue`, crash at `005721b1`; or `Fight::OnSoldierEvent_BySide`, crash at `005711cb`). The
+unmodded game has the same path (an attacker's home harbour taken mid-attack). The mod hooks `Military::Finish`: the
+mission's soldiers ashore and still in its fight are unlinked from the ship first (`NavyLink_UnlinkMilitarySoldier`),
+so they fight on without a ship.
+
 A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `NNavy::Ship::dtor` `005baf20` ends an
 active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
 just leaving it: `MilitaryFightList_Update` deletes an inactive fight the same tick, and a garrison soldier still in
