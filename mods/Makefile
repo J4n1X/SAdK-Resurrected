@@ -3,7 +3,8 @@
 #   make verify   checks every mod's patches against a DRM-free SADK.exe under Wine (SADK_EXE=<path>)
 #   make test     assetshare's archive format under Wine
 # A mod is a folder here with one or more .cpp files (and optionally files to ship next to mod.dll, e.g. .ini,
-# and a data/ folder that is copied as is).
+# and a data/ folder that is copied as is). A folder without .cpp files is a data-only mod: its data/ folder and
+# its flag files (.client / .server / .lobby) are copied.
 CXX = i686-w64-mingw32-g++
 SADKMOD = ../sadkmod
 CXXFLAGS = -std=c++23 -O2 -Wall -Wextra -fno-exceptions -fno-rtti -I$(SADKMOD)/include -I$(SADKMOD)/build/include
@@ -13,9 +14,17 @@ LIBS = $(LIB) -lkernel32 -ladvapi32 -lshell32 -luser32 -lws2_32
 SADK_EXE ?= $(HOME)/sadk_game/bin/SADK.exe
 
 MODS = $(patsubst %/,%,$(filter-out tests/ build/,$(wildcard */)))
-DLLS = $(MODS:%=build/%/mod.dll)
+CODE_MODS = $(foreach m,$(MODS),$(if $(wildcard $(m)/*.cpp),$(m)))
+DATA_MODS = $(filter-out $(CODE_MODS),$(MODS))
+DLLS = $(CODE_MODS:%=build/%/mod.dll)
 
-all: $(DLLS)
+all: $(DLLS) $(DATA_MODS:%=data-%)
+
+# A mod without code: its data folder and its flag files (.client / .server / .lobby name what it changes).
+data-%: FORCE
+	@rm -rf build/$* && mkdir -p build/$*
+	@if [ -d $*/data ]; then cp -r $*/data build/$*/; fi
+	@for f in $*/.client $*/.server $*/.lobby; do if [ -e $$f ]; then cp $$f build/$*/; fi; done
 
 $(LIB) $(GENERATED): FORCE
 	$(MAKE) -C $(SADKMOD)
