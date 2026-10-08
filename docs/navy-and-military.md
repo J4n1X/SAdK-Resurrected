@@ -285,6 +285,12 @@ the ship is not moving (movement float `+0x20` ≤ 0, movement state 0 or 4) [kn
 Ship states (`Ship+0x28`) [inferred]: 0 idle, 1 waiting, 2 loading, 3 unloading/sailing, 4 expedition, 5 military,
 6 sinking, 7 sunk, 8 doomed.
 
+**A sunk ship stays selected** [known; live 2026-10-09]: `NNavy::System::Update` `005b39d0` deletes a ship as soon as
+it reaches state 7. The game deselects removed buildings (`Selection::ClearIfBuildingSelected` `00535220`), but has
+no such step for ships. The selection's ship reference (`Selection::ship`, `+0x88`) keeps its cached pointer
+(`ReferenceShip::Resolve` `0053a450`), and `nMenu::InfoBoxShip::Update` `0063c100` uses it without a check: a ship
+that sinks while selected crashes the game on the next frame. The `navalcombatfix` mod deselects it first.
+
 ## 6. Expeditions
 
 `NNavy::Expedition::Update` `005b8ac0` (ship `+0x30`, state `+0x4c`) [inferred]:

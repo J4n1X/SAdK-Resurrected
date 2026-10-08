@@ -521,8 +521,24 @@ bool sink_after_lost_defence(Ship *ship)
     return true;
 }
 
+// A sunk ship (state 7) is deleted by NNavy::System::Update S 005b39d0 right after its Ship::Update. The game
+// deselects removed buildings (Selection::ClearIfBuildingSelected S 00535220) but has nothing of the kind for ships,
+// and the selection's ship reference keeps its cached pointer (ReferenceShip::Resolve S 0053a450), so a ship that
+// sinks while selected leaves nMenu::InfoBoxShip::Update S 0063c100 reading freed memory [live 2026-10-09: crash
+// right after a sinking]. Deselected here the way the game deselects a building.
+void deselect_if_sunk(Ship *ship)
+{
+    constexpr std::int32_t kShipSunk = 7;
+    if (ship->state != kShipSunk) return;
+    game::ai::game::Selection *selection = logic()->selection;
+    game::NLogic::Unique &id = selection->ship.unique;
+    if (id.idLo != static_cast<std::uint32_t>(ship->uniqueIdLo) || id.idHi != ship->uniqueIdHi) return;
+    fn::NLogicReference_ClearIds(&selection->ship);
+    selection->kind = game::ai::game::ESelectionKind::None;
+}
+
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
-// their route once their mission is over.
+// their route once their mission is over; a sunk ship is deselected before the game deletes it.
 using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
 void SADK_FASTCALL ship_update(Ship *ship)
 {
@@ -531,6 +547,7 @@ void SADK_FASTCALL ship_update(Ship *ship)
     ShipUpdate::original(ship);
     if (onMission && !ship->military->bActive) give_back(ship);
     return_stranded(ship);
+    deselect_if_sunk(ship);
 }
 
 }  // namespace
