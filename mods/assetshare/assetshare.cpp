@@ -43,6 +43,7 @@
 #include <sadkmod/game/sadk_noav/fn/NComm_Manager.hpp>
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
 #include <sadkmod/game/sadk_noav/fn/ai.hpp>
+#include <sadkmod/game/sadk_noav/fn/std_.hpp>
 
 #include <shlobj.h>
 
@@ -193,7 +194,8 @@ std::vector<std::string> switched_off;  // our server mods off for this game (fo
 std::vector<std::string> switched_on;   // our inactive mods activated for this game: off again afterwards
 std::vector<std::string> downloaded;    // .temp_ folders activated for this game
 std::vector<std::string> summary;       // "rules 3 (downloaded)" ...
-std::vector<std::string> missing;       // mods this game needs that we will not download
+std::vector<std::string> refused;       // mods this game needs that we will not download (AcceptServerMods)
+std::vector<std::string> failed;        // mods this game needs that could not be downloaded or set up
 std::vector<std::pair<std::string, std::string>> deferred_maps;   // (remote, local) asked before the manifest came
 std::vector<std::string> leftovers;     // .temp_ folders that could not be removed yet
 
@@ -477,13 +479,15 @@ bool SADK_THISCALL on_begin_send(game::ai::net::S2TftpSession *s, std::uint32_t 
 }
 
 // ── Joiner: the manifest and the plan ───────────────────────────────────────────────────────────────────────────
-// The end of the sync: every host mod is either running here or listed in `missing`.
+// The end of the sync: every host mod is either running here or listed in `refused` or `failed`.
 void finish_sync(Manager *m)
 {
-    if (!missing.empty()) {
+    if (!refused.empty() || !failed.empty()) {
         state = State::failed;
-        room_list("This game needs server mods you won't download (assetshare.ini: AcceptServerMods = false):",
-                  missing);
+        if (!refused.empty())
+            room_list("This game needs server mods you won't download (assetshare.ini: AcceptServerMods = false):",
+                      refused);
+        if (!failed.empty()) room_list("These server mods of the game could not be set up here:", failed);
         room_message("You can't get ready in this game.");
         return;
     }
@@ -498,7 +502,7 @@ void finish_sync(Manager *m)
 // A host mod that could not be set up (download or unpack failed); the sync ends with the last mod download.
 void mod_failed(Manager *m, const Download &d, const std::string &why)
 {
-    missing.push_back(mod_label(d.name, d.version) + " (" + why + ")");
+    failed.push_back(mod_label(d.name, d.version) + " (" + why + ")");
     if (!mods_pending() && state == State::syncing) finish_sync(m);
 }
 
@@ -583,13 +587,13 @@ void provide_host_mod(Manager *m, const std::vector<LocalMod> &locals, const Hos
         return;
     }
     if (!accept_mods) {
-        missing.push_back(label);
+        refused.push_back(label);
         return;
     }
     Download d{Kind::mod, in_dir + "mod." + h.name + ".sas",
                "the server mod " + h.name + " (version " + std::to_string(h.version) + ")", h.name, "", h.version, h.hash};
     if (!request(m, std::string(share_rel) + "mod." + h.name + "." + capability(), d))
-        missing.push_back(label + " (could not ask the host)");
+        failed.push_back(label + " (could not ask the host)");
 }
 
 // The host's set of server mods becomes ours for this game. Maps asked for meanwhile are requested now; the sync ends
@@ -934,7 +938,8 @@ void on_session_end(void *)
     switched_on.clear();
     switched_off.clear();
     summary.clear();
-    missing.clear();
+    refused.clear();
+    failed.clear();
     joiners.clear();
     InterlockedExchange(&downloads_active, 0);
 }
@@ -971,6 +976,21 @@ void SADK_STDCALL append_maps(std::int32_t location, void *list, void *names, fl
     static float user_colour[4] = {1.0f, 0.85f, 0.55f, 1.0f};   // custom maps: warm tint
     fn::SelectMapDialog_AppendMapFiles(location, list, names, rgba);
     fn::SelectMapDialog_AppendMapFiles(MAP_LOCATION_USER, list, names, user_colour);
+}
+
+// The hosted game's name, "<avatar><text of !LOBBY_GAME>", is built only through this lookup
+// (LobbyComm::ServerList::CreateGameServer / UpdateGameServer, Localization::GetTextCStr S 004961f0): a host running
+// assetshare offers its maps and server mods, so " (sharing)" is appended. The mod host appends " (modded)" first.
+using LobbyGameText = sadk::Hook<fn::ai::ui::Localization::GetTextCStr>;
+sadk::msvc::string *SADK_THISCALL on_lobby_game_text(game::ai::ui::Localization *loc, sadk::msvc::string *result,
+                                                     char *key)
+{
+    LobbyGameText::original(loc, result, key);
+    if (key && std::strcmp(key, "!LOBBY_GAME") == 0) {
+        static char sharing[] = " (sharing)";
+        fn::std_::string::append_ptr(result, sharing, sizeof sharing - 1);
+    }
+    return result;
 }
 
 // ── Start-up ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1029,13 +1049,14 @@ bool assetshare_start()
     int hooks = BeginSend::install(on_begin_send, "S2TFTP: 4 KB blocks; who asks for the manifest") +
                 RequestFile::install(on_request_file, "map requests as archives") +
                 Checksum::install(on_checksum, "build checksum without server mods' files") +
-                GameSettings::install(on_game_settings, "maps advertised as downloadable");
+                GameSettings::install(on_game_settings, "maps advertised as downloadable") +
+                LobbyGameText::install(on_lobby_game_text, "hosted games say (sharing)");
     int subscribed = sadk::events::on_net_event(on_net_event) + sadk::events::on_frame(on_frame) +   // join, manifest
                      sadk::events::on_session_end(on_session_end);   // timeout and kick; put the mods back
-    log("%d of 8 patches, %d of 4 hooks, %d of 3 events active (maps folder %s; maps %s, server mods %s; this side %s LZMS)", ok, hooks, subscribed,
+    log("%d of 8 patches, %d of 5 hooks, %d of 3 events active (maps folder %s; maps %s, server mods %s; this side %s LZMS)", ok, hooks, subscribed,
         maps_dir.c_str(), accept_maps ? "accepted" : "refused", accept_mods ? "accepted" : "refused",
         archive::can_compress() ? "can use" : "cannot use");
-    return ok == 8 && hooks == 4 && subscribed == 3;
+    return ok == 8 && hooks == 5 && subscribed == 3;
 }
 
 SADKMOD_MAIN(assetshare_start, 2, SADKMOD_CLIENT)
