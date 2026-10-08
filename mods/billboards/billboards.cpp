@@ -79,8 +79,7 @@ bool SADK_THISCALL billboard_load(CTexture *tex, void *path, bool single_level, 
 
 void read_settings()
 {
-    if (!*sadk::mod_dir()) return;                               // no host (verify test): defaults
-    sadk::Ini ini(std::string(sadk::mod_dir()) + "\\billboards.ini");
+    sadk::Ini ini = sadk::mod_settings();                        // billboards.ini; defaults without a host
     texture = ini.get("Billboards", "Texture", "sign_ad0.dds");
     std::string r = ini.get("Billboards", "Rect", "305,680,730,1005");
     crop = std::sscanf(r.c_str(), "%d,%d,%d,%d", &rect[0], &rect[1], &rect[2], &rect[3]) == 4 && rect[2] > rect[0] &&

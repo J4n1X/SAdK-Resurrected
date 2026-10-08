@@ -24,6 +24,7 @@
 
 namespace game = sadk::game;
 using Device = game::S2CE::CGraphicDevice;
+using Init = sadk::Hook<game::fn::S2CE::CGraphicDevice::Init>;
 using ApplyStyle = sadk::Hook<game::fn::S2CE::CGraphicDevice::ApplyWindowStyle>;
 
 namespace {
@@ -41,18 +42,18 @@ RECT monitor_of(Device *dev)
     return RECT{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
 }
 
-// Before Init: a fullscreen request becomes a windowed one at the same resolution.
-void before_init(Device *&dev, std::int32_t *&mode)
+// Init: a fullscreen request becomes a windowed one at the same resolution.
+bool SADK_THISCALL init(Device *dev, std::int32_t *mode)
 {
-    static std::int32_t windowed[9];
-    if (!mode || *sadk::at<std::uint8_t>(dev, EXTERNAL_WINDOW)) return;
+    if (!mode || *sadk::at<std::uint8_t>(dev, EXTERNAL_WINDOW)) return Init::original(dev, mode);
     bool own_block = mode == reinterpret_cast<std::int32_t *>(&dev->backBufferWidth);
     if (!own_block) borderless = (mode[2] & 0xff) == 0;            // the caller asks for fullscreen
-    if (!borderless || (mode[2] & 0xff)) return;
+    if (!borderless || (mode[2] & 0xff)) return Init::original(dev, mode);
+    std::int32_t windowed[9];
     std::memcpy(windowed, mode, sizeof windowed);
     windowed[2] |= 1;
-    mode = windowed;
     sadk::log("fullscreen %dx%d -> borderless window, picture stretched to the monitor", mode[0], mode[1]);
+    return Init::original(dev, windowed);
 }
 
 void SADK_THISCALL apply_style(Device *dev)
@@ -69,7 +70,7 @@ void SADK_THISCALL apply_style(Device *dev)
 
 bool borderless_start()
 {
-    return sadk::before<game::fn::S2CE::CGraphicDevice::Init>(before_init, "CGraphicDevice::Init: fullscreen -> windowed") &&
+    return Init::install(init, "CGraphicDevice::Init: fullscreen -> windowed") &&
            ApplyStyle::install(apply_style, "CGraphicDevice::ApplyWindowStyle: borderless popup over the monitor");
 }
 
