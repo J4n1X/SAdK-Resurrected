@@ -73,7 +73,6 @@ std::string share_dir;                         // <My Documents>\SAdK\assetshare
 std::string in_dir;                            // <My Documents>\SAdK\assetshare\in\  joiner: downloads land here
 const char share_rel[] = "SAdK\\assetshare\\";  // the same, relative to My Documents (what a joiner asks for)
 
-const sadkmod_api &host() { return *sadk::host_api(); }
 Manager *manager() { return static_cast<Manager *>(fn::NComm_GetManager()); }
 bool is_joiner(Manager *m) { return m && (m->nMode == 1 || m->nMode == 3); }
 bool is_host_online(Manager *m) { return m && (m->nMode == 2 || m->nMode == 4); }
@@ -85,17 +84,7 @@ bool starts_with_icase(const std::string &s, const std::string &prefix)
 }
 
 // ── Messages in the pre-game room ───────────────────────────────────────────────────────────────────────────────
-// NComm_SendUINotification takes a std::string* (the game passes the result of a string builder; Ghidra still
-// types the argument as int). The observers only read or copy it; the text must outlive the call.
-void room_message(const std::string &text)
-{
-    static char held[256];
-    std::snprintf(held, sizeof held, "%s", text.c_str());
-    sadk::msvc::string str = sadk::msvc::string::borrow(held, std::strlen(held));
-    if (void *mgr = fn::NComm_GetManager())
-        fn::NComm_SendUINotification(mgr, static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(&str)));
-    log("room: %s", held);
-}
+using sadk::ui::room_message;
 
 // Several short messages for a long list (one chat line each).
 void room_list(const std::string &head, const std::vector<std::string> &items)
@@ -178,40 +167,18 @@ bool session_map_present(Manager *mgr)
     // NetGUID (vtable + 4 dwords, 0x14 bytes) and NCore::UUID (constructed, GUID at +8..+0x17; the map search
     // compares it there): both get room to spare. The name comes back as a std::string the game may allocate.
     alignas(4) unsigned char guid[32] = {}, uuid[64] = {};
-    sadk::msvc::string name = sadk::msvc::string::small("");
+    sadk::msvc::owned_string name;   // the game may allocate it
     std::int32_t type = 0;
     auto *info = &mgr->gameInformation;
     auto *g = static_cast<game::NComm::NetGUID *>(fn::NComm::EventGameInformation::GetMapGuid(info, guid));
     fn::NComm::NetGUID::ToUUID(g, uuid);
-    bool found = fn::GameFile_FindMapByGuidAnyType(uuid, &name, &type);
-    if (!name.is_inline()) sadk::game_free(name.heap_text);
-    return found;
+    return fn::GameFile_FindMapByGuidAnyType(uuid, &name, &type);
 }
 
 // ── Mods: what the host has, what we have ───────────────────────────────────────────────────────────────────────
-struct LocalMod {
-    std::string folder, name;
-    std::uint32_t version = 0, flags = 0;
-    bool active = false, pending_free = false;
-};
-
-std::vector<LocalMod> local_mods()
-{
-    std::vector<LocalMod> out;
-    host().list_mods(
-        [](const sadkmod_modinfo *i, void *ctx) {
-            static_cast<std::vector<LocalMod> *>(ctx)->push_back(
-                LocalMod{i->folder, i->name, i->version, i->flags, i->active, i->pending_free});
-        },
-        &out);
-    return out;
-}
-
-std::string mod_hash(const std::string &folder)
-{
-    char h[33] = {};
-    return host().mod_hash(folder.c_str(), h) ? std::string(h) : std::string();
-}
+using LocalMod = sadk::host::ModInfo;
+std::vector<LocalMod> local_mods() { return sadk::mods::list(); }
+std::string mod_hash(const std::string &folder) { return sadk::mods::content_hash(folder); }
 
 std::string mod_dir(const std::string &folder) { return sadk::game_path("mods\\") + folder; }
 
@@ -236,9 +203,9 @@ bool remove_tree(const std::string &dir)
 // A downloaded mod's folder: off, out of the list, deleted. Retried later (leftovers) if its mod.dll is still mapped.
 void discard_temp(const std::string &folder)
 {
-    host().deactivate_mod(folder.c_str());
-    host().free_pending();
-    host().forget_mod(folder.c_str());   // false if it was never listed or is still waiting to be freed
+    sadk::mods::deactivate(folder);
+    sadk::mods::free_pending();
+    sadk::mods::forget(folder);   // false if it was never listed or is still waiting to be freed
     if (remove_tree(mod_dir(folder))) return;
     log("%s could not be removed yet (its mod.dll is still in use) - later", folder.c_str());
     leftovers.push_back(folder);
@@ -246,10 +213,10 @@ void discard_temp(const std::string &folder)
 
 void retry_leftovers()
 {
-    host().free_pending();
+    sadk::mods::free_pending();
     std::vector<std::string> still;
     for (auto &f : leftovers)
-        if (!host().forget_mod(f.c_str()) && GetFileAttributesA(mod_dir(f).c_str()) != INVALID_FILE_ATTRIBUTES &&
+        if (!sadk::mods::forget(f) && GetFileAttributesA(mod_dir(f).c_str()) != INVALID_FILE_ATTRIBUTES &&
             !remove_tree(mod_dir(f)))
             still.push_back(f);
         else
@@ -467,10 +434,10 @@ void use_manifest(Manager *m, const std::string &text)
             if (!_stricmp(h.name.c_str(), l.name.c_str()) && h.version == l.version && h.hash == mod_hash(l.folder))
                 kept = true;
         if (kept) continue;
-        int r = host().deactivate_mod(l.folder.c_str());
+        auto r = sadk::mods::deactivate(l.folder);
         switched_off.push_back(l.folder);
         room_message("Your server mod " + l.name + " is off for this game" +
-                     (r == 1 ? " (its code stays loaded until it can be freed)." : "."));
+                     (r == sadk::host::Unload::busy ? " (its code stays loaded until it can be freed)." : "."));
     }
     // 2. The host's mods: our own copy if it is the same, else a download.
     for (auto &h : host_mods) {
@@ -483,7 +450,7 @@ void use_manifest(Manager *m, const std::string &text)
                 same = &l;
         if (same) {
             if (!same->active) {
-                if (host().activate_mod(same->folder.c_str())) switched_on.push_back(same->folder);
+                if (sadk::mods::activate(same->folder)) switched_on.push_back(same->folder);
             }
             summary.push_back(h.name + " " + ver + " (yours)");
             continue;
@@ -515,7 +482,7 @@ void use_mod(Manager *m, const Download &d, const std::vector<archive::Entry> &e
         missing.push_back(d.name + " " + ver + " (" + error + ")");
         return;
     }
-    if (!host().add_mod(mod_dir(folder).c_str())) {
+    if (!sadk::mods::add(mod_dir(folder))) {
         missing.push_back(d.name + " " + ver + " (not a loadable mod)");
         remove_tree(mod_dir(folder));
         return;
@@ -525,7 +492,7 @@ void use_mod(Manager *m, const Download &d, const std::vector<archive::Entry> &e
         discard_temp(folder);
         return;
     }
-    if (!host().activate_mod(folder.c_str())) {
+    if (!sadk::mods::activate(folder)) {
         missing.push_back(d.name + " " + ver + " (it failed to start, see wsock32_shim.txt)");
         discard_temp(folder);
         return;
@@ -797,8 +764,8 @@ void on_session_end(void *)
 {
     if (state != State::idle || !downloaded.empty() || !switched_off.empty() || !switched_on.empty()) {
         for (auto &f : downloaded) discard_temp(f);
-        for (auto &f : switched_on) host().deactivate_mod(f.c_str());
-        for (auto &f : switched_off) host().activate_mod(f.c_str());
+        for (auto &f : switched_on) sadk::mods::deactivate(f);
+        for (auto &f : switched_off) sadk::mods::activate(f);
         log("session ended: %u downloaded mod(s) removed, %u of ours back on, %u off again",
             unsigned(downloaded.size()), unsigned(switched_off.size()), unsigned(switched_on.size()));
     }
@@ -820,9 +787,9 @@ void on_session_end(void *)
 using Checksum = sadk::Hook<fn::GameData_ComputeBuildChecksum>;
 std::uint32_t SADK_CDECL on_checksum(std::int32_t *count, std::int32_t *size)
 {
-    host().redirect_server_mods(false);
+    sadk::mods::redirect_server_mods(false);
     std::uint32_t cs = Checksum::original(count, size);
-    host().redirect_server_mods(true);
+    sadk::mods::redirect_server_mods(true);
     return cs;
 }
 
