@@ -185,8 +185,16 @@ So soldiers always walk to **whichever harbour the ship is heading for**. The sh
 - `MoveToHome` looks for the nearest building of the player that can take the settler
   (`BuildingList_FindNearestReachable` `00557fe0`: same landmass, or a landmass joined by
   `Navy_AreContinentsConnectedForPlayer` `0052eba0`) and walks there over the street network.
-- When the movie ends, `NSettlers::Settler::Update` `00656ec0` puts a settler within 2 cells of such a building into it
-  (state 2). **Otherwise it calls `StartDying`** [known]. A soldier with nowhere to go dies.
+- State 3 runs the `LeaveMap` movie (`NMovie::LeaveMap::Update` `00776bd0`) [known]:
+  1. It starts `MoveToHome`.
+  2. When `MoveToHome::Start` finds no home it can reach, the movie starts **Stray** (aimless wandering) instead.
+  3. After each stray walk a soldier loses 1 health (`Livepoints_Damage` `0065dc20`) and `MoveToHome` is tried again.
+     Other settlers retry up to 26 times.
+  4. The movie ends when the soldier's health reaches 0.
+- When the movie ends, `NSettlers::Settler::Update` `00656ec0` puts a settler within 2 cells of a home building into
+  it (state 2). Otherwise it calls `StartDying` [known].
+- So a soldier with nowhere to go **wanders and slowly loses health until it dies** [live, 2026-10-08: two stranded
+  soldiers in state 3 lost 1 health per stray walk; `StartDying` was not called while they had health left].
 
 **Crossing water on foot: sea streets** [known]. A ship route is also a street (type 3) of the street network, built
 and removed by `NavyShipRoute::UpdateSeaStreet` `005b71d0`. It exists only while `IsStreetValidForPlayer` `005b6d80`
@@ -201,7 +209,7 @@ That holds whether the ground became nobody's or an enemy's. The territory map (
 cell, -1 = nobody) tells the two apart.
 
 Together: destroying one's last military building on the far side takes the harbour's flag with the territory. The
-sea street home disappears, and its soldiers die with nowhere to go [inferred].
+sea street home disappears, and its soldiers wander until they die [live].
 
 ## 5. Sea transport for fights
 
@@ -359,8 +367,8 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 | `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code when the game's own reach factor counted the building. Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
 | `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's landmass. State 5 (`ShipLostOnDefeat`): see below |
 
-**Retreat pickup.** `NSettlers::Settler::StartDying` is hooked. A healthy soldier in state 3 (dying only for having
-nowhere to go, see §4) is picked up by a ship instead, when there is:
+**Retreat pickup.** `NMovie::MoveToHome::Start` is hooked. Where it finds no home for a healthy soldier in state 3
+(the moment the game would let it stray, see §4), a ship picks the soldier up instead, when there is:
 - a harbour on its landmass that is **neutral**: no owner, and nobody's territory at its cell. A harbour whose cell
   belongs to an enemy is not used;
 - with a route to a harbour of the soldier's player;
@@ -375,7 +383,7 @@ pickup. The game would read a null fight in its state 3, so the mod handles ever
 
 | Hooked | Change |
 |---|---|
-| `NSettlers::Settler::StartDying` | The retreat pickup above |
+| `NMovie::MoveToHome::Start` | The retreat pickup above, where the game finds no home |
 | `NNavy::Military::Update` | Also: missions without a fight (pickups) wait in state 2 with a timeout, and sail to the other route end in state 3 |
 
 **Landing harbours** (`landing.cpp`). Wherever the rules above say "H1 of the player", a **neutral** harbour also
@@ -436,7 +444,7 @@ not just the display.
 - **After the colony:** the ship switches to its military mission, state 6, which takes the attackers home and
   unloads them. If there is still no room, the game's own failure path (message, return, unload) applies.
 
-To check in the game:
+Tested in the game 2026-10-08 (maintainer): naval invasions work. Still to check in detail:
 - the scouting message;
 - the button's states;
 - loading and waiting;

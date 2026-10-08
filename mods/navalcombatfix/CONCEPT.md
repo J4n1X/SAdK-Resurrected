@@ -32,7 +32,7 @@ The game's rules are in `docs/navy-and-military.md`; the change is §7 there.
   that neutral harbour, when one of the player's harbours has a route to it. With room for a colony, the colony is
   the way in.
 
-## Naval invasion (implemented in `invasion.cpp`, not tested in the game yet)
+## Naval invasion (implemented in `invasion.cpp`; works in the game, maintainer's test 2026-10-08)
 
 For a neutral harbour where a colony cannot be founded (an enemy is in the way), as decided by the maintainer:
 

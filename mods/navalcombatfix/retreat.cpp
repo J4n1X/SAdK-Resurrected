@@ -1,18 +1,21 @@
 // navalcombatfix, retreat: soldiers left without a home on the far side are picked up by a ship of their player
 // (docs/navy-and-military.md §4 for the game's rules, §7 "Retreat pickup" for this change).
 //
-// A soldier without a home building goes to state 3 (Settler::StopAndSetState3 S 00656740) and runs MoveToHome
-// (S 007776f0). When that ends without a building within 2 cells, NSettlers::Settler::Update S 00656ec0 kills it
-// (StartDying S 00656760). Across the water a home is only reachable through a sea street, which exists only while
-// both harbours of the route belong to the player (NavyShipRoute::IsStreetValidForPlayer S 005b6d80). Destroying
-// one's last military building on the far side removes the harbour flag there with the territory (the harbour turns
-// neutral, Harbor -1 by S 005b5370), so its soldiers die.
+// A soldier without a home building goes to state 3 (Settler::StopAndSetState3 S 00656740), whose LeaveMap movie
+// (NMovie::LeaveMap::Update S 00776bd0) starts MoveToHome (NMovie::MoveToHome::Start S 007776f0). When no home can be
+// reached, Start fails and the soldier strays instead: after every stray walk it loses 1 health and tries again, and
+// at 0 the movie ends and NSettlers::Settler::Update S 00656ec0 kills it (StartDying S 00656760) [live, 2026-10-08].
+// Across the water a home is only reachable through a sea street, which exists only while both harbours of the route
+// belong to the player (NavyShipRoute::IsStreetValidForPlayer S 005b6d80). Destroying one's last military building on
+// the far side removes the harbour flag there with the territory (the harbour turns neutral, Harbor -1 by
+// S 005b5370), so its soldiers stray until they die.
 //
 // The rule (maintainer): if a harbour on the soldier's landmass is neutral, the territory at its flag owned by nobody,
 // and one of the player's ships is ready for the route from it to one of the player's harbours, that ship picks the
 // soldier up instead. A harbour whose cell went to an enemy is not used.
 //
-// The pickup is the game's own sea transport (NNavy::Military) without a fight:
+// So the pickup starts where MoveToHome::Start fails for a healthy soldier, before it strays. It is the game's own sea
+// transport (NNavy::Military) without a fight:
 //   1. the ship is linked to the route, sails to the neutral harbour and waits there in state 2, where the game's
 //      Update boards the soldiers standing on the harbour;
 //   2. each soldier, linked to the ship, walks there through the states the game uses for soldiers coming back from a
@@ -22,15 +25,17 @@
 //   4. the game's state 7 unloads; the soldiers, a home reachable again, walk into a building of the player.
 #include "navy.hpp"
 
+#include <sadkmod/game/sadk_noav/fn/NMovie.hpp>
+
 namespace navalcombatfix {
 namespace {
 
-using StartDying = sadk::Hook<fn::NSettlers::Settler::StartDying>;
+using MoveToHomeStart = sadk::Hook<fn::NMovie::MoveToHome::Start>;
 
 constexpr std::int32_t kWaitingForSoldiers = 2;   // NNavy::Military: board the soldiers standing on the harbour
 constexpr std::int32_t kSailHome = 3;             // for a fight: sail to the landing; a pickup sails home instead
 constexpr std::int32_t kUnload = 7;
-constexpr std::int32_t kLeavingMap = 3;           // NSettlers::Settler state: MoveToHome running (see above)
+constexpr std::int32_t kLeavingMap = 3;           // NSettlers::Settler state: the LeaveMap movie (see above)
 constexpr std::int32_t kWalkToShip = 0x21;        // Soldier::Update: walk to the linked ship's harbour
 constexpr std::int32_t kNobody = -1;              // owner of a neutral harbour / of nobody's territory
 
@@ -145,7 +150,7 @@ Ship *pickup_ship(std::int32_t player, std::int32_t *cell)
 
 // ---- Hook --------------------------------------------------------------------------------------------------------
 
-// A soldier the game is about to kill only for having nowhere to go: healthy, in state 3, on no ship.
+// A soldier with nowhere to go: in state 3 (leaving the map), healthy, on no ship.
 bool stranded_soldier(game::NSettlers::Settler *settler)
 {
     return settler->state == kLeavingMap &&
@@ -153,18 +158,20 @@ bool stranded_soldier(game::NSettlers::Settler *settler)
            reinterpret_cast<game::NSettlers::Soldier *>(settler)->health > 0 && settler->ship.unique.idHi < 0;
 }
 
-// Settler::StartDying S 00656760: a ship picks the stranded soldier up instead, when the rule allows.
-void SADK_THISCALL start_dying(game::NSettlers::Settler *settler)
+// NMovie::MoveToHome::Start S 007776f0: where the game finds no home for a stranded soldier, a ship picks it up
+// instead, when the rule allows. The soldier leaves state 3, so the LeaveMap movie is no longer run
+// (Settler::Update polls it only in state 3); Soldier::Update S 006594a0 walks it to the ship from state 0x21.
+bool SADK_THISCALL move_to_home(game::NMovie::MoveToHome *movie)
 {
-    if (g_settings.retreatPickup && stranded_soldier(settler)) {
-        std::int32_t *cell = &settler->movement->cellX;   // {cellX, cellY}
-        if (Ship *ship = pickup_ship(settler->ownerPlayer->index, cell)) {
-            fn::NavyLink_LinkMilitarySoldier(settler, ship);   // as AttackConnector::AssignBestSoldiers does
-            settler->state = kWalkToShip;
-            return;
-        }
-    }
-    StartDying::original(settler);
+    if (MoveToHomeStart::original(movie)) return true;
+    game::NSettlers::Settler *settler = movie->owner;
+    if (!g_settings.retreatPickup || !stranded_soldier(settler)) return false;   // the game strays
+    std::int32_t *cell = &settler->movement->cellX;   // {cellX, cellY}
+    Ship *ship = pickup_ship(settler->ownerPlayer->index, cell);
+    if (!ship) return false;
+    fn::NavyLink_LinkMilitarySoldier(settler, ship);   // as AttackConnector::AssignBestSoldiers does
+    settler->state = kWalkToShip;
+    return true;
 }
 
 }  // namespace
@@ -190,7 +197,7 @@ bool retreat_update(NavyMission *m)
 
 bool retreat_start()
 {
-    bool ok = navalcombatfix::StartDying::install(navalcombatfix::start_dying);
+    bool ok = navalcombatfix::MoveToHomeStart::install(navalcombatfix::move_to_home);
     sadk::log("%s", ok ? "retreat: ships pick up soldiers left with nowhere to go" : "retreat NOT active");
     return ok;
 }

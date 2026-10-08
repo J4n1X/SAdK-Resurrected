@@ -2,7 +2,8 @@
 
 A server mod: every player of a match needs it (the host's copy, ini included, is what runs; `assetshare` takes care
 of that). The rules are in `CONCEPT.md`, how the game works and what the mod changes in
-`docs/navy-and-military.md` (§2-§6 the game, §7 the mod). Nothing of it has been tried in the game yet.
+`docs/navy-and-military.md` (§2-§6 the game, §7 the mod). Naval invasions work in the game (maintainer's test
+2026-10-08); the rest is still being tested.
 
 What it does:
 
@@ -10,8 +11,9 @@ What it does:
   count and sail when you own both harbours of the route, from a colony, or through a neutral harbour where no colony
   fits (`landing.cpp`). The soldier count is the game's ground rule on the land distances, the crossing free.
 - **Defence across the water**, the same way, with the defender's own ships.
-- **Retreat** (`retreat.cpp`): soldiers the game would let die for having nowhere to go are picked up by a ship from
-  a neutral harbour on their landmass.
+- **Retreat** (`retreat.cpp`): soldiers left with nowhere to go (the game lets them wander until they die) are
+  picked up by a ship from a neutral harbour on their landmass, as soon as the game finds no home for them. A harbour
+  whose flag stands in someone's territory is not neutral.
 - **Flag stripes and attackability** (`proximity.cpp`): routes between your own harbours count for the distance to
   the enemy.
 - **Naval invasion** (`invasion.cpp`): an expedition to a free harbour without room for a colony says so and turns
