@@ -62,6 +62,7 @@ using Manager = game::NComm_Manager;
 constexpr std::uintptr_t THUNK_REMOVE = 0x006f6789;   // -> _remove S 006f675f
 constexpr int MAP_LOCATION_USER = 3;
 constexpr std::uint32_t EV_USER_INFORMATION = 0x30001, EV_GAME_INFORMATION = 0x30003;
+constexpr std::uint32_t HOST_NET_ID = 0xEFFFFFCC;   // the host's id in the match network
 constexpr DWORD MANIFEST_TIMEOUT_MS = 15000;   // joiner: no manifest by then -> the host has no assetshare
 constexpr DWORD KICK_AFTER_MS = 20000;         // host: a joiner that has not asked for the manifest by then
 const char kick_reason[] = "This game needs the assetshare mod: install it with SAdK-ServerConfig.";
@@ -754,7 +755,10 @@ bool SADK_THISCALL on_handle_event(Manager *m, game::NComm::EventBase *ev)
     auto type = static_cast<std::uint32_t>(ev->typeId);   // read first: the handler may consume the event
     std::int32_t source = ev->sourceNetId;
     bool ok = HandleEvent::original(m, ev);
-    if (type == EV_USER_INFORMATION && is_host_online(m)) {   // someone joins this host
+    // Someone joins this host. The host handles its own UserInformation too, under the host id 0xEFFFFFCC (the id
+    // RequestFileFromHost sends to; KickPlayer S 0040b470 never kicks it): only remote players count.
+    if (type == EV_USER_INFORMATION && is_host_online(m) && static_cast<std::uint32_t>(source) != HOST_NET_ID &&
+        source != fn::NComm_Manager_NetworkVcall_30(m)) {
         bool known = false;
         for (auto &j : joiners) known |= j.net_id == source;
         if (!known) joiners.push_back(Joiner{source, GetTickCount(), false});
