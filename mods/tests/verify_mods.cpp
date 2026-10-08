@@ -37,7 +37,7 @@ int main(int argc, char **argv)
     nomeshcache_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 4 + 2 + 1 + 1;   // billboards 4, borderless 2 hooks, npcmodels 1, nomeshcache 1 hook
+    const int expected = 4 + 6 + 1 + 1;   // billboards 4, borderless 6 hooks, npcmodels 1, nomeshcache 1 hook
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

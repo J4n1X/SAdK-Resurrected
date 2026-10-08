@@ -139,18 +139,35 @@ callers use; its reader is [TODO].
 ## Borderless fullscreen (mod `mods/borderless`, hooks)
 
 `S2CE::CGraphicDevice` keeps its display settings as a 9-dword block at `+0xa8`: width, height, and in the third
-dword's low byte the windowed flag (`+0xb0`); `+0xc8` marks a window the game does not own. `CGraphicDevice::Init`
-S 004da2a0 takes such a block from start-up (`CApplicationEx::InitEngineLayer` S 00405590), from the options
-(`S2CG::Settings::ApplyDisplayMode`, `SetDisplaySize` S 00695ab0) and, as its own block, from
-`HandleWindowMessage` S 004da8d0 on `WM_DISPLAYCHANGE`. `InitPresentParameter` S 004d3f70 makes a windowed device
-(`Windowed = 1`) or picks the nearest exclusive fullscreen mode; `ApplyWindowStyle` S 004d4190 then makes the window
-a caption window sized to the backbuffer (windowed) or a topmost popup at 0,0 (fullscreen).
+dword's low byte the windowed flag (`+0xb0`); `+0xc8` marks a window the game does not own. The block is the game's
+own graphics configuration: `S2CG::Settings::Load` S 006960a0 reads it from the player's profile and applies it
+(`ApplyDisplayMode`), the options change it (`SetDisplaySize` S 00695ab0), and `Settings::Store` S 00696270 writes the
+device's block back into the profile. The options also read it (`FillVideoModeCombo`, `LoadOptionValue`). So a mod
+must not change the flag: it would be saved and shown as "windowed".
 
-The mod hooks both. When `Init` is asked for fullscreen it passes the same block with the windowed flag set
-(and keeps that mode for re-initialisations with the device's own block), so the game renders at the resolution
-chosen in its options; `ApplyWindowStyle` then makes the window a `WS_POPUP` covering the window's monitor, not
-topmost, and Direct3D stretches the picture to it (distorted when the shapes differ: the maintainer's choice).
-The cursor needs no correction: in windowed mode the game divides window pixels by the client size
-(`nUi::Cursor::SetPositionFromPixels` S 00492300, `UiCursor_QueryRelativePosition` S 00492410). Not yet live-tested
-[TODO]; to check: `nUi::Cursor::SetPixelPosition` S 00492620 places the cursor at window pixels taken from the
-picture, and what reads `CApplicationEx::displayWidth/Height` (`+0x20/+0x24`).
+`CGraphicDevice::Init` S 004da2a0 takes the block; `InitPresentParameter` S 004d3f70 (at creation and every reset,
+e.g. a resolution change) builds the D3D present parameters: windowed → `Windowed = 1`, fullscreen → the display
+mode nearest the requested size with its refresh rate. `ApplyWindowStyle` S 004d4190 shapes the window (windowed: a
+caption window sized to the backbuffer; fullscreen: a topmost popup at 0,0).
+
+The mod leaves the block alone and hooks:
+- `InitPresentParameter`: after the game has filled in its fullscreen parameters, `Windowed = 1` and
+  `FullScreen_RefreshRateInHz = 0` (required for a windowed device). The backbuffer keeps the game's resolution;
+  Direct3D stretches it to the window.
+- `ApplyWindowStyle`: in fullscreen, a `WS_POPUP` covering the monitor from `borderless.ini` `[Borderless] Monitor`
+  (`primary`, or n for `\\.\DISPLAYn`), not topmost.
+- The fullscreen-only cursor paths, which take screen pixels of a mode at 0,0: `UiCursor_QueryRelativePosition`
+  S 00492410, `nUi::Cursor::SetPixelPosition` S 00492620, `WarpToPosition` S 004926d0. Around these calls the
+  windowed flag reads 1, so they use the window's client area. (`nUi::Cursor::SetPositionFromPixels` S 00492300
+  always divides by the client size.)
+- The lobby's mouse look (right button): `LobbyMenu::LobbyAction` warps the cursor to the centre of the client area
+  (`clientWidth/Height` from `GetClientRect`) and measures the offset from it each frame, but its `OnMouseMove`
+  S 00429360 receives picture pixels (`LobbyDesktop::OnMouseMove` S 0042e8c0: relative cursor position ×
+  `nUi_RelativeToPixelsX/Y`). Stretched, the offset never reaches zero and the camera keeps turning (seen live
+  2026-10-08); in borderless mode the mod passes the cursor's real client position (`GetCursorPos` +
+  `ScreenToClient`).
+
+Live 2026-10-08 (the first version, which set the windowed flag): the game ran, but resolution changes in the
+options did not apply and the flag ended up in the settings; this version addresses both and is not yet
+live-tested [TODO].
+
