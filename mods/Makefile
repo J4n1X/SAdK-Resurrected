@@ -8,7 +8,7 @@
 CXX = i686-w64-mingw32-g++
 SADKMOD = ../sadkmod
 include $(SADKMOD)/pch.mk
-MAKEFLAGS += -j$(shell nproc)
+MAKEFLAGS += -j$(SADKMOD_JOBS)
 CXXFLAGS = $(SADKMOD_CXXFLAGS) -I$(SADKMOD)/include -I$(SADKMOD)/build/include
 LIB = $(SADKMOD)/build/libsadkmod.a
 GENERATED = $(SADKMOD)/build/include/.generated
@@ -38,11 +38,11 @@ $(LIB) $(GENERATED) $(SADKMOD_PCH_GCH): FORCE
 
 $(OBJ_DIR)/%.o: %.cpp $(SADKMOD_PCH_GCH)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -MMD -MP -c -o $@ $<
+	$(SADKMOD_LIMIT) $(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -MMD -MP -c -o $@ $<
 
 $(VERIFY_OBJ_DIR)/%.o: %.cpp $(SADKMOD_PCH_GCH)
 	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -DSADKMOD_NO_ENTRY -MMD -MP -c -o $@ $<
+	$(SADKMOD_LIMIT) $(CXX) $(CXXFLAGS) $(SADKMOD_PCH_FLAGS) -DSADKMOD_NO_ENTRY -MMD -MP -c -o $@ $<
 
 -include $(SOURCES:%.cpp=$(OBJ_DIR)/%.d) $(SOURCES:%.cpp=$(VERIFY_OBJ_DIR)/%.d)
 
