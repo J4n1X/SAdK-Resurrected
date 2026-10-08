@@ -125,3 +125,31 @@ either): the server must send only a set that exists and an index below its size
 which 16 are reachable through the 4-bit `npcidx`; female 6; MacDoyleJr 1; MacGabhan 1). The expected bytes
 are verified against the DRM-free `SADK.exe` (`make verify` in `mods/`); not yet live-tested.
 
+
+## Mesh cache off (mod `mods/nomeshcache`, hook)
+
+`S2CE::CMesh::Load` S 0076e0d0 (19 callers, every model) reads `%LOCALAPPDATA%\SAdK\<mesh>[_<variant>].mshraw`
+(`GetPackedCachePath` S 0076c9f0) when `IsPackedCacheUpToDate` S 0076cbe0 finds it newer than the `.KEX`
+(`File_CompareWriteTime` S 006e7270), and writes a new one after converting (`SavePackedBinary` S 0076bdc0), unless
+its last argument `noCache` is set. The callers checked (`LoadMesh` 0050b68b, `AcquireMesh` 006945ba,
+`LoadItemTypeMesh` 0069dc80) pass 0. The mod hooks `CMesh::Load` and passes `noCache = true`. `engine.ini`
+`[Engine] useMeshCache` (read into `CGraphicDevice+0xc9` by `CGraphicDevice::Init` S 004da2a0) is not what those
+callers use; its reader is [TODO].
+
+## Borderless fullscreen (mod `mods/borderless`, hooks)
+
+`S2CE::CGraphicDevice` keeps its display settings as a 9-dword block at `+0xa8`: width, height, and in the third
+dword's low byte the windowed flag (`+0xb0`); `+0xc8` marks a window the game does not own. `CGraphicDevice::Init`
+S 004da2a0 takes such a block from start-up (`CApplicationEx::InitEngineLayer` S 00405590), from the options
+(`S2CG::Settings::ApplyDisplayMode`, `SetDisplaySize` S 00695ab0) and, as its own block, from
+`HandleWindowMessage` S 004da8d0 on `WM_DISPLAYCHANGE`. `InitPresentParameter` S 004d3f70 makes a windowed device
+(`Windowed = 1`) or picks the nearest exclusive fullscreen mode; `ApplyWindowStyle` S 004d4190 then makes the window
+a caption window sized to the backbuffer (windowed) or a topmost popup at 0,0 (fullscreen).
+
+The mod hooks both. When `Init` is asked for fullscreen it passes a windowed block at the size of the game window's
+monitor instead (and keeps that mode for re-initialisations with the device's own block); `ApplyWindowStyle` then
+makes the window a `WS_POPUP` covering that monitor, not topmost. Mouse input uses window pixels
+(`CApplicationEx::HandleWindowMessage` S 00401f30 → `nUi::Cursor::SetPositionFromPixels`), which match the
+monitor-sized backbuffer. Not yet live-tested [TODO]: in particular whether the UI handles large desktop
+resolutions, and what reads `CApplicationEx::displayWidth/Height` (`+0x20/+0x24`), which keeps the size the game
+asked for.
