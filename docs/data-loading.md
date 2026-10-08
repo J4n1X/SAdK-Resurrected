@@ -27,8 +27,14 @@ The property database is filled only there. Its bindings create records (`*_crea
 (`*_add*`, e.g. `bp_addCost`), so running `data.lua` a second time would add every entry again [known: binding
 names; inferred: append semantics]. The game's own way to empty it is `Properties_Db_ClearAll` `005494a0` (every
 property table, the config flags, `bLoaded` `+0xc0` = 0), called only from `CApplicationEx::Shutdown` `00401cb0`
-[known]. Whether anything keeps pointers into property records past a match (menus built at start-up, the sound
-system, music) is [TODO]; until that is known, reloading the properties between matches is untested.
+[known].
+
+**Reloading between matches works offline** [live, maintainer's test 2026-10-08, test mod `mods/propreload`]: every
+time a match is entered (hook on `Scene_CreateGlobal` `0067e800`, before the world is built), `Properties_Db_ClearAll`,
+`Properties_RegisterLuaLibrary` and `Properties_RunPropertyScript("data")` ran; two offline matches in a row, no
+crash, and the record counts after each reload equal those before (104 buildings, 176 goods, 3 tribes, 12 animals,
+6 AI, 77 sacrifices). Not yet established: an online match after a reload [TODO], and whether every value (not just
+the record counts) is the same as after start-up [TODO: not compared].
 
 ## 2. Again for every match
 

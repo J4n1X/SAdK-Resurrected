@@ -107,7 +107,7 @@ shows a plain plank area of the board's own texture. It changes no bytes; it hoo
 
 No game art is shipped or written to disk. The earlier version of the mod (literal and call-site patches, same
 result) showed the plank area in the game (live 2026-10-07); the hook version is verified against the binary
-(`make verify` in `mods/`) [TODO: not yet run in the game].
+(`make verify` in `mods/`) and ran in the game (maintainer's test, 2026-10-08: both screens made and cropped, per the log).
 
 ## NPC model sets (mod `mods/npcmodels`, in memory)
 
