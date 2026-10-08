@@ -123,7 +123,8 @@ for NPCs. The npcmodels mod makes it the set number:
 NPC index. A record with `bdyprt` 0 behaves as before. There is no bounds check (there was none for the index
 either): the server must send only a set that exists and an index below its size (shipped file: male 17, of
 which 16 are reachable through the 4-bit `npcidx`; female 6; MacDoyleJr 1; MacGabhan 1). The expected bytes
-are verified against the DRM-free `SADK.exe` (`make verify` in `mods/`); not yet live-tested.
+are verified against the DRM-free `SADK.exe` (`make verify` in `mods/`); the mod works in the game (maintainer's
+test, 2026-10-08).
 
 
 ## Mesh cache off (mod `mods/nomeshcache`, hook)
@@ -167,7 +168,7 @@ The mod leaves the block alone and hooks:
   2026-10-08); in borderless mode the mod passes the cursor's real client position (`GetCursorPos` +
   `ScreenToClient`).
 
-Live 2026-10-08 (the first version, which set the windowed flag): the game ran, but resolution changes in the
-options did not apply and the flag ended up in the settings; this version addresses both and is not yet
-live-tested [TODO].
+Live 2026-10-08: the first version set the windowed flag, so resolution changes in the options did not apply and
+the flag ended up in the settings; the lobby's mouse look then turned continuously. The version described here
+fixes both and works in the game (maintainer's test, 2026-10-08).
 

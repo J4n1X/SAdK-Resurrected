@@ -92,6 +92,7 @@ Two tracks:
 | Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
+| Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
 | In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ⚠️ answered per the catalog since 2026-10-07, not live-tested — `[TODO]` |
 
