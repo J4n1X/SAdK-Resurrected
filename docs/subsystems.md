@@ -246,7 +246,7 @@ RTS code tagged under other names.
 | Game system | `nGame::System` | `Update` S 00780d20. Player commands are sent and handled as pairs (`SendPlaceBuilding` S 007818b0 / `HandlePlaceBuilding` S 00781980, streets, flags, upgrades, attacks, ship routes; ids 0x2000x..0x2002x) [inferred] |
 | Settlers / workers | `NSettlers::System`, `Worker`, `Soldier`, `Settler`, `NMovie::*` (scripted settler actions) | [inferred] |
 | Settlement | `NVillage::System` (`Load` S 00559c80, `Update` S 0055a640), `OrderSystem`, `Construction` | [inferred] |
-| Military / navy | `NMilitary::System` (S 00570260), `NMilitary::Fight`, `NNavy::System` (S 005b3d70), `ai::navy::*` | [inferred] |
+| Military / navy | `NMilitary::System` (S 00570260), `NMilitary::Fight`, `NNavy::System` (S 005b3d70), `ai::navy::*` | Attack, defence, sea transport and expedition rules: `docs/navy-and-military.md` [inferred] |
 | AI | `NAI::System` (`Tick` S 00581a30), `NAI::Player`, `NAI::Cell` | [inferred] |
 | World | `NResources::System`, `NNet` (street network), `NTransport::System`, `NDoodads::System`, `ai::map::*` | [inferred] |
 | Sound | `ai::audio::SoundManager` (`Update` S 005c68b0, FMOD) | [inferred] |
