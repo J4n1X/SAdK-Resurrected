@@ -9,8 +9,8 @@
 //     (S2CE::CTexture::CreateFromFile S 004e80d0), into `MOV ECX,EAX; CALL billboard_load`, which loads Texture
 //     instead of adN.tga and crops Rect of it with the game's own D3DX (d3dx9_38.dll, which also decodes DXT) into a
 //     512x512 texture that replaces the full sheet. No game art is shipped.
-// Settings: billboards.ini next to mod.dll, [Billboards] Texture (default sign_ad0.dds), Rect = x0,y0,x1,y1 (default
-// 305,680,730,1005).
+// Settings: billboards.ini next to mod.dll, [Billboards] Enabled (default true; SAdK-ServerConfig's "Disable
+// billboards"), Texture (default sign_ad0.dds), Rect = x0,y0,x1,y1 (default 305,680,730,1005).
 #include <sadkmod/game/sadk_noav/types.hpp>
 #include <sadkmod/sadkmod.hpp>
 
@@ -30,6 +30,7 @@ typedef HRESULT(WINAPI *d3dx_load_surface_fn)(IDirect3DSurface9 *, const PALETTE
                                               IDirect3DSurface9 *, const PALETTEENTRY *, const RECT *, DWORD, D3DCOLOR);
 constexpr DWORD D3DX_FILTER_LINEAR = 3;
 
+bool enabled = true;
 std::string texture = "sign_ad0.dds";
 int rect[4] = {305, 680, 730, 1005};
 bool crop = true;
@@ -80,6 +81,7 @@ bool SADK_THISCALL billboard_load(CTexture *tex, void *path, bool single_level, 
 void read_settings()
 {
     sadk::Ini ini = sadk::mod_settings();                        // billboards.ini; defaults without a host
+    enabled = ini.get_bool("Billboards", "Enabled", true);
     texture = ini.get("Billboards", "Texture", "sign_ad0.dds");
     std::string r = ini.get("Billboards", "Rect", "305,680,730,1005");
     crop = std::sscanf(r.c_str(), "%d,%d,%d,%d", &rect[0], &rect[1], &rect[2], &rect[3]) == 4 && rect[2] > rect[0] &&
@@ -91,6 +93,10 @@ void read_settings()
 bool billboards_start()
 {
     read_settings();
+    if (!enabled) {
+        log("off ([Billboards] Enabled = false in billboards.ini)");
+        return true;
+    }
     texture_name = sadk::msvc::string::small(texture);
     int ok = 0;
     static const std::uintptr_t literals[3] = {0x007e6240, 0x007e6208, 0x007e61d0};   // "ad0.tga" .. "ad2.tga"

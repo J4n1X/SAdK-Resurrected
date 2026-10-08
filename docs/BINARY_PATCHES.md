@@ -90,7 +90,7 @@ S 005c7790) and then renders IE's own "navigation canceled" page over it. The `a
 never used.
 
 The screen is part of the board mesh, so a transparent screen texture leaves a hole. The billboards mod
-(`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig's "Disable billboards") instead
+(`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig, on unless `[Billboards] Enabled = false` in its `billboards.ini`) instead
 shows a plain plank area of the board's own texture:
 
 | Address | Original | Change |

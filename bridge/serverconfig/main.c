@@ -2,13 +2,13 @@
  * sets the bridge options and installs the bridge shim (wsock32.dll, embedded) into the game's bin folder.
  *
  * Writes (all plain Windows INI, which is how the game reads them):
- *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port, ForceBridge, DisableBillboards
+ *   data\lobby\config\LobbySettings.ini  [LobbyServer] Host, Port, ForceBridge
  *       read by LobbyProfile::GetSettingString S 00465700 (GetPrivateProfileStringA)
  *   data\game\settings\network.ini       [Basics] gamePort
  *       read by NComm_NetworkConfig_LoadFromIni S 0041ede0
  *   bin\sadk_bridge.ini                  [Bridge] port   (the shim's bridge port)
  *   bin\wsock32.dll                      the bridge shim and mod host (docs/bridge-protocol.md, mods/README.md)
- *   mods\billboards\mod.dll, billboards.ini  the billboards mod, when "Disable billboards" is ticked
+ *   mods\billboards\mod.dll, billboards.ini  the billboards mod; "Disable billboards" = [Billboards] Enabled
  *
  * The "modified" check recomputes the game's own build checksum (GameData_ComputeBuildChecksum
  * S 005ab800): the host kicks a joiner whose value differs ("!CHECKSUM MISMATCH"), so a different value
@@ -248,23 +248,30 @@ static int install_file(const char *rel, int id)
 static int shim_state(void) { return file_state("bin\\wsock32.dll", IDR_SHIM); }
 static int install_shim(void) { return install_file("bin\\wsock32.dll", IDR_SHIM); }
 
-/* The billboards mod (mods\billboards): installed when "Disable billboards" is ticked, its mod.dll removed when
-   not (its billboards.ini, which a player may have edited, stays). */
+/* The billboards mod (mods\billboards): always installed (on the DRM-free build); "Disable billboards" is its
+   [Billboards] Enabled in mods\billboards\billboards.ini, which the mod reads at start-up. The .ini is only written
+   when missing (from the embedded default) and then only its Enabled key is changed, so other edits stay. */
 #define BILLBOARDS_DLL "mods\\billboards\\mod.dll"
 #define BILLBOARDS_INI "mods\\billboards\\billboards.ini"
-static int set_billboards_mod(int on)
+static int billboards_enabled(void)
+{
+    char p[MAX_PATH], v[16];
+    join(p, root, BILLBOARDS_INI);
+    GetPrivateProfileStringA("Billboards", "Enabled", "true", v, sizeof v, p);   /* none yet: on */
+    return !lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes");
+}
+
+static int install_billboards_mod(int enabled)
 {
     char p[MAX_PATH];
-    if (!on) {
-        join(p, root, BILLBOARDS_DLL);
-        return DeleteFileA(p) || GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND;
-    }
     join(p, root, "mods");
     CreateDirectoryA(p, NULL);
     join(p, root, "mods\\billboards");
     CreateDirectoryA(p, NULL);
     int ok = file_state(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS) == 1 || install_file(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS);
     if (file_state(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI) == 0) ok &= install_file(BILLBOARDS_INI, IDR_MOD_BILLBOARDS_INI);
+    join(p, root, BILLBOARDS_INI);
+    ok &= WritePrivateProfileStringA("Billboards", "Enabled", enabled ? "true" : "false", p) != 0;
     return ok;
 }
 
@@ -321,12 +328,9 @@ static void refresh(HWND dlg)
         GetPrivateProfileStringA("LobbyServer", "ForceBridge", "false", v, sizeof v, lobby);
         CheckDlgButton(dlg, IDC_FORCE, (!lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes"))
                                            ? BST_CHECKED : BST_UNCHECKED);
-        /* Ticked when the billboards mod is installed; otherwise the last choice saved (DisableBillboards), and
-           ticked when there is none, since the pages behind the billboards are gone for everyone. */
-        GetPrivateProfileStringA("LobbyServer", "DisableBillboards", "true", v, sizeof v, lobby);
-        int choice = !lstrcmpiA(v, "true") || !lstrcmpA(v, "1") || !lstrcmpiA(v, "yes");
-        CheckDlgButton(dlg, IDC_BILLBOARDS, file_state(BILLBOARDS_DLL, IDR_MOD_BILLBOARDS) || choice
-                                                ? BST_CHECKED : BST_UNCHECKED);
+        /* The billboards mod's Enabled key; ticked when there is none yet, since the pages behind the billboards
+           are gone for everyone. */
+        CheckDlgButton(dlg, IDC_BILLBOARDS, billboards_enabled() ? BST_CHECKED : BST_UNCHECKED);
     }
     SetDlgItemTextA(dlg, IDC_STATUS, status);
     SetDlgItemTextA(dlg, IDC_MODWARN, warn);
@@ -371,14 +375,12 @@ static void save(HWND dlg)
     ok &= WritePrivateProfileStringA("LobbyServer", "Port", num, lobby);
     ok &= WritePrivateProfileStringA("LobbyServer", "ForceBridge",
                                      IsDlgButtonChecked(dlg, IDC_FORCE) ? "true" : "false", lobby);
-    ok &= WritePrivateProfileStringA("LobbyServer", "DisableBillboards",
-                                     IsDlgButtonChecked(dlg, IDC_BILLBOARDS) ? "true" : "false", lobby);
     snprintf(num, sizeof num, "%u", gport);
     ok &= WritePrivateProfileStringA("Basics", "gamePort", num, network);
     snprintf(num, sizeof num, "%u", bport);
     ok &= WritePrivateProfileStringA("Bridge", "port", num, bridge);
     int shim_ok = !exe_supported || shim_state() == 1 || install_shim();
-    int mods_ok = !exe_supported || set_billboards_mod(IsDlgButtonChecked(dlg, IDC_BILLBOARDS) == BST_CHECKED);
+    int mods_ok = !exe_supported || install_billboards_mod(IsDlgButtonChecked(dlg, IDC_BILLBOARDS) == BST_CHECKED);
 
     if (ok && shim_ok && mods_ok) {
         MessageBoxA(dlg, exe_supported
