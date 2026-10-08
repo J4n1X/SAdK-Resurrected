@@ -362,3 +362,21 @@ layout, and evidence: `decomp/RENAME_LIST.md` "2026-07-28 (cont.)". **`AvatarPro
 `LobbyComm::ActorProxy : LobbyComm::IActor` (a distinct, widely-shared actor interface used by 4+
 other class hierarchies), not this Block family — its own 7-slot vtable (`0x007dd038`) needs a
 dedicated pass rather than a rushed partial binding.
+
+---
+
+## 6. Data loading: start-up vs per match (`sadk_noav.exe`, 2026-10-08)
+
+Full picture and status tags: `docs/data-loading.md`.
+
+| Address | Name | What |
+|---|---|---|
+| `0x004075d0` | `CApplicationEx::Initialize` | once: `FileScanHolder::ScanDirectory("data\\")`, the property database (`Properties_RegisterLuaLibrary` `0x00550e40`, `Properties_RunPropertyScript("data")` `0x0054f8d0`), sound, lobby, menus |
+| `0x0054a140` | `NProperties::StaticAccess::EnsureInstance` | the `PropertiesDb` singleton `0x00889dd8` (0xc4 bytes) |
+| `0x005494a0` | `Properties_Db_ClearAll` | empties every property table, `bLoaded` (+0xc0) = 0; only caller `CApplicationEx::Shutdown` `0x00401cb0` |
+| `0x0067e800` | `Scene_CreateGlobal` | `new S2CG::Scene` into `g_pScene` `0x0088ca60`; caller `nMenu::Game::OnEnter` `0x005eed00` |
+| `0x0067e8a0` | `Scene_DestroyGlobal` | frees `g_pScene`; caller `nMenu::Game::OnLeave` `0x005eb030` (was `ProgressBroadcaster_Destroy`) |
+| `0x006824c0` | `S2CG::Scene::Init` | scene vtable `0x007f8f2c` slot 0; per match: `graphics.xml`, `items.xml`, `settler_config.xml`, `settler_animations.xml`, `buildings.xml`, `animals.xml`, `ships.xml` |
+| `0x007842e0` | `nGame::System::BuildScene` | from `BuildWorld` `0x00784d40`: `terrain_static_data.xml`, `map_objects.xml`, then `Scene::Init` |
+| `0x005ab800` | `GameData_ComputeBuildChecksum` | not cached: `NComm_GetBuildChecksum` `0x0041f240` recomputes on each join |
+| `0x006e4310` | `FileScanHolder::FindFilesInDirectory` | lists the disk live (`FindFirstFileA` / `FindNextFileA`) |

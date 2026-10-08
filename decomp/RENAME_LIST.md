@@ -1281,3 +1281,12 @@ Created `IAvatarDataBlock_vftable` (32B, 8 typed slots) and applied it at all 7 
 namespaced all 27 member functions (3 shared + `Deserialize`/`Serialize`/`GetSize`/`Clear` × 7). Verified:
 every class's `Deserialize` now decompiles with named field access (`this->field1`, `this->base.pVftable
 ->pGetVariant()`, etc.) instead of raw offset arithmetic.
+
+## 2026-10-08 — data loading for mods (`sadk_noav.exe`)
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x0067e8a0` | `ProgressBroadcaster_Destroy` | `Scene_DestroyGlobal` (`void __cdecl(void)`) | frees `g_pScene` `0x0088ca60` through `S2CG::Scene::dtor`; counterpart of `Scene_CreateGlobal` `0x0067e800`; caller `nMenu::Game::OnLeave` `0x005eb030` `[known]` |
+
+Plate comment added on `Properties_Db_ClearAll` `0x005494a0` (the only way the game empties the property database;
+reload safety `[TODO]`). Findings: `docs/data-loading.md`.
