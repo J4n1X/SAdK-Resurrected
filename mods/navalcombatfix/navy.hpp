@@ -4,6 +4,7 @@
 #include <sadkmod/game/sadk_noav/fn/NLogic.hpp>
 #include <sadkmod/game/sadk_noav/fn/NMilitary.hpp>
 #include <sadkmod/game/sadk_noav/fn/NNavy.hpp>
+#include <sadkmod/game/sadk_noav/fn/NProperties.hpp>
 #include <sadkmod/game/sadk_noav/fn/NSettlers.hpp>
 #include <sadkmod/game/sadk_noav/fn/NVillage.hpp>
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
@@ -103,9 +104,14 @@ struct Settings {
     bool attackFromOwnLanding = true;     // AttackFromOwnLanding: an own harbour in the target's range counts
     bool retreatPickup = true;            // RetreatPickup: ships pick up soldiers left with nowhere to go
     bool proximityOverOwnRoutes = true;   // ProximityOverOwnRoutes: own routes count for the distance to the enemy
+    bool neutralLandings = true;          // NeutralLandings: neutral harbours without room for a colony are landings
     std::int32_t crossingDistance = 0;    // CrossingDistance: cells a sea crossing counts as (gathering, proximity)
     std::int32_t pickupTimeout = 1200;    // PickupTimeout: ticks a pickup ship waits for its soldiers
 };
 extern Settings g_settings;
+
+// A harbour `player`'s soldiers may land at: one of the player's own, or a neutral one where the player could not
+// found a colony (landing.cpp).
+bool is_landing(Harbor *harbor, std::int32_t player);
 
 }  // namespace navalcombatfix

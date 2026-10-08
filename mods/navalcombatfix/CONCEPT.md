@@ -27,3 +27,33 @@ The game's rules are in `docs/navy-and-military.md`; the change is §7 there.
   territory, and the soldiers have nowhere to go (the game would let them die), a ship of yours that is ready for the
   route from that harbour to one of yours picks them up. If the harbour's flag becomes enemy territory, the soldiers
   are not allowed to use it to return.
+- **Neutral landings.** An attack is also possible when an enemy is close to a neutral harbour where there is not
+  enough room to found a colony; the distance to the enemy (flag stripes, attackability) is then also measured from
+  that neutral harbour, when one of the player's harbours has a route to it. With room for a colony, the colony is
+  the way in.
+
+## Naval invasion (planned, not implemented)
+
+For a neutral harbour where a colony cannot be founded (an enemy is in the way), as decided by the maintainer:
+
+1. **Scouting.** An expedition that arrives at a harbour without room for its colony building (the game's own test,
+   `NNavy::Expedition::FindBuildingPosition`) says so at once ("not enough space") and ends: it sails home and unloads,
+   instead of waiting for orders that cannot succeed. The player now knows that harbour needs an invasion.
+2. **"Prepare naval invasion".** A new action button at the home buoy of that route, active once the harbour was
+   scouted that way. It starts a new ship mission: the ship loads like an expedition (one soldier and the colony
+   building's goods) and then **waits at home**.
+3. **Attack.** When the player starts an attack on the target's landmass, the waiting invasion ship is the transport:
+   the attackers board with the cargo, it sails, and only the attackers land. The expedition soldier and the goods
+   stay aboard.
+4. **Won:** the colony is founded at once (guard post, the expedition soldier as its garrison); the ship takes the
+   surviving attackers home and unloads them. The guard post's garrison is the game's business: with no enemy near,
+   the game keeps no soldier there and the soldier walks home by himself (with both route ends the player's, the
+   game puts the ship back on the route, so the sea street exists). If there is still no room for the colony (very
+   rare), the captured building keeps its garrison and the rest sail home with the "not enough space" message: invade
+   again.
+5. **Lost:** with `ShipLostOnDefeat` (new setting, harsh: on by default) the ship is destroyed with everything aboard;
+   with it off, the invasion is cancelled and the ship sails home and unloads the expedition cargo.
+
+Work needed first (reverse engineering, then mapping): the action-button system (`nMenu::ActionButton`, the buoy's
+buttons), the lockstep game commands (a player's button press must reach every peer as a command, `nGame::System`
+Send*/Handle* pairs), the expedition's remaining fields, and ship sinking (`NNavy::Ship::BeginSinking`).

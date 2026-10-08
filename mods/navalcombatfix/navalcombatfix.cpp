@@ -18,12 +18,13 @@ void load_settings()
     s.attackFromOwnLanding = ini.get_bool(section, "AttackFromOwnLanding", s.attackFromOwnLanding);
     s.retreatPickup = ini.get_bool(section, "RetreatPickup", s.retreatPickup);
     s.proximityOverOwnRoutes = ini.get_bool(section, "ProximityOverOwnRoutes", s.proximityOverOwnRoutes);
+    s.neutralLandings = ini.get_bool(section, "NeutralLandings", s.neutralLandings);
     s.crossingDistance = ini.get_int(section, "CrossingDistance", s.crossingDistance);
     s.pickupTimeout = ini.get_int(section, "PickupTimeout", s.pickupTimeout);
     sadk::log("settings: attackers by sea %d, defenders by sea %d, attack from own landing %d, retreat pickup %d, "
-              "proximity over own routes %d, crossing distance %d, pickup timeout %d",
+              "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d",
               s.attackersBySea, s.defendersBySea, s.attackFromOwnLanding, s.retreatPickup, s.proximityOverOwnRoutes,
-              s.crossingDistance, s.pickupTimeout);
+              s.neutralLandings, s.crossingDistance, s.pickupTimeout);
 }
 
 bool navalcombatfix_start()

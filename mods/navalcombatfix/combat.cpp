@@ -110,7 +110,7 @@ bool own_sea_link(Building *building, Building *target, Fight *fight, SeaLink *b
     if (defending ? !g_settings.defendersBySea : !g_settings.attackersBySea) return false;
     bool found = false;
     for (Harbor *landing : harbors()) {
-        if (landing->playerIdx != player || region(landing) != targetRegion) continue;
+        if (region(landing) != targetRegion || !is_landing(landing, player)) continue;
         for (Harbor *home : harbors()) {
             if (home->playerIdx != player || region(home) != buildingRegion) continue;
             std::int32_t d = distance(landing, target) + g_settings.crossingDistance + distance(home, building);
@@ -152,7 +152,7 @@ bool own_landing_in_range(Building *target, std::int32_t player)
 {
     std::int32_t range = fn::NVillage::Military::GetTerritoryRange(target->military), targetRegion = region(target);
     for (Harbor *landing : harbors()) {
-        if (landing->playerIdx != player || region(landing) != targetRegion || distance(landing, target) >= range + 1)
+        if (region(landing) != targetRegion || distance(landing, target) >= range + 1 || !is_landing(landing, player))
             continue;
         for (Harbor *home : harbors()) {
             SeaLink link;
@@ -235,24 +235,25 @@ constexpr std::int32_t kWaitForCargo = 1;
 constexpr std::int32_t kSailToLanding = 3;
 constexpr std::int32_t kDisembark = 4;
 
-// The ends of a route that belong to `player` at both sides, split into the one on the target's landmass and the
-// other one. False when the route is not wholly the player's or the target's landmass is not exactly one of its ends.
+// The ends of a route the game's own end-picking cannot handle: the end on the target's landmass belongs to `player`
+// or to nobody (an own or a neutral landing), the other end is the player's. False otherwise (the game's own case,
+// a landing owned by the defender), or when the target's landmass is not exactly one of the ends.
 bool own_route_ends(NavyShipRoute *route, std::int32_t player, std::int32_t targetRegion, Harbor **home,
                     Harbor **landing)
 {
     Harbor *a = fn::NLogic::ReferenceHarbor::Resolve(&route->harborA);
     Harbor *b = fn::NLogic::ReferenceHarbor::Resolve(&route->harborB);
-    if (!a || !b || a->playerIdx != player || b->playerIdx != player) return false;
+    if (!a || !b) return false;
     bool aLands = region(a) == targetRegion, bLands = region(b) == targetRegion;
     if (aLands == bLands) return false;
     *landing = aLands ? a : b;
     *home = aLands ? b : a;
-    return true;
+    return (*home)->playerIdx == player && ((*landing)->playerIdx == player || (*landing)->playerIdx == -1);
 }
 
 // NNavy::Military::Update S 005ba250. Its states 0 (sail to the loading end) and 3 (sail to the landing end) pick
-// the end owned by the ship's player and by the fight's defender; when both ends belong to the ship's player, the
-// landing end is the one on the target's landmass. A mission without a fight is a pickup (retreat.cpp). The guard is
+// the end owned by the ship's player and by the fight's defender; for an own or a neutral landing (own_route_ends),
+// the landing end is the one on the target's landmass. A mission without a fight is a pickup (retreat.cpp). The guard is
 // the game's: the mission is active and the ship stands still (its step interpolator not running, movement state 0
 // or 4).
 bool SADK_THISCALL navy_military_update(NavyMission *m)

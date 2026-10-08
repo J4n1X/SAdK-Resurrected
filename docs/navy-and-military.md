@@ -345,6 +345,18 @@ pickup. The game would read a null fight in its state 3, so the mod handles ever
 | `NSettlers::Settler::StartDying` | The retreat pickup above |
 | `NNavy::Military::Update` | Also: missions without a fight (pickups) wait in state 2 with a timeout, and sail to the other route end in state 3 |
 
+**Landing harbours** (`landing.cpp`). Wherever the rules above say "H1 of the player", a **neutral** harbour also
+counts as H1 when the player could not found a colony there (`NeutralLandings`). The test is the game's own colony
+placement, `NNavy::Expedition::FindBuildingPosition` `005b7e50`, without the expedition:
+- the tribe's expedition building;
+- the cells within its `territoryRange - 1` of the harbour, on its landmass, whose entrance is more than 1 cell from
+  it;
+- `GameQuery::CanPlaceBuildingTypeAt` `005301c0`, with the expedition's arguments. One of them is player entry 8 of
+  the player table, whose role is [TODO].
+
+With room for the colony, the harbour is not a landing: found the colony instead. The ship's mission sails to an own
+or a neutral landing end (`own_route_ends`). The distance to the enemy uses the same landings in both directions.
+
 **Proximity zones** (§2; `proximity.cpp`). `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` is hooked. With
 `includeHarbors`, the distance to the enemy is also measured over routes whose ends belong to the same player, with
 the sum the soldier count uses. Like the game, there's no ship requirement: the route only has to exist.
@@ -364,7 +376,7 @@ not just the display.
 | `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` | Also over routes between two harbours of the same player (both directions above) |
 
 **Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,
-`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup` and `ProximityOverOwnRoutes` switch each rule; with one
+`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; with one
 off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
 soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
 waits. Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole

@@ -10,9 +10,10 @@
 //   - a building whose soldiers now cross through its owner's harbours shows no stripes for it, and
 //   - a target near a colony's harbour, but 19 or more cells from the colonist's military buildings, cannot be attacked.
 // Added here, with the same sum the soldier count uses (combat.cpp), and like the game without asking for a ship:
-//   - own route: an own harbour H2 on this landmass, its route to another own harbour H1:
-//     d(here, H2) + d(H1, the nearest enemy military building on H1's landmass);
-//   - the enemy's own route: an enemy harbour H1 on this landmass, its route to another harbour H2 of that enemy:
+//   - own route: an own harbour H2 on this landmass, its route to a landing harbour H1 of the player elsewhere (own,
+//     or neutral without room for a colony; landing.cpp): d(here, H2) + d(H1, the nearest enemy military building on
+//     H1's landmass);
+//   - the enemy's route: a landing harbour H1 of an enemy on this landmass, its route to that enemy's harbour H2:
 //     d(here, H1) + d(H2, the nearest military building of that enemy on H2's landmass).
 // The game's own distance stays when it is smaller.
 #include "navy.hpp"
@@ -57,7 +58,7 @@ std::int32_t over_own_route(std::int32_t *pos, Player *player, bool filterDiplom
     for (Harbor *home : harbors()) {
         if (home->playerIdx != player->index || region(home) != here) continue;
         for (Harbor *landing : harbors()) {
-            if (landing->playerIdx != player->index || region(landing) == here || !route_between(home, landing))
+            if (region(landing) == here || !route_between(home, landing) || !is_landing(landing, player->index))
                 continue;
             std::int32_t toEnemy = nearest_building(
                 landing, [&](Building *b) { return enemy_of(b->ownerPlayer, player, filterDiplomacy); });
@@ -67,18 +68,19 @@ std::int32_t over_own_route(std::int32_t *pos, Player *player, bool filterDiplom
     return best;
 }
 
-// The enemy's own route: an enemy's harbour H1 here, a route to that enemy's harbour H2 elsewhere, a military
-// building of that enemy near H2.
+// The enemy's own route: a landing harbour of an enemy here (its own, or a neutral one without room for its colony),
+// a route to that enemy's harbour H2 elsewhere, a military building of that enemy near H2.
 std::int32_t over_enemy_route(std::int32_t *pos, Player *player, bool filterDiplomacy)
 {
     std::int32_t best = kFar, here = region(pos);
     for (Harbor *landing : harbors()) {
-        if (landing->playerIdx < 0 || landing->playerIdx == player->index || region(landing) != here) continue;
-        Player *enemy = player_entry(landing->playerIdx);
-        if (!enemy || !enemy_of(enemy, player, filterDiplomacy)) continue;
+        if (landing->playerIdx == player->index || region(landing) != here) continue;
         for (Harbor *home : harbors()) {
-            if (home->playerIdx != landing->playerIdx || region(home) == here || !route_between(landing, home))
+            if (home->playerIdx < 0 || home->playerIdx == player->index || region(home) == here ||
+                !route_between(landing, home))
                 continue;
+            Player *enemy = player_entry(home->playerIdx);
+            if (!enemy_of(enemy, player, filterDiplomacy) || !is_landing(landing, enemy->index)) continue;
             std::int32_t toEnemy = nearest_building(home, [&](Building *b) { return owner(b) == enemy->index; });
             best = std::min(best, distance(landing, pos) + g_settings.crossingDistance + toEnemy);
         }
