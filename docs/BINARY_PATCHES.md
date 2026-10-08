@@ -91,21 +91,23 @@ never used.
 
 The screen is part of the board mesh, so a transparent screen texture leaves a hole. The billboards mod
 (`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig, on unless `[Billboards] Enabled = false` in its `billboards.ini`) instead
-shows a plain plank area of the board's own texture:
+shows a plain plank area of the board's own texture. It changes no bytes; it hooks `GetTexture`:
 
-| Address | Original | Change |
-|---|---|---|
-| 007e6240, 007e6208, 007e61d0 | `"ad0.tga"`, `"ad1.tga"`, `"ad2.tga"` | first letter `#`: no name matches, the screens load from file like any texture |
-| 00504806 (7 bytes) | `MOV EDX,[ESI+0x28]; MOV ECX,EAX; CALL EDX`: virtual `CTexture::CreateFromFile` S 004e80d0 | `MOV ECX,EAX; CALL billboard_load` |
+- An entry (`GfxTextureEntry`, 0x24 bytes: `+0` texture, `+4` `std::string` name, `+0x20..0x23` four flags) whose
+  texture is not made yet and whose name is `ad0.tga`, `ad1.tga` or `ad2.tga` (compared as the game does,
+  case-sensitively) is made by the mod the way `GetTexture` makes every other texture:
+  `S2CE::CResourceMgr::CreateTexture(device, 0)` S 004db310, then `CreateFromFile` (texture vtable `+0x28`,
+  `bool __thiscall (CTexture*, const std::string *path, bool, bool, bool)`) with the entry's first three flags, and
+  `LobbyGfx_Texture_DecrementRedChannel` S 005042e0 when the fourth is set. The path is `Texture`
+  (`billboards.ini` next to the mod's `mod.dll`, default `sign_ad0.dds`) instead of the screen's name.
+- The rectangle `Rect` (default `305,680,730,1005`, x0,y0,x1,y1) of the loaded texture is copied into a new
+  512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and put
+  in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
+- Every other entry goes to the game's `GetTexture` unchanged.
 
-`billboard_load` calls the original `CreateFromFile` (`bool __thiscall (CTexture*, const std::string *path,
-bool, bool, bool)`, `RET 0x10`) with `Texture` (`billboards.ini` next to the mod's `mod.dll`, default
-`sign_ad0.dds`) in place of `ad0/1/2.tga`, then copies the rectangle `Rect` (default `305,680,730,1005`,
-x0,y0,x1,y1) of the loaded texture into a
-new 512×512 texture with the game's own `d3dx9_38.dll` (`D3DXCreateTexture`, `D3DXLoadSurfaceFromSurface`) and
-puts it in place of the full sheet (CTexture `+0x18` `IDirect3DTexture9*`, `+0x58` / `+0x5c` width / height).
-All other names pass through unchanged. No game art is shipped or written to disk. Live 2026-10-07: the
-screens show the plank area.
+No game art is shipped or written to disk. The earlier version of the mod (literal and call-site patches, same
+result) showed the plank area in the game (live 2026-10-07); the hook version is verified against the binary
+(`make verify` in `mods/`) [TODO: not yet run in the game].
 
 ## NPC model sets (mod `mods/npcmodels`, in memory)
 

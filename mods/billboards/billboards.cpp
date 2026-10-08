@@ -1,17 +1,19 @@
 // billboards: the lobby's advertising screens show a plain plank area of their own board instead of the dead
 // web pages (docs/BINARY_PATCHES.md, "Billboards").
 //
-// Lobby::CGfxTextureMgr::GetTexture S 00504650: textures named ad0/ad1/ad2.tga become an embedded Internet Explorer
-// rendering http://www.funatics.de/sadk/forwardingN.html. Those pages are gone (HTTP 404), so the screens show red
-// plus IE's "navigation canceled" page. This mod
-//   - renames the three compare literals, so the screens load from file like any other texture;
-//   - turns GetTexture's file load, the virtual call `MOV EDX,[ESI+0x28]; MOV ECX,EAX; CALL EDX` at 00504806
-//     (S2CE::CTexture::CreateFromFile S 004e80d0), into `MOV ECX,EAX; CALL billboard_load`, which loads Texture
-//     instead of adN.tga and crops Rect of it with the game's own D3DX (d3dx9_38.dll, which also decodes DXT) into a
-//     512x512 texture that replaces the full sheet. No game art is shipped.
+// Lobby::CGfxTextureMgr::GetTexture S 00504650 makes each lobby texture on first use. For the names ad0.tga /
+// ad1.tga / ad2.tga it does not load the file but makes a web-page texture (CTexture vtbl+0x20, CreateFromURL) of
+// http://www.funatics.de/sadk/forwardingN.html. Those pages are gone (HTTP 404), so the screens show red plus IE's
+// "navigation canceled" page. This mod hooks GetTexture: for a screen entry that is not made yet it makes the
+// texture the way GetTexture makes every other one (S2CE::CResourceMgr::CreateTexture, then vtbl+0x28
+// CreateFromFile with the entry's three flags), but from Texture instead of adN.tga, and crops Rect of it with the
+// game's own D3DX (d3dx9_38.dll, which also decodes DXT) into a 512x512 texture that replaces the full sheet.
+// Every other texture goes to the game's GetTexture unchanged. No game art is shipped.
 // Settings: billboards.ini next to mod.dll, [Billboards] Enabled (default true; SAdK-ServerConfig's "Disable
 // billboards"), Texture (default sign_ad0.dds), Rect = x0,y0,x1,y1 (default 305,680,730,1005).
-#include <sadkmod/game/sadk_noav/types.hpp>
+#include <sadkmod/game/sadk_noav/fn/Lobby.hpp>
+#include <sadkmod/game/sadk_noav/fn/S2CE.hpp>
+#include <sadkmod/game/sadk_noav/fn/_global.hpp>
 #include <sadkmod/sadkmod.hpp>
 
 #include <d3d9.h>
@@ -20,7 +22,10 @@
 #include <string>
 
 using sadk::log;
-using sadk::game::S2CE::CTexture;
+namespace game = sadk::game;
+namespace fn = sadk::game::fn;
+using game::S2CE::CTexture;
+using GetTexture = sadk::Hook<fn::Lobby::CGfxTextureMgr::GetTexture>;
 
 namespace {
 
@@ -68,14 +73,25 @@ void billboard_crop(CTexture *tex)
     log("screen = %s (%d,%d)-(%d,%d)", texture.c_str(), rect[0], rect[1], rect[2], rect[3]);
 }
 
-// Stands in for the loader call at 00504806: CreateFromFile through the texture's vtable, as GetTexture did.
-bool SADK_THISCALL billboard_load(CTexture *tex, void *path, bool single_level, bool default_pool, bool full_quality)
+// GetTexture compares the entry's name with these, case-sensitively (S 00504650).
+bool is_screen(const sadk::msvc::string &name)
 {
-    auto *name = static_cast<const sadk::msvc::string *>(path);
-    bool screen = name->equals_icase("ad0.tga") || name->equals_icase("ad1.tga") || name->equals_icase("ad2.tga");
-    bool ok = tex->vftable->CreateFromFile(tex, screen ? &texture_name : path, single_level, default_pool, full_quality);
-    if (ok && screen) billboard_crop(tex);
-    return ok;
+    return name.view() == "ad0.tga" || name.view() == "ad1.tga" || name.view() == "ad2.tga";
+}
+
+CTexture *SADK_THISCALL get_texture(game::Lobby::CGfxTextureMgr *mgr, std::int32_t index)
+{
+    game::ai::lobby::GfxTextureEntry &e = mgr->entries[index];
+    if (e.texture || !is_screen(e.name)) return GetTexture::original(mgr, index);
+    auto *tex = static_cast<CTexture *>(
+        fn::S2CE::CResourceMgr::CreateTexture(static_cast<game::S2CE::CResourceMgr *>(mgr->device), 0));
+    e.texture = tex;
+    if (tex->vftable->CreateFromFile(tex, &texture_name, e.flag0, e.flag1, e.flag2))
+        billboard_crop(tex);
+    else
+        log("%.*s: %s did not load", int(e.name.size), e.name.data(), texture.c_str());
+    if (e.flag3) fn::LobbyGfx_Texture_DecrementRedChannel(tex);   // as GetTexture does for every texture
+    return tex;
 }
 
 void read_settings()
@@ -98,17 +114,9 @@ bool billboards_start()
         return true;
     }
     texture_name = sadk::msvc::string::small(texture);
-    int ok = 0;
-    static const std::uintptr_t literals[3] = {0x007e6240, 0x007e6208, 0x007e61d0};   // "ad0.tga" .. "ad2.tga"
-    for (int i = 0; i < 3; i++) {
-        auto digit = static_cast<std::uint8_t>('0' + i);
-        ok += sadk::patch(literals[i], {'a', 'd', digit}, {'#', 'd', digit}, "billboard texture from disk");
-    }
-    ok += sadk::patch(0x00504806, {0x8B, 0x56, 0x28, 0x8B, 0xC8, 0xFF, 0xD2},
-                      sadk::Bytes{0x8B, 0xC8} + sadk::call_to(sadk::Module::sadk, 0x00504808, (void *)billboard_load),
-                      "billboard screen texture swap");
-    log("%d of 4 patches active (screens show %.15s, crop %s)", ok, texture.c_str(), crop ? "on" : "off");
-    return ok == 4;
+    bool ok = GetTexture::install(get_texture, "GetTexture: the screens (ad0/ad1/ad2.tga) from Texture");
+    log("screens show %.15s, crop %s", texture.c_str(), crop ? "on" : "off");
+    return ok;
 }
 
-SADKMOD_MAIN(billboards_start, 1, SADKMOD_CLIENT)
+SADKMOD_MAIN(billboards_start, 2, SADKMOD_CLIENT)

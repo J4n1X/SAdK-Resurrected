@@ -1290,3 +1290,7 @@ every class's `Deserialize` now decompiles with named field access (`this->field
 
 Plate comment added on `Properties_Db_ClearAll` `0x005494a0` (the only way the game empties the property database;
 reload safety `[TODO]`). Findings: `docs/data-loading.md`.
+
+Type change: `ai::lobby::GfxTextureEntry` (0x24) `+0x4` `std::string name` (was padding). `Lobby::CGfxTextureMgr::GetTexture`
+`0x00504650` passes `&entry->name` as the `std::string*` path to `CTexture` vtbl `+0x28` (`CreateFromFile`) and compares
+its buffer with `ad0/ad1/ad2.tga` `[known]`. Used by the billboards mod's `GetTexture` hook.
