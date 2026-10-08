@@ -24,7 +24,8 @@ What it does:
 - **Lost attacks by sea sink the ship** (`ShipLostOnDefeat`): when an attack by sea fails (the target still stands and
   is not taken), the attacker's ship sinks at the landing with everyone aboard. This holds for every attack by sea,
   the game's own and invasions. Not affected: ships carrying defenders, a ship whose landing harbour is still its
-  player's (a coastal attack), and cancelled attacks (a cancelled invasion sails home and unloads).
+  player's (a coastal attack), and cancelled attacks (a cancelled invasion sails home and unloads). A ship carrying
+  defenders sinks when the defence is lost together with the harbour it landed them at.
 
 ## Settings (`navalcombatfix.ini`, `[NavalCombatFix]`)
 
@@ -38,7 +39,7 @@ What it does:
 | `NeutralLandings` | true | neutral harbours without room for a colony are landings |
 | `CrossingDistance` | 0 | cells a sea crossing counts as |
 | `PickupTimeout` | 1200 | ticks a ship waits for soldiers (pickups, invasion boarding) |
-| `ShipLostOnDefeat` | true | a lost attack by sea sinks the attacker's ship; false: it sails home (an invasion unloads its cargo) |
+| `ShipLostOnDefeat` | true | a lost attack by sea sinks the attacker's ship, a defence lost with its harbour the defender's; false: they sail home (an invasion unloads its cargo) |
 
 ## To do
 

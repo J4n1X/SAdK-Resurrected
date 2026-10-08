@@ -489,7 +489,14 @@ is not the attacker's** (an attack from an own harbour is a coastal attack), `NN
   sails home and unloads.
 
 Every attack by sea is covered, the game's own (landing at the defender's harbour) as well as the mod's, and the
-invasion (state 106). Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat
+invasion (state 106).
+
+**Lost defences by sea** (`ShipLostOnDefeat`, `combat.cpp`, maintainer's rule): a ship carrying defenders (its
+player is the fight's `defenderPlayer`) sinks when the harbour it lies at or sails to is no longer its player's and
+the attacked building is not the defender's any more (taken or gone). A ship at a harbour that is still its
+player's is safe. Checked in the `Ship::Update` hook before the game's update: when a harbour's territory changes
+hands, `005b5370` unlinks the ships from its routes, and `Ship::Update` would then end the mission for want of a
+route. Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat
 pickup.
 
 **Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,

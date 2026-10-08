@@ -387,10 +387,34 @@ bool update_mission(NavyMission *m)
 
 bool SADK_THISCALL navy_military_update(NavyMission *m) { return update_mission(m); }
 
-// NNavy::Ship::Update S 005bb500: lent route ships go back on their route once their mission is over.
+// ShipLostOnDefeat for defenders (maintainer's rule): a ship carrying defenders sinks when the defence is lost and the
+// harbour it lies at or sails to is lost with it (no longer its player's); at a harbour that is still its player's it
+// is safe, as for attackers. Checked before Ship::Update runs: a harbour whose territory changes hands is unlinked
+// from its ships' routes (005b5370), and Ship::Update then ends their missions for want of a route.
+bool sink_after_lost_defence(Ship *ship)
+{
+    NavyMission *m = ship->military;
+    if (!g_settings.shipLostOnDefeat || !m->bActive || !carries_fight(m)) return false;
+    Fight *fight = m->fight.cachedFight;
+    std::int32_t player = ship->player->index;
+    if (!fight || fight->defenderPlayer != player || at_own_harbor(ship)) return false;
+    if (!fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor)) return false;
+    Building *target = fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
+    if (target && owner(target) == player) return false;   // the defence still holds the building
+    fn::NNavy::Military::Finish(m);
+    forget_lent(ship);   // it sinks at its next stop: not back on its route
+    fn::NNavy::Ship::SinkImmediately(ship);
+    sadk::log("defence by sea lost with its harbour: ship %d sinks", ship->shipNumber);
+    tell(ship, "!navalcombatfix_defence_lost_sunk", "Defence lost with the harbour: the ship sank");
+    return true;
+}
+
+// NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
+// their route once their mission is over.
 using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
 void SADK_FASTCALL ship_update(Ship *ship)
 {
+    sink_after_lost_defence(ship);
     ShipUpdate::original(ship);
     if (g_lentCount) return_lent(ship);
 }
