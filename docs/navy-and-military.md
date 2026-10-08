@@ -355,26 +355,27 @@ P's own harbours: H1 on the target's landmass, H2 on the building's landmass, an
 A pair counts only if **its own route has a ship for these soldiers**, by the checks `SendSoldiersBySea` makes
 (§5.2). The ship is one of these:
 - P's ship already on that route, carrying the fight being dispatched;
-- P's ship on that route lying idle there (ship state 0 or 1, no mission): the ship of the route's sea street. The
-  game's idle-ship search skips it, because a route takes one ship per player [live 2026-10-08: such a ship made every
-  attack over its route count only the target's landmass]. The fight starts its mission
-  (`NNavy::Military::Activate` `005b9cd0`) and sets the ship to state 0: `Ship::Update` `005bb500` starts a mission
-  only from state 0 (→ 5), and a route ship cycles through 1-3 (wait, load, unload) [live 2026-10-08: left in 1, the
-  mission never ran and the ship stayed stuck]. When the mission ends, `Military::Finish` takes the ship off the
-  route and `Ship::Update` sets 0; the mod's hook on `Ship::Update` puts it back (`NavyLink_LinkMovementRoute`
-  `0053c3d0`) in state 1, as the game does for an expedition's ship, so the sea street stays. Only once the ship lies
-  still at one of the route's harbours (sent to its player's end first if it lies elsewhere): state 1 reads the
-  route's opposite end from the ship's target harbour (`NavyShipRoute::GetOppositeHarbor` `005b91f0`) and crashes on
-  a ship that has none [live 2026-10-08: crash at `005b91f7` when the ship was set to 1 while still at sea]. This bookkeeping is not
-  saved with the game. A ship sunk after a defeat is not put back.
-  "Docked" is the ship's cell equal to the harbour's docking cell for it (`Harbor::FindDockingPositionOf`, as
-  `MoveToHarbor` tests): a ship stopped mid-voyage also reads movement state 4 (AtHarbor) and keeps its target
-  harbour [live 2026-10-08]. A lent ship that is not docked at its route, or whose route is no longer a sea street
-  (an end lost), goes the game's own way home (`Ship::ReturnToOwnHarbor` `005bab60`: nearest home harbour, a route of
-  it, state 3), as does any ship left in state 0 without a route after stopping mid-voyage: when a harbour changes
-  hands, `Ship::Update` ends the missions of the ships on its routes and sets state 0 without sending them anywhere,
-  so a ship under way stays where it stopped, out of every idle-ship search [live 2026-10-08: a defending ship stopped
-  at sea after its harbour fell];
+- P's ship serving that route (ship states 0-3: idle, waiting, loading, carrying; no mission, no expedition): the
+  ship of the route's sea street. The game's idle-ship search skips it, because a route takes one ship per player
+  [live 2026-10-08: such a ship made every attack over its route count only the target's landmass]. It is taken
+  **whatever it is doing**, so a fight never depends on when the ship is free (maintainer's rule):
+  - passengers assigned to board it are released (`NavyCargo_UnassignPendingSettlers` `005bd3b0`);
+  - its mission starts (`NNavy::Military::Activate` `005b9cd0`; it stays linked to its route) and the fight is linked;
+  - ship state 0: `Ship::Update` `005bb500` starts a mission only from 0 (→ 5), and a route ship cycles through 1-3
+    [live 2026-10-08: left in 1, the mission never ran and the ship stayed stuck];
+  - it is sent at once to the harbour on the soldiers' side (`Movement::MoveToHarbor`; re-planning from the current
+    cell is what `NMovement::Base::StartMoveTo` `00772b00` does), since soldiers walk to the ship's target harbour as
+    soon as they leave their buildings. The mission's first step unloads the cargo there; the economy asks for those
+    goods again.
+  When the mission ends, `Ship::Update` calls `Ship::ReturnToOwnHarbor` `005bab60`, which puts the ship on a route of
+  its nearest home harbour, not necessarily the one it served. While that route is still a sea street, the mod puts
+  the ship back on it the same way (`NavyLink_LinkMovementRoute` `0053c3d0` + `MoveToHarbor` to its nearer end +
+  state 3, unload then wait): its service resumes. This bookkeeping is not saved with the game. A ship sunk after a
+  defeat is not put back.
+  When a harbour changes hands, `Ship::Update` ends the missions of the ships on its routes and sets state 0 without
+  sending them anywhere; a ship under way stays where it stopped (still reading movement state 4, AtHarbor), out of
+  every idle-ship search [live 2026-10-08: a defending ship stopped at sea after its harbour fell]. The mod sends such
+  a stranded ship (state 0, no route, stopped mid-voyage) home with `Ship::ReturnToOwnHarbor`;
 - an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually
 take. A blocked route falls back to the next-best pair and its ship.

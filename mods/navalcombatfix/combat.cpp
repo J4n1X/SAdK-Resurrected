@@ -67,7 +67,7 @@ struct SeaLink {
     Ship *ship = nullptr;           // the player's ship for this route
     bool onRoute = false;           // already on the route (carrying this fight), else idle and still to be linked
     bool invasion = false;          // a naval invasion ship waiting at home (invasion.cpp), still to be linked
-    bool routeIdle = false;         // the route's own ship, idle on it (its sea street), still to be linked
+    bool routeShip = false;         // the route's own ship (its sea street), taken from its service, still to be linked
     std::int32_t distance = 0;      // d(target, H1) + d(H2, building)
 };
 
@@ -75,30 +75,26 @@ struct SeaLink {
 // AttackConnector::SendSoldiersBySea S 00575510, made for this one route. A route takes one ship per player
 // (NavyShipRoute::CanPlayerAssignShip S 005b6d30):
 //   - the player already has a ship on it: usable while its mission is active and carries this fight, or while it
-//     lies idle on the route (ship state idle or waiting, no mission): the ship of a sea street between two of the
-//     player's harbours, which FindNearestIdleShipAtHarborExit skips because it serves the route already [live
-//     2026-10-08: such a ship, state 1, made every attack over its route count only the target's landmass];
+//     serves the route (ship states 0-3: idle, waiting, loading, carrying; no mission, no expedition): the ship of a
+//     sea street between two of the player's harbours, which FindNearestIdleShipAtHarborExit skips because it serves
+//     the route already [live 2026-10-08: such a ship made every attack over its route count only the target's
+//     landmass]. Taken whatever it is carrying, so a fight never depends on when the ship happens to be free
+//     (maintainer's rule); see take_route_ship;
 //   - else the nearest idle ship of the player at H2's exit (NNavy::System::FindNearestIdleShipAtHarborExit
 //     S 005b3450), linked to the route only when the soldiers are actually sent.
-constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (docs/navy-and-military.md §5.3); 0 also picks up a
-constexpr std::int32_t kShipWaiting = 1;   // mission (Ship::Update S 005bb500: an active mission -> 5)
-
+constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (Ship::Update S 005bb500): 0 picks up a mission
+constexpr std::int32_t kShipWaiting = 1;   // (an active mission -> 5); 1-3 are a route ship's service: wait for
+constexpr std::int32_t kShipCarrying = 3;  // passengers, load, sail and unload; 4 expedition, 5 mission
 constexpr std::int32_t kShipSinking = 6;   // 6 sinking, 7 sunk, 8 doomed
 
-bool idle_on_route(Ship *ship)
+bool serves_route(Ship *ship)
 {
-    return (ship->state == kShipIdle || ship->state == kShipWaiting) && !ship->military->bActive;
+    return ship->state >= kShipIdle && ship->state <= kShipCarrying && !ship->military->bActive &&
+           !ship->expedition->bActive;
 }
 
-// Route ships lent to a fight (return_ship below gives them back). A route ship cycles through Ship::Update's states 1-3 (wait, load, unload) and only
-// state 0 starts a mission, so the lent ship is set to 0 [live 2026-10-08: left in 1, its mission never ran and the
-// ship stayed stuck]. When the mission ends, Ship::Update sets 0 and sends the ship to its own harbour, and
-// NNavy::Military::Finish S 005ba190 has taken it off its route (NavyLink_UnlinkMilitaryRoute), which would end the
-// route's sea street. So the mod's Ship::Update hook puts it back on its route in state 1, as Expedition::Finish and
-// Ship::Update's state 4 do for an expedition's ship (NavyLink_LinkMovementRoute S 0053c3d0) - but only once the ship
-// lies still at a harbour of that route: state 1 reads the opposite end of the route from the ship's target harbour
-// (NavyShipRoute::GetOppositeHarbor S 005b91f0) and crashed on a ship still at sea [live 2026-10-08, crash at
-// 005b91f7]. Kept by the mod, not saved with the game; every peer runs the same updates, so it stays in lockstep.
+// Route ships lent to a fight, with the route they served. Kept by the mod, not saved with the game; every peer runs
+// the same updates, so it stays in lockstep.
 struct LentShip {
     Ship *ship;
     NavyShipRoute *route;
@@ -106,17 +102,73 @@ struct LentShip {
 LentShip g_lent[64];
 int g_lentCount;
 
-void lend(Ship *ship, NavyShipRoute *route)
+int lent_index(Ship *ship)
 {
     for (int i = 0; i < g_lentCount; ++i)
-        if (g_lent[i].ship == ship) return;
-    if (g_lentCount < 64) g_lent[g_lentCount++] = {ship, route};
+        if (g_lent[i].ship == ship) return i;
+    return -1;
 }
 
 void forget_lent(Ship *ship)
 {
-    for (int i = 0; i < g_lentCount; ++i)
-        if (g_lent[i].ship == ship) g_lent[i] = g_lent[--g_lentCount];
+    if (int i = lent_index(ship); i >= 0) g_lent[i] = g_lent[--g_lentCount];
+}
+
+// Takes the route's own ship for a fight, whatever it is doing (maintainer's rule: a fight must not depend on when the
+// ship is free). Its service is put aside:
+//   - passengers assigned to board it are released (NavyCargo_UnassignPendingSettlers S 005bd3b0, as Ship::Update
+//     does when a ship loses its route);
+//   - its mission starts (NNavy::Military::Activate, what NavyLink_LinkMilitaryRoute does last; the ship stays linked
+//     to its route) and the fight is linked;
+//   - ship state 0, from which Ship::Update starts a mission (a route ship cycles through 1-3 and never passes 0
+//     [live 2026-10-08: left in 1, the mission never ran]);
+//   - it is sent to the harbour on the soldiers' side at once (Movement::MoveToHarbor S 005b97f0; re-planning from
+//     the current cell is what NMovement::Base::StartMoveTo S 00772b00 does), because the soldiers walk to the
+//     ship's target harbour as soon as they leave their buildings (Soldier::Update S 006594a0, state 0x28). The
+//     mission's first step unloads whatever cargo is aboard there; the economy asks for those goods again.
+// The route is remembered; give_back puts the ship back on it when the mission is over.
+void take_route_ship(Ship *ship, NavyShipRoute *route, Harbor *soldiersSide, Fight *fight)
+{
+    fn::NavyCargo_UnassignPendingSettlers(ship->cargo);
+    fn::NNavy::Military::Activate(ship->military);
+    fn::NavyLink_LinkMilitaryFight(fight, ship);
+    ship->state = kShipIdle;
+    fn::NNavy::Movement::MoveToHarbor(ship->movement, soldiersSide);
+    if (lent_index(ship) < 0 && g_lentCount < 64) g_lent[g_lentCount++] = {ship, route};
+}
+
+std::int32_t distance_to(Ship *ship, Harbor *h)
+{
+    return distance(&ship->movement->base.currentCellX, &h->posX);
+}
+
+bool sea_street(NavyShipRoute *route, std::int32_t player, Harbor **a, Harbor **b)
+{
+    *a = fn::NLogic::ReferenceHarbor::Resolve(&route->harborA);
+    *b = fn::NLogic::ReferenceHarbor::Resolve(&route->harborB);
+    return *a && *b && (*a)->playerIdx == player && (*b)->playerIdx == player;
+}
+
+// When a lent ship's mission has ended. Normally Ship::Update has just called Ship::ReturnToOwnHarbor S 005bab60,
+// which puts the ship on a route of its nearest home harbour (FindOwnRouteForShip) and sails it there in state 3 -
+// not necessarily the route it served. While that route is still a sea street, the ship goes back to it the same way
+// (NavyLink_LinkMovementRoute S 0053c3d0 + MoveToHarbor to its nearer end + state 3: unload, then wait). Otherwise
+// (a harbour of it lost) it is left to the game and to return_stranded.
+void give_back(Ship *ship)
+{
+    int i = lent_index(ship);
+    if (i < 0) return;
+    NavyShipRoute *route = g_lent[i].route;
+    g_lent[i] = g_lent[--g_lentCount];
+    Harbor *a, *b;
+    if (ship->state >= kShipSinking || !sea_street(route, ship->player->index, &a, &b)) return;
+    NavyShipRoute *now = fn::NLogic::ReferenceShipRoute::Resolve(&ship->movement->route);
+    if (now != route) {
+        if (now) fn::NavyLink_UnlinkMovementRoute(ship, now);
+        fn::NavyLink_LinkMovementRoute(ship, route);
+    }
+    fn::NNavy::Movement::MoveToHarbor(ship->movement, distance_to(ship, a) <= distance_to(ship, b) ? a : b);
+    ship->state = kShipCarrying;
 }
 
 bool lies_still(game::NNavy::Movement *mv)
@@ -124,52 +176,19 @@ bool lies_still(game::NNavy::Movement *mv)
     return !(mv->base.interpolator.progress > 0.0f) && (mv->state == 0 || mv->state == 4);   // Ship::Update's test
 }
 
-// Docked at its target harbour: on that harbour's docking cell for the ship, as Movement::MoveToHarbor S 005b97f0
-// tests. A ship stopped mid-voyage also reads movement state 4 (AtHarbor) and keeps its target harbour, so neither
-// says where it is [live 2026-10-08: a ship stopped at sea 8 cells from its target].
-bool docked(Ship *ship, Harbor *at)
-{
-    game::NNavy::DockingPosition *dock = fn::ai::navy::Harbor::FindDockingPositionOf(at, ship);
-    game::NNavy::Movement *mv = ship->movement;
-    return dock && mv->base.currentCellX == dock->posX && mv->base.currentCellY == dock->posY;
-}
-
-bool sea_street(NavyShipRoute *route, std::int32_t player)
-{
-    Harbor *a = fn::NLogic::ReferenceHarbor::Resolve(&route->harborA);
-    Harbor *b = fn::NLogic::ReferenceHarbor::Resolve(&route->harborB);
-    return a && b && a->playerIdx == player && b->playerIdx == player;
-}
-
-// After a ship update, for a ship idle in state 0 with no mission:
-//   - a lent ship docked at an end of its route, the route still a sea street: back on it in state 1;
-//   - any other such ship that is stranded (no route, or a lent one not docked at its route): the game's own
-//     Ship::ReturnToOwnHarbor S 005bab60 (nearest home harbour, a route of it, state 3). When a harbour changes
-//     hands, Ship::Update ends the missions of the ships on its routes and sets state 0 without sending them anywhere,
-//     so a ship that was under way stays where it stopped, out of every idle-ship search [live 2026-10-08].
-void return_ship(Ship *ship)
+// A ship left in state 0 without a route after stopping mid-voyage goes the game's own way home
+// (Ship::ReturnToOwnHarbor: nearest home harbour, a route of it, state 3). When a harbour changes hands, Ship::Update
+// ends the missions of the ships on its routes and sets state 0 without sending them anywhere, so a ship under way
+// stays where it stopped, out of every idle-ship search [live 2026-10-08: a defending ship stopped at sea after its
+// harbour fell]. A ship stopped mid-voyage still reads movement state 4 (AtHarbor) and keeps its target harbour.
+void return_stranded(Ship *ship)
 {
     game::NNavy::Movement *mv = ship->movement;
-    if (ship->military->bActive || ship->expedition->bActive || ship->state != kShipIdle || !lies_still(mv)) return;
-    int lent = -1;
-    for (int i = 0; i < g_lentCount; ++i)
-        if (g_lent[i].ship == ship) lent = i;
-    if (lent < 0 && (mv->route.unique.idHi >= 0 || !mv->bInterrupted)) return;   // the game's own idle ship
-    Harbor *at = fn::NLogic::ReferenceHarbor::Resolve(&mv->targetHarbor);
-    if (lent >= 0) {
-        NavyShipRoute *route = g_lent[lent].route;
-        g_lent[lent] = g_lent[--g_lentCount];
-        Harbor *a = fn::NLogic::ReferenceHarbor::Resolve(&route->harborA);
-        Harbor *b = fn::NLogic::ReferenceHarbor::Resolve(&route->harborB);
-        if (at && (at == a || at == b) && docked(ship, at) && sea_street(route, ship->player->index)) {
-            fn::NavyLink_LinkMovementRoute(ship, route);
-            ship->state = kShipWaiting;
-            return;
-        }
-    }
+    if (ship->state != kShipIdle || ship->military->bActive || ship->expedition->bActive || !lies_still(mv) ||
+        mv->route.unique.idHi >= 0 || !mv->bInterrupted)
+        return;
     fn::NNavy::Ship::ReturnToOwnHarbor(ship);   // nothing when the player has no harbour left for it
-    if (ship->state != kShipIdle)
-        sadk::log("ship %d: no route or not docked after its mission, sent to its own harbour", ship->shipNumber);
+    if (ship->state != kShipIdle) sadk::log("ship %d stranded after its mission, sent to its own harbour", ship->shipNumber);
 }
 
 bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight, bool attacking, SeaLink *link)
@@ -185,8 +204,8 @@ bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight
         bool waitingInvasion = attacking && invasion_ready(ship) && !ship->military->bActive;
         if (waitingInvasion) {
             link->invasion = true;
-        } else if (idle_on_route(ship)) {
-            link->routeIdle = true;
+        } else if (serves_route(ship)) {
+            link->routeShip = true;
         } else {
             if (!fight) return false;   // outside a dispatch a busy ship never counts
             if (!ship->military->bActive || !carries(ship->military, fight)) return false;
@@ -329,11 +348,8 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
     } else if (link.invasion) {   // the invasion ship is on its route already; the fight starts its boarding
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
-    } else if (link.routeIdle) {   // the route's own ship: linked to the route already, so only its mission starts
-        fn::NNavy::Military::Activate(link.ship->military);   // what NavyLink_LinkMilitaryRoute does last
-        fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
-        link.ship->state = kShipIdle;   // state 0 picks the mission up at the next stop
-        lend(link.ship, link.route);
+    } else if (link.routeShip) {   // the route's own ship: taken from its service (take_route_ship)
+        take_route_ship(link.ship, link.route, link.home, connector->fight);
     }
     // __thiscall on the connector: binds each soldier to connector->fight and to the ship.
     fn::NMilitary::AttackConnector::SendSoldiersFromBuilding(connector, building, count, link.ship);
@@ -438,8 +454,10 @@ using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
 void SADK_FASTCALL ship_update(Ship *ship)
 {
     sink_after_lost_defence(ship);
+    bool onMission = ship->military->bActive;
     ShipUpdate::original(ship);
-    return_ship(ship);
+    if (onMission && !ship->military->bActive) give_back(ship);
+    return_stranded(ship);
 }
 
 }  // namespace
