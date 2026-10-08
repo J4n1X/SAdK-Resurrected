@@ -475,7 +475,9 @@ bool update_mission(NavyMission *m)
         return NavyMilitaryUpdate::original(m);
     if (!carries_fight(m)) return retreat_update(m);
     if (hold_for_defence(m, ship)) return false;
-    if (sink_after_defeat(m, ship)) return true;   // finished, as the game's state 7 returns
+    // Not "finished": a finished mission makes Ship::Update set ship state 0 and call ReturnToOwnHarbor, which would
+    // overwrite the scheduled sinking (state 8) [live 2026-10-09: the ship survived in state 0].
+    if (sink_after_defeat(m, ship)) return false;
     if (m->state != kSailToLoading && m->state != kSailToLanding) return NavyMilitaryUpdate::original(m);
 
     NavyShipRoute *route = fn::NLogic::ReferenceShipRoute::Resolve(&mv->route);
