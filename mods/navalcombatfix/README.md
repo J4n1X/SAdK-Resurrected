@@ -39,6 +39,7 @@ What it does:
 | `NeutralLandings` | true | neutral harbours without room for a colony are landings |
 | `CrossingDistance` | 0 | cells a sea crossing counts as |
 | `PickupTimeout` | 1200 | ticks a ship waits for soldiers (pickups, invasion boarding) |
+| `LandingReach` | 9 | cells a landing harbour may lie beyond a target's territory range + 1 (enemy, own and neutral landings); 0: the game's rule |
 | `ShipLostOnDefeat` | true | a lost attack by sea sinks the attacker's ship, a defence lost with its harbour the defender's; false: they sail home (an invasion unloads its cargo) |
 
 ## To do

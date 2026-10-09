@@ -141,6 +141,7 @@ struct Settings {
     std::int32_t crossingDistance = 0;    // CrossingDistance: cells a sea crossing counts as (gathering, proximity)
     std::int32_t pickupTimeout = 1200;    // PickupTimeout: ticks a pickup ship waits for its soldiers
     bool shipLostOnDefeat = true;         // ShipLostOnDefeat: a lost attack by sea sinks the attacker's ship
+    std::int32_t landingReach = 9;        // LandingReach: cells a landing harbour may lie beyond a target's range + 1
 };
 extern Settings g_settings;
 

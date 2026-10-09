@@ -15,8 +15,9 @@
 //     each with its own ship. The crossing counts as zero length: the game's own distance falloff
 //     (Military_DistanceFalloff S 00574fe0) applies to d(target, H1) + d(H2, building). That holds for attackers and
 //     defenders alike.
-//   - Attacking: a target is attackable when such an H1 lies within the target's territory range + 1, the same test
-//     the game uses for an enemy-owned landing harbour (Military_IsHarborWithinBuildingRange S 00574f70).
+//   - Attacking: a target is attackable when such an H1 lies within the target's territory range + 1 + LandingReach,
+//     the game's test for an enemy-owned landing harbour (Military_IsHarborWithinBuildingRange S 00574f70), which
+//     LandingReach widens too.
 //   - The ship's mission (NNavy::Military::Update S 005ba250) picks its route ends by owner; when both ends belong
 //     to the ship's player it lands at the end on the target's landmass and loads at the other one.
 // Everything else, including every case the game already handles, runs the game's own code unchanged. The retreat
@@ -35,6 +36,7 @@ using game::NMilitary::ISoldierConnector;
 using ReachFactor = sadk::Hook<fn::Military_GetAttackReachFactor>;
 using TargetReachable = sadk::Hook<fn::Military_IsTargetReachable>;
 using TerritoryInRange = sadk::Hook<fn::Military_IsEnemyTerritoryInRange>;
+using HarborInRange = sadk::Hook<fn::Military_IsHarborWithinBuildingRange>;
 using DispatchAttackers = sadk::Hook<fn::NMilitary::Attack::DispatchAttackers>;
 using DispatchDefenders = sadk::Hook<fn::NMilitary::Attack::DispatchDefenders>;
 using SendBySea = sadk::Hook<fn::NMilitary::AttackConnector::SendSoldiersBySea>;
@@ -269,13 +271,15 @@ bool SADK_CDECL target_reachable(Building *target, Building *building, bool pers
     return allowSea && own_sea_link(building, target, g_dispatchFight, &link);
 }
 
-// A harbour of `player` on the target's landmass within the target's territory range + 1, with a route to one of
-// the player's harbours across the water and a ship for it (the game's harbour test without its owner condition).
+// A harbour of `player` on the target's landmass within the target's territory range + 1 + LandingReach, with a route
+// to one of the player's harbours across the water and a ship for it (the game's harbour test without its owner
+// condition).
 bool own_landing_in_range(Building *target, std::int32_t player)
 {
     std::int32_t range = fn::NVillage::Military::GetTerritoryRange(target->military), targetRegion = region(target);
     for (Harbor *landing : harbors()) {
-        if (region(landing) != targetRegion || distance(landing, target) >= range + 1 || !is_landing(landing, player))
+        if (region(landing) != targetRegion || distance(landing, target) >= range + 1 + g_settings.landingReach ||
+            !is_landing(landing, player))
             continue;
         for (Harbor *home : harbors()) {
             SeaLink link;
@@ -285,6 +289,24 @@ bool own_landing_in_range(Building *target, std::int32_t player)
         }
     }
     return false;
+}
+
+// Military_IsHarborWithinBuildingRange S 00574f70, the game's landing test (an enemy-owned harbour with a route to the
+// attacker, the nearest to the target, closer than the target's territory range + 1): LandingReach cells further.
+// The attack button, the reach factor and the reachability test all go through it. The reason code the game writes
+// on failure (4) is put back when the wider range holds.
+bool SADK_CDECL harbor_in_range(Building *target, std::int32_t *attacker, std::int32_t *outReason)
+{
+    std::int32_t reason = outReason ? *outReason : 0;
+    if (HarborInRange::original(target, attacker, outReason)) return true;
+    if (g_settings.landingReach <= 0) return false;
+    std::int32_t range = fn::NVillage::Military::GetTerritoryRange(target->military);
+    Harbor *landing = fn::ai::navy::HarborList::FindNearestWithPlayerShipRoute(
+        &logic()->navy->harbors, &target->posX, attacker, &target->ownerPlayer->index, *var::g_bSeaAttackDispatch,
+        nullptr);
+    if (!landing || distance(landing, target) >= range + 1 + g_settings.landingReach) return false;
+    if (outReason) *outReason = reason;
+    return true;
 }
 
 // Military_IsEnemyTerritoryInRange S 00575850 (the attack button): also true for an own landing harbour in range.
@@ -607,7 +629,8 @@ bool combat_start()
 {
     using namespace navalcombatfix;
     bool ok = ReachFactor::install(reach_factor) && TargetReachable::install(target_reachable) &&
-              TerritoryInRange::install(territory_in_range) && DispatchAttackers::install(dispatch_attackers) &&
+              TerritoryInRange::install(territory_in_range) &&
+              HarborInRange::install(harbor_in_range) && DispatchAttackers::install(dispatch_attackers) &&
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
               NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update) &&
               MilitaryFinish::install(finish_mission) && ShipDtor::install(ship_dtor);

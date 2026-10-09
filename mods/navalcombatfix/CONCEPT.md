@@ -20,7 +20,8 @@ The game's rules are in `docs/navy-and-military.md`; the change is §7 there.
   minus the distance from the attacked building to the harbour flag: the game's ground falloff (full to 12 cells,
   nothing from 24) on d(target, harbour flag) + d(other harbour flag, building).
 - **Invasion.** The destination harbour flag of an expedition counts like the attacker's land: a building is
-  attackable when that flag lies within the building's territory range + 1 (the game's own test for enemy harbours).
+  attackable when that flag lies within the building's territory range + 1 (the game's own test for enemy harbours),
+  plus `LandingReach` cells (default 9) for every kind of landing.
   Soldiers are gathered by the rule above.
 - Soldier counts are the game's own ground-attack counts.
 - **Retreat.** If you destroy your military building and in the process lose your harbour, which becomes neutral

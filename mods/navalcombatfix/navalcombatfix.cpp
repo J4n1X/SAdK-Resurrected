@@ -23,10 +23,13 @@ void load_settings()
     s.crossingDistance = ini.get_int(section, "CrossingDistance", s.crossingDistance);
     s.pickupTimeout = ini.get_int(section, "PickupTimeout", s.pickupTimeout);
     s.shipLostOnDefeat = ini.get_bool(section, "ShipLostOnDefeat", s.shipLostOnDefeat);
+    s.landingReach = ini.get_int(section, "LandingReach", s.landingReach);
     sadk::log("settings: attackers by sea %d, defenders by sea %d, attack from own landing %d, retreat pickup %d, "
-              "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d, ship lost on defeat %d",
+              "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d, ship lost on defeat %d, "
+              "landing reach %d",
               s.attackersBySea, s.defendersBySea, s.attackFromOwnLanding, s.retreatPickup, s.proximityOverOwnRoutes,
-              s.neutralLandings, s.crossingDistance, s.pickupTimeout, s.shipLostOnDefeat);
+              s.neutralLandings, s.crossingDistance, s.pickupTimeout, s.shipLostOnDefeat,
+              s.landingReach);
 }
 
 bool navalcombatfix_start()

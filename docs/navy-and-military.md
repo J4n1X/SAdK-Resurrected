@@ -408,7 +408,8 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 |---|---|
 | `Military_GetAttackReachFactor` | When the game returns 0: `falloff(d(target, H1) + d(H2, building))` of the own sea link. The crossing counts as zero length, and the ground rule of §3.2 applies to the remaining walk. For attackers and defenders alike |
 | `Military_IsTargetReachable` | Also true (with `allowSea`) when an own sea link exists |
-| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's landmass closer than the target's range + 1, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's harbour attackable |
+| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's landmass closer than the target's range + 1 + `LandingReach`, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's (or a neutral landing's) harbour attackable |
+| `Military_IsHarborWithinBuildingRange` | The game's landing test for an enemy-owned harbour (§2): `LandingReach` cells beyond the target's range + 1. The attack button, the reach factor and the reachability test all use it |
 | `NMilitary::Attack::DispatchAttackers` | Unchanged; only records the fight being dispatched |
 | `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building on another landmass than the target sends through slot 1 (by sea) instead of slot 0 |
 | `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code when the game's own reach factor counted the building. Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
@@ -565,7 +566,9 @@ pickup.
 `DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ShipLostOnDefeat` sinks the ship of a lost attack by sea; with one
 off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
 soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
-waits. Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole
+waits. `LandingReach` (cells, default 9: as if a guard house stood at the landing) widens the landing test for
+every landing, enemy, own and neutral: the harbour may lie up to that many cells beyond the target's territory
+range + 1 (10 to 12 cells: `bp_setTerritoryRange` 9 for the guard house and castle, 10 tower, 11 fortress). Every player of a match runs the host's copy of the mod, this file included: `assetshare` compares the whole
 folder and downloads the host's copy when anything differs.
 
 Several ships: a route still takes one ship per player, but buildings whose best usable pairs differ use different
