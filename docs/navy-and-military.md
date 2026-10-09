@@ -285,11 +285,19 @@ the ship is not moving (movement float `+0x20` ≤ 0, movement state 0 or 4) [kn
 Ship states (`Ship+0x28`) [inferred]: 0 idle, 1 waiting, 2 loading, 3 unloading/sailing, 4 expedition, 5 military,
 6 sinking, 7 sunk, 8 doomed.
 
-**A sunk ship stays selected** [known; live 2026-10-09]: `NNavy::System::Update` `005b39d0` deletes a ship as soon as
-it reaches state 7. The game deselects removed buildings (`Selection::ClearIfBuildingSelected` `00535220`), but has
-no such step for ships. The selection's ship reference (`Selection::ship`, `+0x88`) keeps its cached pointer
-(`ReferenceShip::Resolve` `0053a450`), and `nMenu::InfoBoxShip::Update` `0063c100` uses it without a check: a ship
-that sinks while selected crashes the game on the next frame. The `navalcombatfix` mod deselects it first.
+**Where ships are deleted** [known: callers of `NNavy::Ship::dtor` `005baf20`]: `NNavy::System::Update` `005b39d0`
+deletes a ship as soon as it reaches state 7 (sunk). `NNavy::System::EraseShipByUnique` `005b3890` deletes one at
+once, without sinking and without a last `Ship::Update`; it is called by the scripts' `na_destroyShip`
+(`GameScript_Lua_na_destroyShip` `005af2a0`), `TransferShipsOfPlayer` `005b44e0`, the editor tool
+(`HandleToolClick` `00604dd0`) and the destructor at `0055e8c0`. `NNavy::System::DeleteAllShips` `005b3c40` deletes
+them all when the logic is reset between matches (`NLogic::System::Reset` `00526f80`, after the selection is reset).
+
+**A deleted ship stays selected** [known; live 2026-10-09]: the game deselects removed buildings
+(`Selection::ClearIfBuildingSelected` `00535220`), but has no such step for ships. The selection's ship reference
+(`Selection::ship`, `+0x88`) keeps its cached pointer (`ReferenceShip::Resolve` `0053a450`), and
+`nMenu::InfoBoxShip::Update` `0063c100` uses it without a check: a ship deleted while selected crashes the game on
+the next frame. The `navalcombatfix` mod deselects it in its hook on `NNavy::Ship::dtor`, which every deletion path
+passes.
 
 ## 6. Expeditions
 
@@ -526,6 +534,11 @@ A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `
 active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
 just leaving it: `MilitaryFightList_Update` deletes an inactive fight the same tick, and a garrison soldier still in
 state `0xF` then reads it (`Fight::OnSoldierEvent_BySide` on a null fight) [live 2026-10-09: crash at `005711cb`].
+
+What the mod keeps about ships (lent route ships with their route, defence holds with their landing, pickup and
+invasion timers) is dropped in its hook on `NNavy::Ship::dtor`, so a ship deleted on any path (§5) leaves nothing
+behind. A route or harbour the mod remembered is looked up in the game's lists (`NNavy::System::shipRoutes`,
+`harbors`) before it is used: destroying a harbour deletes its routes.
 
 **Lost defences by sea** (`ShipLostOnDefeat`, `combat.cpp`, maintainer's rule): a ship carrying defenders (its
 player is the fight's `defenderPlayer`) sinks when the harbour it lies at or sails to is no longer its player's and

@@ -157,4 +157,24 @@ void tell(Ship *ship, const char *key, const char *text = nullptr);
 // A naval invasion ship loaded and waiting at home for an attack (invasion.cpp).
 bool invasion_ready(Ship *ship);
 
+// A ship is being deleted (combat.cpp's hook on its destructor): the files drop what they keep about it.
+void retreat_forget_ship(Ship *ship);
+void invasion_forget_ship(Ship *ship);
+
+// The game still has this route / harbour (a pointer the mod kept may outlive it: a harbour's destruction deletes
+// its routes). Compares pointers only, nothing is read through them.
+inline bool route_alive(NavyShipRoute *route)
+{
+    game::ai::navy::ShipRouteList &list = logic()->navy->shipRoutes;
+    for (auto **r = static_cast<NavyShipRoute **>(list.routesFirst); r != static_cast<NavyShipRoute **>(list.routesLast); ++r)
+        if (*r == route) return true;
+    return false;
+}
+inline bool harbor_alive(Harbor *harbor)
+{
+    for (Harbor *h : harbors())
+        if (h == harbor) return true;
+    return false;
+}
+
 }  // namespace navalcombatfix

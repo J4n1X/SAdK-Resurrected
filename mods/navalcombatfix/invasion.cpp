@@ -422,6 +422,8 @@ bool invasion_ready(Ship *ship)
     return ship->expedition->bActive && ship->expedition->state == kInvReady;
 }
 
+void invasion_forget_ship(Ship *ship) { stop_waiting(ship->expedition); }
+
 }  // namespace navalcombatfix
 
 bool invasion_start()

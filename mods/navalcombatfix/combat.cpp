@@ -153,7 +153,7 @@ bool sea_street(NavyShipRoute *route, std::int32_t player, Harbor **a, Harbor **
 // which puts the ship on a route of its nearest home harbour (FindOwnRouteForShip) and sails it there in state 3 -
 // not necessarily the route it served. While that route is still a sea street, the ship goes back to it the same way
 // (NavyLink_LinkMovementRoute S 0053c3d0 + MoveToHarbor to its nearer end + state 3: unload, then wait). Otherwise
-// (a harbour of it lost) it is left to the game and to return_stranded.
+// (a harbour of it lost, or the route gone with a destroyed harbour) it is left to the game and to return_stranded.
 void give_back(Ship *ship)
 {
     int i = lent_index(ship);
@@ -161,7 +161,7 @@ void give_back(Ship *ship)
     NavyShipRoute *route = g_lent[i].route;
     g_lent[i] = g_lent[--g_lentCount];
     Harbor *a, *b;
-    if (ship->state >= kShipSinking || !sea_street(route, ship->player->index, &a, &b)) return;
+    if (ship->state >= kShipSinking || !route_alive(route) || !sea_street(route, ship->player->index, &a, &b)) return;
     NavyShipRoute *now = fn::NLogic::ReferenceShipRoute::Resolve(&ship->movement->route);
     if (now != route) {
         if (now) fn::NavyLink_UnlinkMovementRoute(ship, now);
@@ -515,7 +515,7 @@ bool sink_after_lost_defence(Ship *ship)
     Harbor *at = fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor);
     if (!at) {
         DefenceHold *hold = hold_of(ship, false);
-        at = hold ? hold->landing : nullptr;
+        at = hold && harbor_alive(hold->landing) ? hold->landing : nullptr;   // a destroyed harbour is gone
     }
     if (!at || at->playerIdx == player) return false;
     Building *target = fight->target.unique.idHi >= 0 ? fight->target.cachedBuilding : nullptr;
@@ -528,15 +528,12 @@ bool sink_after_lost_defence(Ship *ship)
     return true;
 }
 
-// A sunk ship (state 7) is deleted by NNavy::System::Update S 005b39d0 right after its Ship::Update. The game
-// deselects removed buildings (Selection::ClearIfBuildingSelected S 00535220) but has nothing of the kind for ships,
-// and the selection's ship reference keeps its cached pointer (ReferenceShip::Resolve S 0053a450), so a ship that
-// sinks while selected leaves nMenu::InfoBoxShip::Update S 0063c100 reading freed memory [live 2026-10-09: crash
-// right after a sinking]. Deselected here the way the game deselects a building.
-void deselect_if_sunk(Ship *ship)
+// The game deselects removed buildings (Selection::ClearIfBuildingSelected S 00535220) but has nothing of the kind
+// for ships, and the selection's ship reference keeps its cached pointer (ReferenceShip::Resolve S 0053a450), so a
+// ship deleted while selected leaves nMenu::InfoBoxShip::Update S 0063c100 reading freed memory [live 2026-10-09:
+// crash right after a sinking]. Deselected the way the game deselects a building.
+void deselect(Ship *ship)
 {
-    constexpr std::int32_t kShipSunk = 7;
-    if (ship->state != kShipSunk) return;
     game::ai::game::Selection *selection = logic()->selection;
     game::NLogic::Unique &id = selection->ship.unique;
     if (id.idLo != static_cast<std::uint32_t>(ship->uniqueIdLo) || id.idHi != ship->uniqueIdHi) return;
@@ -575,7 +572,7 @@ void SADK_THISCALL finish_mission(NavyMission *m)
 }
 
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
-// their route once their mission is over; a sunk ship is deselected before the game deletes it.
+// their route once their mission is over.
 using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
 void SADK_FASTCALL ship_update(Ship *ship)
 {
@@ -584,7 +581,23 @@ void SADK_FASTCALL ship_update(Ship *ship)
     ShipUpdate::original(ship);
     if (onMission && !ship->military->bActive) give_back(ship);
     return_stranded(ship);
-    deselect_if_sunk(ship);
+}
+
+// NNavy::Ship::dtor S 005baf20. Ships are deleted on more paths than a sinking (state 7, NNavy::System::Update
+// S 005b39d0): NNavy::System::EraseShipByUnique S 005b3890 deletes them at once, called by the scripts'
+// na_destroyShip (GameScript_Lua_na_destroyShip S 005af2a0), TransferShipsOfPlayer S 005b44e0, the editor tool
+// (HandleToolClick S 00604dd0) and the destructor at 0055e8c0; NNavy::System::DeleteAllShips S 005b3c40 at the
+// end of a game. None of them passes Ship::Update, so the mod drops what it keeps about the ship here, where every
+// path meets, before the game frees it.
+using ShipDtor = sadk::Hook<fn::NNavy::Ship::dtor>;
+void SADK_FASTCALL ship_dtor(Ship *ship)
+{
+    forget_lent(ship);
+    end_hold(ship);
+    retreat_forget_ship(ship);
+    invasion_forget_ship(ship);
+    deselect(ship);
+    ShipDtor::original(ship);
 }
 
 }  // namespace
@@ -597,7 +610,7 @@ bool combat_start()
               TerritoryInRange::install(territory_in_range) && DispatchAttackers::install(dispatch_attackers) &&
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
               NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update) &&
-              MilitaryFinish::install(finish_mission);
+              MilitaryFinish::install(finish_mission) && ShipDtor::install(ship_dtor);
     sadk::log("%s", ok ? "combat by sea: soldiers cross through their own harbours" : "combat by sea NOT active");
     return ok;
 }

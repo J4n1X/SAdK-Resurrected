@@ -193,6 +193,8 @@ bool retreat_update(NavyMission *m)
     return false;
 }
 
+void retreat_forget_ship(Ship *ship) { forget_pickup(ship->military); }
+
 }  // namespace navalcombatfix
 
 bool retreat_start()
