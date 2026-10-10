@@ -52,6 +52,7 @@ constexpr std::int32_t kMessageNavy = 6;                     // PlayerMessages t
 // The game's expedition states (Expedition::Update) and the invasion's own (saved like them).
 enum ExpeditionState : std::int32_t {
     kArrive = 4,
+    kWaitForOrders = 5,
     kFoundColony = 6,
     kReturn = 7,
     kUnloadHome = 8,
@@ -236,7 +237,8 @@ bool moving(game::NNavy::Movement *mv)
 // subject as " (subject)"); a key it does not know shows as "(MBT)<key>" once and as the key after. The mod's own
 // keys are therefore entered into the table (Localization::translations, the std::map GetTextCStr S 004961f0 reads)
 // before their first message. English only for now (README.md, to do).
-void tell(Ship *ship, const char *key, const char *text)
+void post(std::int32_t type, std::int32_t player, const char *key, const char *text, sadk::msvc::string *subject,
+          std::int32_t *cell)
 {
     if (text) {
         sadk::msvc::string k = sadk::msvc::string::borrow(key);   // copied into the map when it is new
@@ -245,10 +247,14 @@ void tell(Ship *ship, const char *key, const char *text)
         fn::std_::string::assign(value, const_cast<char *>(text), static_cast<std::uint32_t>(std::strlen(text)));
     }
     sadk::msvc::string message = sadk::msvc::string::borrow(key);
+    fn::PlayerMessages_SendToPlayer(type, player, &message, subject, cell);
+}
+
+void tell(Ship *ship, const char *key, const char *text)
+{
     sadk::msvc::owned_string subject;
     fn::NNavy::Ship::GetNameKey(ship, &subject);
-    fn::PlayerMessages_SendToPlayer(kMessageNavy, ship->player->index, &message, &subject,
-                                    &ship->movement->base.currentCellX);
+    post(kMessageNavy, ship->player->index, key, text, &subject, &ship->movement->base.currentCellX);
 }
 
 namespace {
@@ -371,16 +377,38 @@ bool invasion_update(Expedition *e)
     return false;
 }
 
-// The game's arrival (state 4): at a free harbour without room for a colony, report and turn back.
+// The game's arrival (state 4): at a free harbour without room for a colony, report and turn back. At an enemy
+// harbour without a garrison (takeover.cpp), wait for orders as at a free harbour, where the game would say "Harbor
+// is already captured!".
 bool scout(Expedition *e)
 {
     Ship *ship = ship_of(e);
     Harbor *landing = fn::NLogic::ReferenceHarbor::Resolve(&ship->movement->targetHarbor);
     std::int32_t player = ship->player->index;
+    if (harbor_open_to(landing, player)) {
+        fn::ai::map::MapModifier::ExploreArea(logic()->map->modifier, &landing->posX, kExpeditionReveal,
+                                              &ship->player->index);
+        tell(ship, "!Ship waiting for Orders");
+        e->state = kWaitForOrders;
+        return false;
+    }
     if (!landing || landing->playerIdx != -1 || colony_fits(landing, player)) return ExpeditionUpdate::original(e);
     fn::ai::map::MapModifier::ExploreArea(logic()->map->modifier, &landing->posX, kExpeditionReveal,
                                           &ship->player->index);
     tell(ship, "!No Valid Position for Building found!");
+    e->state = kReturn;
+    return false;
+}
+
+bool found_colony_game(Expedition *e) { return ExpeditionUpdate::original(e); }
+
+// State 6, the game's founding with the harbour takeover (takeover.cpp). No room even with the takeover: the game's
+// own failure (message, return).
+bool found(Expedition *e, bool invasion)
+{
+    TakeoverResult result = found_colony(e, invasion, found_colony_game);
+    if (result != TakeoverResult::no_room) return result == TakeoverResult::founded;
+    tell(ship_of(e), "!No Valid Position for Building found!");
     e->state = kReturn;
     return false;
 }
@@ -392,13 +420,19 @@ bool SADK_THISCALL expedition_update(Expedition *e)
     switch (e->state) {
     case kArrive:
         return scout(e);
+    case kWaitForOrders:
+        // The game turns back from an owned harbour ("captured"); an enemy's without a garrison stays open.
+        if (harbor_open_to(fn::NLogic::ReferenceHarbor::Resolve(&ship_of(e)->movement->targetHarbor),
+                           ship_of(e)->player->index))
+            return false;
+        return ExpeditionUpdate::original(e);
     case kFoundColony:
     case kUnloadHome:
         if (m->bActive) {
             // An invasion ending in the game's states: after the colony, the mission takes the attackers home;
             // after a return, they were unloaded with everything else.
             std::int32_t state = e->state;
-            if (!ExpeditionUpdate::original(e)) return false;
+            if (!(state == kFoundColony ? found(e, true) : ExpeditionUpdate::original(e))) return false;
             e->bActive = 0;   // the invasion is over (Expedition::Finish leaves the flag set)
             if (state == kFoundColony) {
                 tell(ship_of(e), "!navalcombatfix_invasion_won", "Naval invasion won: colony founded");
@@ -409,7 +443,7 @@ bool SADK_THISCALL expedition_update(Expedition *e)
             fn::NNavy::Military::Finish(m);
             return true;
         }
-        return ExpeditionUpdate::original(e);
+        return e->state == kFoundColony ? found(e, false) : ExpeditionUpdate::original(e);
     default:
         return e->state >= kInvSailHome ? invasion_update(e) : ExpeditionUpdate::original(e);
     }

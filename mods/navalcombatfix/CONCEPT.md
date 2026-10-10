@@ -52,9 +52,36 @@ For a neutral harbour where a colony cannot be founded (an enemy is in the way),
    game puts the ship back on the route, so the sea street exists). If there is still no room for the colony (very
    rare), the captured building keeps its garrison and the rest sail home with the "not enough space" message: invade
    again.
-5. **Lost:** with `ShipLostOnDefeat` (new setting, harsh: on by default) the ship is destroyed with everything aboard;
+5. **Lost:** with `ShipLostOnDefeat` (new setting, harsh: off by default) the ship is destroyed with everything aboard;
    with it off, the invasion is cancelled and the ship sails home and unloads the expedition cargo. The setting holds
    for **every** lost attack by sea, not only invasions: the attacker's ship sinks at the landing.
 
 "Scouted" means: the player has explored the harbour (an expedition reveals it on arrival), it is neutral, and no
 colony fits. The button borrows the attack icon and shows plain English texts for now (`README.md`, to do).
+
+## Harbour garrison (implemented in `takeover.cpp`, not tested in the game yet)
+
+As decided by the maintainer (setting `HarborMustHaveGarrison`, on by default):
+
+- **Garrison.** An enemy harbour is guarded while a street path **on land** joins its flag to the flag of a
+  **finished** military building of its owner, occupied or not, whose territory range reaches the harbour flag (the
+  harbour lies on land that building holds: 9 to 11 cells and the owner's bonuses). Sea streets do not count;
+  construction sites do not; a building further away does not, however long its street.
+- **Arrival.** An expedition at an unguarded enemy harbour gets "Ship waiting for orders", as at a free harbour (the
+  game would say "Harbor is already captured!"). If the harbour becomes guarded meanwhile, the game's "captured" path
+  sends it home.
+- **Found colony.** The colony takes the smallest land the founding needs: the guard post's footprint and entrance
+  flag, and the street from the harbour flag to it with a cell on each side (a street cannot run on the edge of the
+  land). The path is the game's own street search. The enemy's harbour flag and streets on that land go, and the
+  harbour becomes the colonist's. Afterwards the game's territory rules decide the land as usual.
+- **Enemy military buildings in the way.** The game keeps a guard post 4 cells away from any territory building. If
+  only enemy territory buildings (construction sites included) within those 4 cells stop the colony, they are
+  destroyed the way the game destroys a building, soldiers and goods coming out. A position that needs no
+  destruction is always preferred. A non-enemy building in the way, or no room at all: "No valid position", the
+  expedition returns. If that takes a headquarters (only possible with a harbour within 4 cells of it, a map
+  error), its owner is told to blame the map maker. Players who lose land to the colony get the game's "Lost
+  territory" message.
+- Only enemy harbours: allies' harbours and free harbours blocked by enemy land keep the game's rules (the latter are
+  the naval invasion's case).
+- **Naval invasion.** When the invasion's colony is founded and a third player holds the harbour without a garrison,
+  or contests the land around it, the colony takes its land the same way.

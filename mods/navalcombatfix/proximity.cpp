@@ -26,8 +26,6 @@ using MinEnemyDistance = sadk::Hook<fn::ai::game::GameQueryHelper::MinDistanceTo
 
 constexpr std::int32_t kFar = 1000;   // the game's "no enemy" distance
 
-Player *player_entry(std::int32_t index) { return fn::PlayerTable_GetEntry(logic()->playerTable, &index); }
-
 // The game's filters for an enemy (MinDistanceToEnemyMilitaryBuilding S 005337e0): an enemy of `player`
 // (Player::IsEnemyOf S 005be280), with filterDiplomacy not marked in `player`'s per-player flags.
 bool enemy_of(Player *other, Player *player, bool filterDiplomacy)

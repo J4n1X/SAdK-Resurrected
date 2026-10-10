@@ -573,6 +573,18 @@ void deselect(Ship *ship)
 // 005711cb, the attacker's home harbour taken mid-attack]. The unmodded game has the same path; sea fights make it
 // common. Soldiers of the mission who are ashore and still in its fight are unlinked from the ship first, as
 // Soldier::Update does when they leave the ship (NavyLink_UnlinkMilitarySoldier): they fight on without a ship.
+//
+// Soldiers of the mission who are aboard on the way to the fight are in it already: Soldier::Update S 006594a0 calls
+// SoldierFightState::EnterFight (inFight = 1) in state 7, before they board (states 0x34/0x37/0x33). RemoveShip takes
+// them out of the fight (0053cfe0: Fight::RemoveSoldier, fightRef cleared) and leaves inFight set. When such a soldier
+// is deleted, SoldierFightState::Destruct S 0065c080 sees inFight and calls ReleaseAll S 0065bfe0, which hands the
+// null fight of the cleared reference to Fight::RemoveSoldier [live 2026-10-10: crash at 005719e3 while a sunk ship
+// was deleted with a soldier aboard: Ship::dtor ends the mission, then NavyCargo_dtor deletes the cargo's settlers].
+// The unmodded game has the same path; ShipLostOnDefeat makes it common. After the game's Finish those soldiers leave
+// the fight the way the game's state 0x2d does (SoldierFightState::LeaveFight S 0065be90: building links, opponent,
+// fight groups, inFight = 0). Whichever of RemoveShip and Finish runs first (Fight::dtor S 00571790 calls RemoveShip
+// before Finish), the soldiers are still in the mission's list when Finish starts.
+constexpr int kMaxAboard = 64;   // more soldiers than a ship carries [inferred]
 using MilitaryFinish = sadk::Hook<fn::NNavy::Military::Finish>;
 void SADK_THISCALL finish_mission(NavyMission *m)
 {
@@ -584,13 +596,23 @@ void SADK_THISCALL finish_mission(NavyMission *m)
             --it;
             auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::ReferenceSettler_Resolve(*it));
             if (!soldier) continue;
-            game::NLogic::Unique &id = soldier->fight.unique;
+            game::NLogic::Unique &id = soldier->fightState.fightRef.unique;
             bool inFight = id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
             if (inFight && !fn::Settler_IsAboardShip(soldier->base.movement))
                 fn::NavyLink_UnlinkMilitarySoldier(&soldier->base, ship);
         }
     }
+    game::NSettlers::Soldier *aboard[kMaxAboard];
+    int count = 0;
+    for (void **it = m->soldiers.refs_first; it != m->soldiers.refs_last && count < kMaxAboard; ++it) {
+        auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::ReferenceSettler_Resolve(*it));
+        if (soldier && soldier->fightState.inFight && fn::Settler_IsAboardShip(soldier->base.movement))
+            aboard[count++] = soldier;
+    }
     MilitaryFinish::original(m);
+    for (int i = 0; i < count; ++i)
+        if (aboard[i]->fightState.fightRef.unique.idHi < 0)
+            fn::ai::military::SoldierFightState::LeaveFight(&aboard[i]->fightState);
 }
 
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on

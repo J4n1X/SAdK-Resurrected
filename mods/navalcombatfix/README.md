@@ -12,8 +12,9 @@ What it does:
   fits (`landing.cpp`). The soldier count is the game's ground rule on the land distances, the crossing free.
 - **Defence across the water**, the same way, with the defender's own ships.
 - **Retreat** (`retreat.cpp`): soldiers left with nowhere to go (the game lets them wander until they die) are
-  picked up by a ship from a neutral harbour on their landmass, as soon as the game finds no home for them. A harbour
-  whose flag stands in someone's territory is not neutral.
+  picked up by a ship from a harbour on their landmass, as soon as the game finds no home for them. Which harbours
+  count is `ValidRetreatHarbors`: by default neutral ones (the flag on nobody's land), optionally team mates' and
+  enemies' too.
 - **Flag stripes and attackability** (`proximity.cpp`): routes between your own harbours count for the distance to
   the enemy.
 - **Naval invasion** (`invasion.cpp`): an expedition to a free harbour without room for a colony says so and turns
@@ -21,7 +22,13 @@ What it does:
   building goods) and waits at home. Attack a building near that harbour: the ship carries the attackers, only they
   land, and when the building is taken the colony is founded. The event log says when the ship is ready and how the
   invasion ended.
-- **Lost attacks by sea sink the ship** (`ShipLostOnDefeat`): when an attack by sea fails (the target still stands and
+- **Harbour garrison** (`takeover.cpp`, `HarborMustHaveGarrison`): an enemy harbour is guarded only while a street on
+  land joins its flag to a finished military building of its owner whose territory range reaches the harbour. An expedition to an unguarded one waits for
+  orders; **Found colony** takes just the land the colony needs (the guard post, its flag and the street to the
+  harbour, with a cell on each side) and founds it; the enemy loses the harbour. Enemy military buildings within 4
+  cells that would stop the guard post are destroyed (only when no other position works). The same takeover lets a naval
+  invasion's colony keep its harbour when a third player contests it.
+- **Lost attacks by sea sink the ship** (`ShipLostOnDefeat`, off by default): when an attack by sea fails (the target still stands and
   is not taken), the attacker's ship sinks at the landing with everyone aboard. This holds for every attack by sea,
   the game's own and invasions. Not affected: ships carrying defenders, a ship whose landing harbour is still its
   player's (a coastal attack), and cancelled attacks (a cancelled invasion sails home and unloads). A ship carrying
@@ -34,13 +41,14 @@ What it does:
 | `AttackersBySea` | true | attackers gather through their own harbours |
 | `DefendersBySea` | true | defenders cross the water |
 | `AttackFromOwnLanding` | true | an own harbour within a target's range makes it attackable |
-| `RetreatPickup` | true | ships pick up stranded soldiers |
+| `ValidRetreatHarbors` | neutral | harbours ships pick stranded soldiers up from: `own` (none, the game's rule), `neutral`, `friendly` (+ team mates'), `all` (+ enemies') |
 | `ProximityOverOwnRoutes` | true | own routes count for the flag stripes and attackability |
 | `NeutralLandings` | true | neutral harbours without room for a colony are landings |
 | `CrossingDistance` | 0 | cells a sea crossing counts as |
 | `PickupTimeout` | 1200 | ticks a ship waits for soldiers (pickups, invasion boarding) |
 | `LandingReach` | 9 | cells a landing harbour may lie beyond a target's territory range + 1 (enemy, own and neutral landings); 0: the game's rule |
-| `ShipLostOnDefeat` | true | a lost attack by sea sinks the attacker's ship, a defence lost with its harbour the defender's; false: they sail home (an invasion unloads its cargo) |
+| `ShipLostOnDefeat` | false | a lost attack by sea sinks the attacker's ship, a defence lost with its harbour the defender's; false: they sail home (an invasion unloads its cargo) |
+| `HarborMustHaveGarrison` | true | an enemy harbour without a land street to one of its owner's finished military buildings can be taken by an expedition (and a naval invasion's colony takes its land against a third player) |
 
 ## To do
 

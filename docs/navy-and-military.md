@@ -326,6 +326,37 @@ only through harbours owned by the **target's** owner, so the colonist cannot at
 possible are on foot from the expedition building's garrison, against targets whose land its small territory touches
 [inferred].
 
+**What founding needs from the land** [known]:
+- The building position: `FindBuildingPosition` `005b7e50` walks hex rings 1 .. `territoryRange` − 1 around the
+  harbour (`MapRingIterator_Next` `00600e90`: each ring starts in direction 4, then steps through directions 0..5).
+  It takes the first cell on the harbour's landmass whose entrance (one step in direction 1) is more than one cell
+  from the harbour and that passes `GameQuery::CanPlaceBuildingAt` `0052fbe0`. That test reads the owner of the
+  centre, of the footprint (`ai::village::FootprintIter::Init`/`Next` `0055abf0`/`0055ac80`: one cell, or four for
+  a shape with none of the size bits `0x1b`) and of the entrance flag cell, all with borders allowed. It refuses any
+  territory building within 4 cells (`HasNoTerritoryBuildingWithinRadius4`).
+- An unowned harbour: state 6 goes back to state 5 while the harbour has an owner.
+- The street: `PlaceFlagAndRevealExitsForCellOwner` `005b5670` places a flag for whoever owns the harbour cell.
+  `StreetPlanner::BuildStreet` `006636e0` starts only on the colonist's own flag there. `ExtendTo` `00663bf0` runs
+  `NMap::AStar::FindPath` with `NLogic::AStarStreet`, whose cells must be the colonist's and not border cells
+  (`GameQuery::CanStreetPassCell` `0052fb10`, `AStarStreet::GetStepCost` `00776500`). A border cell is an owned cell
+  with a neighbour of another owner (`MapCellUpdater::IsTerritoryBorderCell` `0067b5a0`).
+
+**Territory** [known]: each cell's owner is computed from the territory sources (`Territory_ComputeCellOwner`
+`00679510`): a source within 2 cells takes the cell outright; otherwise each source weighs radius / distance² (radius
+doubled within 5 cells, nothing beyond it) and the strongest player gets it. `PlaceExpeditionBuilding` adds a source
+of radius 4, and the building's own territory follows, so the land around a new colony is contested by its
+neighbours' sources. After a change, `MapModifier::OnTerritoryChangedAt` `00673a50` refreshes the border bits and the
+construction map, removes streets on land no longer their owner's (`RemoveForeignStreetsInRadius` `00665930`) and
+marks buildings outside their land. Every tick, `NNet::System::Update` `00665ef0` removes each flag that no longer
+stands on its owner's land (`00669e30`). A harbour loses its owner when its flag goes (`005b5370`; the flag is
+`ai::navy::Harbor::flagRef`, +0x38).
+
+**Street networks** [known]: every flag keeps a network id per kind (`NLogic_UniqueArray40_IsEqualAt` `00663d90`,
+flood fill `NNet_CollectConnectedFlags` `00666250` over `Flag::linksFirst`, one `FlagLink` per street: other flag at
++0x8, street at +0x28). Kind 1 counts every street, kind 0 only streets with a carrier. Sea streets (type 3, built by
+`NavyShipRoute::UpdateSeaStreet` `005b71d0` between two harbours of one player) count for both
+(`NNet::Street::ctor` `00669cd0`).
+
 ### 6.1 The buoy's buttons and the ship-route commands
 
 A selected ship route (its buoy) shows the in-game action panel: 4 button slots
@@ -417,12 +448,15 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 
 **Retreat pickup.** `NMovie::MoveToHome::Start` is hooked. Where it finds no home for a healthy soldier in state 3
 (the moment the game would let it stray, see §4), a ship picks the soldier up instead, when there is:
-- a harbour on its landmass that is **neutral**: no owner, and nobody's territory at its cell. A harbour whose cell
-  belongs to an enemy is not used;
+- a harbour on its landmass that `ValidRetreatHarbors` allows. The harbour counts as the land owner's at its flag
+  cell (its own owner when that cell is nobody's). `neutral` (the default): nobody's. `friendly`: also a team mate's
+  (`ai::player::Player::IsEnemyOf` `005be280`: a different index and a different team, or team -1, is an enemy).
+  `all`: also an enemy's. The player's own harbours are never used: their sea streets are the game's way home.
+  `own` turns the pickup off;
 - with a route to a harbour of the soldier's player;
 - and either one of the player's ships already waiting there, or an idle one for that route.
 
-The ship gets a transport mission without a fight (`NavyLink_LinkMilitaryRoute`), sails to the neutral harbour and
+The ship gets a transport mission without a fight (`NavyLink_LinkMilitaryRoute`), sails to that harbour and
 waits in state 2, where the game boards the soldiers standing on it. The soldier is linked to the ship (`NavyLink_LinkMilitarySoldier` `0053c070`) and
 set to state `0x21`, so it walks to the ship's harbour like a soldier coming back from a fight. When all are aboard,
 or after a timeout (1200 ticks, [TODO] tune), state 3 sails to the other end of the route, and the game's state 7
@@ -531,6 +565,18 @@ unmodded game has the same path (an attacker's home harbour taken mid-attack). T
 mission's soldiers ashore and still in its fight are unlinked from the ship first (`NavyLink_UnlinkMilitarySoldier`),
 so they fight on without a ship.
 
+**Soldiers aboard keep their in-fight mark** [known (static); live 2026-10-10]: a soldier sent to a fight by sea is in
+the fight before it boards (`Soldier::Update` `006594a0` state 7 calls `SoldierFightState::EnterFight` `0065b840`,
+`inFight = 1`; the sea states `0x34`/`0x37`/`0x33` follow). `RemoveShip` takes it out of the fight through `0053cfe0`
+(`Fight::RemoveSoldier`, then the soldier's `fightState.fightRef` is cleared) and leaves `inFight` set. When such a
+soldier is deleted, `SoldierFightState::Destruct` `0065c080` sees `inFight` and calls `ReleaseAll` `0065bfe0`, which
+passes the null result of `ReferenceFight::Get` to `Fight::RemoveSoldier` (crash at `005719e3`). A ship deleted with
+an active mission does exactly this: `Ship::dtor` ends the mission, then `NavyCargo_dtor` `005bd7f0` deletes the
+settlers aboard. The crash dump has this stack; that the soldier was on its way to the fight is `[inferred]`. The
+unmodded game has the same path; ShipLostOnDefeat makes it common. In its `Military::Finish` hook the mod lets the
+mission's soldiers who are aboard and marked leave the fight after the game's `Finish`, as the game's state `0x2d`
+does (`SoldierFightState::LeaveFight` `0065be90`). In the game `[TODO]`.
+
 A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `NNavy::Ship::dtor` `005baf20` ends an
 active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
 just leaving it: `MilitaryFightList_Update` deletes an inactive fight the same tick, and a garrison soldier still in
@@ -562,8 +608,48 @@ hands, `005b5370` unlinks the ships from its routes, and `Ship::Update` would th
 route. Soldiers aboard sink with the ship; any still ashore are left to the game (§4) or a retreat
 pickup.
 
+**Harbour garrison** (`takeover.cpp`, `HarborMustHaveGarrison`). An enemy harbour (owner an enemy by
+`Player::IsEnemyOf`) is guarded when a walk over its flag's links, skipping sea streets, reaches the entrance flag of
+a finished territory building of its owner (both `NVillage::Construction` remainders at 0) whose territory range
+reaches the harbour flag: hex distance ≤ `NVillage::Military::GetTerritoryRange` `0055fca0`, the radius
+`TerritoryUpdater::Activate` `00565350` gives its territory source. The expedition hook
+(`invasion.cpp`) changes three states for an unguarded enemy harbour:
+- state 4 says "Ship waiting for Orders" and goes to 5;
+- state 5 keeps waiting;
+- state 6 runs the takeover before the game's founding.
+
+The takeover looks for a position in `FindBuildingPosition`'s order. The test runs while the colonist holds every cell
+within `territoryRange` + 1 of the harbour: the territory grid is written, `RefreshTerritoryBorderBits` `0067b910`
+and `MapModifier::RecomputeConstructionMapRadius` `00672da0` run, the placement test and the street search run, and
+everything is restored. For each position found, the land the founding needs is tested once more, alone:
+- the footprint;
+- the street path, ends included, with the 6 neighbours of each of its cells.
+
+The street search is the game's: the navy's `StreetPlanner` search object, set up as `Generic_SetLink4C` `00776160`
+would (player, type 0, the path so far, no street to cross). Its fields are restored afterwards. The claim writes
+those cells and runs `OnTerritoryChangedAt`. It removes the enemy's harbour flag at once with
+`NNet::System::RemoveFlag` `00665c10`, as the next tick would. Then it runs the game's state 6, with
+`FindBuildingPosition` answering the chosen position. After `PlaceExpeditionBuilding` (whose sources recompute the
+land around it) the claimed cells are written again, so the harbour flag and the street can follow.
+
+If no position works, a second search also accepts a position that the placement test refuses only because of the
+4-cell rule, when every territory building within 4 cells is an enemy's. "Only because of" means the same test
+passes with size bit 0x40 cleared; that bit alone brings in `HasNoTerritoryBuildingWithinRadius4` `0052dc30`. The
+search skips this when the cleared size would be 8 or 0x10, which the test compares for equality. The construction
+map's own use of the 4-cell test is a separate per-player flag. The buildings (found as the game does:
+`FindBuildingAtOrNearest` `00558890` radius 0 on each cell, type with `territoryRange` > 0, sites included) are
+removed before the claim with `NVillage::System::RemoveBuilding` `00559db0` (spill on). Every way the game destroys a
+building ends there: hitpoints at 0 (`Hitpoints::OnChanged` `0055b8b0`), land lost (`Building+0x138`, removed by
+`NVillage::System::Update` `0055a640`), demolition, `vi_destroyBuilding`. The headquarters (the only type that is
+both a depot and gives territory: `castle`, `BuildingProperty::depot` +0x54 and `territoryRange` 9) can be among
+them only on a map with a harbour within 4 cells of it; its owner then gets a message blaming the map maker. No
+position: "No Valid Position", state 7. A naval invasion's founding does the same at a harbour held by a third player without
+a garrison. At a free harbour, it only falls back to the game's own founding when no position is found. Every player who
+loses cells to a claim gets the game's "!Lost Territory." (message type 1, unless one is already at the harbour, as
+`TerritoryLostFlags::NotifyLostTerritory` `006797f0` does).
+
 **Settings** (`navalcombatfix.ini`, `[NavalCombatFix]`; defaults are the rules above): `AttackersBySea`,
-`DefendersBySea`, `AttackFromOwnLanding`, `RetreatPickup`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ShipLostOnDefeat` sinks the ship of a lost attack by sea; with one
+`DefendersBySea`, `AttackFromOwnLanding`, `ProximityOverOwnRoutes` and `NeutralLandings` switch each rule; `ValidRetreatHarbors` (`own`, `neutral`, `friendly`, `all`) chooses the retreat pickup's harbours; `ShipLostOnDefeat` sinks the ship of a lost attack by sea; `HarborMustHaveGarrison` the harbour garrison rule; with one
 off, that case runs the game's own code. `CrossingDistance` (cells, default 0) is added for a sea crossing to the
 soldier-count sum and to the distance to the enemy. `PickupTimeout` (ticks, default 1200) is how long a pickup ship
 waits. `LandingReach` (cells, default 9: as if a guard house stood at the landing) widens the landing test for

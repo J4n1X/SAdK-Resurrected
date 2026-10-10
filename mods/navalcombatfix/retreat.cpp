@@ -10,9 +10,9 @@
 // the far side removes the harbour flag there with the territory (the harbour turns neutral, Harbor -1 by
 // S 005b5370), so its soldiers stray until they die.
 //
-// The rule (maintainer): if a harbour on the soldier's landmass is neutral, the territory at its flag owned by nobody,
-// and one of the player's ships is ready for the route from it to one of the player's harbours, that ship picks the
-// soldier up instead. A harbour whose cell went to an enemy is not used.
+// The rule (maintainer): if a harbour on the soldier's landmass is valid for a pickup (ValidRetreatHarbors: neutral,
+// the territory at its flag owned by nobody; friendly, a team mate's; all, an enemy's too) and one of the player's
+// ships is ready for the route from it to one of the player's harbours, that ship picks the soldier up instead.
 //
 // So the pickup starts where MoveToHome::Start fails for a healthy soldier, before it strays. It is the game's own sea
 // transport (NNavy::Military) without a fight:
@@ -84,7 +84,20 @@ std::int32_t territory_owner(Harbor *h)
     return territory->cellsFirst[h->posY * *var::g_MapWidth + h->posX];
 }
 
-bool is_neutral(Harbor *h) { return h->playerIdx == kNobody && territory_owner(h) == kNobody; }
+// ValidRetreatHarbors: may `player`'s ship pick soldiers up at `h`? The harbour belongs to whoever owns the land at
+// its flag (the harbour's own owner when that land is nobody's, as for a flag on the edge of its land). The
+// player's own harbours are left to the game: their sea streets bring the soldiers home. Friendly is the game's
+// own test, the same team (ai::player::Player::IsEnemyOf S 005be280).
+bool valid_retreat_harbor(Harbor *h, std::int32_t player)
+{
+    std::int32_t holder = territory_owner(h);
+    if (holder == kNobody) holder = h->playerIdx;
+    RetreatHarbors level = g_settings.retreatHarbors;
+    if (holder == kNobody) return level >= RetreatHarbors::neutral;
+    if (holder == player) return false;
+    bool enemy = fn::ai::player::Player::IsEnemyOf(player_entry(player), player_entry(holder));
+    return level >= (enemy ? RetreatHarbors::all : RetreatHarbors::friendly);
+}
 
 // A ship of `player` already waiting at `landing` for soldiers: how a second stranded soldier at the same harbour
 // joins the ship the first one called.
@@ -117,7 +130,7 @@ Ship *idle_ship_for(Harbor *landing, std::int32_t player, HarborExit **exitOut)
 }
 
 // Sends an idle ship to wait at `landing`. NavyLink_LinkMilitaryRoute S 0053c0d0 puts it on the route and activates
-// its mission (state 0); it then sails to the neutral harbour and waits there in state 2.
+// its mission (state 0); it then sails to the landing harbour and waits there in state 2.
 void send_to_wait(Ship *ship, HarborExit *exit, Harbor *landing)
 {
     fn::NavyLink_LinkMilitaryRoute(fn::NLogic::ReferenceShipRoute::Resolve(&exit->route), ship);
@@ -125,8 +138,8 @@ void send_to_wait(Ship *ship, HarborExit *exit, Harbor *landing)
     ship->military->state = kWaitingForSoldiers;
 }
 
-// The ship to pick up a soldier of `player` standing at `cell`: at the nearest neutral harbour of the soldier's
-// landmass that has one, the ship already waiting there, else an idle one sent there.
+// The ship to pick up a soldier of `player` standing at `cell`: at the nearest valid harbour (ValidRetreatHarbors)
+// of the soldier's landmass that has one, the ship already waiting there, else an idle one sent there.
 Ship *pickup_ship(std::int32_t player, std::int32_t *cell)
 {
     std::int32_t soldierRegion = region(cell);
@@ -135,7 +148,7 @@ Ship *pickup_ship(std::int32_t player, std::int32_t *cell)
     Ship *bestShip = nullptr;
     std::int32_t bestDistance = 0;
     for (Harbor *landing : harbors()) {
-        if (!is_neutral(landing) || region(landing) != soldierRegion) continue;
+        if (!valid_retreat_harbor(landing, player) || region(landing) != soldierRegion) continue;
         std::int32_t d = distance(landing, cell);
         if (bestLanding && d >= bestDistance) continue;
         HarborExit *exit = nullptr;
@@ -165,7 +178,7 @@ bool SADK_THISCALL move_to_home(game::NMovie::MoveToHome *movie)
 {
     if (MoveToHomeStart::original(movie)) return true;
     game::NSettlers::Settler *settler = movie->owner;
-    if (!g_settings.retreatPickup || !stranded_soldier(settler)) return false;   // the game strays
+    if (g_settings.retreatHarbors == RetreatHarbors::own || !stranded_soldier(settler)) return false;   // the game strays
     std::int32_t *cell = &settler->movement->cellX;   // {cellX, cellY}
     Ship *ship = pickup_ship(settler->ownerPlayer->index, cell);
     if (!ship) return false;

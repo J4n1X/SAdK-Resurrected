@@ -18,10 +18,6 @@ namespace {
 
 using game::ai::player::Player;
 
-constexpr std::int32_t kExpeditionPlacementPlayer = 8;   // the player entry FindBuildingPosition passes (0x780 / 0xf0)
-
-Player *player_entry(std::int32_t index) { return fn::PlayerTable_GetEntry(logic()->playerTable, &index); }
-
 // Room for `player`'s colony building at `harbor` (FindBuildingPosition's search, see above).
 bool colony_fits_uncached(Harbor *harbor, std::int32_t player)
 {
@@ -30,7 +26,7 @@ bool colony_fits_uncached(Harbor *harbor, std::int32_t player)
     std::int32_t type = fn::ai::properties::ShipConfig::GetExpeditionBuilding(db->shipConfig, colonist->tribeId);
     game::ai::properties::BuildingProperty *building = fn::ai::properties::PropertiesDb::GetBuildingProperty(db, &type);
     std::int32_t radius = building->territoryRange - 1, landmass = region(harbor);
-    auto *placementPlayer = reinterpret_cast<std::uint32_t *>(&player_entry(kExpeditionPlacementPlayer)->index);
+    std::uint32_t *placementPlayer = expedition_placement_player();
     auto *colonistIndex = reinterpret_cast<std::uint32_t *>(&colonist->index);
     for (std::int32_t y = harbor->posY - radius; y <= harbor->posY + radius; ++y) {
         for (std::int32_t x = harbor->posX - radius - 1; x <= harbor->posX + radius + 1; ++x) {
