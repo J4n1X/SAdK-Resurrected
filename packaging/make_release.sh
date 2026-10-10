@@ -7,9 +7,9 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$REPO/release"
-# The mods a release ships. Test mods (cheatstart, propreload), nomeshcache (for model makers) and mods not yet
-# tested in the game stay out; gamebridge, assetshare and billboards are also embedded in SAdK-ServerConfig.
-RELEASE_MODS="gamebridge assetshare billboards borderless nopreview foresterfix navalcombatfix"
+# The mods a release ships. Test mods (cheatstart, propreload), nomeshcache (for model makers) and npcmodels stay
+# out; gamebridge, assetshare and billboards are also embedded in SAdK-ServerConfig.
+RELEASE_MODS="gamebridge assetshare billboards borderless oscursor nopreview foresterfix navalcombatfix"
 
 # Plain make: the Makefiles track their dependencies. (make -B rebuilds sadkmod's precompiled header from several
 # sub-makes at once, which corrupts it.)
@@ -41,6 +41,8 @@ Mods for "Die Siedler - Aufbruch der Kulturen". They need the DRM-free SADK.exe 
   billboards      plain screens on the lobby's advertising billboards (billboards.ini)
   borderless      the game's fullscreen becomes a borderless window, stretched to the monitor;
                   borderless.ini: Monitor = primary, or the display number (1, 2, ...)
+  oscursor        the game's mouse cursors as Windows cursors: the cursor stays visible at display
+                  scaling above 125%
   nopreview       choosing a map without a preview picture (.bmp) no longer crashes the game
   foresterfix     server mod: the forester no longer crashes the game on volcanic ground
   navalcombatfix  server mod: soldiers cross the water through their own harbours, naval invasions;
