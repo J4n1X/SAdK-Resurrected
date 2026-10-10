@@ -1,41 +1,57 @@
 #!/usr/bin/env bash
 # Assembles release/ for a GitHub release (zip its contents):
 #   release/SAdK-ServerConfig.exe   the players' setup tool (embeds the bridge shim and the billboards mod)
-#   release/mods/<name>/            the repo's mods, to copy into <game>\mods (optional extras)
+#   release/mods/<name>/            the mods of RELEASE_MODS below, to copy into <game>\mods
 #   release/LICENSE
 #   release/server/                 the Python server, WITHOUT the game's msgdefs.ini, + a quick guide
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$REPO/release"
+# The mods a release ships. Test mods (cheatstart, propreload), nomeshcache (for model makers) and mods not yet
+# tested in the game stay out; gamebridge, assetshare and billboards are also embedded in SAdK-ServerConfig.
+RELEASE_MODS="gamebridge assetshare billboards borderless nopreview foresterfix navalcombatfix"
 
-make -C "$REPO/bridge/wsock32_shim" -B
-make -C "$REPO/mods" -B
-make -C "$REPO/bridge/serverconfig" -B
+# Plain make: the Makefiles track their dependencies. (make -B rebuilds sadkmod's precompiled header from several
+# sub-makes at once, which corrupts it.)
+make -C "$REPO/bridge/wsock32_shim"
+make -C "$REPO/mods"
+make -C "$REPO/bridge/serverconfig"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/server"
 cp "$REPO/bridge/serverconfig/SAdK-ServerConfig.exe" "$OUT/"
 cp "$REPO/LICENSE" "$OUT/"
 mkdir -p "$OUT/mods"
-cp -r "$REPO"/mods/build/*/ "$OUT/mods/"
+for m in $RELEASE_MODS; do cp -r "$REPO/mods/build/$m" "$OUT/mods/"; done
+cp "$REPO/mods/navalcombatfix/README.md" "$OUT/mods/navalcombatfix-README.md"
 cp "$REPO/mods/README.md" "$OUT/mods/"
 cat > "$OUT/mods/INSTALL.txt" <<'TXT'
-Optional mods for "Die Siedler - Aufbruch der Kulturen" (they need the DRM-free SADK.exe and the bridge shim,
-which SAdK-ServerConfig installs).
+Mods for "Die Siedler - Aufbruch der Kulturen". They need the DRM-free SADK.exe and the mod loader
+(bin\wsock32.dll), which SAdK-ServerConfig installs.
 
-Install: copy a mod's folder into the game's "mods" folder, e.g.
-    ...\Die Siedler - Aufbruch der Kulturen\mods\borderless\
-Create the "mods" folder next to "bin" and "data" if it is not there. Remove the folder (or rename it so it starts
-with "_") to switch the mod off.
+1. Copy the folders in here into the game's "mods" folder, so that you get e.g.
+       ...\Die Siedler - Aufbruch der Kulturen\mods\navalcombatfix\mod.dll
+   Create the "mods" folder next to "bin" and "data" if it is not there.
+2. Run SAdK-ServerConfig.exe, choose the game folder and the lobby server, and press Save. It installs the mod
+   loader and writes your choices into the mods' settings. On any other SADK.exe than the DRM-free one it shows a
+   red warning and installs neither the loader nor the mods.
 
-  billboards    plain screens on the lobby's advertising billboards (SAdK-ServerConfig installs it;
-                "Disable billboards" = Enabled in billboards.ini)
-  borderless    the game's fullscreen becomes a borderless window, stretched to the monitor;
-                borderless.ini: Monitor = primary, or the display number (1, 2, ...)
-  nomeshcache   models are always read from their .KEX files (no cache); for model makers only: loads slower,
-                and the lobby town flickers while it is on
-  npcmodels     lets the server show the female, MacDoyleJr and MacGabhan NPC models (chat: !npc <set> <index>)
+  gamebridge      hosting from behind a router, through the lobby server (gamebridge.ini)
+  assetshare      shares a match's map and the host's server mods with the joiners; every player needs it
+  billboards      plain screens on the lobby's advertising billboards (billboards.ini)
+  borderless      the game's fullscreen becomes a borderless window, stretched to the monitor;
+                  borderless.ini: Monitor = primary, or the display number (1, 2, ...)
+  nopreview       choosing a map without a preview picture (.bmp) no longer crashes the game
+  foresterfix     server mod: the forester no longer crashes the game on volcanic ground
+  navalcombatfix  server mod: soldiers cross the water through their own harbours, naval invasions;
+                  settings in navalcombatfix.ini, described in navalcombatfix-README.md
 
+gamebridge, assetshare and billboards are also inside SAdK-ServerConfig, which installs them by itself.
+
+A server mod runs for every player of a match: the host's copy, its .ini included, is used, and joiners who do not
+have it (or have another version) download it from the host when they enter the game.
+
+To switch a mod off, remove its folder or rename it so that it starts with "_".
 README.md describes how mods work and how to write one.
 TXT
 
