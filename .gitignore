@@ -86,6 +86,7 @@ tincat_server.log
 
 # Python venv (created by setup_venv.sh)
 .venv/
+.venv-pypy/
 
 # Ghidra project (SFTP'd in; embeds the copyrighted game binary)
 sadk/
