@@ -66,6 +66,9 @@ static int file_md5(const char *path, char out[33])
 }
 
 static HBRUSH bg_brush;
+static HFONT bold_font;
+static int exe_warn_shown;
+#define EXE_WARN_SHIFT 66   /* dialog units the other controls move down by: the warning's height + a gap */
 
 /* ── Paths ───────────────────────────────────────────────────────────────── */
 static void join(char *out, const char *a, const char *b) { snprintf(out, MAX_PATH, "%s\\%s", a, b); }
@@ -337,12 +340,40 @@ static void set_advanced(HWND dlg, int on)
     for (int i = 0; i < 6; i++) EnableWindow(GetDlgItem(dlg, ids[i]), on);
 }
 
+/* The warning for an unsupported SADK.exe sits above everything else: shown, it pushes the other controls down
+   and the window grows by its height. */
+static BOOL CALLBACK shift_child(HWND child, LPARAM dy)
+{
+    HWND dlg = GetParent(child);
+    if (GetDlgCtrlID(child) == IDC_EXEWARN) return TRUE;
+    RECT r;
+    GetWindowRect(child, &r);
+    MapWindowPoints(NULL, dlg, (POINT *)&r, 2);
+    SetWindowPos(child, NULL, r.left, r.top + (int)dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    return TRUE;
+}
+
+static void show_exe_warning(HWND dlg, int show)
+{
+    if (show == exe_warn_shown) return;
+    exe_warn_shown = show;
+    RECT du = {0, 0, 0, EXE_WARN_SHIFT}, w;
+    MapDialogRect(dlg, &du);
+    int dy = show ? du.bottom : -du.bottom;
+    EnumChildWindows(dlg, shift_child, dy);
+    GetWindowRect(dlg, &w);
+    SetWindowPos(dlg, NULL, 0, 0, w.right - w.left, w.bottom - w.top + dy, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    ShowWindow(GetDlgItem(dlg, IDC_EXEWARN), show ? SW_SHOW : SW_HIDE);
+    InvalidateRect(dlg, NULL, TRUE);
+}
+
 static void refresh(HWND dlg)
 {
     char text[MAX_PATH], status[256] = "", warn[256] = "", shim[160] = "";
     GetDlgItemTextA(dlg, IDC_FOLDER, text, MAX_PATH);
     have_game = normalize_root(text, root);
     modded = 0;
+    exe_supported = 0;
     if (!have_game) {
         lstrcpyA(status, "SADK.exe not found - choose the game folder (or its bin folder).");
     } else {
@@ -359,8 +390,8 @@ static void refresh(HWND dlg)
         exe_supported = file_md5(exe, md5) && strcmp(md5, SUPPORTED_EXE_MD5) == 0;
         int st = shim_state();
         if (!exe_supported)
-            lstrcpyA(shim, st ? "Unsupported SADK.exe - remove bin\\wsock32.dll; the shim needs the DRM-free build."
-                              : "Unsupported SADK.exe - the shim needs the DRM-free build and is not installed.");
+            lstrcpyA(shim, st ? "Unsupported SADK.exe - remove bin\\wsock32.dll, it only works on the DRM-free build."
+                              : "Unsupported SADK.exe - shim and mods are not installed.");
         else lstrcpyA(shim, st == 1 ? "Shim (wsock32.dll): up to date. Save installs or updates the mods."
                       : st == 0 ? "Shim (wsock32.dll): not installed - Save installs it and the mods."
                                 : "Shim (wsock32.dll): a different version - Save replaces it, updates the mods.");
@@ -384,6 +415,17 @@ static void refresh(HWND dlg)
     SetDlgItemTextA(dlg, IDC_MODWARN, warn);
     SetDlgItemTextA(dlg, IDC_SHIM, shim);
     EnableWindow(GetDlgItem(dlg, IDOK), have_game);
+    /* Without the mods their settings do nothing. */
+    int unsupported = have_game && !exe_supported;
+    EnableWindow(GetDlgItem(dlg, IDC_FORCE), !unsupported);
+    EnableWindow(GetDlgItem(dlg, IDC_BILLBOARDS), !unsupported);
+    SetDlgItemTextA(dlg, IDC_EXEWARN, unsupported
+        ? "This SADK.exe is NOT the DRM-free build: the mod loader and the mods (gamebridge, assetshare, "
+          "billboards) will not be installed.\n"
+          "You can then only host with a forwarded game port, and you cannot join games that share maps or mods.\n"
+          "Put the publisher's DRM-free SADK.exe into the bin folder, then run this tool again and press Save."
+        : "");
+    show_exe_warning(dlg, unsupported);
 }
 
 static int get_port(HWND dlg, int id, const char *what, unsigned *out)
@@ -485,6 +527,12 @@ static INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                                  GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
         SendMessageA(dlg, WM_SETICON, ICON_BIG, (LPARAM)big);
         SendMessageA(dlg, WM_SETICON, ICON_SMALL, (LPARAM)small);
+        LOGFONTA lf;
+        if (GetObjectA((HFONT)SendMessageA(dlg, WM_GETFONT, 0, 0), sizeof lf, &lf)) {
+            lf.lfWeight = FW_BOLD;
+            bold_font = CreateFontIndirectA(&lf);
+            SendDlgItemMessageA(dlg, IDC_EXEWARN, WM_SETFONT, (WPARAM)bold_font, FALSE);
+        }
         SendDlgItemMessageA(dlg, IDC_HOST, EM_LIMITTEXT, 200, 0);
         for (int id = IDC_LOBBYPORT; id <= IDC_BRIDGEPORT; id++) SendDlgItemMessageA(dlg, id, EM_LIMITTEXT, 5, 0);
         char r[MAX_PATH];
@@ -495,7 +543,8 @@ static INT_PTR CALLBACK dlg_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     }
     case WM_CTLCOLORSTATIC: {
         int id = GetDlgCtrlID((HWND)lp);
-        if (id == IDC_MODWARN || (id == IDC_STATUS && (modded || !have_game))) {
+        if (id == IDC_EXEWARN || id == IDC_MODWARN || (id == IDC_STATUS && (modded || !have_game)) ||
+            (id == IDC_SHIM && have_game && !exe_supported)) {
             SetTextColor((HDC)wp, RGB(176, 32, 16));
         } else if (id == IDC_STATUS) {
             SetTextColor((HDC)wp, RGB(0, 120, 40));

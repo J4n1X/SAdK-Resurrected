@@ -18,7 +18,9 @@ needs.
   missing or different.
 - **Shim and mods only on the DRM-free build:** they call game functions at fixed addresses, so they are installed
   only when `bin\SADK.exe` has MD5 `d4832bc5103c14f5445471af29b8d778` (the DRM-free build). On any other
-  build Save writes the settings but not the shim, and says why.
+  build Save writes the settings but not the shim, and says why. The window shows this all the time, not only
+  after Save: a red warning at the top (what is missing, what that means for hosting and joining, and to put the
+  DRM-free `SADK.exe` into `bin`), and the two mod settings below are greyed out.
 - **Mods** (embedded, installed on the DRM-free build): `mods\gamebridge` (hosting through the server; "Bridge
   port" and "Always host through the bridge" are `[Bridge] Port` / `ForceBridge` in its `gamebridge.ini`),
   `mods\assetshare` (map sharing; `assetshare.ini` as shipped) and `mods\billboards` ("Disable billboards" is

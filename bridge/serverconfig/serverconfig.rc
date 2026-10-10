@@ -16,6 +16,8 @@ STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSM
 CAPTION "SAdK-ServerConfig"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
+    /* Hidden unless the chosen SADK.exe is not the DRM-free build; main.c then moves everything else down. */
+    LTEXT           "", IDC_EXEWARN, 7, 7, 246, 62, NOT WS_VISIBLE
     GROUPBOX        "Game folder", -1, 7, 7, 246, 60
     EDITTEXT        IDC_FOLDER, 14, 20, 206, 14, ES_AUTOHSCROLL
     PUSHBUTTON      "...", IDC_BROWSE, 224, 20, 22, 14
