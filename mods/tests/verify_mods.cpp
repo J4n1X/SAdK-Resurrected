@@ -21,6 +21,7 @@ bool proximity_start();
 bool invasion_start();
 bool takeover_start();
 bool cheatstart_start();
+bool oscursor_start();
 
 int main(int argc, char **argv)
 {
@@ -53,12 +54,13 @@ int main(int argc, char **argv)
     invasion_start();
     takeover_start();
     cheatstart_start();
+    oscursor_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 1 + 6 + 1 + 1 + 13 + 22 + 1;           // billboards 1 hook, borderless 6 hooks, npcmodels 1,
+    const int expected = 1 + 6 + 1 + 1 + 13 + 22 + 1 + 3;       // billboards 1 hook, borderless 6 hooks, npcmodels 1,
                                                           // nomeshcache 1 hook, assetshare 8 patches + 5 hooks,
-                                                          // navalcombatfix 22 hooks, cheatstart 1 hook (events are not
-                                                          // verified)
+                                                          // navalcombatfix 22 hooks, cheatstart 1 hook, oscursor 3
+                                                          // hooks (events are not verified)
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

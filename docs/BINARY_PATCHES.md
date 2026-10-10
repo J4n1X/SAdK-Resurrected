@@ -177,3 +177,33 @@ Live 2026-10-08: the first version set the windowed flag, so resolution changes 
 the flag ended up in the settings; the lobby's mouse look then turned continuously. The version described here
 fixes both and works in the game (maintainer's test, 2026-10-08).
 
+## Windows cursor (mod `mods/oscursor`, hooks)
+
+`engine.ini` `[Engine] hardwareCursor` (`data\game\settings\engine.ini`, the game's `[data]\settings\engine.ini`
+through `FileScanHolder::ResolvePath` S 006e3fd0) is read once, when `S2CE::CGraphicDevice::Init` S 004da2a0 first
+creates the device, into `CGraphicDevice+0xbd` (default 1; not read for an external window, `+0xc8`).
+- **1:** `SetHWCursor` S 004d6b50 loads `gfx\Mousecursors_MainCursor.tga` (or `engine.xml`'s `hwCursor`) into a
+  texture and sets `bHwCursorLoaded` (`+0x4b0`). The cursors of `game\ui\layout\cursors.xml` (arrow, animated
+  clock, build cursor; all 32×32, 32-bit TGA) are textures too: `HwCursorSlot::LoadFromFile` S 004d4b70, managed
+  pool, the file's format. `nUi::Cursor::SelectCursor` S 00492960 switches them through `SetCustomCursor`
+  S 004d6ca0 (only with `+0x4b0` set). `Show`/`Hide` go through `ShowHWCursor` S 004d69d0, which calls
+  `SetCursorProperties`, `SetCursor(NULL)` and `IDirect3DDevice9::ShowCursor`. On `WM_SETCURSOR`,
+  `HandleWindowMessage` S 004da8d0 calls `ShowHWCursor(true)` again while the cursor is visible.
+- **0:** the Windows arrow (`LoadCursor(IDC_ARROW)` into `+0x1b0`), set on `WM_SETCURSOR`. Cursor changes do nothing
+  (`SetCustomCursor` needs `+0x4b0`), and `ShowHWCursor` returns early without a cursor texture.
+
+Direct3D 9 only shows such a cursor as a Windows cursor when its size is the system cursor size: 32×32 up to 125%
+display scaling, 48×48 from 150%
+([SetCursorProperties](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setcursorproperties),
+[About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)). Otherwise Direct3D draws the
+cursor itself. PCGamingWiki reports an invisible pointer above 125% scaling for The Settlers II 10th Anniversary, the
+same engine. [TODO, live] Which of the paths an affected PC takes.
+
+The mod makes a Windows cursor (`CreateIconIndirect`, 32-bit colour with alpha) from each cursor texture's level 0
+and the slot's hotspot, and sets it with `SetCursor` where the game shows its Direct3D cursor:
+- `ShowHWCursor` (`bHwCursorVisible` `+0x4b1` kept);
+- `SetCustomCursor`, after the game's slot bookkeeping (cursor changes and the clock's animation);
+- `WM_SETCURSOR` in the client area (`HTCLIENT`; a window frame keeps Windows' cursors).
+
+Direct3D's `ShowCursor` is never called, so its cursor stays hidden. With `hardwareCursor = 0` (no `+0x4b0`), or for
+a texture that is not A8R8G8B8 or X8R8G8B8, the game's own code runs.
