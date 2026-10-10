@@ -142,6 +142,24 @@ its last argument `noCache` is set. The callers checked (`LoadMesh` 0050b68b, `A
 callers use; its reader is [TODO]. In the game (maintainer's test, 2026-10-08) the mod works, but the lobby town flickers while it is on;
 the cause is not investigated.
 
+## Map without a preview picture (mod `mods/nopreview`, hooks)
+
+`LobbyMenu::SetupGameDialog::UpdateMapPreviewImage` S 00454fc0 (hosting) and
+`nMenu::FreeGamePanel::UpdateMapPreviewImage` S 005e7220 (offline free game) are the same code. When the chosen map
+differs from `previewMapName`, the previous preview texture is destroyed (`UiResourceManager::ReleaseTexture`
+S 00493ae0 → `CResourceMgr::DestroyTexture` S 004daf10: destructor and `free`) and the name is cleared. Only when the
+new map's `<map>.bmp` exists (`Fs_FileExists`) is a texture loaded (`PreloadMapPreviewTexture` S 00494610), stored in
+the `MapPreview` widget's `shape.texture` (`nUi::ShapedObject` `+0x198`, `nUi::Shape` `+0x14`) and the name set again.
+For a map without a `.bmp` the widget keeps the pointer to the destroyed texture and stays visible, so the next frame
+draws it: `UiSprite_RenderToOwnerRect` S 004aa310 only tests the pointer, and `S2CE::CTexture::LinkToStage` S 004e7520
+reads the texture's device at 004e7562. `[known]` (static). A player's crash dump (2026-10-10, hosting a custom map)
+shows this call stack with a null device and a null D3D texture; that the map had no `.bmp` is `[inferred]`. All 20
+shipped free-game maps have a `.bmp`, so only custom maps are affected.
+
+The mod hooks both functions: when a call cleared a non-empty `previewMapName` and stored none, it sets the widget's
+`shape.texture` to null, and the preview area stays empty. Verified against the DRM-free `SADK.exe` (`make verify`
+in `mods/`); in the game `[TODO]`.
+
 ## Borderless fullscreen (mod `mods/borderless`, hooks)
 
 `S2CE::CGraphicDevice` keeps its display settings as a 9-dword block at `+0xa8`: width, height, and in the third
