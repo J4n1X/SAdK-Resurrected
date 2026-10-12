@@ -398,3 +398,19 @@ Packets, flow, speed and pitfalls: `docs/s2tftp.md`.
 | `0x00427f10` | `ai::net::S2TftpSession::OnAck` | stop-and-wait: next block only after the ack |
 | `0x00427cf0` | `ai::net::S2TftpSession::OnData` | acks each block; completes on a short block |
 | `0x0041f220` | `UserProfile_GetConnectionType` | UserProfile `+0x94`, option `cConnectionType` (0 none … 4 LAN); was `FUN_0041f220` |
+
+## 8. Match wager (`sadk_noav.exe`, 2026-10-12)
+
+| Address | Name | What |
+|---|---|---|
+| 0x004625c0 | `LobbyManager::GetLocalAvatar` | returns `LobbyManager +0x554`, the local player's `AvatarProxy` `[inferred]` type |
+| 0x00413a00 / 0x00413a10 | `NComm::EventGameInformation::GetWager` / `SetWager` | the wager, game information `+0x233` `[known]` |
+| 0x0040c1b0 | `NComm_Manager::SetWager` | host: store, clear the human slots' ready state on change, broadcast `[known]` |
+| 0x00457d50 | `LobbyMenu::SetupGameDialog::HandleSettingsClicks` | BetGame opens the stack dialog, 0 .. the host's gold `[known]` |
+| 0x00457900 | `LobbyMenu::SetupGameDialog::OnWagerChosen` | clamp >= 0, host calls `SetWager` `[known]` |
+| 0x00454cf0 | `LobbyMenu::SetupGameDialog::UpdatePlayerRow` | ready button: wager <= own gold, no AI slot unless wager 0 `[known]` |
+| 0x00457a00 | `LobbyMenu::SetupGameDialog::Update` | un-readies the local player when gold < wager `[known]` |
+| 0x0046b3d0 | `RefereeResult_GetName` | result code 0..20 → name, table `0x0087aee0` `[known]` |
+
+Fields: `LobbyManager +0x54c localAvatarId`, `+0x554 localAvatar`; `NComm::EventGameInformation +0x22f gameSeed`,
+`+0x233 wager`, `+0x237 settingsCrc`. Protocol side: `docs/message-catalog.md`, 0xDB6 RegisterGame.

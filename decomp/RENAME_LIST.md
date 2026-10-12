@@ -1304,3 +1304,14 @@ S2TFTP findings: `docs/s2tftp.md`.
 | `0x0054f8d0` | `Properties_RunPropertyScript` (`void __stdcall(void*)`) | `ai::properties::PropertiesDb::RunPropertyScript` (`void __thiscall(PropertiesDb*, std::string *scriptName)`) | the only call site passes the database in ECX and the name on the stack (`RET 4`); the body never reads ECX `[known]` |
 
 Type change: `NComm_Manager` `+0xdc` `NComm::EventGameInformation gameInformation` (0x24f, was undefined): `GetGameInformation` returns its address, `HandleEvent` 0x30003 assigns into it `[known]`.
+
+## 2026-10-12 — match wager (`sadk_noav.exe`)
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x004625c0` | `FUN_004625c0` (`int __fastcall(void*)`) | `LobbyManager::GetLocalAvatar` (`AvatarProxy * __thiscall(LobbyManager*)`) | returns `+0x554`; its readers compare `+0xd0` (`AvatarProxy.gold`) with the match wager in `SetupGameDialog::UpdatePlayerRow` `0x00454cf0` and `::Update` `0x00457a00` `[inferred]` type |
+
+Type changes (undefined bytes replaced in place, struct sizes unchanged): `LobbyManager` `+0x54c` `uint localAvatarId`
+`[known]`, `+0x554` `AvatarProxy *localAvatar` `[inferred]`; `NComm::EventGameInformation` `+0x22f` `uint gameSeed`
+`[known]`, `+0x237` `uint settingsCrc` `[inferred]` name. Findings: `docs/message-catalog.md`, 0xDB6 RegisterGame
+("The wager on the client", "ERefereeResult") and 0xDC0 FinishGame.

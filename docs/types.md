@@ -88,7 +88,7 @@ and `ResetSubManagers` S 00462440.
 | +0x544 | GameServerConnection* | game-room connection (new 0x38) | `pGameSlotConnection` | [known] |
 | +0x548 | int | lobby / chat server handle | `nChatServerHandle` | [inferred] |
 | +0x550 | int | selected village server id (-1 reset) | `nSelectedVillageServerCached` | [inferred] |
-| +0x554 | AvatarProxy* | local avatar; +0xd0 of it is the player's gold | – | [inferred] |
+| +0x554 | AvatarProxy* | local avatar (`GetLocalAvatar` S 004625c0); +0xd0 of it is the player's gold | `localAvatar` | [inferred] |
 | +0x558 | std::map | actor map (avatars) | – | [inferred] |
 | +0x564 | std::map | NPC map (shared with the village connection) | – | [inferred] |
 | +0x570 | item database | built from `ItemsClient.txt` (dtor S 0048bf90) | – | [inferred] |
@@ -506,7 +506,8 @@ Shutdown S 0040b410.
 | +0x22a | int | gameId → `RegisterGame` / `FinishGame` GameID | [inferred] |
 | +0x22e | u8 | rankedGame | [inferred] |
 | +0x22f | int | game seed (`SetGameSeed` S 004139f0) | [inferred] |
-| +0x233 | int | wager | [inferred] |
+| +0x233 | int | wager, in gold: `GetWager` S 00413a00, `SetWager` S 00413a10; serialized in the game information, sent as `RegisterGame Wager` | [known] |
+| +0x237 | u32 | settingsCrc (`GetSettingsCrc`); the setup dialog restarts its 3500 ms countdown when it changes | [inferred] name |
 | +0x23b | NComm::MD5Digest (0x14) | password MD5, zero = none; not serialized | [inferred] |
 
 **Key methods:** Serialize S 00413ae0 · ctor_Deserialize S 00413e00 · GetSlot S 00413100 ·

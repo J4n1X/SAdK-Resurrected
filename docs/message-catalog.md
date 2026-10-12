@@ -1912,13 +1912,51 @@ Sent by **every** client whose WorldScreen is active, host and joiners, once per
 - Reply `0xDB7 RegisterGameAcknowledge`, then `0xDB8 RegisterGameResult`. [PROVEN]
 - Read the fields with a bit reader. GameID at byte offset 0 is safe to read as BE u32. Wager and the
   AvatarIDs are not byte-aligned. [known]
-- Stub difference: the stub reads only GameID. Its docstring describes u32-length strings, which does not
-  match the bitstream. There is no wire effect today. [known]
+- The stub reads all of it (`lobby/sadk_lobby/wagers.py`). The layout above decodes the nine RegisterGame frames
+  of the server log of 2026-10-10 to wager 0, no AI, and the players' real avatar ids (= perm ids), identical
+  from every client of a match. [PROVEN for wager 0; a non-zero wager on the wire: TODO]
+
+**The wager on the client.** `Wager` is an amount of gold (`AvatarProxy +0xd0`), set by the host in the
+pre-game room and carried in the NComm game information (gi+0x233). The client's rules, all in
+`LobbyMenu::SetupGameDialog` [known]:
+- Only the host can change it: the BetGame button opens a stack dialog from 0 to the **host's own gold**
+  (`HandleSettingsClicks` S 00457d50); the result is clamped to >= 0 (`OnWagerChosen` S 00457900).
+- A changed wager clears the ready state of every human slot and broadcasts the game information
+  (`NComm_Manager::SetWager` S 0040c1b0), so every player has to confirm the new amount.
+- The local ready button is enabled only when wager <= own gold, more than one human is connected, there is
+  more than one party, GameID is non-zero, and **either no AI slot or wager 0** (`UpdatePlayerRow` S 00454cf0).
+- A player who is ready and whose gold falls below the wager is set to not ready (`Update` S 00457a00).
+- The game's line in the server list carries it: `build|s226|s225|s227|wager|names…` (S 0046a850).
+
+The client never moves gold and shows no wager result after a match: `GetWager` has exactly these readers
+[known]. Winning or losing a wager is the server's bookkeeping, visible to the player only as the gold of the
+character it gets back.
+
+**ERefereeResult.** The names of the referee's result codes (table S 0087aee0, `RefereeResult_GetName`
+S 0046b3d0) say what the original referee checked [known for the table; inferred that each named a check]:
+
+| Code | Name | Code | Name | Code | Name |
+|---|---|---|---|---|---|
+| 0 | None | 7 | MismatchingPlayerCount | 14 | NoAvatarLoaded |
+| 1 | MismatchingGameID | 8 | MismatchingPlayerlist | 15 | NotEnoughCredits |
+| 2 | WrongState | 9 | MismatchedWager | 16 | InvalidMap |
+| 3 | MismatchingMapGUID | 10 | NotParticipating | 17 | InvalidPlayerID |
+| 4 | MismatchingMapName | 11 | FinishFailed | 18 | InvalidChestID |
+| 5 | MismatchingMapSettings | 12 | GameNotFound | 19 | ChestAlreadyClaimed |
+| 6 | MismatchedRankingSettings | 13 | RegistrationTimeOut | 20 | ChestClaimError |
+
+Codes 1 and 3-9 compare one client's RegisterGame with the others' of the same GameID; 13 is a registration
+that not every listed avatar completed in time; 15 is a player whose gold is below the wager. [inferred]
 
 **Open decisions.**
 - **H16** Validation of the registration: slots, wager, ranked, avatar ownership. The client accepts
   Result 0 to proceed. Any non-zero Result shows `!REGISTER_GAME_FAILED` and logs out of the referee.
-  Default: accept.
+  The stub (maintainer rules 2026-10-12, `lobby/sadk_lobby/wagers.py`): a match without a wager is never
+  refused. With a wager, a registration gets 9 when its wager differs from the match's, 8 when its player list
+  differs, 15 when the player's gold is below the wager; the refusal is `0xDB7` Result 0, then `0xDB8` with the
+  code and an empty FailReason. Each registration is answered at once, so a refused player's opponents have
+  already started; the client's own ready rules keep an honest client from getting there. [the refusal on the
+  wire: TODO, not live-tested]
 
 #### 0xDB7 (3511) RegisterGameAcknowledge — referee -> C
 
@@ -1976,13 +2014,21 @@ NComm slot, nothing is sent. [inferred, boards #447/#2368]
 
 **Required server behaviour.**
 - Reply `0xDC1` and then `0xDC2`. [inferred]
-- What the client blocks on after FinishGame was not traced. FinishGameResult fires +0x68 (OK) or +0x74
-  (fail), and no subscriber of those lists is identified. [TODO]
-- Stub difference: the stub logs it and does not reply. [known]
+- The client does not wait for the answer. FinishGameResult fires the referee connection's list +0x68 (OK)
+  or +0x74 (fail), and nothing subscribes to either: of the 166 call sites of the one `ObserverList::Subscribe`
+  (S 00458860), the referee connection's lists get +0x04, +0x10, +0x50, +0x5c, +0x80, +0x8c (WorldScreen) and
+  +0x98 (the give-up requester) only. [known, static]
+- The stub answers `0xDC1` then `0xDC2` with Result 0. [PROVEN: server log 2026-10-10, matches 113 and 115;
+  both clients sent FinishGame naming the same winner within 0.2 s, and their referee connections stayed open
+  from RegisterGame to the end of the match, 76 minutes in match 115]
 
 **Open decisions.**
 - **H19** How to reconcile N reports: agreement, first report, majority. The client accepts anything.
-  Default: accept every report and record the winner when they agree.
+  The stub accepts every report. A match is over for it when every registered player has reported: FinishGame,
+  GiveUpGame, or its referee connection closed. A wager is paid only then, and only when every FinishGame names
+  the same registered player: each other player pays it the wager. No gold moves when the reports disagree,
+  nobody names a winner, or the match has more than two players (the server does not know the teams, and the
+  one named winner's allies are not listed). [offline-tested, `lobby/tests/test_wagers.py`; in the game: TODO]
 
 #### 0xDC1 (3521) FinishGameAcknowledge — referee -> C
 **Contract.** GameID 32, Result 32. Handler S 0047a810. 0 -> log. Non-zero -> list +0x74
@@ -2011,7 +2057,8 @@ re-sent every frame until answered (S 006008b0). [inferred, board #680]
 - Reply `0xDD5` with **GameID equal to the request's**. A mismatched GameID is a silent no-op.
   Both outcomes run the same exit: referee logout, then the main screen. [inferred]
 - Tolerate repeats. [inferred]
-- Stub difference: the stub logs it and does not reply, so the client stays on "Finalizing". [known]
+- The stub answers every `0xDD4` with `0xDD5`, Result 0. [PROVEN: server log 2026-10-10, match 107; the client
+  did resend it, two frames 14 ms apart]
 
 **Open decisions.**
 - **H20** Record the give-up as a loss. This is server-side ranking policy, and the client does not care.
@@ -2053,7 +2100,8 @@ to an ERefereeResult name (S 0046b3d0), logs it, then list +0xa4. **≥21 -> NUL
 - `0xDAD` must use Result 0. Its failure branch fires list **+0x5c**, the RegisterGame-failure list. With
   the WorldScreen active, that shows `!REGISTER_GAME_FAILED` and tears down the referee session
   (S 00479fb0, disasm 0047a0ff). [known]
-- Stub difference: the stub logs it and does not reply. [known]
+- The stub answers `0xDAD` (Result 0) and `0xDAE` with the first claimant as the owner. [PROVEN: server log
+  2026-10-10, match 115: each chest claimed by both clients, 0.2 s apart]
 
 **Open decisions.**
 - **H22** Grant or deny the chest, and the AvatarID / Text returned. See 0xDAE.

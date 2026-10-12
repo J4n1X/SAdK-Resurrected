@@ -95,7 +95,8 @@ Two tracks:
 | Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
 | Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); in the game `[TODO]` (property reload between offline matches ✅ live) |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
-| In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ⚠️ answered per the catalog since 2026-10-07, not live-tested — `[TODO]` |
+| In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ✅ live 2026-10-10 (server log: all three sent by the clients and answered; rewards credited) |
+| Match wagers (`lobby/sadk_lobby/wagers.py`: registration checks, the loser pays the winner in two-player matches) | ⚠️ implemented 2026-10-12, offline-tested; in the game `[TODO]`; matches of more than two players move no gold until the server knows the teams |
 
 The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
 arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The
@@ -134,7 +135,7 @@ saves; never move, overwrite or delete them.**
 - `chat.py` — chat/UC second connection · `village.py` — village/world third connection
 - `players.py` — multi-user identities · `registry.py` — process-global hosted-game store
 - `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
-- `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
+- `server.py` — listeners (lobby 7070, UC/chat 7071, village 5477, referee 5481, bridge 7072/7073) + main loop
 
 Two parts of the project are published as their own repositories (GitHub org `S2-modders`) and mounted here as
 submodules; changes to them are committed and pushed there, then the submodule pointer is updated here:
@@ -167,7 +168,7 @@ Every other mod is in `mods/` (`mods/README.md`): borderless, oscursor, navalcom
 
 ## Running & environment notes
 
-- Ports: `7070` lobby · `7071` UC/chat · `5479` world. Binds `0.0.0.0`. Advertised IP
+- Ports: `7070` lobby · `7071` UC/chat · `5477` village · `5481` referee · `7072`/`7073` host bridge (`5479` is a hosting client's game port). Binds `0.0.0.0`. Advertised IP
   via `SADK_ADVERTISE_IP`.
 - Point **both** client configs at the stub: `data/lobby/config/LobbySettings.ini`
   and `data/game/settings/network.ini`. AdK patchlevel **9212**.
