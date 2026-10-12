@@ -43,7 +43,7 @@ S 004f84b0).
 - **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
   patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
 
-## Map sharing (mod `mods/assetshare`, in memory)
+## Map sharing (mod `lobby/mods/assetshare`, in memory)
 
 The client already contains a map transfer: a joiner that lacks the host's map asks the host for
 `SAdK\maps\<map>.s2m` and `.bmp` over the match connection (S2TFTP, message `0x3eb`) and stores them in its
@@ -79,7 +79,7 @@ host's `My Documents` (and above it with `..\`) through this transfer: `S2TftpMa
 answers every read request with `My Documents\<requested name>`, unchecked. The shim's filter closes this
 for hosts that run assetshare.
 
-## Billboards (mod `mods/billboards`, in memory)
+## Billboards (mod `lobby/mods/billboards`, in memory)
 
 The three advertising screens in the lobby world (`lobby/scene/scene_ad.xml`, models `ad0.KEX` / `ad1.KEX`) are
 web pages. Each model has two materials: the board (`sign ad0` → `sign_ad0.dds`) and the screen
@@ -92,7 +92,7 @@ S 005c7790) and then renders IE's own "navigation canceled" page over it. The `a
 never used.
 
 The screen is part of the board mesh, so a transparent screen texture leaves a hole. The billboards mod
-(`mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig, on unless `[Billboards] Enabled = false` in its `billboards.ini`) instead
+(`lobby/mods/billboards`, installed into `<game>\mods\billboards` by SAdK-ServerConfig, on unless `[Billboards] Enabled = false` in its `billboards.ini`) instead
 shows a plain plank area of the board's own texture. It changes no bytes; it hooks `GetTexture`:
 
 - An entry (`GfxTextureEntry`, 0x24 bytes: `+0` texture, `+4` `std::string` name, `+0x20..0x23` four flags) whose

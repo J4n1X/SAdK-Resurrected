@@ -239,7 +239,7 @@ observer fan-out that simply does not fire). Before a live drive, prefer
 
 ## Related
 
-- `sadk_lobby/village.py` — where `EnterWorld(1000)` is built; the new messages belong beside it.
+- `lobby/sadk_lobby/village.py` — where `EnterWorld(1000)` is built; the new messages belong beside it.
 - The `EnterWorld` `ChatChannelID`/`ChatChannelZone`/`ChatChannelsCount` fields are **not** the
   source of the in-world chat tabs (refuted 2026-07-27 — the tabs are hardcoded in
   `FUN_004389d0`/`LobbyMenu_WorldScreen_OnShow`). Do not conflate the two.

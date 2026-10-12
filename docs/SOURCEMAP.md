@@ -299,7 +299,7 @@ factory vtable @ **0x1004DE84**: `+0x04 Register · +0x08 Unregister · +0x0C Cr
 `1000 EnterWorld→0x46f470 · 1001→0x46ddf0 · 1002→0x46dfb0 · 1003→0x46e190 · 1004→0x46f6c0 ·
 1005→0x46f420 · 1006→0x46e8b0 · 0xED6/3798 SendWorldReadyAck(out) · 0xED7/3799 HandlePongCode→0x46be00`.
 
-See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md` for the current protocol flow.
+See `lobby/sadk_lobby/village.py` and the in-world TODO in `MEMORY.md` for the current protocol flow.
 
 ### 5a. Remaining switch cases — surveyed 2026-07-28 (`sadk_noav.exe` addresses; renamed + checked out
 in the shared Ghidra project, but the **checkin failed** — "file requires merge, not supported in

@@ -11,7 +11,7 @@
                 "${workspaceFolder}/sadkmod/include",
                 "${workspaceFolder}/sadkmod/build/include",
                 "${workspaceFolder}/sadkmod/third_party/minhook/include",
-                "${workspaceFolder}/bridge/wsock32_shim"
+                "${workspaceFolder}/sadkmod/shim"
             ],
             "defines": [],
             "browse": {

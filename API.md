@@ -7,8 +7,8 @@ on top of the DNG lobby.
 
 This is a **flow-level** reference: what talks to what, in which order, and with which IDs.
 The per-message field layouts are in the game's own `msgdefs.ini` (bundled at
-`sadk_lobby/data/msgdefs.ini`) — **that file is authoritative** and overrides anything here.
-The prose reference is `docs/LOBBY_PROTOCOL.md`; the implementation is `sadk_lobby/`.
+`lobby/sadk_lobby/data/msgdefs.ini`) — **that file is authoritative** and overrides anything here.
+The prose reference is `docs/LOBBY_PROTOCOL.md`; the implementation is `lobby/sadk_lobby/`.
 
 Status legend, per `HARNESS.md`: **[PROVEN]** = binary address + live evidence ·
 **[TODO]** = modelled but not confirmed.
@@ -350,7 +350,7 @@ u32 Checksum      CRC32 over the payload
 ```
 
 CRC32 uses the TinCat variant: polynomial `0xEDB88320`, **init 0**, **no final XOR**
-(`sadk_lobby/tincat.py`). A `Ping (11)` needs no answer.
+(`lobby/sadk_lobby/tincat.py`). A `Ping (11)` needs no answer.
 
 ### HandshakeConnect payload — 52 bytes
 
@@ -376,7 +376,7 @@ u16 Type2     == Type1
 
 `Type2` is not redundancy: it **is** the msgdef's leading `type="UNSHORT"` field. The codec
 therefore skips any field literally named `type` when encoding a body
-(`sadk_lobby/msgdefs.py`, `codec.py`).
+(`lobby/sadk_lobby/msgdefs.py`, `codec.py`).
 
 Chat frames replace the prefix with:
 
@@ -467,8 +467,8 @@ stays unjoinable. `server_data_block(1000)` == `00 00 03 E8 00`.
 
 ## Payloads
 
-Field layouts: `sadk_lobby/data/msgdefs.ini` (221 types, the game's own schema).
-Handler table: `sadk_lobby/dispatch.py`. Anything without an explicit handler gets a default
+Field layouts: `lobby/sadk_lobby/data/msgdefs.ini` (221 types, the game's own schema).
+Handler table: `lobby/sadk_lobby/dispatch.py`. Anything without an explicit handler gets a default
 `Result (42)` OK, so no message type is ever left unanswered.
 
 ### Client → server (handled)
@@ -611,4 +611,4 @@ STRING password, u8 protected, u8 persistent, u8 autodelete, u8 hidden, u32 crea
 * `docs/MATCH_START.md`, `docs/MATCH_WORLD_LOGIN.md` — the referee chain in depth
 * `docs/NCOMM_GAME_PROTOCOL.md` — the in-match P2P session
 * `engagement_records/` — one file per live experiment, including the refuted ones
-* `sadk_lobby/data/msgdefs.ini` — **authoritative** field layouts
+* `lobby/sadk_lobby/data/msgdefs.ini` — **authoritative** field layouts

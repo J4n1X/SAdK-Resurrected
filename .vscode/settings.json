@@ -15,7 +15,7 @@
         "release/**": true,
         "mapping/cache/**": true,
         "mapping/dumps/**": true,
-        "sourcemap/**/*.gz": true
+        "sadkmod/sourcemap/**/*.gz": true
     },
     "files.watcherExclude": {
         "**/build/**": true,

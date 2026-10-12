@@ -166,7 +166,7 @@ drive the client to state 9: advertise a `ServerType=4` village entry (msg 170, 
 accept the 3rd TinCat connection to that entry's Ip/Port, and on the village handshake send
 village-message **1000** with the property bag (`Worldname`, `ServerPerm`, chat channels) →
 `HandleEnterWorld` → `SetState(9)` → 3D world + working `MainMenu` Host/Join. That is the
-correct path — not a UI edit. See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
+correct path — not a UI edit. See `lobby/sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
 ### The one UI edit that *is* possible (and its limit)
 Because `lobbyAvatarScreen.xml` is just layout, you *can* add a real, clickable widget to the

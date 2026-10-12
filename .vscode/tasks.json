@@ -4,7 +4,7 @@
         {
             "label": "build: all (shim, mods, ServerConfig)",
             "type": "shell",
-            "command": "make -C bridge/wsock32_shim && make -C mods && make -C bridge/serverconfig",
+            "command": "make -C sadkmod/shim && make -C mods && make -C lobby/setup SADKMOD=../../sadkmod",
             "group": { "kind": "build", "isDefault": true },
             "problemMatcher": { "base": "$gcc", "fileLocation": ["autoDetect", "${workspaceFolder}"] }
         },
@@ -32,14 +32,14 @@
         {
             "label": "test: verify shim + mod patches against SADK.exe (Wine)",
             "type": "shell",
-            "command": "make -C bridge/wsock32_shim verify && make -C mods verify",
+            "command": "make -C mods verify && make -C lobby/mods verify SADKMOD=../../sadkmod",
             "group": "test",
             "problemMatcher": []
         },
         {
             "label": "test: server (Python)",
             "type": "shell",
-            "command": "for t in tests/test_*.py; do python3 \"$t\" > /dev/null || echo \"FAIL $t\"; done; echo done",
+            "command": "for t in lobby/tests/test_*.py; do python3 \"$t\" > /dev/null || echo \"FAIL $t\"; done; echo done",
             "group": "test",
             "problemMatcher": []
         },

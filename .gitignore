@@ -114,4 +114,4 @@ tincat_lobby_unhandled.log*
 !/sourcemap/sadk_noav.exe/
 
 # ── The game's own message schema: copyrighted, never commit (copy it from your game's bin folder) ──
-/sadk_lobby/data/msgdefs.ini
+/lobby/sadk_lobby/data/msgdefs.ini

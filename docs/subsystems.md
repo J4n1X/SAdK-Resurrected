@@ -8,7 +8,7 @@ and `tincat3.dll` (the network middleware, image base `0x10000000`).
   addresses and match runtime (no rebase).
 - Tags: **[known]** = read directly from the binary (decompile, disassembly, strings, imports).
   **[inferred]** = follows from known facts through one reasoning step. **[guess]** = plausible, not
-  checked. **[PROVEN]** = the working stub (`sadk_lobby/`) shows it live (binary address plus live evidence).
+  checked. **[PROVEN]** = the working stub (`lobby/sadk_lobby/`) shows it live (binary address plus live evidence).
 - Wire layouts are not repeated here. See [message-catalog.md](message-catalog.md) for per-message fields
   and [LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md) for the NETMSG reference.
 - Mapping numbers come from a `mapping/state.db` snapshot taken on 2026-10-07 at the end of Phase 6.
@@ -92,7 +92,7 @@ strongest evidence for the whole stage.
    ↔ NComm_Manager::AdvanceNetTick S 00411990 (1001 client→host, 1002 host→clients)
 ```
 
-The full referee chain and its failure modes are in `sadk_lobby/referee.py`, `sadk_lobby/dispatch.py` and
+The full referee chain and its failure modes are in `lobby/sadk_lobby/referee.py`, `lobby/sadk_lobby/dispatch.py` and
 `engagement_records/2026-07-27_referee-*.md`. Every failure in that chain is silent: the frame is accepted, the
 socket stays open, and nothing is logged.
 

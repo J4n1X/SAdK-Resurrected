@@ -22,7 +22,7 @@ this session. Evidence tags: `[PROVEN]` = address + decompiled evidence here;
 `[TODO]` = inferred or runtime-indirected, needs a live trace.
 
 > **Why it's broken in the stub.** Match start is **referee-gated**. The referee /
-> match-arbiter subsystem was removed from `sadk_lobby/`, so the client's referee login
+> match-arbiter subsystem was removed from `lobby/sadk_lobby/`, so the client's referee login
 > never completes and the host's `RegisterGame` never gets a `GameSeed` back — and a
 > deterministic lockstep RTS cannot start a match without the shared seed. The 3D lobby
 > works; pressing through to a match does not.

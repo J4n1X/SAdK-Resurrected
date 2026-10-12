@@ -45,7 +45,7 @@ that the real client connects to, plus a small optional client add-on for hostin
   playtime (2-minute minimum), with a bonus for the winner and for chests (which also give an item).
 - **Host bridge:** a host behind a router without a forwarded port can still be joined. A small proxy
   `wsock32.dll` next to the game detects this at start-up and routes joiners through the server instead
-  (`docs/bridge-protocol.md`). Live-tested 2026-10-07.
+  (`lobby/docs/bridge-protocol.md`). Live-tested 2026-10-07.
 
 **Chat commands**
 
@@ -70,7 +70,7 @@ that the real client connects to, plus a small optional client add-on for hostin
 
 ## Playing on a server
 
-You need a legal install of the game and the **SAdK-ServerConfig** tool (`bridge/serverconfig/`):
+You need a legal install of the game and the **SAdK-ServerConfig** tool (`lobby/setup/`):
 
 1. Run `SAdK-ServerConfig.exe`. It finds the game folder (or pick it), shows whether your game data is
    modified, and lets you enter the server's address. *Advanced configuration* exposes the ports.
@@ -93,13 +93,14 @@ Legacy driver (9.13.0604) if the game reports `NxCreatePhysicsSDK failed`.
 ## Running a server
 
 ```bash
-pip install -r requirements.txt     # cryptography, twofish
-python -m sadk_lobby                # or as a systemd service, see below
+git submodule update --init                # the server is the lobby/ submodule (S2-modders/sadklobby)
+pip install -r lobby/requirements.txt      # cryptography, twofish
+cd lobby && python -m sadk_lobby           # or as a systemd service, see below
 ```
 
-The server reads the game's own message schema, `msgdefs.ini`, from `sadk_lobby/data/msgdefs.ini` and refuses to
+The server reads the game's own message schema, `msgdefs.ini`, from `lobby/sadk_lobby/data/msgdefs.ini` and refuses to
 start without it. It is copyrighted game data, so neither this repository nor the release includes it: copy
-`bin\msgdefs.ini` from your game installation into `sadk_lobby/data/` (in the release: `server/sadk_lobby/data/`).
+`bin\msgdefs.ini` from your game installation into `lobby/sadk_lobby/data/` (in the release: `server/sadk_lobby/data/`).
 
 | Port (TCP) | Role |
 |---|---|
@@ -122,7 +123,7 @@ Hosting a match needs the host's game port (TCP 5479 by default) reachable, or t
 ## Tests
 
 ```bash
-for t in tests/test_*.py; do python3 "$t"; done     # or: pytest tests/
+for t in lobby/tests/test_*.py; do python3 "$t"; done     # or: pytest lobby/tests/
 ```
 
 The tests cover the wire codec (a byte-for-byte golden test), login, characters and saves, chat,
@@ -133,10 +134,10 @@ against fake sockets. Live behaviour is only ever proven against a real client.
 
 ## For reverse engineers
 
-- **`sourcemap/`** — everything named and typed in Ghidra, for both binaries: ~30,000 named functions
+- **`sadkmod/sourcemap/`** — everything named and typed in Ghidra, for both binaries: ~30,000 named functions
   with signatures, 1,500+ classes and namespaces, 4,300 data types, labels and comments. Import it
   into your own Ghidra on your own copy of the DRM-free `SADK.exe` and `tincat3.dll` with
-  `ApplySourcemap.java` (see `sourcemap/README.md`).
+  `ApplySourcemap.java` (see `sadkmod/sourcemap/README.md`).
 - **`sadkmod/`** — a C++ library for modding the game from inside its process: typed declarations of the
   game's functions, classes and globals generated from the sourcemap (17,000+ callable functions, 2,300
   types with checked layouts), byte patches that check what they replace, MinHook-based hooks, mirrors of
@@ -146,7 +147,7 @@ against fake sockets. Live behaviour is only ever proven against a real client.
 - **`docs/message-catalog.md`** — the protocol reference: every message the client sends or handles,
   what it expects back, and why, with binary addresses.
 - `docs/types.md` (structs and classes), `docs/subsystems.md`, `docs/village-and-character-protocol.md`,
-  `docs/bridge-protocol.md`, `docs/map-format.md`.
+  `lobby/docs/bridge-protocol.md`, `docs/map-format.md`.
 - **`HARNESS.md`** — the rules the work follows: reverse engineering through the Ghidra MCP, live
   debugging through the Frida MCP (`tools/frida_mcp/`), no faked results, honest status.
 
@@ -179,20 +180,23 @@ LobbyMessage field scalars are big-endian; the surrounding TinCat message fields
 | `STRING N` | int32 length (incl. NUL) + ISO-8859-15 bytes |
 | `MEMBLOCK` | int32 length + raw bytes |
 
-The message schema comes from the game's own `msgdefs.ini` (supplied from your install into `sadk_lobby/data/`),
+The message schema comes from the game's own `msgdefs.ini` (supplied from your install into `lobby/sadk_lobby/data/`),
 so one generic codec encodes and decodes every message.
 
 ## Repo map
 
 ```
-sadk_lobby/          the server (Python package)
-sadkmod/             C++ modding library: generated game declarations, patches, hooks (sadkmod/README.md)
-bridge/wsock32_shim/ the shim: proxy wsock32.dll and mod host (C++)
-mods/                the repo's mods (gamebridge, assetshare, billboards, ...) and how to write one (mods/README.md)
-bridge/serverconfig/ SAdK-ServerConfig, the Windows setup tool (C, Win32)
-sourcemap/           Ghidra map of SADK.exe and tincat3.dll + its import script
+sadkmod/             submodule (S2-modders/sadkmod): the C++ modding library, generated game declarations,
+                     patches, hooks, how to write a mod (sadkmod/docs/writing-mods.md)
+sadkmod/shim/        the shim: proxy wsock32.dll and mod host (C++)
+sadkmod/sourcemap/   Ghidra map of SADK.exe and tincat3.dll + its import script
+lobby/               submodule (S2-modders/sadklobby): the lobby server with its players' side
+lobby/sadk_lobby/    the server (Python package)
+lobby/tests/         the server's offline tests
+lobby/mods/          the mods a lobby player needs: gamebridge, assetshare, billboards
+lobby/setup/         SAdK-ServerConfig, the Windows setup tool (C, Win32)
+mods/                this repo's further mods (mods/README.md)
 docs/                protocol and RE reference
-tests/               offline tests
 tools/               wire proxy and capture decoders, the Frida MCP, CVar client
 mapping/             the whole-binary mapping run's infrastructure
 CLAUDE.md, HARNESS.md   instructions and rules for the agents doing the work

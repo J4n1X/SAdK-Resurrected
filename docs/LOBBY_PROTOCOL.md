@@ -55,7 +55,7 @@ server means matching this binary protocol.
 
 EnterWorld(1000) is understood and drives the client into the rendered world. [PROVEN]
 **[TODO]** full in-world set (1001–1006, ticks, observer fan-out, entity overlays) — not yet a
-reimplementable spec. See `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
+reimplementable spec. See `lobby/sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
 ### 3.3 Authentication & Session [PROVEN]
 
@@ -78,7 +78,7 @@ reimplementable spec. See `sadk_lobby/village.py` and the in-world TODO in `MEMO
 | 188 | **CheckVersion** | version(SISHORT), subversion(SISHORT) |
 | 178 | **ChangePatchlevel** | patchlevel |
 
-**Login flow** [PROVEN] (implemented in `sadk_lobby/crypto.py`; **ECDH, not RSA**):
+**Login flow** [PROVEN] (implemented in `lobby/sadk_lobby/crypto.py`; **ECDH, not RSA**):
 ```
 C→S  201 StartAuthenticateSession  (client ECDH secp521r1 public key)
 S→C  202 AckAuthenticateSession    (server ECDH public key)
@@ -420,7 +420,7 @@ Keyed by (category, index) → signed int. Used for persistent game data (resour
 - `1000 EnterWorld` is the world-entry handshake that drives the client into the rendered world. [PROVEN]
   Receiver and field reads: see SOURCEMAP §2b (`HandleEnterWorld`).
 - **[TODO]** full in-world message set (1001–1006, ticks, observer fan-out). Tracked in
-  `sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
+  `lobby/sadk_lobby/village.py` and the in-world TODO in `MEMORY.md`.
 
 ---
 
@@ -451,7 +451,7 @@ Keyed by (category, index) → signed int. Used for persistent game data (resour
 Minimum viable lobby (login → browser → chat → server list):
 1. TCP listener (orig 7070); point `LobbySettings.ini` Host at the stub.
 2. Auth: real flow (201–207, ECDH + SHA-512/XOR + Twofish-CTR, completes on `153`), implemented in
-   `sadk_lobby/crypto.py`. Plaintext fallback: `4` → `42` OK → `207`.
+   `lobby/sadk_lobby/crypto.py`. Plaintext fallback: `4` → `42` OK → `207`.
 3. Server browser (168, 170, 171); ConnectionData relay (221–222); TAN handshake (223–224).
 4. MOTD + chat (105, 106, 165); Result (42).
 5. Serve patchlevel 9212; accept any CD key.

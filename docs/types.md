@@ -100,7 +100,7 @@ and `ResetSubManagers` S 00462440.
 
 `+0x580` is set by `SetRefereeServerAddress` S 004625d0. The stub shows it live: once a type-4/sub-4
 assign reply arrives, the client retries `189 AssignServer` exactly every 60 s, which is the +0x588 timer
-re-arming. A type-4/sub-5 reply never sets it. Sources: `sadk_lobby/dispatch.py` `_h_assign_server`
+re-arming. A type-4/sub-5 reply never sets it. Sources: `lobby/sadk_lobby/dispatch.py` `_h_assign_server`
 and the 2026-07-27 referee engagement records.
 
 **`LobbyManagerState`** (`/LobbyManagerState`, 4 bytes) [known]: 0 Init, 1 Disconnected, 2 Authorizing,
@@ -289,7 +289,7 @@ FinishGameAcknowledgeReceived S 0047a810 · FinishGameResultReceived S 0047a9c0.
 
 [PROVEN] The stub has driven `RegisterGame 0xDB6` to `Ack 0xDB7` and `Result 0xDB8` live (two matches,
 2026-07-27). `LoginSuccessReceived` S 0047ac20 drops a PermID whose bytes are not big-endian (see
-`sadk_lobby/referee.py`).
+`lobby/sadk_lobby/referee.py`).
 
 ### 1.7 GameServerConnection
 
@@ -322,7 +322,7 @@ extra data members [inferred]. It absorbed the 1-byte PRIOR root `/GameServerCon
 | +0x38 | int | 1 in the send ctor, 0 in InitFromWire; meaning [TODO] | [known] values |
 
 Multi-byte scalars written into a LobbyMessage field are big-endian [PROVEN]: the stub packs them with
-`struct.pack(">I")` (`sadk_lobby/village.py`), and a little-endian PermID is dropped by S 0047ac20.
+`struct.pack(">I")` (`lobby/sadk_lobby/village.py`), and a little-endian PermID is dropped by S 0047ac20.
 
 **Key methods:** ctor (send) S 0048fb00 · InitFromWire S 0048fa50 · InitFromBuffer S 0048f9a0 · WriteBits
 S 0048ef70 / ReadBits S 0048f0d0 · Write/ReadInt S 0048f2c0 / S 0048f300 · WriteString S 0048fe20 ·

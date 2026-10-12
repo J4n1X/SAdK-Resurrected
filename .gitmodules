@@ -1,0 +1,6 @@
+[submodule "sadkmod"]
+	path = sadkmod
+	url = https://github.com/S2-modders/sadkmod.git
+[submodule "lobby"]
+	path = lobby
+	url = https://github.com/S2-modders/sadklobby.git

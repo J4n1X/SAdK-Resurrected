@@ -15,7 +15,7 @@ it waits, what happens on errors, and which values the server may use.
 
 **Confidence tags.** [known] means read directly from code or disassembly. [inferred] means
 derived from code but not observed end to end. [guess] means plausible, with no direct evidence.
-[PROVEN] means the working stub (`sadk_lobby/`) shows it live against the real client. A
+[PROVEN] means the working stub (`lobby/sadk_lobby/`) shows it live against the real client. A
 [PROVEN] claim carries a binary address and the date of the live evidence. [TODO] marks an open
 question.
 
@@ -86,7 +86,7 @@ values inside the parts are u32 LE. [known, T 100163c0, T 1002eac0]
 
 This blob is the game's own **save**: the client builds the character (look, items, gold/glod, level,
 last position) from it at login, and the avatar-select screen draws it. The server keeps it current
-(`sadk_lobby/savegame.py`). [PROVEN 2026-10-07: look, items and position restored after a re-login]
+(`lobby/sadk_lobby/savegame.py`). [PROVEN 2026-10-07: look, items and position restored after a re-login]
 The avatar-select screen shows the saved colours but only some equipped items: items that change the
 main-hand animation are not drawn there, and neither are some that do not [observed live 2026-10-07;
 which items the select screen draws, and why, is TODO].
@@ -611,7 +611,7 @@ LobbyAction table (S 004325b0):
 
 **Stub:** NPC spawning is on (`config.VILLAGE_NPCS_ENABLED = True`): eight record NPCs at the
 maintainer's measured spots (shops, tailor, hall of fame, games, both taverns' matchmakers, mail) and one
-walker (`sadk_lobby/npcs.py`).
+walker (`lobby/sadk_lobby/npcs.py`).
 
 ### 5.2 NPC interaction
 

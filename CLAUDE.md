@@ -57,12 +57,12 @@ the German standalone on the *Settlers II: 10th Anniversary* (DNG) engine. The
 official servers died ~2014.
 
 The method: reverse-engineer the original client (`SADK.exe` + `tincat3.dll`) and run
-a Python **stub lobby server** (`sadk_lobby/`) that the real, unmodified client
+a Python **stub lobby server** (`lobby/sadk_lobby/`) that the real, unmodified client
 connects to. The goal is to **speak the protocol correctly**, not to force
 client-side bypasses.
 
 Two tracks:
-- **Online lobby revival** — the active frontier, centred on `sadk_lobby/`.
+- **Online lobby revival** — the active frontier, centred on `lobby/sadk_lobby/`.
 - **Game asset decoding / modding** — encrypted `.KEX` / `sadk` files via `AdKEd.exe`
   (see `docs/REVERSE_ENGINEERING_GUIDE.md`).
 
@@ -89,7 +89,7 @@ Two tracks:
 | In-world content: NPCs (shops, tailor, hall of fame, games, matchmakers, mail) | ✅ on (`config.VILLAGE_NPCS_ENABLED = True`); models: only the male set of `npc_bodyparts.xml` is reachable (`docs/village-and-character-protocol.md` §5.1) |
 | Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07; tailor ✅ live 2026-10-07 (owner and others see the new look); shop/inventory `[TODO]` |
 | Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
-| Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
+| Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`lobby/sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
 | Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
@@ -99,7 +99,7 @@ Two tracks:
 
 The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
 arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The
-full chain — and the four *silent* bugs that hid it — are documented in `sadk_lobby/referee.py`,
+full chain — and the four *silent* bugs that hid it — are documented in `lobby/sadk_lobby/referee.py`,
 `dispatch.py` (`_h_assign_server` / `_h_connection_data`) and
 `engagement_records/2026-07-27_referee-*.md`. **Read those before touching anything referee-related:
 every failure mode in this subsystem is silent** (frame accepted, socket stays open, nothing
@@ -116,13 +116,18 @@ Two facts worth burning in:
 
 ## Repository architecture quick map
 
-Run the stub:
+Run the stub (it lives in the `lobby/` submodule, `S2-modders/sadklobby`; after cloning:
+`git submodule update --init`, not recursive):
 ```bash
-pip install -r requirements.txt
-python -m sadk_lobby
+pip install -r lobby/requirements.txt
+cd lobby && python -m sadk_lobby
 ```
+The server keeps its saves next to the package (`lobby/sadk_players.json`, `sadk_mail.json`) unless
+`SADK_STORE_PATH` names the store. The maintainer's live service (`sadk-lobby.service`, a systemd user unit) runs
+from `lobby/` with `SADK_STORE_PATH` set to `sadk_players.json` in this repo's root: **those files are the players'
+saves; never move, overwrite or delete them.**
 
-`sadk_lobby/` file roles:
+`lobby/sadk_lobby/` file roles:
 - `__main__.py` — entry point · `config.py` — constants/ports/players (no flags)
 - `tincat.py` — frame parsing/building · `msgdefs.py` — parses the game's `msgdefs.ini`
 - `codec.py` — generic message-body encode/decode · `crypto.py` — login crypto
@@ -131,12 +136,18 @@ python -m sadk_lobby
 - `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
 - `server.py` — listeners (lobby 7070, UC/chat 7071, world 5479) + main loop
 
-Outside the server: `sadkmod/` is the C++ library for code running inside SADK.exe (generated game
-declarations, patches, hooks, the mod host; `sadkmod/README.md`). The shim `bridge/wsock32_shim/` is built on it
-(C++): a proxy wsock32.dll that only loads mods from the game's `mods` folder. Everything else is a mod in `mods/`
-(`mods/README.md`): the host bridge's client side (`gamebridge`), map sharing (`assetshare`), billboards,
-npcmodels, ... The setup tool `bridge/serverconfig/` (C, Win32) embeds the shim, gamebridge, assetshare and
-billboards.
+Two parts of the project are published as their own repositories (GitHub org `S2-modders`) and mounted here as
+submodules; changes to them are committed and pushed there, then the submodule pointer is updated here:
+- `sadkmod/` (`S2-modders/sadkmod`) — the C++ library for code running inside SADK.exe (generated game
+  declarations, patches, hooks, the mod host; `sadkmod/README.md`), the Ghidra map it is generated from
+  (`sadkmod/sourcemap/`), the shim `sadkmod/shim/` (a proxy wsock32.dll that only loads mods from the game's
+  `mods` folder), the shared mod build rules `sadkmod/mods.mk` and the mod guide `sadkmod/docs/writing-mods.md`.
+- `lobby/` (`S2-modders/sadklobby`) — the lobby server and what its players need: the mods `lobby/mods/`
+  (`gamebridge`, the host bridge's client side; `assetshare`, map sharing; `billboards`), the setup tool
+  `lobby/setup/` (C, Win32; embeds the shim and those three mods) and `lobby/docs/bridge-protocol.md`. Build its
+  mods against this repo's sadkmod: `make -C lobby/mods SADKMOD=../../sadkmod` (`lobby/sadkmod` stays empty here).
+
+Every other mod is in `mods/` (`mods/README.md`): borderless, oscursor, navalcombatfix, npcmodels, ...
 - `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
 
 ---
@@ -207,9 +218,9 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
 - `tools/sadk_crypt.py` / `tools/kex.py` — offline decryption of the game's encrypted data files and parsing /
   splitting of `.KEX` scenes (`docs/asset-formats.md`). Stated reason: `AdKEd.exe` (MEW-packed) crashes under
   Wine and no MCP converts files in bulk; both re-implement the client's own loaders, checked against every file
-- `sadkmod/gen/gen_game_headers.py` — generates sadkmod's C++ declarations of the game from `sourcemap/`
+- `sadkmod/gen/gen_game_headers.py` — generates sadkmod's C++ declarations of the game from `sadkmod/sourcemap/`
   (types, functions, globals). Stated reason (approved by the maintainer 2026-10-07): neither MCP produces source
-  code; it reads only the committed sourcemap. `sourcemap/ExportTypesJson.java` (runs inside Ghidra) feeds it.
+  code; it reads only the committed sourcemap. `sadkmod/sourcemap/ExportTypesJson.java` (runs inside Ghidra) feeds it.
 - `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
   the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
 
@@ -230,11 +241,11 @@ captures/logs as valuable RE artifacts — don't delete or casually rewrite them
 ## Testing
 
 ```bash
-python tests/test_codec_golden.py     # 170 reproduced byte-for-byte vs the frozen legacy monolith
-python tests/test_server_smoke.py     # end-to-end vs a fake socket
-python tests/test_server_browser.py   # server-browser wire
-python tests/test_multi_client.py     # multi-player + global game registry
-# or: pytest tests/
+python lobby/tests/test_codec_golden.py     # 170 reproduced byte-for-byte vs the frozen legacy monolith
+python lobby/tests/test_server_smoke.py     # end-to-end vs a fake socket
+python lobby/tests/test_server_browser.py   # server-browser wire
+python lobby/tests/test_multi_client.py     # multi-player + global game registry
+# or: pytest lobby/tests/
 ```
 
 ---

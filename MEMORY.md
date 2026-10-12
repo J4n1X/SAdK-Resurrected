@@ -96,7 +96,7 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   **Stub path to unblock:** referee must accept
   `Login`→`LoginSuccess` and `RegisterGame`→`RegisterGameAck(0xDB7)`+`RegisterGameResult(0xDB8)` with a
   shared `GameSeed`. Named/typed functions also in `docs/REFEREE_FUNCTIONS_TO_NAME.md`.
-  **REFEREE STUB RE-IMPLEMENTED 2026-06-13 (offline-tested; `[VERIFY LIVE]`):** new `sadk_lobby/referee.py`
+  **REFEREE STUB RE-IMPLEMENTED 2026-06-13 (offline-tested; `[VERIFY LIVE]`):** new `lobby/sadk_lobby/referee.py`
   (LoginSuccess 0xDCA / RegisterGameAck 0xDB7 / RegisterGameResult 0xDB8{GameSeed} builders + 74-envelope
   framing + channel `handle_frame`), referee listener on `config.REFEREE_PORT=5481`, `is_referee` routing in
   `connection.py`. The referee `AssignServer(189)`→`GameServerData(170,subtype=5,REF_SERVER_ID,:5481)` trigger
@@ -104,7 +104,7 @@ live evidence; everything else is `[TODO]`/`[HYPOTHESIS]` and labelled.
   →`LM+0x580`→`InitRefereeServerConnection@0x462910` dials) is **DEFERRED in `dispatch._h_assign_server` — NOT
   sent**: a 170 on every type-4 assign BROKE world-entry (UC/village/referee 189s are ALL type-4, indistinguishable
   here). `dispatch` now logs `server_subtype` to capture the real discriminator live; `REFEREE_SERVER` dict is the
-  ready definition to re-enable a GUARDED 170. `tests/test_referee.py` + full suite green; the deferred state is
+  ready definition to re-enable a GUARDED 170. `lobby/tests/test_referee.py` + full suite green; the deferred state is
   wire-inert (only a cosmetic log change vs baseline). **Still needs a live drive (task #8)** for the 189
   discriminator, channel framing, LoginSuccess trigger, and whether the match loads.
   **STATIC RECONCILIATION 2026-06-17 (`docs/MATCH_START_STATIC_RECONCILIATION.md`, `[PROVEN static]`).**

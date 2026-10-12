@@ -4,8 +4,8 @@ This catalog lists every network message the SAdK client (`SADK.exe` + `tincat3.
 the lobby side: the lobby, UC/chat, village, referee and ranking connections, plus the NComm
 peer-to-peer events that drive the pre-game room. It is built from three sources: the binary
 (`S` = sadk_noav.exe, base 0x400000; `T` = tincat3.dll, base 0x10000000; addresses are cited as
-`S 00xxxxxx` / `T 10xxxxxx`), the schema in `sadk_lobby/data/msgdefs.ini`, and the working stub in
-`sadk_lobby/`. Each message has three layers: the **contract** (what the bytes are), the **required
+`S 00xxxxxx` / `T 10xxxxxx`), the schema in `lobby/sadk_lobby/data/msgdefs.ini`, and the working stub in
+`lobby/sadk_lobby/`. Each message has three layers: the **contract** (what the bytes are), the **required
 server behaviour** (what the client needs from the server to make progress), and the **open
 decisions** (server-side choices the client does not dictate, with the range it accepts and a
 suggested default). Confidence tags: **[known]** = read in code with no ambiguity, or proven live;
@@ -111,7 +111,7 @@ T 100110e0, widths from Property::GetMaxLength T 10011490). [known] [PROVEN]
 | UNSHORT / SISHORT | 2 bytes LE | T 10011490 [known] |
 | UNLONG / SILONG | 4 bytes LE | T 10011490 [known] |
 | 64-bit / double | 8 bytes LE | T 10011490 [known] |
-| STRING N | u32 LE length **including the NUL**, then the bytes. The receiver forces the last byte to NUL and clamps the value to N | T 100112b0 / T 100110e0 [known]; NUL convention [PROVEN] (`tests/test_codec_golden.py`, live 170) |
+| STRING N | u32 LE length **including the NUL**, then the bytes. The receiver forces the last byte to NUL and clamps the value to N | T 100112b0 / T 100110e0 [known]; NUL convention [PROVEN] (`lobby/tests/test_codec_golden.py`, live 170) |
 | MEMBLOCK 0 | u32 LE length, then the bytes | T 100112b0 [known] |
 
 Rules [known]:
@@ -1772,7 +1772,7 @@ reached any other way [known, static]:
   natupnp/hnetcfg/INetFw strings).
 So joiners need no forwarding, and the host needs TCP on its game port (5479 observed live). Making an
 unreachable host joinable needs something on the host's side that dials out (a tunnel helper or VPN).
-The stub's answer is the host bridge: `docs/bridge-protocol.md`.
+The stub's answer is the host bridge: `lobby/docs/bridge-protocol.md`.
 
 
 The host opens its room with 168. The joiner reads host ip/port from the 170 descriptor and runs
@@ -2019,7 +2019,7 @@ re-sent every frame until answered (S 006008b0). [inferred, board #680]
 
 Match rewards are server-side only: no message carries amounts, there is no knock-out message, and
 the client just shows the character's stored XP, level and gold [known]. The stub's rules (maintainer
-decisions 2026-10-07, `sadk_lobby/rewards.py`): XP = (500 + 100 per full minute from the player's
+decisions 2026-10-07, `lobby/sadk_lobby/rewards.py`): XP = (500 + 100 per full minute from the player's
 RegisterGame to its own FinishGame / GiveUpGame) x (1 + 1.0 if its FinishGame names it the winner +
 0.25 per chest it got), nothing for a match under 2 minutes, gold = XP / 10, credited once per player per match into the character save.
 Levels follow the client's thresholds 0 / 1000 / 2500 / 5000 / 10000, capped at level 5 and 25000 XP
@@ -2963,7 +2963,7 @@ CMiniGameControllerPoker_Board::Update S 00525550, IsLocalPlayersTurn S 00489b80
   pokertable8 at 13-14.
 - SitOut 302 `enbl`: 1 = sit out, 0 = back (the dialog toggle starts at 0) [inferred].
 
-Server decisions (`sadk_lobby/minigames.py`, `poker.py`): big blind = the table's minimum stake, small
+Server decisions (`lobby/sadk_lobby/minigames.py`, `poker.py`): big blind = the table's minimum stake, small
 blind half; heads-up the button posts the small blind and acts first preflop; the turn times out after
 15 s (check if free, else fold); a sitting-out player in a hand is checked/folded after 1 s; a player
 who leaves mid-hand folds; odd chips of a split pot go to the first winner after the button.
@@ -3004,7 +3004,7 @@ S 005260f0, RefreshMovablePieces S 00525c00, MinigameDialog_PawnChess S 0044caf0
   after a game over. Each side's bet is drawn as the table minimum (`lmtmn`).
 - Seats 0 and 1 are the players (IsPrimarySeat S 004715f0).
 
-Server decisions (`sadk_lobby/pawnchess.py`, `minigames.py`): two seats, no spectators; the stake is the
+Server decisions (`lobby/sadk_lobby/pawnchess.py`, `minigames.py`): two seats, no spectators; the stake is the
 table minimum from each player, taken at the start, all of it to the winner; the game ends on the position
 before the king is taken; a side with no legal move loses; leaving a running game forfeits it; only one
 pawn can be marked against a single checker.
@@ -4531,7 +4531,7 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 
 ## Where the stub differs from the client
 
-The stub (`sadk_lobby/`) is unchanged by this catalog. Rows marked "not implemented" are messages
+The stub (`lobby/sadk_lobby/`) is unchanged by this catalog. Rows marked "not implemented" are messages
 the client handles and the stub ignores or only logs.
 
 | Message | What the stub does | What the client needs | Impact | Address |
