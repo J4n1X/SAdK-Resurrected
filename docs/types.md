@@ -70,11 +70,12 @@ and `ResetSubManagers` S 00462440.
 | off | type | name | Ghidra name | conf |
 |---|---|---|---|---|
 | +0x00 | vtable* | vftable (S 007dacb0) | `pVtable` | [known] |
-| +0x04 | ObserverList | connection-lost observers (sender, err) | – | [inferred] |
-| +0x10 | ObserverList | login-succeeded observers | – | [inferred] |
-| +0x1c | ObserverList | login-failed observers (sender, errorCode) | – | [inferred] |
-| +0x28 | ObserverList | main-connection logged-out observers (state > 6) | – | [inferred] |
-| +0x34, +0x40 | ObserverList | further observer lists, meaning [TODO] | – | [known] offsets |
+| +0x04 | ObserverList | connection-lost observers (sender, errorCode); fired by `OnConnectionLost` S 00464931; subscriber `AvatarScreen::OnConnectionLost` S 0043b1b0 | – | [known] |
+| +0x10 | ObserverList | global data loaded (state 6 -> 7), args (sender, chatServerHandle `+0x548`): the login-complete signal; fired by `StatePump_Tick` S 0046504f; subscribers `LoginDialog::OnLoginSucceeded` S 0043c1a0, `CreateAccountDialog::OnAccountCreated` S 0043d960 | – | [known] |
+| +0x1c | ObserverList | login-failed observers (sender, errorCode); fired by `OnLoginFailed` S 00464b3b and by `OnLoggedOut` S 00464cce with the fixed code 0x5479 when the main connection logs out in a state != 1 and < 7; subscribers `LoginDialog::OnLoginFailed` S 0043c890, `CreateAccountDialog::OnCreateAccountFailed` S 0043db90 | – | [known] |
+| +0x28 | ObserverList | main-connection logged-out observers (sender, reason), state > 6; fired by `OnLoggedOut` S 00464ce5; subscriber `AvatarScreen::OnLobbyServerLoggedOut` S 00439c20 | – | [known] |
+| +0x34 | ObserverList | subscribed once, with the no-op S 00472360, by `AvatarScreen::Activate` S 0043bec5 (unsubscribed in `AvatarScreen::OnHide` S 0043b2fe); no call of the eight notify functions targets it [known]. Purpose [TODO] | – | [known] offset |
+| +0x40 | ObserverList | version-check-failed observers (sender, errorCode); fired by `OnVersionChecked_State4to5` with 0x6f (111, property request failed, S 00464e93) or 0x3e (62, client protocol version non-zero and lower than the server value, S 00464ebb); subscriber `LoginDialog::OnVersionCheckFailed` S 0043ca60 (`!VERSIONCHECK_FAILED_TEXT`) | – | [known] |
 | +0x4c | ICommLayer* | tincat3 CommLayer | `pCommLayer` | [known] |
 | +0x50 | ConnectionManager* | tincat3 connection manager | `pConnectionManager` | [known] |
 | +0x54 | LobbyComm::ServerList (0xac) | server list | `villageServerList` | [known] |
@@ -89,14 +90,14 @@ and `ResetSubManagers` S 00462440.
 | +0x548 | int | lobby / chat server handle | `nChatServerHandle` | [inferred] |
 | +0x550 | int | selected village server id (-1 reset) | `nSelectedVillageServerCached` | [inferred] |
 | +0x554 | AvatarProxy* | local avatar (`GetLocalAvatar` S 004625c0); +0xd0 of it is the player's gold | `localAvatar` | [inferred] |
-| +0x558 | std::map | actor map (avatars) | – | [inferred] |
-| +0x564 | std::map | NPC map (shared with the village connection) | – | [inferred] |
+| +0x558 | std::map | avatar map (key actor id); the village connection's `+0x170` points here (ctor S 0046f193); holds the local avatar from `SetLocalAvatar` S 004626c0 until `ClearLocalAvatar` S 00462570 | – | [known] |
+| +0x564 | std::map | NPC map; the village connection's `+0x174` points here (ctor S 0046f199) | – | [inferred] |
 | +0x570 | item database | built from `ItemsClient.txt` (dtor S 0048bf90) | – | [inferred] |
 | +0x57c | `LobbyManagerState` | login state | `state` | [known] |
 | +0x580 | int | referee server id | `nRefereeServerId` | **[PROVEN]** |
-| +0x584 | u8 | referee requested | – | [inferred] |
+| +0x584 | u8 | referee server requested: `StatePump_Tick` (state > 5) sets 1 when it calls `ServerList::RequestRefereeServer` (S 00465107) and clears it when the timer +0x588 is negative (S 0046512f), which makes the next tick request again | – | [known] |
 | +0x588 | int | referee retry timer, ms (60000) | `nRefereeConnectTimeoutMs` | [inferred] |
-| +0x58c | std::string | pending e-mail (account creation) | – | [inferred] |
+| +0x58c | std::string (0x1c) | pending e-mail: written by `CreateUser` (S 004635d1, before the connection attempt, so it stays stored when registration fails), consumed on the 5 -> 6 transition by `CharacterManager::UpdateEMail` (S 00464fa8), then cleared. `+0x590` / `+0x5a0` / `+0x5a4` are this string's buffer, size and capacity, not separate fields | – | [known] |
 
 `+0x580` is set by `SetRefereeServerAddress` S 004625d0. The stub shows it live: once a type-4/sub-4
 assign reply arrives, the client retries `189 AssignServer` exactly every 60 s, which is the +0x588 timer
@@ -146,7 +147,8 @@ present.
 | +0x34 | void* | pTransport: tincat3 connection; vtbl+0xc GetState (8 = logged in), +0x1c Send(u16 header, data, len) | [known] |
 
 `/ai/lobby/ObserverList` (0xc) is an MSVC `std::list` of callbacks: +4 sentinel head, +8 count [inferred].
-`NotifyQueue_FireAndClear` S 00464300 fires it.
+`NotifyQueue_FireAndClear` S 00464300 fires it: it iterates a copy and leaves the list itself untouched, so
+it is a notify, not a fire-and-clear [known].
 
 **`/LobbyComm/BaseConnection_vftable`** (each slot is typed with a `/ai/lobby/BaseConnection_*_fn` funcdef):
 
@@ -165,7 +167,7 @@ present.
 | 10 | +0x28 | S 005657b0 (empty) | Process (per-tick pump) | [inferred] |
 | 11 | +0x2c | S 0048dce0 | IsLoggedIn | [known] |
 | 12 | +0x30 | S 0048dd00 | IsConnectionPending | [known] |
-| 13 | +0x34 | S 0059af50 | returns 3, meaning [TODO] | [guess] |
+| 13 | +0x34 | S 0059af50 | GetConnectionQuality: the base is a shared `return 3` body (3 = best), also in the UserCommConnection, RefereeServerConnection and GameServerConnection vtables; VillageServerConnection overrides it with S 0046c130, which returns its +0x244 | [inferred] |
 
 ### 1.4 VillageServerConnection (3D lobby world)
 
@@ -249,8 +251,13 @@ SendAvatarColorChange S 0046c760 · SendDeleteItemRequest S 0046bff0.
 |---|---|---|---|
 | +0x34 | void* | pTransport (BaseConnection) | prior |
 | +0x38 | void* | IChatChannelObserver face | prior |
-| +0x3c, +0x48, +0x60, +0x6c, +0x78, +0x84 | `/ai/std/MsvcList` | delegate lists. +0x60 holds the login-succeeded subscribers and +0x78 is cleared by HandleWorldLoginAck; the others are [TODO] | [inferred] |
-| +0x5c | void* | channels | prior |
+| +0x3c | `/ai/std/MsvcList` | chat line received (senderName, senderId, channelId, text): fired by `ChatReceived` S 00480ff6; subscribers `WorldScreen::OnChatChannelMessage` S 00436180, `CLobbyClient::OnChatMessage` S 00503200 | [known] |
+| +0x48 | MsvcList | incoming whisper (fromName, fromId, text): fired by `PrivateChatReceived` S 00481296 when `from_id` is not the local perm id; dropped when `GetUserRelation(from)` == 2; subscriber WorldScreen S 00432930 | [known] |
+| +0x54 | MsvcList | own whisper echoed (targetName, targetId, text): fired by `PrivateChatReceived` S 004812eb when `from_id` is the local perm id and the target's name is in the CharacterManager name cache (otherwise the echo is dropped; the id lookup that precedes the send does not fill that cache, S 00473590, S 00480340); subscriber `WorldScreen::OnPrivateChatSent` S 00432c60. The Ghidra field `pM_channels` at +0x5c lies inside this list (its size field) | [known] |
+| +0x60 | MsvcList | channel joined (ChatChannelInfo*): fired by `JoinChannelReceived` with error 0 (S 00480c3e); subscriber `VillageServerConnection::OnChatChannelJoined` S 0046d610 (records the joined zone at VSC+0x225, clears the zone-join-pending flag +0x226), subscribed in `VSC::OnUserCommLoggedIn`, unsubscribed in `HandleWorldLoginAck` S 0046ec50 | [known] |
+| +0x6c | MsvcList | channel join failed (ChatChannelInfo*, error): fired by `JoinChannelReceived` with error != 0 (S 00480bb3); no subscriber in the binary | [known] |
+| +0x78 | MsvcList | channel left (ChatChannelInfo*): fired by `LeaveChannelReceived` with error 0 (S 00480e1e); only subscriber is the VSC with the no-op S 0064b9c0 (same subscribe / unsubscribe sites as +0x60) | [known] |
+| +0x84 | MsvcList | channel leave failed (ChatChannelInfo*, error): fired by `LeaveChannelReceived` with error != 0 (S 00480d93); no subscriber in the binary | [known] |
 | +0x90 | void* | tincat3 ChatChannelManager | prior |
 | +0x94 | vector<ChatChannelInfo> | first/last/end at +0x98/+0x9c/+0xa0 | [inferred] |
 | +0xa4 | deque<PrivateChatRequest> | whisper queue: map +0xa8, size +0xac, offset +0xb0, count +0xb4 | [inferred] |
@@ -319,7 +326,7 @@ extra data members [inferred]. It absorbed the 1-byte PRIOR root `/GameServerCon
 | +0x2c | bool | finished | [inferred] |
 | +0x30 | u32 | CRC32 accumulator value | [known] |
 | +0x34 | u32 | CRC32 accumulated length | [inferred] |
-| +0x38 | int | 1 in the send ctor, 0 in InitFromWire; meaning [TODO] | [known] values |
+| +0x38 | int | direction marker: 1 in the send ctor (S 0048fb66), 0 in InitFromWire (S 0048fad8), the caller's last argument in InitFromBuffer (S 0048fa29; its one caller passes 0) [known]. Write-only: no reader in the lobby-comm range S 00462000..00491000 [inferred] | [inferred] |
 
 Multi-byte scalars written into a LobbyMessage field are big-endian [PROVEN]: the stub packs them with
 `struct.pack(">I")` (`lobby/sadk_lobby/village.py`), and a little-endian PermID is dropped by S 0047ac20.
@@ -383,7 +390,7 @@ message 1004) [known]. Its fields beyond ActorProxy:
 |---|---|---|---|
 | +0x88 | std::string | npcDescRaw (`npcdesc`) | [known] |
 | +0xa8 | uint[3] | actionIds (`act`) | [known] |
-| +0xb4 | uint[3] | actionArgs, meaning [TODO] | [known] |
+| +0xb4 | uint[3] | actionArgs: parameters of the three action slots, copied with actionIds to WorldScreen `actionSlotCodes` / `actionSlotParams` by slot 5 (S 0047b200). Always 0 for an NPC: `ReadFromMessage` only zeroes them and message 1004 has no field for them [known]. The WorldScreen array is non-zero for a selected minigame table (`RefreshActionSlots` S 00433f60) and is read by action codes 12..15 (S 00434230) | [inferred] |
 | +0xc0 | int | npcIndex (`npcidx`, 4 bits) | [known] |
 | +0xc4 | int | npcType (`npctyp`, 2 bits) | [known] |
 | +0xc8 | std::string[3] | actionChat (`actChat`). Written without a bound check: `actcnt` ≥ 4 overflows | [known] |
@@ -412,10 +419,10 @@ MailHeadersReceived S 0047dce0 · MailReceived S 0047e0f0 · Process S 0047d880.
 | type | size | role | conf |
 |---|---|---|---|
 | `LobbyComm::ServerList` | 0xac, vtbl S 007dafcc (+ S 007daf8c face) | village and game server browser; ASyncAction base. Methods: StartObservation S 00468e80, FindBestVillageServer S 00469010, RequestRefereeServer S 00468f60, GameServerAssigned S 00469ad0, CreateGameServer S 0046aaa0, UpdateGameServer S 0046aff0 | [inferred] |
-| `LobbyComm::GameServerInfo` | 0x9c, vtbl S 007de8b8 | client view of one hosted game: +0x04 serverId, +0x08 name, +0x24 str24 [TODO], +0x40 "Multiplayer", +0x60 wager, +0x64..+0x6c settings, +0x78 ipOctets[4], +0x88 port, +0x8c vector<string> player names | [inferred] |
+| `LobbyComm::GameServerInfo` | 0x9c, vtbl S 007de8b8 | client view of one hosted game: +0x04 serverId, +0x08 name, +0x24 map name (NETMSG 170 `map`, copied from descriptor +0x48 by `UpdateFromDescriptor` S 0048da70; stored, no reader in the class or the browser dialog [known]), +0x40 "Multiplayer", +0x5c passwordRequired (descriptor +0x24 == 1), +0x5d hardcore (descriptor +0x44 == 1) [known], +0x60 wager, +0x64..+0x6c settings, +0x70 occupied count = `max_spectators` + `ai_players` (u16 descriptor +0x34 + +0x38), +0x74 `max_players` (u16 descriptor +0x30) [known], +0x78 ipOctets[4], +0x88 port, +0x8c vector<string> player names | [inferred] |
 | `LobbyComm::VillageServerInfo` | 0x38 | one village server row: +0x04 serverId, +0x08 name, +0x28 curPlayers, +0x2c maxPlayers, +0x30 roomKey (compared with the protocol version), +0x34 blockFlag, +0x35 isValid | [inferred] |
 | `/GameServerDescriptor` | 0x50 (PRIOR, root) | older view of the tincat3 descriptor: +0x04 dwServerId, +0x29 serverSubtype, +0x30, +0x34, +0x35, +0x4c | prior, [TODO] see gaps |
-| tincat3 `/ai/CommLayer/GameServerInfo` | 0x5c | the descriptor tincat3 hands over: +0x00 serverId, +0x08 name, +0x0c description, +0x10 char[16] ip, +0x20 port, +0x28 serverType, +0x29 serverSubtype, +0x2c version, +0x54 data, +0x58 dataLen | [inferred]; +0x28/+0x29 [known] |
+| tincat3 `/ai/CommLayer/GameServerInfo` | 0x5c | the descriptor tincat3 hands over: +0x00 serverId, +0x08 name, +0x0c description, +0x10 char[16] ip, +0x20 port, +0x24 password_required, +0x28 serverType, +0x29 serverSubtype, +0x2c version, +0x30 max_players (u16), +0x32 cur_players, +0x34 max_spectators, +0x36 cur_spectators, +0x38 ai_players, +0x44 hardcore, +0x48 map (char*), +0x4c running (170 decoder in `ConnectionBC::OnTinCatEvent` T 1002f5a0, descriptor base ESP+0x10) [known], +0x54 data, +0x58 dataLen | [inferred]; +0x28/+0x29 [known] |
 
 `OnGameServerAssigned` T 10021520 checks `serverType == 4` and `serverSubtype == 5` on that descriptor
 [known]. That check is the 4/5 special case that keeps the referee latch from being set. The wire form is
@@ -502,10 +509,11 @@ Shutdown S 0040b410.
 | +0x208 | std::string | map name → `RegisterGame MapName` | [inferred] |
 | +0x224 | u8 | maxPlayers (slot loop bound) | [inferred] |
 | +0x225 / +0x226 / +0x227 | u8 | MapSettings digits 1..3 (win condition, start resources, fog of war per method names) | [inferred] |
-| +0x228 / +0x229 | u8 | flag228 / byte229 [TODO] | [known] offsets |
+| +0x228 | bool | fetch-map-from-host flag: on a client whose map lookup by GUID fails in event 0x30003, clear -> self-kick `!MAP NOT EXISTING`; set and +0x229 == 3 -> `RequestFileFromHost` S 004084d0 for `<My Documents>\SAdK\maps\<mapName>.s2m` and `.bmp`; set and +0x229 != 3 -> self-kick (S 0040eeb3 .. S 0040f30d) [known]. Only writer besides Reset (0) and the copies is `SetGameSettings` (S 0040c137), and its three callers (S 00454c87, S 0046ad82, S 005da0e1) pass 0, so this build never sets it locally [known]. Serialized, in the settings CRC. The name is [inferred] from the reader branch. The two values are arguments of `SetGameSettings`, so a hook of that function sets them without a memory write (the assetshare mod does); the fetch with both forced is recorded live in `docs/BINARY_PATCHES.md` | [inferred] |
+| +0x229 | u8 | map type of the chosen map: `SetGameSettings` (S 0040c11e) gets `MapInfo +0x1d0` from `OnMapSelected` S 00454ad0 and `CreateGameServer` S 0046aaa0, and the literal 0x6e from `nMenu::System::StartPendingMap` (S 005da0c9); Reset 0xff [known]. `GameFile_LoadMapInfo` S 005aaa30 writes `MapInfo +0x1d0` = the type under which the file was found when it is not the requested one (fallbacks 3, `.usermapinfo`, then 10), so 3 = a user map [inferred]. Only reader: event 0x30003 (== 3, S 0040ef9d). Serialized, in the settings CRC. The values are the `MapPath` types of `docs/sim/save-format.md` §2.6 (0 free game map, 1 campaign, 2 tutorial, 3 `<My Documents>\SAdK\maps`, 10 `.sav`, 100..103 the same four folders, 0x65 `.a2m`, 0x6e `.aav`). The lobby asks for type 0 with fallbacks (S 00454ad0), so a stock map sends the `mapType` stored in its file (0 in the shipped maps) and a map from the Documents folder sends 3 [known] S 005aaa30. A host running the assetshare mod always sends 3, and `+0x228` = 1 (its hook of `SetGameSettings`) | [known] |
 | +0x22a | int | gameId → `RegisterGame` / `FinishGame` GameID | [inferred] |
 | +0x22e | u8 | rankedGame | [inferred] |
-| +0x22f | int | game seed (`SetGameSeed` S 004139f0) | [inferred] |
+| +0x22f | int | game seed: the referee's GameSeed (`SetGameSeed` S 004139f0 <- `SetGameSeedIfState2` S 004082e0 <- S 00431800 only). Seeds only the chest-content generator of a network match (`GetGameSeed` S 004139e0 <- S 005ac7ed, S 00775e1f), not the simulation generator S 00889b08. Serialized, in the settings CRC, Reset 0 | [known] |
 | +0x233 | int | wager, in gold: `GetWager` S 00413a00, `SetWager` S 00413a10; serialized in the game information, sent as `RegisterGame Wager` | [known] |
 | +0x237 | u32 | settingsCrc (`GetSettingsCrc`); the setup dialog restarts its 3500 ms countdown when it changes | [inferred] name |
 | +0x23b | NComm::MD5Digest (0x14) | password MD5, zero = none; not serialized | [inferred] |
@@ -526,19 +534,21 @@ the same 0x4c layout; it is no longer used by `EventGameInformation` and is wait
 | +0x00 | void* | vftable | [known] |
 | +0x04 | u8 | state (ctor 5; SetupAi 1, SetupClosed 4, ResetToOpen 0) | [known] |
 | +0x05 | u32 | playerId (0xEFFFFFEE none, 0xEFFFFFCC host) | [known] |
-| +0x0d | u8[16] | owner GUID (NetGUID data) | prior (`pOwnerGuid`) |
-| +0x1d | `EConnectionType` (u8) | connection type | [inferred] |
+| +0x09 | `NComm::NetGUID` (0x14) | owner GUID object: vftable pointer at +0x09 (ctor stores S 007d42b4), data at +0x0d. Serialized raw as 0x14 bytes, pointer included (S 00415084, S 00415154) | [known] |
+| +0x0d | u8[16] | owner GUID (the data part of the NetGUID at +0x09) | prior (`pOwnerGuid`) |
+| +0x1d | `EConnectionType` (u8) | connection type, 0..4: the joiner's `UserProfile +0x94`, sent in `EventUserInformation +0x48` (S 0040af35) and stored by the host at S 0040e8de; shown by `nMenu::NetInfo::RefreshInfo` S 005fd96c | [known] |
 | +0x1e | std::string | player name | [known] |
 | +0x3a | u8 | playerIndex (ctor 0xff) | [known] |
 | +0x3b | `EPlayerSlotKind` | 0 Open, 1 Human, 2 AI, 3 Closed | [known] |
 | +0x3c | u8 | aiLevel | [inferred] |
-| +0x3d | u8 | tribe | [inferred] |
-| +0x3e | u8 | color | [inferred] |
-| +0x3f | u8 | team | [inferred] |
-| +0x40 | u8 | readyState (2 for AI/closed) | [inferred] |
-| +0x41 | u16 | version nibbles (ctor 0xffff) | [known] serialized; meaning [inferred] from `SetVersionNibbles` S 00415000 |
-| +0x43 / +0x47 | u32 | serialized, meaning [TODO] | [known] |
-| +0x4b | u8 | local only, not serialized | [known] |
+| +0x3d | u8 | tribe (-> `NComm_GetNationIdForTribe` -> load descriptor +0x68, S 004562d0) | [known] |
+| +0x3e | u8 | color (-> load descriptor +0x88) | [known] |
+| +0x3f | u8 | team (-> load descriptor +0xa8 -> `Player.team` +0x94, `Player::IsEnemyOf` S 005be280); 0xff = no team | [known] |
+| +0x40 | u8 | readyState: 0 not ready, 1 ready (event 0x30011), 2 loaded (event 0x30004; also AI, closed and dropped slots); written through the folded setter S 00552f10 | [known] |
+| +0x41 | u16 | avatar look of the joined user, three nibbles (ctor 0xffff = unset): written by `SetVersionNibbles` S 00415000 (misnamed) from `EventUserInformation +0x50`, read by `GetAvatarTribeGenderLevel` S 00414fc0 for the room's avatar preview [known]. Nibble order bits 8..11 tribe, 4..7 gender, 0..3 level [inferred] | [known] |
+| +0x43 | u32 | avatar colours of the joined user, eight 4-bit values, low nibble first (S 0041f2f0, S 00456182); -1 unset; from `EventUserInformation +0x54` | [known] |
+| +0x47 | u32 | lobby AvatarID of the joined user, 0 none; from `EventUserInformation +0x58`, unchecked by the host. Readers (`GetField47` S 00415050): `RegisterGame` AvatarID list S 004322b0, `FinishGame` Winner S 00535ac9, `ClaimChest` S 00782ae1, chat sender id S 0040e46f / S 0040e520 | [known] |
+| +0x4b | u8 | local only, not serialized [known]: latch "the left-game notice was shown for this slot" (set to 1 after the notice, S 004108c5, S 0040fb5b, S 00410c0b, S 00410e40; read through the folded getter S 0046b5f0) | [inferred] |
 
 ### 2.4 Event family
 
@@ -732,7 +742,7 @@ GetProperty T 10013d00, CloneFrom T 10013ba0.
 | +0x20 | u32 | size / max length | [known] |
 | +0x28 | u64 | scalar value, or heap block pointer for MEMBLOCK/WSTRING | [known] |
 | +0x30 | void* | owner set | [inferred] |
-| +0x34 | u32 | meaning [TODO] | [known] |
+| +0x34 | u32 | owned by the set: 0 from `Init` T 10013560 (caller-constructed property), 1 for a property the set allocates itself in `PropertySet::CreateProperty` (T 100139b4, T 10013a20); `RemoveProperty` T 10013aa0 (T 10013b04) and `RemoveAllProperties` T 10013b30 (T 10013b54) delete only properties with it set. Copied by the copy ctor and operator= | [known] |
 
 `/TinCatProperties/Property_vftable` (0xc8) names 24 Set/Get slots [known].
 `TinCatProperties::PropertyDataConverter` (0xc) converts between a property set and wire bytes.
@@ -972,9 +982,13 @@ Specific to the types in this document:
 3. **`/LobbyComm/VillageServerConnection`** has the correct size (0x280) but only six PRIOR fields, and its
    vtable struct has PRIOR slot names. The full layout exists only as board facts (section 1.4).
 4. **Duplicate slot type:** the PRIOR `/NCommGameSlot` duplicates `/NComm/PlayerInfo` (0x4c) and is waiting to
-   be retired; that needs maintainer approval (board #4795). The meanings of +0x43 and +0x47 are open.
+   be retired; that needs maintainer approval (board #4795).
 5. **Two server-descriptor types:** `/GameServerDescriptor` (sadk PRIOR, serverId at +0x04) and tincat3
-   `/ai/CommLayer/GameServerInfo` (serverId at +0x00). They do not agree. `LobbyComm::GameServerInfo`
-   also has unexplained fields `str24`, `flag5c` and `flag5d`.
+   `/ai/CommLayer/GameServerInfo` (serverId at +0x00). They do not agree: the PRIOR names `bIsSecuredFlag`,
+   `bIsPresent` and `dwTargetListId` sit where the 170 decoder stores `max_spectators` (+0x34), `ai_players`
+   (+0x38) and `max_players` (+0x30) [known] (T 1002f752..1002f764, S 0048da70).
+   `ServerList::FindBestVillageServer` S 00469010 and `WorldScreen::PopulateSelectServerMenu` S 004375a0
+   iterate `VillageServerInfo` rows but have locals typed `LobbyComm::GameServerInfo`, so the decompiler
+   shows VillageServerInfo +0x28 / +0x2c / +0x30 / +0x35 as offsets inside the string at +0x24 [inferred].
 6. **Pure interface types** stay 1-byte placeholders: `CommLayer::I*Observer`, `NComm::IEventHandler`,
    `TinCatProperties::IPropertySet`, `CommLayer::CommHandlerBase`. Their methods' `this` is not typed.

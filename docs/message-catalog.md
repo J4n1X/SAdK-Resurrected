@@ -1989,8 +1989,14 @@ Handler S 0047a580.
 
 **Required server behaviour.**
 - Send `Result 0` + GameSeed to **each** client that registered. [PROVEN] (stub, two clients)
-- Give every client of one match the **same** seed. It is the lockstep RNG seed, and the session field
-  +0x22F is also carried in the GameInformation/StartGame session copy. [inferred]
+- The GameSeed seeds only the contents of the network-match chests (`Game_DistributeChestsForNetworkMatch`
+  S 00775dd0, one draw per chest into LogicChest +0x28); the simulation uses a separate global generator
+  (S 00889b08) that the seed never reaches. [known] What the match needs is this message, not a
+  particular seed: 0 is accepted. [known]
+- Give every client of one match the **same** seed. The session field +0x22F is also copied from the
+  host's GameInformation / StartLoading / StartGame payloads (`AssignGameData` S 00414388), so a
+  client's seed can be replaced by the host's; whether differing seeds desync or only give different
+  chest contents is [TODO] (docs/MATCH_START.md).
 - Never send both GameSeed and FailReason. [known]
 
 **Open decisions.**
@@ -2371,7 +2377,11 @@ shrtclr, trsrclr, addColor1..4 (stored unmasked at +0x49..+0x50) [known]. Item s
 `sltt` 8, `cnt` 8, `itmid` 32 (S 0048ab40) [known]. Stats: wire order lvl, exp, gold, glod [known].
 
 Behaviour: unknown id -> new AvatarProxy inserted; known id -> update in place. For the client's own
-id the location fields are consumed and discarded (only tick is stored) [known]. A failed block logs
+id the location fields are consumed and discarded (only tick is stored) [known]: `ReadLocationBlock`
+S 004824b0 stores the tick, then for proxy id == LobbyManager+0x54c reads and drops posx 11, posy 11,
+posz 11, rot 7, zone 4 (S 0048f790), ghstzne 4 (S 0048f970) and rnng 1, jmp 1 (S 0048f950), 50 bits,
+so the body stays in sync. The Style, ActiveItems and Stats blocks have no own-id branch
+(`ReadDataBlocks` S 00482c20) and are applied to the own proxy like to any other [known]. A failed block logs
 `Could not read <block> from message.` and aborts; the proxy stays in the map with no notification.
 Delivery is queued (+0x1ac) and fires observers +0xbc (`CLobbyClient_UpdateAvatar` S 00503620) only in
 state 9 [known]. The first 1001 for an id creates the 3D avatar; each later 1001 pushes a waypoint
@@ -2388,8 +2398,15 @@ avatar's position [PROVEN 2026-08-01, TTD traces].
 - Send 1005 first (see 1005).
 - Never send a short body: a truncated 1001 crashed the client about 1.1 s later [PROVEN 2026-07-31].
 - The own-avatar branch in S 004824b0 shows the original server also sent each client a 1001 for its
-  own id [inferred]. Whether the own avatar is in the +0x170 map without one (needed for 3100-3201
-  `ownr` lookups) is [TODO].
+  own id [inferred]. The own avatar is in the +0x170 map without one [known]: +0x170 points at the
+  map at LobbyManager+0x558 (ctor S 0046f193), and `LobbyManager::SetLocalAvatar` S 004626c0 inserts
+  a copy of the chosen character there before the village login is sent (`OnUserCommLoggedIn`
+  S 004704e0), so the 3100-3201 `ownr` lookups find it, with the style, items and stats of the
+  character data. It leaves the map only through `ClearLocalAvatar` S 00462570 (logout, disconnect,
+  next SetLocalAvatar, LobbyManager dtor); a 1003 for the own id does not remove it. A 1001 for the
+  own id is safe on the wire and sets the own style, equipped items and stats [known]; what the
+  movement sample pushed by `CLobbyClient::UpdateAvatar` S 00503620 does to the locally controlled
+  avatar is [TODO].
 - Stub differs: names this message EntityCreate; sends location + style blocks only; never sends a
   1001 for the recipient's own id.
 
@@ -2562,23 +2579,32 @@ Get-or-create; observers +0x38 fire immediately (not queued) [known]. The select
 copied verbatim into the world screen's action codes by `NPCProxy::GetActionSlots` S 0047b200 and
 executed by `DispatchSlotAction` S 00434230: 2..6 minigame matchmaking (search, kind act-2), 7 mailbox,
 8 host game, 9 game list toggle, 10 hall of fame, 11 OpenShop (sends 0xE10), 12/13 create table,
-14/15 join table, 16 NPC text, 17 tailor, 18 clear setup-game flag [inferred]. NPC slot parameters
-are always 0 [known]. NPC records render with per-npcidx models and labels [PROVEN 2026-08-02].
+14/15 join table, 16 NPC text, 17 tailor, 18 clear setup-game flag [known]; 0, 1 and 19 upward have
+no case. NPC slot parameters are always 0 [known]. For a selected NPC the three action buttons get
+the template `LobbyAction_None` every frame (`RefreshActionSlots` S 00434173..0043420e) [known]; the
+only path established for running an NPC's code is the automatic dispatch in `HandleButtonClicks`
+S 00437760: once per selection change, `DispatchSlotAction(0)` when slot 0 holds a code and slots 1
+and 2 are 0 [known]. So an NPC with exactly one action runs it when it is selected, and an NPC with
+two or three actions has no established way to run any [inferred]
+(docs/village-and-character-protocol.md §5.2). No message removes an NPC record: only 1004 touches
+the NPC map and it only adds or re-reads in place [known].
+NPC records render with per-npcidx models and labels [PROVEN 2026-08-02].
 
 **Required server behaviour.**
 - actcnt <= 3: actChat for i >= 3 is written past the 0x120-byte object (heap corruption, S 0047b5c0
   disasm, board #2381) [known].
 - Send after 1000 to each entrant; they are static, no refresh stream needed [PROVEN].
-- Stub: matches (`village.player_create_body`); NPCs are disabled by the maintainer's flag
-  `config.VILLAGE_NPCS_ENABLED = False`. Comment drift: the stub calls this "PlayerCreate"/"player
-  record".
+- At most one action per NPC, in slot 0, for the action to run (see above) [inferred].
+- Stub: matches (`village.player_create_body`); NPCs are on (`config.VILLAGE_NPCS_ENABLED = True`).
+  Comment drift: the stub calls this "PlayerCreate"/"player record".
 
 **Open decisions.**
 - **V18** the NPC cast (ids, positions, npcidx, colours, labels). Any values; npcidx 0..15, npctyp 1/2
   to be visible. Default: the stub's `npcs.make_village_npcs` set. npcidx -> model mapping lives in the
   encrypted game data [TODO].
-- **V19** NPC actions. act 0..255 per slot, at most 3 slots; only the codes listed above do anything.
-  Default: shop NPCs act 11, mailbox 7, tailor 17, minigame hosts 2..6.
+- **V19** NPC actions. act 0..255 per slot, at most 3 slots; only the codes listed above do anything,
+  and only a single action in slot 0 is dispatched [inferred].
+  Default: one action per NPC: shop NPCs act 11, mailbox 7, tailor 17, minigame hosts 2..6.
 - **V20** NPC ids. Any u32; must not collide with avatar ids used in 1001 or in minigame seats
   (acttype 2 = NPC) [inferred]. Default a reserved high range.
 
@@ -2642,8 +2668,19 @@ state 9 [known].
 - Stub differs: not implemented.
 
 **Open decisions.**
-- **V23** item ids and slot types. Game-data ids from the encrypted item tables [TODO]; client accepts
-  any u32. Default empty slots (all zero).
+- **V23** item ids and slot types. Item ids are the ids 1..36 of `ItemsClient.txt` (plain text in the
+  install's `data/lobby/config/`), loaded once by `ItemDatabase::LoadFromFile` S 0048bfd0 into the map
+  at LobbyManager+0x570 [known]; that `itmid` of 3100-3102 uses the same ids as 0xE11 `ItemID` is
+  [inferred]. Any u32 is accepted on the wire; an id outside the file resolves to the invalid-item
+  placeholder `g_InvalidItemInfo` S 00885978 (S 0048b6c0), which fits no equipment container [known].
+  With a shop open, hovering an inventory slot that holds such an id runs a checked-iterator failure
+  path in `GetShopSellPriceByItemId` S 0046d6d0 (S 0046d73e..0046d7dd, `_invalid_parameter_noinfo`,
+  before the read past the stock vector) [known]; that ends the process with exit code 0xC000000D, because no
+  invalid-parameter handler is installed (S 006f26de, S 006f25e2) [known]. Token 5 of the
+  file is the slot mask: container 0 (backpack) always fits, containers 2 / 3 / 4 / 5 need mask bit
+  0 / 1 / 2 / 3 (`CanItemGoToSlot` S 0044d390) [known]; head / right hand / left hand / pet for
+  2..5 is [inferred] (docs/village-and-character-protocol.md §4.3). Which code interprets the wire
+  field `sltt` is [TODO]. Default empty slots (all zero); never send an id outside 1..36.
 
 #### 0xC1D (3101) InventoryUpdate — S->C
 
@@ -2696,15 +2733,33 @@ Queued (+0x1e8) for observers +0xe0 (CLobbyClient S 005036d0) [known].
 |---|---|---|---|
 | 1 | NPCID | 32 | the selected NPC's id |
 
-Only caller: `DispatchSlotAction` S 00434230, slot code 11 (an NPC with act 11) [known]. If a shop
-is still open it is cleared first (S 0046dba0) [known].
+Only caller: `DispatchSlotAction` S 00434230, slot code 11 (an NPC with act 11) [known]: it plays UI
+sound 0x63c3110c, takes the selected actor's id (`selectedObject` +0x3630 -> vtbl+0xc -> +8) and
+sends, then shows the NPC's `actChat` for that slot. If a shop is still open (+0x258 and +0x25c both
+non-zero) it is cleared first (S 0046dba0) [known]. LobbyMessage(2, 0xe10, reserve 0x10), sent
+through connection vtbl+0xc = `BaseConnection::SendMessage` S 0048dfa0, which fails silently only
+when the transport pointer (+0x34) is null [known].
+
+Click path [known]: `WorldScreen::Update` calls `RefreshActionSlots` S 00433f60 (S 00435c1b); for a
+selected foreign actor it calls actor vtbl+0x14, which for an NPC copies the three `act` ids of 1004
+verbatim into `actionSlotCodes[3]` (+0x356c) (`NPCProxy::GetActionSlots` S 0047b200). A change of
+the selected actor sets the latch +0x3638 (S 00434068). `HandleButtonClicks` S 00437760 returns
+early when the base handler returns false or CLobby vtbl+0x8c (S 004f50d0, byte +0x11 of the lobby
+client) is true; otherwise it tests and clears the latch and, when codes[0] != 0 and codes[1] == 0
+and codes[2] == 0, calls `DispatchSlotAction(0)` and then CLobby vtbl+0xc0 (`SelectLocalAvatar`
+S 004f5e00). So the request is sent once per selection of a shop NPC whose only action, in slot 0, is
+11. Nothing on the path checks distance, gold or dialog state. For an NPC selection the three
+action buttons are set to `LobbyAction_None` every frame; whether a button click can still dispatch
+for an NPC with more than one action is not established [TODO]. Code 11 dereferences
+`selectedObject` without a null check, and the scene-object path sets it to 0 (S 00434047) [known].
 
 **Required server behaviour.**
 - Reply with 0xE11 whose NPCID equals the request's NPCID [inferred, board #4784].
-- Stub differs: `dispatch._h_send_game_data` has no branch for 0x2E10 and `village.py` describes 0xE11
-  as server-pushed. A live shop-NPC click put nothing on the wire (2026-08-02); the cause sits before
-  the send and is [TODO] (act 11 is copied verbatim to slot code 11 by S 0047b200, so the mapping
-  itself is not the cause [inferred]).
+- Stub: wired, `dispatch._ECONOMY_HANDLERS[0x2E10]` -> `economy.handle_open_shop`, which answers
+  with 0xE11. An NPC id that is not a shop gets no answer.
+- A live shop-NPC click put nothing on the wire on 2026-08-02. Unexplained [TODO] and superseded by
+  the wired handler: statically nothing gates the send beyond the conditions above. An NPC record
+  with more than one `act`, or with 11 not in slot 0, would send nothing [inferred].
 
 **Open decisions.**
 - **V25** NPC id -> shop mapping. Any. Default one shop per shop NPC.
@@ -2717,8 +2772,8 @@ is still open it is cleared first (S 0046dba0) [known].
 |---|---|---|---|
 | 1 | NPCID | 32 | -> +0x258 |
 | 2 | ShopID | 32 | -> +0x25c; used by 0xE1A/0xE24 |
-| 3 | ShopName | string (vtbl+0x30) | observer argument only |
-| 4 | SellMod | 32 raw-32 (little-endian float) | -> +0x260 |
+| 3 | ShopName | string (vtbl+0x30: 8-bit length + chars, UTF-8 -> ANSI, S 004900a0) | observer argument only; `ShopDialog::SetShop` S 0045d580 stores it at `ShopDialog +0xb5c` and nothing reads it: the name is not displayed [known] |
+| 4 | SellMod | 32 raw-32 (vtbl+0x40 S 0048ff50: 32 bits then byte-reversed = little-endian float) | -> +0x260 |
 | 5 | StockCount | 16 | N |
 | 6.. | N x {ItemID 32, Buy 32, Sell 32} | 96 each | -> vector +0x264 |
 
@@ -2726,16 +2781,39 @@ No validation. Always replaces the open-shop state and fires observers +0x128 (N
 opens the shop dialog [known]. The shop counts as open only when NPCID and ShopID are both non-zero
 (S 0046c610) [known]. Arrival opens the dialog even unrequested [PROVEN 2026-08-02].
 
+Dispatch [known]: the inbound type word is split into names flag (bit 15), category (bits 12..14)
+and id (low 12 bits) by `LobbyMessage::InitFromWire` S 0048fa50, and `HandleMessage` S 00470a90
+switches on the id only, so the category of the reply is not checked.
+
+Dialog chain [known]: the subscriber of +0x128 is `WorldScreen::OnShopInventoryReceived` S 004323d0
+(subscribed in `OnShow` S 00439324, removed in `OnLeave` S 0043941c). If the ShopDialog (+0x35d4,
+created in `OnShow` by `System::OpenShopDialog` S 0042c050) exists, it calls `ShopDialog::SetShop`
+S 0045d580 with (ActorID{type 2, NPCID}, ShopID, name, SellMod, stock); on true it shows the dialog
+(vtbl+0x2c) and latches the local avatar position into +0x363c..+0x3644. `SetShop` returns false,
+with nothing shown or logged, only when the dialog is already visible for a different NPC id, actor
+type or ShopID.
+
+Stock display [known]: the dialog has 25 stock slot widgets and `RefreshStockSlots` S 0045b790 is
+only called with first index 0 (from `SetShop` and from the vtable slot 8 function S 0045b9f0), so
+entries after the 25th are never shown; there is no paging. A slot is enabled only when its Buy
+price <= the local avatar's gold (+0xd0); the slots are rebuilt only when that gold value changes.
+An ItemID that is not in `ItemsClient.txt` (`ItemDatabase::HasItem` S 0048b730) shows as an empty
+stock slot (EmptyIcon, stock index 0xFFFF; hover text `!LOBBY_SHOP_STOCK_EMPTY`,
+`!LOBBY_SHOP_NO_DESCRIPTION`, `---`) and keeps its position in the vector, so the indexes of the
+following entries do not change.
+
 **Required server behaviour.**
 - Send only as the reply to 0xE10; an unrequested 0xE11 pops the dialog open [PROVEN].
 - NPCID and ShopID non-zero [known].
-- Stub: body layout matches (`village.shop_inventory_body`); not wired to 0x2E10 (see 0xE10).
+- At most 25 stock entries [known].
+- Stub: body layout matches (`village.shop_inventory_body`); sent by `economy.handle_open_shop` as
+  the reply to 0x2E10.
 
 **Open decisions.**
-- **V26** stock (ItemID, Buy, Sell). Item ids are game-data ids [TODO]; prices any u32. Default: a
-  curated list per shop.
-- **V27** SellMod. Any float; default 0.9 (the client's built-in default at 007db9d0 per prior
-  analysis) [inferred], stub uses 1.0.
+- **V26** stock (ItemID, Buy, Sell). Item ids are the ids 1..36 of `ItemsClient.txt` (S 0048bfd0)
+  [known]; prices any u32. Default: a curated list per shop, at most 25 entries.
+- **V27** SellMod. Any float. The handler's local default 0.9 (S 007db9d0) never survives, because
+  the read is unconditional [known]; the stub sends 0.9.
 - **V28** ShopID values. Any non-zero u32. Default a stable id per shop.
 
 #### 0xE1A (3610) ShopBuy — C->S, wire type 0x2E1A
@@ -2745,13 +2823,14 @@ opens the shop dialog [known]. The shop counts as open only when NPCID and ShopI
 | order | field | bits | notes |
 |---|---|---|---|
 | 1 | ShopID | 32 | open shop (+0x25c), may be 0 (no check) |
-| 2 | Slot | 16 | stock index |
-| 3 | QTY | 16 | 1 from the UI |
+| 2 | Slot | 16 | index into the stock vector as sent in 0xE11 |
+| 3 | QTY | 16 | 1 from the UI (sole caller S 0044d96f) |
 | 4 | Backpack | 16 | target backpack index, 0xFFFF = any free slot |
 
 **Required server behaviour.**
 - Reply with 0xE1B [inferred], and update items (3102) and gold (3201) on success [inferred].
-- Stub differs: logged and dropped.
+- Stub: `economy.handle_buy` reads the same layout and answers 0xE1B. It does not compare ShopID
+  with the shop it opened for the player and honours QTY > 1.
 
 **Open decisions.**
 - **V29** purchase rules (gold check, full backpack). Client accepts any Result. Default: fail when gold
@@ -2769,7 +2848,7 @@ opens the shop dialog [known]. The shop counts as open only when NPCID and ShopI
 No connection state change; observers +0x134 get (ShopID, Result) [known].
 
 **Required server behaviour.**
-- One per 0xE1A [inferred]. Stub differs: not implemented.
+- One per 0xE1A [inferred]. Stub: `economy.result_body`, same layout.
 
 **Open decisions.**
 - None beyond V29.
@@ -2786,13 +2865,26 @@ No connection state change; observers +0x134 get (ShopID, Result) [known].
 
 Note the order differs from 0xE1A (Backpack before QTY) [known].
 
+Sent only after the `!LOBBY_SELL_ITEM_QUESTION` box is answered Yes (callers S 0044d543 and
+S 0045b97e, both on result 2) [known]. The price in that question is computed by the client
+(`GetShopSellPrice` S 0046d800, shown at S 0044e271): the Sell value of the open shop's stock entry
+with the same ItemID if the shop lists the item, otherwise the item's base value (`ItemsClient.txt`
+token 8, ItemInfo +0x80) x SellMod, truncated toward zero (S 0046d7b3), 0 when below 1 [known]. A
+price of 0 shows `!LOBBY_CANT_SELL_ITEM_CAPTION` with `!LOBBY_TRADER_NOT_WANTS_ITEM` for a valid item
+and `!LOBBY_CANT_SELL_ITEM` otherwise, and nothing is sent; with a shop open an equipment slot
+(container != 0) does nothing (S 0044e0f0, S 0045c560) [known]. Closing the dialog sends nothing
+(`CloseAndClearShop` S 0045b920 only clears local state) [known].
+
 **Required server behaviour.**
 - Reply with 0xE25, plus 3102 and 3201 on success [inferred].
-- Stub differs: logged and dropped.
+- Stub: `economy.handle_sell` reads the same layout and answers 0xE25. Stub differs: it credits
+  `int((price // 2) * 0.9)` for every item, not the amount the client showed (crown, base 250: shown
+  125 at the listing shop and 225 at the other, credited 112).
 
 **Open decisions.**
-- **V30** sell price. Client shows Sell and SellMod but does not dictate the credited amount. Default
-  `Sell * SellMod`.
+- **V30** sell price. The client does not dictate the credited amount, but it shows the player one:
+  stock Sell if the open shop lists the item, else trunc(base value x SellMod) [known]. Default:
+  credit exactly that amount.
 
 #### 0xE25 (3621) ShopSellResult — S->C
 
@@ -2806,7 +2898,7 @@ Note the order differs from 0xE1A (Backpack before QTY) [known].
 Observers +0x140 get (ShopID, Result) [known].
 
 **Required server behaviour.**
-- One per 0xE24 [inferred]. Stub differs: not implemented.
+- One per 0xE24 [inferred]. Stub: `economy.result_body`, same layout.
 
 **Open decisions.**
 - None.
@@ -3621,7 +3713,7 @@ appended to the cache). **No ticket check and no ticket release** [known].
 | 1 | delivery_target | UNLONG | rec+4 [known] |
 | 2 | message_id | UNLONG | rec+0; mail identity [known] |
 | 3 | creator | UNLONG | rec+8; sender perm id, name resolved via CharacterManager [known] |
-| 4 | creation_time | UNLONG | rec+0xc [known]; unit not traced [TODO] |
+| 4 | creation_time | UNLONG | rec+0xc [known] (T 10024e43) -> Mail+0x2c (S 0048cce0, S 0048ced0); copied only, no reader found in the Mail / PostOffice / Mailbox / NameRequest functions [inferred]; unit not constrained by the client [TODO] |
 | 5 | title | STRING 128 | rec+0x10 [known] |
 | 6 | status | UNBYTE | read with GetLBOOL: nonzero = read, 0 = unread [known] |
 | 7 | message_text | MEMBLOCK | read twice: NUL-terminated heap copy (rec+0x18) and ptr/len (rec+0x1c/+0x20) [known: push operands 10024e8a / 10024edc] |
@@ -3635,7 +3727,9 @@ next 147 clears the cache first [inferred].
 **Open decisions.**
 - **T14** `message_id`: any nonzero u32, unique per mailbox; 0 is rejected by every PostOffice
   operation (S 0047d200 / S 0047d390 / S 0047dfc0) [known]. Default: per-server counter from 1.
-- **T15** `creation_time`: any u32 [inferred]. Default: Unix seconds.
+- **T15** `creation_time`: any u32; nothing displays or compares it [known]: `Mail +0x2c` is only copied (S 0048ca80, S 0048cb70, S 0048cc60,
+  S 0048ced0, S 0048cce0). The client
+  itself sends 0 in 150 (T 10028cc8), leaving the stamp to the server [known]. Default: Unix seconds.
 - **T16** `data`: anything; never read. Default: empty (length 0).
 - **T17** `message_text` encoding: the client sends its own text as bytes incl. NUL (150) and copies
   up to the first NUL on receive [known]. Default: echo the sender's bytes unchanged.
@@ -4078,14 +4172,23 @@ only).
 **Contract.** Sender UserManager::ChangeUser T 1002ed80: user_id, name, cipher, mail, banned,
 active, data, property_mask, ticket_id (0x58). SADK uses it only for UpdateEMail (CharacterManager
 action 10): name/password empty, mail = new address, active 1, property_mask **8** (mail only)
-[known: S 00476390].
+[known: S 00476390]. The call at S 004769fb passes (user_id, name NULL, password NULL, mail, banned 0,
+active 1, data NULL, sizes NULL, 8). tincat3 does not interpret the mask: it copies its ninth argument
+untested into `property_mask` (T 1002efec) and writes name, mail, banned, active and data whatever
+the mask is; `cipher` is skipped when the password is NULL (T 1002ee35), and NULL data arguments give
+a zeroed 24-byte block of six sizes (T 1002efaa) [known]. So with mask 8 the accompanying active 1,
+banned 0, empty name and empty data are placeholders, not changes. No other caller of the vftable
+slot (UserManager +0x20, T 1005154c) was found in sadk_noav.exe [inferred].
 
 **Required server behaviour.** Result(42) -> UserManager clear busy + observer 0x0c -> SADK
 UserObserverListener::UpdateResultReceived S 00473e90 [known]. Stub acks [PROVEN as handler
 `_h_char_ack`; live use not recorded].
 
-**Open decisions.** **T43** `property_mask` bits other than 8: [TODO]; default: apply only the fields
-whose bit is set, treat 8 = mail.
+**Open decisions.** **T43** `property_mask`: the client sends only 8 [known] (the one call of the sender,
+`CharacterManager::ProcessActions` S 00476390, passes mask 8, active 1, banned 0, name and password NULL and
+no data) and neither sets nor
+tests any other bit, so the meaning of the other bits (1, 2, 4, 0x10, ...) cannot be read from it:
+[TODO]. Default: with mask 8 apply **only** `mail`; otherwise apply only the fields whose bit is set.
 
 #### 0x05C (92) RemoveUser, 0x013 (19) - 0x01D (29) legacy user/group admin
 
@@ -4139,8 +4242,12 @@ client's bytes unchanged [PROVEN].
 
 #### 0x048 (72) RequestCharacters — C->S / 0x04B (75) CharacterData — S->C
 
-**Contract.** Senders RequestCharacterByName T 10015d50, ById T 10015df0: {char_id UNLONG, name
-STRING 128, selection UNLONG, ticket_id (0x48)}. SADK uses it for its own list and for name<->id
+**Contract.** Senders RequestCharacterByName T 10015d50, ById T 10015df0; msgdefs fields {char_id
+UNLONG, name STRING 128, selection UNLONG, ticket_id (0x48)}. Each sender writes two fields only:
+ById `char_id` and `ticket_id`, ByName `name` and `ticket_id`. `selection` is never written by
+either, and they are the only creators of a 0x48 message [known]. The request kind is told apart
+only by which key field is present; `char_id` 0 with a name is a name lookup. The value an unwritten
+UNLONG serialises to is taken as 0 [inferred]. SADK uses it for its own list and for name<->id
 lookups (actions 8/9, used e.g. by mail recipient resolution) [known]. 75 rows (case 0x4b, only on
 a 0x48 ticket -> CharacterManager::OnCharacterData T 100163c0) have the same 11 fields as 60 plus
 ticket_id [known]; buffered and delivered on the Result (T 10016730).
@@ -4154,8 +4261,9 @@ S 0048cce0 shows "???" until it resolves) sends `char_id`; LookUpID (action 9, e
 typed by name) sends the lower-cased `name`. CharacterDataReceived S 00473590 takes the **first** 75
 row's name / char_id; no row = unknown (empty name / id 0). Mail is addressed from and to characters.
 
-**Open decisions.** **T45** `selection` values for by-id vs by-name: [TODO]; the stub matches whichever
-of char_id / name is set and answers the requester's own list when neither is. **T46** Unknown name/id: Result(42) with no rows or errorcode != 0; both end
+**Open decisions.** **T45** `selection`: closed, the client never writes it [known]; dispatch on the
+field present. The stub matches whichever of char_id / name is set and answers the requester's own
+list when neither is. **T46** Unknown name/id: Result(42) with no rows or errorcode != 0; both end
 the lookup [inferred]. Default: no rows, errorcode 0.
 
 #### 0x056 (86) AddCharacter — C->S
@@ -4182,12 +4290,22 @@ is ignored [known].
 
 #### 0x05A (90) ChangeCharacter — C->S
 
-**Contract.** Sender T 10016550: {char_id, name, data, property_mask, ticket_id (0x5a)}.
+**Contract.** Sender T 10016550: {char_id, name, data, property_mask, ticket_id (0x5a)}. A pure
+pass-through: it always writes char_id, name and data (six sub-blocks, or six zero sizes when the
+data arguments are NULL) and copies its fifth argument untested into `property_mask` (T 1001668c)
+[known]. Its only reference is the CharacterManager vftable slot +0x1c (T 1004e94c); no call through
+that slot was found in sadk_noav.exe, and `ProcessActions` S 00476390 uses slots +0x0c, +0x10, +0x14
+and +0x20 only, so this client is not known to send 90 [inferred].
 
 **Required server behaviour.** Result(42) -> clear busy + notify (errorcode, ticket data) [known].
 Stub acks and persists [PROVEN as handler].
 
-**Open decisions.** **T49** `property_mask` bit meanings: [TODO]; default: apply the fields sent.
+**Open decisions.** **T49** `property_mask` bit meanings: [TODO]. Established: tincat3 passes the
+mask through untested, and the client never sends 90 [known]: the sender is slot `+0x1c` of the character
+interface (vftable T 1004e930) and the client calls slots `+0x04`, `+0x08`, `+0x0c`, `+0x10`, `+0x14` and
+`+0x20` only (all uses of `CharacterManager.pCharacterComm`: S 00473460, S 00472b30, S 00476390); not established: any bit meaning, which is a
+server-side decision. Default: apply the fields sent, but never an empty name or an all-zero data
+block (the sender writes both even when the caller passes none).
 
 #### 0x05E (94) RemoveCharacter — C->S
 
@@ -4469,7 +4587,7 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | H14 | 0xDCA LoginSuccess | delay after the 153 | any, within the retry window | 0.5 s |
 | H15 | 0xDCA / 0xDCB | referee admission | either | always LoginSuccess |
 | H16 | 0xDB7 / 0xDB8 | RegisterGame validation | Result 0 proceeds; non-zero fails the match | accept |
-| H17 | 0xDB8 | GameSeed | any u32, the same for every client of a match [inferred] | one value per match, e.g. from GameID |
+| H17 | 0xDB8 | GameSeed | any u32, 0 included; seeds only the network-match chest contents (S 00775dd0) [known]; whether clients of one match may differ is [TODO] | one value per match, the same for every client, e.g. from GameID |
 | H18 | 0xDB8 | GameID echoed | not compared | echo the request's GameID |
 | H19 | 0xDC0 FinishGame | reconcile N reports | anything | accept every report; record when they agree |
 | H20 | 0xDD4 GiveUpGame | record a give-up as a loss | anything | record it |
@@ -4498,18 +4616,18 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | V16 | 3200 LevelExpUpdate | level/XP rules | any u32 pair (see V12) | stored values |
 | V17 | 3201 StatsUpdate | economy (gold, glod) | any u32 | stored values; new characters gold = glod = 50 |
 | V18 | 1004 NPCData | NPC cast | npcidx 0..15, npctyp 1/2 to be visible | the stub's `npcs.make_village_npcs` set |
-| V19 | 1004 | NPC actions | act 0..255, **at most 3 slots** | shop 11, mailbox 7, tailor 17, minigames 2..6 |
+| V19 | 1004 | NPC actions | act 0..255, **at most 3 slots**; only a single action in slot 0 is dispatched (S 00437760) [inferred] | one action per NPC: shop 11, mailbox 7, tailor 17, minigames 2..6 |
 | V20 | 1004 | NPC ids | any u32 not colliding with avatar ids [inferred] | a reserved high range |
 | V21 | 3001 MoveItem | move validation | whatever the following update says | apply legal moves, resend state otherwise |
 | V22 | 3002 DeleteItemRequest | allow deletion | any | allow |
-| V23 | 3100 / 3102 | item ids and slot types | any u32 (ids from encrypted game data [TODO]) | empty slots |
+| V23 | 3100 / 3102 | item ids and slot types | any u32 on the wire; ids 1..36 from `ItemsClient.txt` (plain text, loader S 0048bfd0) [known]; another id resolves to the invalid-item placeholder | empty slots; ids 1..36 only |
 | V24 | 3101 / 3102 | sltcnt | ignored | the true slot count |
 | V25 | 3600 OpenShop | NPC id -> shop | any | one shop per shop NPC |
-| V26 | 3601 ShopInventoryData | stock (ItemID, Buy, Sell) | any prices; item ids from game data [TODO] | curated list per shop |
-| V27 | 3601 | SellMod | any float | 0.9 [inferred client default] (stub 1.0) |
+| V26 | 3601 ShopInventoryData | stock (ItemID, Buy, Sell) | any prices; item ids 1..36 from `ItemsClient.txt` [known]; an unknown id shows as an empty slot; only the first 25 entries are shown (S 0045b790) [known] | curated list per shop, at most 25 entries |
+| V27 | 3601 | SellMod | any float | 0.9 (stub 0.9) |
 | V28 | 3601 | ShopID | any non-zero u32 | stable id per shop |
 | V29 | 3610 ShopBuy | purchase rules | any Result | fail when gold or space is short |
-| V30 | 3620 ShopSell | sell price credited | not dictated | `Sell * SellMod` |
+| V30 | 3620 ShopSell | sell price credited | not dictated; the client shows stock Sell if the shop lists the item, else trunc(base value x SellMod) (S 0046d800) [known] | the amount the client shows |
 | V31 | 3910 / 3930 | send trade messages | client cannot clear a pending trade | never |
 | V32 | 4000 ChatCommand | command set | anything | ignore, or a system chat line from ServerPerm |
 | V33 | 2001 CreateMiniGameTable | capacity, refusal (0xDB) | any | one table per tavern slot |
@@ -4532,7 +4650,7 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | T12 | 147 / 149 | order of 149 records | arrival order; merged by id [inferred] | newest first |
 | T13 | 147 | mails per list | no client limit known | cap at 100 |
 | T14 | 149 | message_id | non-zero u32, unique per mailbox (0 rejected) | per-server counter from 1 |
-| T15 | 149 | creation_time | any u32 [inferred] | Unix seconds |
+| T15 | 149 | creation_time | any u32; stored in Mail+0x2c, no reader [known]; unit [TODO] | Unix seconds |
 | T16 | 149 | `data` | never read | empty |
 | T17 | 149 | message_text encoding | bytes up to the first NUL | echo the sender's bytes |
 | T18 | 149 | mails from ignored senders | the client auto-deletes them [inferred] | deliver anyway |
@@ -4560,12 +4678,12 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | T40 | 59 | `password` | never read | None |
 | T41 | 59 | `data` part sizes | must not exceed the blob | the stored account blob, or empty |
 | T42 | 55 / 60 | several characters per account | N rows [inferred] | list every persisted character |
-| T43 | 88 | property_mask bits other than 8 | [TODO] | apply only fields whose bit is set; 8 = mail |
-| T45 | 72 | `selection` by id vs by name | [TODO] | match whichever of char_id / name is set |
+| T43 | 88 | property_mask bits other than 8 | [TODO]; the client sends only 8 [known] S 00476390 and fills the other fields with placeholders (active 1, banned 0, empty name and data) that must not be applied [known] | with 8 apply only mail; else only fields whose bit is set |
+| T45 | 72 | `selection` by id vs by name | never written by either sender (T 10015df0, T 10015d50) [known] | match whichever of char_id / name is set |
 | T46 | 72 | unknown name/id | no rows or errorcode != 0 both end the lookup [inferred] | no rows, errorcode 0 |
 | T47 | 86 | character name rules | STRING 128 only [inferred] | unique per server, 3..32 characters |
 | T48 | 86 | char_id allocation | non-zero, distinct [inferred] | store counter |
-| T49 | 90 | property_mask bits | [TODO] | apply the fields sent |
+| T49 | 90 | property_mask bits | [TODO]; passed through untested by tincat3 (T 10016550) [known]; the client never calls that slot, so it does not send 90 [known] (S 00473460, S 00472b30, S 00476390) | apply the fields sent, never an empty name or all-zero data |
 | T50 | groups | group model | nothing imposed [inferred] | reject admin writes, empty lists |
 | T51 | guilds | guild support | nothing imposed | no guilds (guild_id 0, empty lists) |
 | T52 | CD keys | key validation policy | server-side only | accept every key, keypool 0..255 |
@@ -4602,18 +4720,18 @@ the client handles and the stub ignores or only logs.
 | 0xDC0 FinishGame | logs, no reply | 0xDC1 then 0xDC2 | what the client blocks on is [TODO] | S 00479c40, S 0047a810, S 0047a9c0 |
 | 0xDD4 GiveUpGame | logs, no reply | 0xDD5 with the request's GameID, Result 0..20 | client stays on "Finalizing" [known] | S 00479ab0, S 0047ae80 |
 | 0xDAC ClaimChest | logs, no reply | 0xDAD Result 0, then 0xDAE | chest claim never resolves [inferred] | S 00479670, S 00479fb0 |
-| 1001 AvatarData | named EntityCreate; sends location + style blocks only; never sends a 1001 for the recipient's own id | the original server sent each client its own 1001 [inferred]; whether the own avatar needs it for 3100-3201 `ownr` lookups is [TODO] | server-side item/stat updates for the own avatar may be dropped [TODO] | S 0046e1d0, S 004824b0 |
+| 1001 AvatarData | named EntityCreate; sends location + style blocks only; never sends a 1001 for the recipient's own id | the original server sent each client its own 1001 [inferred]; the own avatar is in the map without it (S 004626c0) and a 1001 for the own id is consumed bit-exactly (S 004824b0) [known] | none: 3100-3201 `ownr` lookups find the own avatar [known] | S 0046e1d0, S 004824b0, S 004626c0 |
 | 1002 AvatarLoggedIn | `config.VILLAGE_MSG_ENTITY_UPDATE = 1002 # (movement)` | 1002 is AvatarLoggedIn; movement is a repeated 1001 | comment only; the stub never sends 1002 | S 0046e390 |
-| 1004 NPCData | body builder matches; disabled by `config.VILLAGE_NPCS_ENABLED = False`; comments call it "PlayerCreate" | NPCs sent after 1000 to each entrant | no NPCs in the world | S 0046f8c0, S 0047b5c0 |
+| 1004 NPCData | body builder matches; on (`config.VILLAGE_NPCS_ENABLED = True`); comments call it "PlayerCreate"; one NPC ("Herold Hartmut") carries two actions; `actChat` values are written like button labels | NPCs sent after 1000 to each entrant; one action per NPC, in slot 0; `actChat` is spoken (bubble + chat line) | the two-action NPC has no established way to run an action [inferred] | S 0046f8c0, S 0047b5c0, S 00437760, S 004337f0 |
 | 2000 AvatarLocation | relays correctly; comment says "~3/s" | the client sends about 15/s at 60 fps | comment only | S 0051ace0 |
 | 2002 LeaveVillageRequest | answers with two 1006 (correct); docstrings still call 0x27D2 a world-login request answered with 1000 | two 1006 {0xDEADBEEF} | comment only | S 0046bde0, S 0046ec50 |
 | 3950 AvatarColorChange | logged and dropped | 3201 + a style 1001 to everyone (V15) | colour changes are not seen by others; gold not charged | S 0046c760 |
 | 3200 / 3201 | not implemented | 3201 after any gold change | client-side gold checks drift [inferred] | S 0046c940, S 0046c9c0 |
 | 3001 / 3002 | logged and dropped | an item update (3101/3102) | item moves and deletes never take effect | S 0046bec0, S 0046bff0 |
 | 3100 / 3101 / 3102 | not implemented | item state for the owner | inventory and equipment never update | S 0046e660, S 0046e6f0, S 0046e780 |
-| 3600 OpenShop / 3601 ShopInventoryData | no branch for 0x2E10; 0xE11 body exists and is described as server-pushed | 0xE11 as the reply to 0xE10 with the same NPCID | no shop opens; a live click put nothing on the wire, cause [TODO] | S 0046ddf0, S 004706b0, S 0047b200 |
-| 3601 SellMod | 1.0 | any float | 0.9 is the client default [inferred] | S 004706b0 |
-| 3610 / 3620 and 3611 / 3621 | logged and dropped / not implemented | 0xE1B / 0xE25 plus 3102 and 3201 | buying and selling do nothing | S 0046c400, S 0046c510, S 00470990, S 00470a10 |
+| 3600 OpenShop / 3601 ShopInventoryData | wire matches (`economy.handle_open_shop` answers 0x2E10 with 0xE11); stale comments in `dispatch.py` and `village.py` still say a click sends nothing; a non-shop NPC id gets no answer | 0xE11 as the reply to 0xE10 with the same NPCID | none on the wire; comments only | S 0046ddf0, S 004706b0, S 0047b200 |
+| 3610 / 3620 and 3611 / 3621 | wire matches (`economy.handle_buy`, `handle_sell`, `result_body`); ShopID is not compared with the opened shop; QTY > 1 honoured | 0xE1B / 0xE25 plus 3102 and 3201; the client sends the ShopID of its last 0xE11 and QTY 1 | a buy with a stale ShopID is honoured; no effect with the real client | S 0046c400, S 0046c510, S 00470990, S 00470a10 |
+| 3620 ShopSell price | credits `int((price // 2) * 0.9)` for every item | the amount the client shows: stock Sell if the open shop lists the item, else trunc(base value x SellMod) | the player is paid a different amount than the confirm box states [known] | S 0046d800, S 0044e271 |
 | 4000 ChatCommand | logged and dropped | nothing required | none | S 0046cbf0 |
 | Minigames (2001, 209, 204, 222, 220, 221, 300-302, 400-403; 216-220, 303) | client actions logged and dropped; server messages not implemented | the table protocol (0xDA, 0xD9, 0xD8, 0xDB, 0xDC, 0x12F) | no minigames | S 0046cf20, S 0046f380, S 00471720 |
 | 150 AddPrivateMessage | default Result(42) | AddResult(153) | the first send leaks the ticket; all later mail sends and the PostOffice queue stall [known] | T 1002677c entry 0x96 -> T 10028fc0 |

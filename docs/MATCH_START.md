@@ -23,9 +23,9 @@ this session. Evidence tags: `[PROVEN]` = address + decompiled evidence here;
 
 > **Why it's broken in the stub.** Match start is **referee-gated**. The referee /
 > match-arbiter subsystem was removed from `lobby/sadk_lobby/`, so the client's referee login
-> never completes and the host's `RegisterGame` never gets a `GameSeed` back — and a
-> deterministic lockstep RTS cannot start a match without the shared seed. The 3D lobby
-> works; pressing through to a match does not.
+> never completes and the host's `RegisterGame` never gets a `RegisterGameResult(0xDB8)` back — and
+> the handler of that message is what starts the load (S 00431800). The `GameSeed` it carries only
+> seeds the chest contents (Phase 2). The 3D lobby works; pressing through to a match does not.
 
 ---
 
@@ -108,8 +108,29 @@ The referee is a separate server, assigned on demand (see `REFEREE_FUNCTIONS_TO_
 The referee answers **`RegisterGameResult(0xDB8)`**: `GameID`, `Result`; on `Result==0` it
 carries **`GameSeed(u32)`** and fires the 2-arg fan-out on `refConn+0x50`; on failure it
 carries `FailReason(str)` and fires `refConn+0x5c`. (Intermediate `RegisterGameAck(0xDB7)`:
-`GameID`, `Result`.) **The `GameSeed` is the lockstep determinism seed — without it the
-match cannot start.**
+`GameID`, `Result`.)
+
+**What the `GameSeed` seeds `[known]`.** Only the contents of the chests of a network match; it is
+not the simulation's random seed. `GetGameSeed` S 004139e0 has two callers:
+- `Game_LoadWorldFromDescriptor` S 005ac770 (S 005ac7ed), for new-game map types only
+  (`FUN_0052c270(mapType)`): after `Game_CreatePlayersFromDescriptor`, if `GameSeed != 0` or
+  `GameID` (`+0x22a`) `!= 0`, it calls `Game_DistributeChestsForNetworkMatch`.
+- `Game_DistributeChestsForNetworkMatch` S 00775dd0 (S 00775e1f): builds a local
+  `ai::math::RandomGenerator` (Park-Miller, `Rng_ParkMillerNext` S 006ec350), seeds it with the
+  GameSeed (`SetSeed` S 006ec2a0) and draws one number per chest, stored at `LogicChest +0x28`
+  (`LogicChest_SetContentKind` S 00539200). The chest positions are chosen without the generator.
+
+The simulation uses a separate global generator at S 00889b08: constructed with the constant
+`0x5432ace0` (static initialiser S 007c07d0), reset from its stored seed in `LogicRandom_SetUp`
+S 00538980, advanced by `LogicRandom_Next` S 005389b0, replaced only by `LogicRandom_Load` (from a
+game file) and part of the checksum; nothing writes the GameSeed into it.
+
+So the match needs the `0xDB8` message, not its seed value: the handler S 00431800 stores the seed,
+fills the load descriptor and starts the game. A seed of 0 is accepted, and chests are still
+distributed when `GameID != 0`. Other accesses of session `+0x22f`: `SetGameSeed` S 004139f0 ←
+`SetGameSeedIfState2` S 004082e0 ← S 00431800 only; `Serialize` / `Deserialize` (it travels in every
+GameInformation / StartLoading / StartGame payload); `AssignGameData` / `CopyFrom`;
+`UpdateSettingsCrc` (S 004148c8); `Reset` (0).
 
 ## Phase 3 — start-loading + the referee-login gate `[PROVEN]`
 
@@ -245,16 +266,17 @@ the accessors below, and writes a `GameLoadDescriptor` (the per-player setters `
 | `+0x3a` | int8 | playerIndex | `NComm_Slot_GetPlayerIndex@0x414d60` | |
 | `+0x3b` | int8 | **kind** | `NComm_Slot_GetKind@0x414d70` | `0`=empty, `1`=human, `2`=AI, `3`=closed |
 | `+0x3c` | int8 | aiLevel | `NComm_Slot_GetAiLevel@0x414d80` | valid when kind==AI |
-| `+0x3d` | int8 | tribe/color? | `FUN_00414da0` (→`FUN_004538b0` map → descriptor color/faction) | `[TODO]` exact semantic |
-| `+0x3e` | int8 | ? | `FUN_00414db0` | `[TODO]` |
-| `+0x3f` | int8 | ? | `FUN_00414dc0` | `[TODO]` |
-| `+0x40` | — | (12B) | — | `[TODO]` — team / ready likely here |
+| `+0x3d` | int8 | tribe | `GetTribe` S 00414da0 (→ `NComm_GetNationIdForTribe` S 004538b0 → descriptor `+0x68`) | `[known]` |
+| `+0x3e` | int8 | colour | `GetColor` S 00414db0 (→ descriptor `+0x88`) | `[known]` |
+| `+0x3f` | int8 | team | `GetTeam` S 00414dc0 (→ descriptor `+0xa8` → `Player.team`) | `[known]`; -1 = no team |
+| `+0x40` | int8 | readyState | folded setter S 00552f10 | `[known]`; 0 not ready, 1 ready, 2 loaded |
+| `+0x41..+0x4b` | — | avatar look, avatar colours, AvatarID, left-notice latch | — | see `docs/NCOMM_GAME_PROTOCOL.md` |
 
-`[TODO]` to finish the room model: (a) disambiguate `+0x3d/+0x3e/+0x3f` and the `+0x40..0x4b` tail against
-the descriptor setters → label tribe/color/team/**ready**; (b) formalize `NCommGameSlot` as a Ghidra struct;
+The full slot table, the team chain and the ready-state writers are in `docs/NCOMM_GAME_PROTOCOL.md`.
+`[TODO]` to finish the room model: (b) formalize `NCommGameSlot` as a Ghidra struct;
 (c) **the wire-update path** — how slots get populated/changed over the network (join, pick tribe, ready). The
-slot object passed to `FillMpDescriptor` is the SetupGame game object; the GameSeed lives in a *different*
-object (`DAT_00885754+0xdc`, the nMenu session singleton) — relationship `[TODO]`.
+slot object passed to `FillMpDescriptor` is the SetupGame game object; the GameSeed lives in the
+`EventGameInformation` embedded in the NComm manager (`DAT_00885754+0xdc`, field `+0x22f`).
 
 ## Open `[TODO]` — to finish the model / unblock the stub
 
@@ -265,8 +287,19 @@ object (`DAT_00885754+0xdc`, the nMenu session singleton) — relationship `[TOD
 2. ~~**GameSeed consumer.**~~ **DONE 2026-06-13 (storage endpoint).** `refConn+0x50` →
    `LobbyGameScreen_OnRefereeRegisterGameResult@0x431800` stores the seed into the game-session
    singleton **`DAT_00885754+0xdc`** (via `FUN_004082e0`→`FUN_004139f0`, gated on `sess+0x1c==2`),
-   fills the MP descriptor, and kicks the Game (`vtbl[0x2c](1)`). `[TODO]` one hop deeper: confirm
-   `DAT_00885754+0xdc`/`FUN_004139f0` is where the deterministic-sim RNG actually reads the seed.
+   fills the MP descriptor, and kicks the Game (`vtbl[0x2c](1)`). The readers are
+   `Game_LoadWorldFromDescriptor` S 005ac770 and `Game_DistributeChestsForNetworkMatch` S 00775dd0:
+   the seed feeds only the chest-content generator, not the simulation generator S 00889b08
+   `[known]` (Phase 2).
+   `[TODO]` **Differing seeds inside one match.** Established: each client stores the seed of its own
+   `RegisterGameResult` and then loads; `AssignGameData` copies `+0x22f` from the host's payload
+   (S 00414388) in events 0x30003 (GameInformation), 0x30012 (StartLoading) and 0x30005 (StartGame),
+   and the host rebroadcasts 0x30003 after every 0x30004 / 0x30011 / 0x30002 it receives, so the
+   host's value (0 before its own `RegisterGameResult`) can replace a client's seed at several
+   points. Not established: whether such a replacement lands before that client's chest pass
+   (S 00775e1f), which depends on message timing; and whether `LogicChest +0x28` is part of the
+   checksummed state, i.e. whether different seeds cause a detected desync or only different chest
+   contents per client.
 3. ~~**Identify `FUN_004624d0`**~~ — **DONE 2026-06-13.** It is `LobbyManager_GetVillageServerConnection@0x4624d0`
    (returns `VillageServerConnection*` at `LM+0x540`). The game screen's second observer target is the
    **village/world connection**, not a new actor — proven via the noav struct field + the
@@ -275,11 +308,11 @@ object (`DAT_00885754+0xdc`, the nMenu session singleton) — relationship `[TOD
    candidate carrier of the unreversed pre-game slot/tribe/team/ready protocol.)
 4. **Stub implication.** To start a match the stub referee must, at minimum: accept the
    referee `Login` (→ `LoginSuccess 0xDCA`), accept the host's `RegisterGame 0xDB6`
-   (→ `RegisterGameAck 0xDB7` then `RegisterGameResult 0xDB8` **with a `GameSeed`**). All
-   clients in the match must receive the **same** seed. Re-introducing the referee server is
-   the path to unblocking "entering matches".
+   (→ `RegisterGameAck 0xDB7` then `RegisterGameResult 0xDB8` **with a `GameSeed`**). Sending
+   every client of a match the same seed is the safe choice while item 2's `[TODO]` is open.
+   Re-introducing the referee server is the path to unblocking "entering matches".
 5. **Re-verify live** that the "give-up-after-5-retries → load anyway" path is what actually
-   happened in past failed tests (it loads but likely can't start the sim without a seed).
+   happened in past failed tests (the seed is not what the simulation waits for, see Phase 2).
 
 ---
 
@@ -309,7 +342,7 @@ and `RegisterGame 0xDB6`→`Ack 0xDB7`+`Result 0xDB8` with a `GameSeed`). Only t
 | inside `FUN_00479ef0` at the callback dispatch `(*(code*)puVar3[3])(…)` | `puVar3[3]` (the callback fn ptr) | **the game-screen LoginSuccess/Failed callback** (`[TODO]` #1) |
 | inside `FUN_00464300` (register-result fan-out) | the callback fn ptr + the `GameSeed` arg | **the seed-result callback** |
 | `RefereeServerConnection_OnRegisterGameResult@0x47a580` | the `GameSeed` value read off the wire | seed delivery |
-| then single-step the resolved callbacks | where `GameSeed` is stored / the sim RNG seeded | **GameSeed→sim consumer** (`[TODO]` #2) |
+| `Game_DistributeChestsForNetworkMatch` S 00775dd0, at the `GetGameSeed` call S 00775e1f | session `+0x22f` on each client | **which seed each client's chest pass uses** (`[TODO]` #2) |
 
 Chicken-and-egg: Tier B's success callbacks can't fire until the stub at least *answers* the
 referee `Login`/`RegisterGame`. So the practical order is: (1) Tier A first (pure observation,

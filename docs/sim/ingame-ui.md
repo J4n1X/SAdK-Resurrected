@@ -1,0 +1,1548 @@
+# In-game user interface: HUD, menus, selection and actions
+
+Binary: `sadk_noav.exe` (image base 0x400000). `S 00xxxxxx` is a static address in that binary.
+
+Tags: **[known]** = read directly in the decompiled code at the given address, or in the named data file and
+key. **[inferred]** = one step of reasoning from what is visible; this includes statements that rest on the
+mapped description of a function whose body was read only in part. **[TODO]** = not established, with what
+would settle it. Nothing in this document was observed in the running game.
+
+Related documents: [game-commands.md](game-commands.md) (every command the UI issues, the action table and
+its availability rules), [lua-runtime.md](lua-runtime.md) (the `menu.*` / `ui.*` script functions and button
+events), [players-victory.md](players-victory.md) (messages, quests, victory state),
+[save-format.md](save-format.md) (the load and save panel's file handling),
+[network-session.md](network-session.md) (hang state, chat), [hud-panels.md](hud-panels.md) (the HUD panels in
+detail: statistics, in-game settings, messages, tooltips), [ui-toolkit.md](ui-toolkit.md) (the widget toolkit
+in detail), [frontend-screens.md](frontend-screens.md) (the front end: main menu, options, free game, campaign),
+[lobby-screens.md](lobby-screens.md) (the lobby screens), [match-setup-room.md](match-setup-room.md) (the match
+set-up room), [`../UI_FINDINGS.md`](../UI_FINDINGS.md) (only a file map of the lobby layout files and the
+finding that screen flow is code, not data; it specifies no screen; its §2 calls `data\game\ui\layout` "the
+single-player RTS UI": the same files serve network matches), [`../subsystems.md`](../subsystems.md) §2.9,
+[`../data-loading.md`](../data-loading.md), [`../asset-formats.md`](../asset-formats.md).
+
+---
+
+## 1. Purpose and scope
+
+Two namespaces:
+
+- **`nUi`**, the widget toolkit: a tree of `nUi::Object` widgets below one `nUi::Root`, a layout record
+  (`Deployment`) per widget, sprites (`Shape`), text (`Text`), buttons, sliders, lists, tab controls, tooltips,
+  the cursor, the key state table, and the loader that builds a widget tree from a layout XML file.
+- **`nMenu`**, the screens built with it: the menu system with its screens and dialogs, and inside the game
+  screen (`nMenu::Game`) the HUD: selection panel with info boxes, the round action buttons, build menu,
+  minimap, messages, quest lines and quest log, goods bar, sacrifice bar, world overlays, statistics, in-game
+  settings (military, transport priority, goods distribution, diplomacy view), options, load/save, requester.
+
+The UI is the only producer of player commands. It never changes the simulation itself: every change goes
+through `NComm_Manager::QueueGameCommand` ([game-commands.md](game-commands.md) §3.1), with the exceptions
+listed in §8.
+
+Out of scope: the lobby screens (`LobbyMenu::*`: [lobby-screens.md](lobby-screens.md); the match set-up room:
+[match-setup-room.md](match-setup-room.md)), the front-end screens `nMenu::Main`,
+`Splash`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns` ([frontend-screens.md](frontend-screens.md); they use
+the same toolkit; only their place in the screen table is given here), the camera rules (`nGame::Camera`), the debug screens (`nMenu::Debug`, the debug
+toggles), the renderer.
+
+---
+
+## 2. Data model
+
+### 2.1 `nUi::Object` (0x198 bytes) [inferred: field list from the mapped struct, cross-checked on the readers named]
+
+Every widget is an `nUi::Object` or derives from it. Three vtables: primary at +0, `NCore::IUpdateable` at +4,
+`nUi::Event` (which is also the `Configurable`, i.e. the XML-loadable face) at +8.
+
+| Offset | Field | Meaning | Evidence |
+|---|---|---|---|
+| +0x28 / +0x2c | user data (i64) | XML `data`; code stores per-widget ids here (action number, good id, quest index, building id) | S 004a76c0 |
+| +0xc8 | name (`std::string`) | XML `name`, else the element name | S 004a76c0 |
+| +0xe4 | enabled (u8) | XML `enabled` | S 004a76c0, S 0049fdd0 |
+| +0xe8 | `nUi::Focus` | state 0 idle, 1 hovered, 2 pressed; `canReceiveFocus` (u8 at Focus +0x18, default 1) | S 004c1c30, S 004a3b30, S 004a0020 |
+| +0x114 | render id (i32) | draw order stamp of the current frame; decides which of two overlapping widgets is "under the cursor" | S 004a0500, S 004a1b00 |
+| +0x118 | forwardEvents (u8) | XML `forwardEvents`: input is offered to the children first; constructor default 1 | S 004a07a0, S 004a3cc0 |
+| +0x119 | click latch (u8) | set by a completed left click or by the hotkey; polled and cleared by the owner | S 0049ff60, S 0049ffc0 |
+| +0x11c | unique id (i32) | process-wide widget id; code compares ids to recognise a sender | S 004a3cc0 |
+| +0x120 | clipping (u8) | XML `clipping`: children are clipped to the widget rectangle | S 004a58a0 |
+| +0x124 | layout dirty (i32) | 2 = changed, 1 = re-evaluate mouse-over next update, 0 = clean | S 004a0500, S 004a3920 |
+| +0x128 | deployment stack (`std::list<Deployment>`) | front = base layout; animations push temporary copies at the back; the back entry is the one in effect (hit test, clip, draw) | S 004a4050, S 004a2490, S 004a1820 |
+| +0x134 | owned animations (`std::list<Animation*>`) | ticked in `Update`, deleted when finished | S 004a3920 |
+| +0x140 | opacity (f32) | multiplied into text and sprite alpha | S 004a0630 |
+| +0x144 | hovered (u8) | set by `OnMouseEnter`, cleared by `OnMouseLeave` | S 004a3b30, S 004a1c80 |
+| +0x148 | kind (i32) | widget type number, §2.3 | S 004c28a0 |
+| +0x14d | visible (u8) | XML `visible` | S 004a1090 |
+| +0x150 | parent | | S 004a40c0 |
+| +0x158..+0x15c | children (`std::vector<Object*>`) | sorted ascending by z-order (`qsort` on +0x178); updated in that order, offered input in the reverse order (last = topmost first) | S 004a0550, S 004a3920, S 004a07a0 |
+| +0x178 | z-order (i32) | XML `zorder` | S 004a0ad0 |
+| +0x17c | hotkey (i32) | XML `hotkey`; −1 = none | S 0049ffc0 |
+| +0x181 | owned child (u8) | set for widgets created by the XML factory; they are deleted before a reload | S 004c21d0, S 004a3840 |
+| +0x184 | intersection type (i32) | XML `intersectionType`: 0 rectangle (its height reduced by one pixel), 1 ellipse inscribed in the rectangle; any other value never hits | S 004a1820 |
+| +0x188 / +0x18c / +0x190 | local 4×4 matrix, cached world matrix, dirty flag | XML `transform`; scale animations | S 004a0930, S 004a0b60 |
+
+### 2.2 `nUi::Deployment` (0x70 bytes) and `nUi::Position` [known] S 004bcb80, S 004bc0b0, S 004bc570, S 004aae00
+
+A `Position` is two values, each `{f32 value, u8 isRelative}` (x at +4/+8, y at +0xc/+0x10). **All stored
+lengths are fractions of the screen**: x of the back-buffer width, y of its height (`nUi_PixelsToRelativeX/Y`
+S 004aaae0, S 004aab10 divide by the device resolution). The flag only records whether the XML wrote a
+percentage.
+
+| Offset | Field |
+|---|---|
+| +0x10 | owner widget |
+| +0x14 | absolute position (screen fraction; value x +0x18, y +0x20) |
+| +0x28 | relative position, i.e. relative to the parent's origin (x +0x2c, y +0x34) |
+| +0x3c | offset (x +0x40, y +0x48) |
+| +0x50 | size (width +0x54, height +0x5c) |
+| +0x64 | alignX: 0 none, 1 left, 2 center, 3 right |
+| +0x68 | alignY: 0 none, 1 top, 2 center, 3 bottom |
+| +0x6c | dock (XML `anchor`): 0 none, 1 top, 2 right, 3 bottom, 4 left, 5 center |
+
+### 2.3 Widget kinds [known] S 007bf5f0 (name table, 39 entries), S 004c28a0 (factory switch)
+
+`controltype` values are matched without regard to case against this table; the index is the kind.
+
+| Kind | `controltype` | Created class (bytes) | Kind | `controltype` | Created class (bytes) |
+|---|---|---|---|---|---|
+| 0 | Item | `Item` 0x2d8 | 20 | DropDownMenu | `DropDownMenu` 0xb90 |
+| 1 | Slider | `Slider` 0x560 | 21 | Listbox | not creatable |
+| 2 | Slider2 | `Slider2` 0x1380 | 22 | ListBox2 | `ListBox2` 0x1848 |
+| 3 | StackedSlider | `StackedSlider` 0x2b8 | 23 | Dialog | not creatable |
+| 4 | SliderEx | `SliderEx` 0xef0 | 24 | TextBlock | `TextBlock` 0x1a0 |
+| 5 | Grabber | `Grabber` 0x1a0 | 25 | Chart | `Chart` 0x1a8 |
+| 6 | Edit | `Edit` 0x330 | 26 | Video | not creatable |
+| 7 | EditEx | `EditEx` 0x12a8 | 27 | TextScroller | `TextScroller` 0x228 |
+| 8 | Icon | `Icon` 0x3f8 | 28 | ChatSystem | `ChatSystem` 0x3358 |
+| 9 | Label | `Label` 0x228 | 29 | Table | not creatable |
+| 10 | Button | `Button` 0x468 | 30 | Serverlist | not creatable |
+| 11 | ButtonEx | `Button` 0x468 (kind 10) | 31 | Scroller | `Scroller` 0x400 |
+| 12 | PictureButton | `PictureButton` 0x500 | 32 | ShapedObject | `ShapedObject` 0x230 |
+| 13 | OverlayButton | `OverlayButton` 0x790 | 33 | Container | plain `Object` 0x198 |
+| 14 | Picture | `Picture` 0x288 | 34 | ProgressBar | `ProgressBar` 0x768 |
+| 15 | AlphaFanPicture | `AlphaFanPicture` 0x2f8 | 35 | Root | not creatable |
+| 16 | Desktop | not creatable | 36 | Graph | `Graph` 0x298 |
+| 17 | Bar | `Bar` 0x350 | 37 | TabControl | `TabControl` 0x2f0 |
+| 18 | ComboBox | `ComboBox` 0x930 | 38 | InventoryButton | `InventoryButton` 0x5d8 |
+| 19 | ComboBoxNew | `ComboBoxNew` 0xb88 | | | |
+
+"Not creatable": the factory logs `Object type <n> is not a known ui object type` and returns null; the
+element is skipped. An unknown name logs the same with the name [known] S 004c2730.
+
+`nMenu::Factory::CreateObjectByName` S 0060c880 [known] is the factory installed while the game runs. It
+tests these names first (case-insensitive) and passes everything else to the table above:
+
+| `controltype` | Class (bytes) | Use |
+|---|---|---|
+| mainmenubutton | `nMenu::MainMenuButton` 0x598 | front-end buttons |
+| goodbutton | `nMenu::GoodButton` 0x1bd0 | one good, settler or soldier with count and state icons |
+| timedgoodbutton | `nMenu::TimedGoodButton` 0x1bd8 | a good button with a fan-shaped timer |
+| sacrificebutton | `nMenu::SacrificeButton` 0xd98 | one sacrifice in the temple info box |
+| clocksymbol | `nMenu::ClockSymbol` 0x1818 | 8-frame animated clock with a counter |
+| roundingamebutton | `nMenu::RoundIngameButton` 0xa18 | round HUD button with green/red hover highlight |
+| avatar | `nMenu::Avatar` 0x1d0 | player portrait |
+
+### 2.4 `nUi::Shape` (0x94 bytes): the sprite of a widget [known] S 004aa700, S 004aa5a0
+
+| Offset | Field | Default |
+|---|---|---|
+| +0x14 | texture | none |
+| +0x18 | mapping: source rectangle x, y, w, h in texture pixels | |
+| +0x38 | flipped (u8): mirrored | 0 |
+| +0x3c / +0x44 | width / height, each with a "relative" byte (+0x40 / +0x48) | 0; the widget's own draw (S 004aa310) does not read them, it uses the owner's rectangle [known] |
+| +0x4c | color (f32[4]): RGBA multiplier | 1, 1, 1, 1 |
+| +0x5c | disabledColor (f32[4]): used while the widget is disabled | 0.4667, 0.4667, 0.4667, 1 |
+| +0x6c mask texture, +0x70 maskUV0, +0x78 maskUV1 | second texture whose alpha masks the sprite; its UV corners | none; (0,0)..(1,1) |
+| +0x80..+0x8c | borders top, right, bottom, left (pixels) | 0 |
+| +0x90 | stretch (u8) | 1 |
+| +0x92 | rotation (u16): the quad is turned about its centre by −value ÷ 65536 × the constant at S 00882840 [known] S 004a88a0; [TODO] the constant's value (a read of the float settles whether a full turn is 65536) | 0 |
+
+The shape is drawn only if it has a texture and the mapping's width or height is not 0 [known] S 004aa310.
+
+### 2.5 `nUi::Text` (0x8c bytes) [known] S 004b46d0; [inferred] S 004b3ed0, S 004b43c0
+
+font (+0x10), position (+0x14) and offset (+0x28) as `Position`, string (+0x3c), align (+0x58: 4 left, 8 center,
+0x10 right), contentHidden (+0x60), upperCase (+0x61), lowerCase (+0x62), color RGBA (+0x64, default white),
+wrap width and height in pixels (+0x74, +0x78).
+
+### 2.6 Singletons and globals
+
+| Object | Where | Role | Evidence |
+|---|---|---|---|
+| `nUi::Root` | function-local static S 00885a88, `GetInstance` S 00491970 | root widget, kind 0x23 (35), size 1.0 × 1.0; input entry; device-change listener | [inferred] S 00491810 |
+| `nUi::Cursor` | `g_pCursor` S 00885c98 (0x90 bytes) | position (+0x24 x, +0x2c y, screen fraction), previous position (+0x38, +0x40), visible (+0x70), wheel delta (+0x74), cursor table (+0x7c), current index (+0x8c) | [inferred] S 00492be0 |
+| `nUi::GameAction` | `g_pGameAction` S 00885a00 (0xd08 bytes); active map `g_pActiveAction` S 008859fc | per virtual key: `keyState[256]` (+4), `pressedThisFrame[256]` (+0x404), `asyncHoldFrames[256]` (+0x804), `asyncDown[256]` (+0xc04), ctrlDown (+0xd04), shiftDown (+0xd05), asyncPollEnabled (+0xd06) | [inferred] S 00490f50, S 00490e90 |
+| input capture | `g_pUiInputCapture` S 00885cb4 | widget that receives all mouse events while set (sliders, grabbers) | [known] S 004913f0 |
+| mouse-over widget, hovered list | S 00885cb0, S 00885cb8 | result of the per-frame mouse-over arbitration | [inferred] S 004a1b00 |
+| templates document | `g_pUiTemplatesXml` S 00885d64 | parsed `templates.xml` | [known] S 004ab6f0 |
+| widget factory | S 00885dac | `nMenu::Factory` | [known] S 004a76c0 |
+| XML handler registry | S 00885c8c, reload flag S 00885c88 | map handler → file name, for the hot reload | [inferred] S 00491c90 |
+| `ai::ui::Localization` | S 00885ca0 (0x2c bytes) | key → text map, language code (+0xc, default `de`) | [inferred] S 00496070, S 004955a0 |
+| `nMenu::System` | `g_pNMenuSystem` S 0088b83c (0xb8 bytes) | screen table, §2.7 | [known] S 005dda30 |
+| `nMenu::IconConfig` | S 0088b908 | icon atlas rectangles per good, building, sacrifice | [inferred] S 00611320 |
+| script button events gate | S 0088b314 | 1 while a map script is loaded | [lua-runtime.md](lua-runtime.md) §4.4 |
+
+### 2.7 `nMenu::System` (0xb8 bytes) [known] S 005dda30, S 005d9650, S 005d97a0; offsets [inferred]
+
+| Offset | Field |
+|---|---|
+| +0x08 | quit flag |
+| +0x0a | "a dialog with focus was updated this frame" |
+| +0x0c | current top-level screen (Main, Game, Splash or Exit) |
+| +0x10 | dialog slots 0..8 (below) |
+| +0x34 | `Info` (encyclopaedia / help popup) |
+| +0x09 | initialised |
+| +0x38 / +0x3c / +0x40 / +0x44 | `Main` (0x9a8 bytes), `Game` (0x11038), `Splash` (0x15d8), `Exit` (0xb58) [known] S 005dda30 |
+| +0x48 | minimap symbol list (script markers and message markers) |
+| +0x4c | language string |
+| +0x68 | pending map or save path (`std::string`); non-empty starts that map on the next update |
+| +0x84 | current music index (−1 none); +0x88 seven music sound ids |
+| +0xa4 | UI suppressed (set only by the constructor to 0, see `subsystems.md`) |
+| +0xb4 | one-shot "enter the lobby" request |
+| +0xb5 | 3D world active behind the screen (XML `BG_3D` of a screen root) |
+
+Dialog slots (index used by `ActivateScreenById`, `ToggleScreen`, `IsScreenAttached`):
+
+| Slot | Class | Opened by |
+|---|---|---|
+| 0 | `Report` | map completed, map type other than 1 and 0x65 (§3.9) |
+| 1 | `Debug` | no opener in the shipped flow (`subsystems.md`) |
+| 2 | `Book` | `menu.openBookDialog` |
+| 3 | `Victory` | map completed, map type 1 or 0x65 (§3.9) |
+| 4 | `Requester` | menu items "Main Menu" and "Quit" |
+| 5 | `Defeat` | local player defeated (§3.9) |
+| 6 | `MsgBox` | file errors (`!FILENOTFOUND`, `!INVALID_SAVEGAME`) |
+| 7 | `NetInfo` | key `x` in a network match |
+| 8 | `Cinematic` | `menu.startCinematic` |
+
+All nine derive from `nMenu::Overlapped` (a draggable framed dialog: frame +0x1c0, grabber +0x428, title label
++0x5c8, close button +0x7f0) [inferred] S 0062e530.
+
+### 2.8 `nMenu::Game` (0x11038 bytes): the game screen [inferred: offsets from the mapped struct and the readers named]
+
+| Offset | Member |
+|---|---|
+| +0x20 | `nUi::Desktop` face: the screen's root widget (name of the XML root, `menuingame`) |
+| +0x1b8 | owning `nMenu::System` |
+| +0x1c4 | NComm message callbacks; +0x1c8 `NLogic::CallbackReceiver` (building, soldier, fight, sacrifice events) |
+| +0x968 | `MenuGameRootObject`: the HUD root; hiding it hides the HUD |
+| +0x29a8 | `MiniMap` |
+| +0x7ff8 | `MenuSelection` (§2.9) |
+| +0x8000 | `ActionButtonPanel` (4 × `ActionButton` 0xa28 at panel +0x288, `AttackSlider` at panel +0x2b30, confirmation `MessageBox2*` at panel +0x2b28, override map at panel +0x2dd0) |
+| +0xae04 | `OverlayPanel` (world overlays) |
+| +0xae10 | pause panel |
+| +0xb098 / +0xb09c | chatFadeOutTime / chatFadeInTime (XML) |
+| +0xb0a0 | "sacrifice started" effect picture |
+| +0xb328 / +0xb32c | `QuestLog*` / `Tutorial*` |
+| +0xb330 | deferred "leave the match" flag |
+| +0xcc70 | `LoadingPanel*` |
+| +0xcc74 | `StatisticPanel*` |
+| +0xcc78 | `OptionsPanel*` |
+| +0xcc7c | `IngameSettingsPanel*` |
+| +0xcc80 / +0xcc84 | `LoadSavePanel*` in load mode / in save mode |
+| +0xcc88 | in-game `nUi::ChatSystem` |
+| +0xffe0 | team-chat modifier (Shift held) |
+| +0xffe4 | `GameLoadDescriptor*` |
+| +0xffe8 | `nGame::System*` (cursor at +0x10 with the hovered cell at +0x24 / +0x28, camera at +0x2d0, state at +0x2d8) |
+| +0xfff0 | info-map overlay mode (0 / 1) |
+| +0xfff4 | local player entry (`*entry` = player index) |
+| +0xfff9 | paused |
+| +0x10000.. | four debug toggles |
+| +0x11030 | game speed saved while paused |
+
+### 2.9 `nMenu::MenuSelection` [known] S 00617c70 (constructor defaults), S 00617910, S 00616f40
+
+| Offset | Field | Values |
+|---|---|---|
+| +0x10 | parent `Game` | |
+| +0x14 | preview picture (`selectionPicture`) | |
+| +0x18 | `NLogic::Unique` of the target (id at +0x20 / +0x24, −1 = none) | |
+| +0x28 | resolved render instance of the target | |
+| +0x34 | map selection kind → `InfoBox*` | §3.6 |
+| +0x40 | current selection kind | −1 = none |
+| +0x44 | active info box | |
+| +0x48 | renderMarker (XML) | |
+| +0x4c | noSelectionTexture (XML), +0x68 noSelectionMapping (XML, 4 floats) | |
+| +0x88 | mode | 1 normal, 2 build placement, 3 street placement, 4 reset pending |
+| +0x8c / +0x90 | cell of the last click (−1 = none) | |
+
+The object that is selected lives in `nGame::System` (`Selection`, [game-commands.md](game-commands.md) §2.4:
+kind 0 None, 1 Building, 2 Flag, 3 Settler, 4 Street, 5 Ship, 6 ShipRoute). `MenuSelection` derives the
+**selection kind** (§3.6) from it.
+
+### 2.10 Player messages as the HUD sees them [inferred] S 005f75a0, S 005f73e0
+
+Record fields read by the HUD: id (+0x10 / +0x14), remaining time (+0x18, f32; a new message starts at 600.0),
+cell x / y (+0x1c / +0x20, −1 = no place), read flag (+0x78), type (+0x7c, 1..8). The record itself belongs to
+`NPlayer::Messages` ([players-victory.md](players-victory.md) §2.7).
+
+| Type | Filter entry (`cbMessages`) | Icon x in `ui_ingame5` (y 800, 40 × 37) | New-message sound | Minimap symbol |
+|---|---|---|---|---|
+| 1 | `!Military` | 240 | `uiMessage1` | 1 |
+| 2 | `!Scholar` | 280 | `uiMessage0` | 0 |
+| 3 | `!Economic` | 360 | `uiMessage0` | 0 |
+| 4 | `!Sacrifice` | 160 | `uiMessage0` | 0 |
+| 5 | `!Chest` | 200 | `uiMessage0` | 5 |
+| 6 | `!Navy` | 320 | `uiMessage0` | 0 |
+| 7 | `!Misc` | 80 | `uiMessage0` | 0 |
+| 8 | none (letters, autosave notice) | 0 | `uiMessage0` | 0 |
+
+The pairing of filter entries with types follows from the numbering in S 005ecaf0 (`cbMessages` item *i* gets
+user data *i* + 1 [known]) and from the filter array indexed by type (S 005f8e80) [inferred].
+
+---
+
+## 3. Rules and algorithms
+
+### 3.1 The layout XML
+
+#### 3.1.1 Files and loading [known] S 00491ac0, S 004ab3e0, S 0060cbd0, S 005ee5d0
+
+A layout file is an XML document (encrypted on disk like every game XML, `data-loading.md`). Each file is owned
+by one `nUi::XMLHandler`, constructed with the file name; `LoadFromFile` opens and parses the file and calls
+the handler's "document loaded" method with the document. For a screen (`nMenu::Object`) that method loads the
+**root element** into the screen's desktop widget, so the root element's children are the screen's top-level
+widgets. A panel created later (statistics, in-game settings, options, load/save) is an `XMLHandler` of its own
+with its own file. The root element name is free: the shipped `menurequester.xml` has the root `menuLoadSave`
+[known: data] and loads.
+
+Handlers register in a global map; when the reload flag S 00885c88 is set, `ReloadAll` S 00491c90 first reloads
+`templates.xml` and then every registered file. A widget that is reloaded deletes its XML-created children
+first (the "owned child" flag) and keeps the children that code created [inferred] S 004a3b00, S 004a3840.
+
+#### 3.1.2 Elements: how a tree is built [known] S 004a76c0, S 004c21d0
+
+An element is processed by the widget that it describes:
+
+1. `nUi::Object::LoadFromXml` reads the common attributes (§3.1.4) and, between them, the child elements
+   `deployment` (before the attribute `pos`), `description` and `focus` if present, and as its last step calls
+   the factory for the element's children. `<description>` has the format of `<text>` (§3.1.7) and fills the
+   `nUi::Text` every widget owns; the base draw shows it whenever it is not empty [known] S 004a0500.
+2. `Factory::CreateChildrenFromXml`: **every child element that has a non-empty `controltype` attribute**
+   creates a new widget of that type as a child, marks it as owned, and loads it from that element (with
+   template resolution, §3.1.3). Child elements **without** `controltype` create nothing by themselves.
+3. A child element without `controltype` is meaningful only if the parent's class asks for it by name: a class
+   loads its fixed members with `member.LoadChildFromXml(doc, parentNode, "<name>")`. Examples: every widget
+   reads `<deployment>`; a `ShapedObject` reads `<shape>`; a `Label` and a `Button` read `<text>`; a `Picture`
+   and a `Button` read `<tip>`; a `PictureButton` reads `<background>`; `nMenu::Game` reads `<miniMap>`,
+   `<btBack>`, `<cbMenu>`, `<selection>` and so on (§3.4).
+
+So the element name is either the name of a fixed member of the enclosing class (binding by name, in code), or,
+with `controltype`, the name of a free widget that code may later find with
+`Object::FindObjectByName` (case-insensitive, depth first; a miss logs
+`Object with name <n> not found!`) [inferred] S 004a7530. An element that neither the class asks for nor
+carries `controltype` is ignored; that is what makes it usable as a local template (§3.1.3).
+
+#### 3.1.3 Templates [known] S 004ab6f0, S 004ab9f0, S 004ab530
+
+`template="X"` on an element applies another element first, then the element itself (so the element's own
+attributes win, and child elements of both are loaded: first the template's, then the element's):
+
+1. If `templates.xml` (root element `templates`) has a top-level element named `X`, that one is used.
+2. Otherwise the loader searches for a sibling scope: starting at the element's parent and walking up to the
+   document root, the first ancestor that has a child element named `X` supplies it (name comparison is exact,
+   case-sensitive).
+3. If neither exists the attribute has no effect.
+
+A template may itself carry `template`. While a template is applied, the `{document, node}` of the element
+being loaded is kept on a list in the object; the factory uses that list to load an XML-created child a second
+time from the same-named child of the outer element (§3.1.2 step 2, the loop over the created widget's list)
+[known] S 004c21d0. Code applies templates by name too: `Configurable::ApplyTemplate(name)` looks only in
+`templates.xml` (used for `overlayBuilding`, `overlaySoldier`, `overlayFight`, `overlaySettler`, `tipDefault`,
+`tipGood`, `tipBuilding`, `tipSacrifice`, `tipSoldier`, `tipInfoboxBuilding`, `graph`) [inferred] S 0063f550,
+S 006464c0, S 00642970.
+
+Shipped local templates are recognisable by their names: `t_sacrificebutton`, `t_infoboxclosebutton`,
+`t_headline`, `t_slider`, `t_slot` [known: `menuingame.xml`, `menuIngameSettings.xml`].
+
+#### 3.1.4 Common attributes (every widget) [known] S 004a76c0, S 004ab250
+
+| Attribute | Type | Effect |
+|---|---|---|
+| `controltype` | name | on a child element: create a widget (§2.3) |
+| `template` | name | §3.1.3 |
+| `name` | string | widget name; without it the element name is used, but only if the widget has no name yet and no template is being applied to it |
+| `enabled` | bool | disabled widgets take no press and draw with the shape's disabled colour |
+| `visible` | bool | initial visibility |
+| `clipping` | bool | clip children to the rectangle |
+| `intersectionType` | int | 0 rectangle, 1 ellipse (hit test) |
+| `data` | int | user data (sign-extended to 64 bit) |
+| `pos` | two ints, pixels | relative position; same field as `<deployment pos>` but integers only |
+| `zorder` | int | order among siblings (ascending = later drawn = on top); the parent re-sorts |
+| `debugColor` | four ints 0..255 | debug tint (÷ 255) |
+| `hotkey` | one character, or exactly two decimal digits | character code that clicks the widget; `hotkey="27"` = Esc, `"13"` = Enter, `"s"` = 0x73. Any other length is ignored |
+| `forwardEvents` | bool | offer input to the children |
+| `pointfiltering` | bool | texture sampling without filtering |
+| `receiveEvents` | bool | default true; false makes the widget transparent to input |
+| `transform` | 16 floats | local 4×4 matrix |
+
+The shipped layouts contain `pointfilering` (two places); that spelling is not read [known: data + S 004a76c0].
+
+#### 3.1.5 `<deployment>`: position, size, anchoring [known] S 004bcb80, S 004aae00, S 004aac10
+
+Attributes, applied in this order: `pos`, `offset`, `size`, `anchor`, `alignx`, `aligny`.
+
+`pos`, `offset` and `size` hold exactly two tokens. A token is `N%` (N ÷ 100, a fraction of the screen axis),
+`Npx` or a bare number (pixels; converted at load time to a screen fraction by dividing by the current
+back-buffer width or height). An attribute with another token count or an unparsable token is ignored.
+
+- `pos`: position relative to the parent's top-left corner.
+- `size`: width and height.
+- `anchor` (the dock), values `none top right bottom left center`, case-insensitive:
+
+  | anchor | x | y | width | height |
+  |---|---|---|---|---|
+  | top | offset.x | offset.y | parent width | own |
+  | bottom | offset.x | parent height − own height + offset.y | parent width | own |
+  | left | offset.x | offset.y | own | parent height |
+  | right | parent width − own width + offset.x | offset.y | own | parent height |
+  | center | offset.x | offset.y | parent width | parent height |
+
+- `alignx` (`none left center right`) and `aligny` (`none top center bottom`), each axis independently:
+  left/top → offset; center → (parent − own) × 0.5 + offset; right/bottom → (parent − own) + offset. With `none`
+  on an axis that axis keeps `pos`.
+- Priority when the layout is re-applied (parent resized, size changed): dock, else alignment, else the plain
+  relative position [inferred] S 004bc870. A widget without a parent uses 1.0 × 1.0 as the parent size.
+
+An unrecognised value string leaves the field unchanged. The absolute position is the parent's absolute
+position plus the relative one [inferred] S 004bbed0. A size or position change notifies children and parent
+(`NotifySizeChanged`, `NotifyPositionChanged`), which re-apply their own docks and alignments.
+
+**Resolution.** There is no virtual UI resolution: pixels in the XML are real pixels. On a resolution change
+`nUi::Root::OnViewportChanged` rescales every widget by new ÷ old per axis (`Deployment::ApplyScale` scales
+only the pixel-born parts and re-applies dock and alignment) [inferred] S 004914a0, S 004bd0d0. The options
+panel lists only video modes of at least `minResolutionX` × `minResolutionY` (1024 × 720 in `menuoptions.xml`)
+[known: data; inferred S 005e64b0]. The HUD is therefore corner-anchored groups of fixed pixel size.
+
+#### 3.1.6 `<shape>` [known] S 004aa700
+
+| Attribute | Type | Meaning |
+|---|---|---|
+| `texture` | name | looked up or loaded from `[data]\gfx\` by the UI resource manager [inferred] S 00494000 |
+| `mapping` | 4 numbers | source rectangle x y w h in texture pixels |
+| `flipped` | bool | mirror |
+| `width`, `height` | number | draw size; default the owner's size |
+| `color`, `disabledcolor` | 4 floats | RGBA 0..1 |
+| `border` | float | sets all four borders; if absent `bordertop`, `borderright`, `borderbottom`, `borderleft` |
+| `stretch` | bool | with borders: stretch (true) or tile (false) edges and centre |
+| `mask` | name | mask texture; with it `maskUV0`, `maskUV1` (2 floats each) are read |
+
+Drawing [inferred] S 004a8f70, S 004a88a0: with all borders 0 one quad; otherwise a nine-slice (four fixed
+corners, edges and centre tiled or stretched). Positions are rounded to whole pixels (+0.5, truncate). Vertex
+colour = colour × widget opacity.
+
+#### 3.1.7 `<text>` [known] S 004b46d0
+
+`uppercase`, `lowercase` (bool; applied with the system locale), `pos` and `offset` (two integer pixels),
+`align` (`left` 4, `center` 8, `right` 0x10), `contenthidden` (bool: every character except `|` is drawn as
+`*`), `content` (the text; localised if its first character is `!`, §3.10), `font` (font name, §3.10), `color`
+(4 floats), `wrapSize` (two integer pixels: wrap box). The shipped `visible` on `<text>` is not read.
+
+#### 3.1.8 `<tip>` and `<focus>` [inferred] S 004b5d80; [known] S 004c1be0
+
+`<tip description="…" data="…" align="…" hidden="…">`: tooltip text (localised if it starts with `!`), a tip
+id (int), the corner of the popup placed at the cursor (`topleft` 0, `topright` 1 = default, `bottomright` 2,
+`bottomleft` 3), and `hidden="true"` to disable the tip. `<focus canReceiveFocus="false"/>` excludes the widget
+from hover arbitration.
+
+#### 3.1.9 Type-specific attributes and children
+
+Read in the named loaders; the attribute lists are [known] from the string references of each function, the
+meanings [inferred] from its mapped description unless a section below reads the code.
+
+| Type | Attributes | Named child elements |
+|---|---|---|
+| Label S 004b1d50 | | `text` |
+| TextBlock S 004b7e90 | `content`, `font` | |
+| Picture S 004b16f0 | | `shape`, `tip` |
+| Button S 004afed0 | `type` (style, default 12), `checkbutton`, `marked`, `mapping`, `mapping_cursorover`, `mapping_cursoroverandpressed`, `mapping_marked`, `texture_selected`, `texture_not_selected`, `texture_pressed`, `font`, `font_cursorover` | `shape`, `text`, `tip`, `focus` |
+| PictureButton S 004b3a90 | as Button | `background` (a shape drawn over the button: the icon) |
+| OverlayButton S 004b2280 | `onhover` | `highlight` |
+| RoundIngameButton S 00622b60 | as PictureButton | `highlightGreen`, `highlightRed` |
+| ComboBoxNew S 004cbf90 / DropDownMenu S 004b36e0 | `size` (item count), `string0`…`string<n>`, `dropdownoffset`, `selection` (ComboBoxNew) | `button` (with `text`), `item` |
+| ComboBox S 004bfa70 | `string%u`, `data%u` | `button` |
+| Slider2 S 004d04b0 | `mapping`, `mapping_cursorover` (source rectangles; `mapping` is first copied into the cursor-over one), `useText`, `textValMin`, `textValMax`, `textFormat`, `value`, `snapCount`, read in this order | `throttle`, `leftUp`, `rightDown`, `text` (loaded after `textFormat`) |
+| SliderEx S 004b94c0 | `SnapCount`, `Value`, `vertical` / `horizontal` | `Throttle`, `Increase`, `Decrease` |
+| Slider S 004d0950 | `throttle`, `snapcount`, `speed` | `shape`, `focus` |
+| StackedSlider S 004bbc10 | `stackCount`, `value`, `mapping`, `mappingMouseOver` | |
+| ListBox2 S 004b8c00 | `markSingleItem`, `itemSpacing` | `container`, `item` (row template), `slider` |
+| Item S 004c78c0 | `columns` | `shape`, `focus` |
+| TabControl S 004bad00 | `count`, `defaultTab`, `fadetime`, `mappingTabActive`, `mappingTabInactive` | `tab0`…, `tabButton0`… |
+| ProgressBar S 004bd470 | | `bar` |
+| Graph S 004c9940 | `color`, `texture`, `mappingX`, `mappingY`, `scale`, `offset`, `lineThickness`, `displayMin`, `displayMax`, `smoothingStrength`, `smoothingIterations`, `lineani`, `alphaani` | |
+| AlphaFanPicture S 004cd370 | `reverse`, `invert`, `timedtexture`, `timedtexturemapping` | |
+| Scroller S 004c9ca0 | `clipping`, `smoothing`, `bigchild` | |
+| TextScroller S 004ca9b0 | `fadeBorder`, `fontDefault`, `fontGatter`, `fontPercent`, `spacing{Default,Gatter,Percent}{Before,After}` | |
+| EditEx S 0049ebd0 | `maxLength`, `allowedChars`, `readOnly`, `isPassword`, `multiline`, `breakonedge`, `clearonesc`, `autohide`, `padding`, `mapping`, `mapping_cursorover`, `mapping_cursoroverandpressed` | `VScroll` |
+| ChatSystem S 004ad150 | | `ChatOutput` (`x`, `y`, `width`, `height`, `lineSpacing`), `ChatInput`, `ChatScrollbar`, `ChatMinimize`, `ChatMaximize` (`MinHeight`, `MaxHeight`) |
+| tip popup `tipDefault` S 004c6320 | `border`, `minsize` (positions) | children named `textblock`, `picture` |
+
+[TODO] not established: the exact semantics of each Slider / Slider2 / SliderEx / ListBox2 / Graph attribute
+(value ranges, snapping rule, smoothing formula). A static read of the loaders and `Update` functions listed
+settles each.
+
+### 3.2 Widget behaviour
+
+#### 3.2.1 Button [inferred] S 004b12d0, S 004b1470, S 004aeca0, S 004aecf0, S 004af080, S 004afd10
+
+- States: normal, hover (Focus state 1), pressed (state 2), marked. With style 12 (the only style the shipped
+  in-game layouts use, written `type="12"` or left as default) the sprite's source rectangle is `mapping`,
+  `mapping_cursorover`, `mapping_cursoroverandpressed` or `mapping_marked`; a state without its own rectangle
+  uses `mapping` (the loader copies `mapping` into all four and then reads the overrides) [known] S 004afed0.
+  The numbered styles 0..11 are fixed sprites in the atlas `uiElements0` with fixed pixel sizes, width × height
+  (0: 208 × 32, 1: 152 × 22, 2: 224 × 19, 3: 152 × 20, 4 and 5: 224 × 24, 7: 32 × 208, 8: 136 × 22,
+  9 and 10: 64 × 20, 11: 288 × 20 [known] S 004b0280; style 6 sets no size there), used by widgets that code
+  creates (message box and requester buttons) [inferred].
+- Press (left button down on an enabled button whose ancestors are enabled): `OnPressed` → press observers,
+  parent notification, script event `<name>_isPressed`.
+- Click (left button up while the cursor is still over the widget that took the down, or the hotkey):
+  `OnClicked` → a `checkbutton` toggles `marked`; sound `uiClick0`; the parent's `OnChildClicked(button)` (which
+  bubbles up the tree until a class handles it); click observers; script event `<name>_isClicked`
+  ([lua-runtime.md](lua-runtime.md) §4.4). Independently the click latch (+0x119) is set; several panels poll
+  it instead of overriding `OnChildClicked`.
+- A double click on a button counts as a press and notifies a separate observer list [inferred] S 004b1270.
+- Caption colour with style 12: `font_cursorover` while hovered, else `font` (fallback `Body_Arial`).
+
+#### 3.2.2 Tooltips [inferred] S 004b5a70, S 004c5e30; constants [known] S 004b5a70
+
+A tip is shown when its owner has been hovered with a motionless cursor for **0.07 s**; it fades in over
+**0.2 s** and fades out over 0.2 s when the cursor leaves the owner or any mouse button is down. The default
+popup (template `tipDefault`) sizes a
+text block of 200 px width to the text and the background to max(`minsize`, text + 2 × `border`). `nMenu` adds
+five rich popups selected per widget: 0 Building (`tipBuilding`: name, 4 cost slots, 4 product slots, 5 input
+slots), 1 Sacrifice (`tipSacrifice`: name, description, 4 cost slots, running and research time), 2 Good
+(`tipGood`: name, producing buildings, 4 ingredient slots), 3 Soldier (`tipSoldier`: name, health `cur | max`,
+armour, damage `base + bonus`, rank), 4 InfoboxBuilding (`tipInfoboxBuilding`, the help button of an info box)
+[inferred] S 0062bc70, S 00647150, S 00647740, S 00647d20, S 00648070.
+
+#### 3.2.3 Animations [inferred] S 004c3c30, S 004c3d50, S 004d2220
+
+Owned by the widget, ticked in its `Update`: alpha fade (linear, optional smoother-step easing), alpha pulse,
+mover (between two positions), scaler, transform fade. `FadeIn(t)` = make visible + fade to 1; `FadeOut(t)` =
+fade to 0, then hide. Panels use 0.2 s, hover highlights 0.1 s (constants in the callers).
+
+#### 3.2.4 Cursor [known: `cursors.xml`; inferred S 00493190, S 00492d80, S 00492370]
+
+`cursors.xml` (root `cursors`) holds `cursor0`, `cursor1`, … up to the first missing index. Each: `name` (image
+path, e.g. `[data]\gfx\Mousecursors_MainCursor.tga`) and `hotSpot` (two ints); or `animated="true"` with `fps`
+and `name0`…`name<n>` (frame duration 1 ÷ fps). Shipped: 0 main, 1 clock (8 frames, 5 fps), 2 main (selected
+when the cursor is over an own object, S 005ef740), 3 build. The images become device cursors (hardware cursor).
+The pending wheel delta is halved every 83 ms and zeroed below 0.0001 [known] S 00492370.
+
+### 3.3 Input
+
+#### 3.3.1 From the window to the tree [known] S 004913f0, S 004ab060; producers [inferred] S 00401f30
+
+The window procedure calls `nUi::Root::HandleInputEvent(type, arg1, arg2)`:
+
+| Type | Event | arg1 |
+|---|---|---|
+| 0 | mouse button down | button: 0 left, 1 right, 2 middle, 3 / 4 X buttons |
+| 1 | mouse button double click | button |
+| 2 | mouse button up | button |
+| 3 | mouse move | x, y in pixels (stored in the cursor; the handlers get no arguments) |
+| 4 | mouse wheel | notches (delta ÷ 120) |
+| 5 | key down | virtual key |
+| 6 | key up | virtual key |
+| 7 | character (`WM_CHAR`) | character code |
+| 8 | hotkey | character code |
+
+1. Type 3 first updates the cursor position.
+2. Types 0..4 go to the input-capture widget if one is set, else (like all other types) into the tree at the
+   root.
+3. In the tree (`Object::DispatchEvent` S 004a07a0): an invisible widget returns "not handled". A widget with
+   `forwardEvents` (the constructor default) offers the event to its children from the last vector entry to
+   the first, i.e. highest z-order first, and stops at the first that returns 1; if no child returned 1, or
+   without `forwardEvents`, the widget's own handler for the type runs. A widget with `receiveEvents="false"`
+   handles nothing.
+4. A mouse-down is delivered only to a widget that is hovered (or holds the capture); a mouse-up only to the
+   widget that got the matching down [inferred] S 0049ff00, S 0049ff40.
+5. If nothing handled it: key down / key up are recorded in the active key table (`BaseAction::OnKeyEvent`,
+   1 = down, 2 = up); **a character is dispatched a second time as type 8**, which is what triggers `hotkey`
+   attributes (`Object::HandleHotkey`: hotkey equals the code, widget enabled and visible, ancestors enabled →
+   click latch, return 1).
+
+Consequences: hotkeys are character codes, so they depend on the keyboard layout and shift state (`hotkey="s"`
+does not fire for `S`) [inferred]; a text field with focus consumes characters before they become hotkeys; Esc
+and Enter work as hotkeys because `WM_CHAR` delivers 27 and 13.
+
+#### 3.3.2 Mouse-over [inferred] S 004a1b00
+
+Once per frame per widget whose layout was marked dirty in the last draw: if the widget is visible and the
+cursor hits it (rectangle or ellipse, §2.1), it becomes the mouse-over widget unless the current one is still
+hit and was drawn later (higher render id). Widgets that can receive focus get `OnMouseEnter` /
+`OnMouseLeave`; a widget covered by a later-drawn focusable widget gets `OnMouseLeave`.
+
+#### 3.3.3 In-game keys and mouse (`nMenu::Game` handlers)
+
+While `NComm_Manager::IsGameHanging()` is true ([game-commands.md](game-commands.md) §3.1) left clicks on the
+world and all character keys except `p` are swallowed [known] S 005eaae0, S 005eb180.
+
+| Input | Effect | Evidence |
+|---|---|---|
+| Left click on the world (not on a HUD widget) | select what is under the cursor, then `MenuSelection::HandleClick` (§3.5) | [known] S 005eaae0 |
+| Right click on the world | `MenuSelection::HandleRightClick` (§3.5) | [inferred] S 005eab40 |
+| Middle button down | close the action button panel unless a confirmation is open | [inferred] S 005eab80 |
+| Wheel over the world | camera zoom in (positive) / out; never consumed | [inferred] S 005eb140 |
+| Wheel over the minimap | minimap zoom by (15 − notches) ÷ 15 around the cursor, not closer than 1/10 of the texture | [known constants] S 005f2390, S 005f1af0 |
+| `p` | pause toggle; nothing in a network match (roles 1..4), nothing while the game screen is not active or the cinematic dialog is. Pausing stores the speed scale (user profile +0x24), sets it to 0, pauses all sounds, brings the `pause` panel to the front and fades it in over 1.0 s; if a session exists and its role is not 0 the localised text of `!Pause` is first sent as chat to all. Unpausing restores the stored speed (at least 1), resumes the sounds and fades the panel out over 1.0 s | [known] S 005eb180, S 005da400, S 005ea9b0 |
+| `h` | camera to the local player's home building (only in camera state 0) | [known] S 005eb180 |
+| `x` | toggle the `NetInfo` dialog (slot 7), network roles 1..4 only | [known] S 005eb180 |
+| Enter | chat input not focused and tutorial hidden: open the chat line. Focused: send the line (to the team while Shift is held, else to all) and close the input. Offline, the cheat strings of §8 are tested first | [inferred] S 005ec340 |
+| Shift | held: team chat modifier | [inferred] S 005ec340, S 005eb230 |
+| Arrow keys (0x25..0x28), Shift, Insert, Delete | `nGame::Camera::HandleKeyDown`, tried before Enter and only while no text field and no widget has focus: arrows and Shift are entered in the camera's held-key map; Delete sets the rotation rate target to 1.5 (to 0 if it is −1.5), Insert to −1.5 (to 0 if it is 1.5). All of them are consumed | [known] S 00787790, S 005ec340 |
+| Any key | closes the action button panel unless a confirmation is open (the key still propagates) | [inferred] S 005f0770 |
+| Right click on the action panel | cancel the selection | [inferred] S 005f06f0 |
+| Right click in the build menu | leave build placement (mode 1, selection reset) | [inferred] S 00634040 |
+| Right click on the tutorial panel | close it | [inferred] S 005f9720 |
+| Esc | Camera in cinematic mode: back to standard. Otherwise the hotkey 27 of whichever visible widget has it: info box `closeButton`, the `closeButton` of statistics / settings / load / save / quest log; in the requester "No"; in the sacrifice target chooser close | [known: data]; [inferred] S 00787790, S 005ffc70, S 00626d60 |
+
+Hotkeys set in the shipped `menuingame.xml` [known: data]:
+
+| Key | Widget | Function |
+|---|---|---|
+| `1` `2` `3` `4` | `btAction1`..`btAction4` | the action buttons of the selection (§3.7) |
+| `,` / `.` | `btBack` / `btForward` | previous / next object of the selected type |
+| `l` | `btSettings` | in-game settings panel |
+| `s` | `btStatistics` | statistics panel |
+| space | `btInfoMap1` | info-map overlay |
+| `e` | `btInfoMap2` | overlay layer 0 on / off |
+| `m` | `btInfoMap3` | overlay layer 1 on / off |
+| `v` | `btSpeed` | cycle game speed |
+| `o` | `btOptions` | options panel |
+| `q` | `btQuests` | quest log |
+| `t` | `btTutorial` | tutorial panel (button hidden until a page exists) |
+| Esc (27) | `closeButton` of the info box and of the quest log | close |
+
+Other files: `menuLoadSave.xml` `btLoad` 13 (Enter), `btDelete` `d`; the load/save list gives its first ten
+rows the hotkeys `0`..`9` in code [inferred] S 0060da50; message box buttons get Enter / Esc / `i` by mode
+(§3.8.7).
+
+### 3.4 The game screen: construction and HUD inventory
+
+`nMenu::Game` is constructed once at start-up with `menuingame.xml` [known] S 005ee5d0. `LoadFromXml`
+S 005ecaf0 first loads `iconconfig.xml` into `IconConfig`, reads the root attributes `chatFadeInTime`,
+`chatFadeOutTime`, `zoomInTime`, then loads each fixed member from the same-named child [known for the names
+listed in the code's string references; shipped values in §6]:
+
+| Element | Class | Place (shipped) | Shows | Interaction |
+|---|---|---|---|---|
+| `chat` | `nUi::ChatSystem` (template `LobbyChat`) | bottom left | chat lines, input line; fades out after `chatFadeOutTime` | Enter (§3.3.3) |
+| `selectionPicBG`, `selectionPicture`, `selectionBorder` | pictures | bottom left, 244 × 244 | render-to-texture preview of the selected object, or `noSelectionTexture` | |
+| `btBack`, `btForward` | round buttons | on the selection frame | enabled only while a building is selected | cycle the selection to the previous / next object of the same type, re-centre |
+| `btSettings` | round button | | | opens `IngameSettingsPanel` (§3.8.2) |
+| `btStatistics` | round button | | | toggles `StatisticPanel` (§3.8.1) |
+| `miniMap`, `miniMapBorder` | `MiniMap` | bottom right, 188 × 188, round mask | §3.8.5 | |
+| `btQuests` (in `miniMapBorder`) | round button | | | toggles the quest log |
+| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene |
+| `btInfoMap2`, `btInfoMap3` | round buttons | | | toggle overlay layers 0 and 1 of the `OverlayPanel` (§3.8.6) |
+| `btSpeed` with pictures `x2`, `x3` | round button | | `x2` visible at speed 2, `x3` at speed 3 | **`0x20023` GE_Logic_SpeedUp** via `SendCycleGameSpeedCommand` |
+| `btOptions` | round button | | | shows `OptionsPanel` |
+| `questInfo` | `QuestInfoPanel` with `quest` lines | | active quests (§3.8.4) | |
+| `cbMessages` | `ComboBoxNew`, 7 check entries | top right | message type filters (§2.10) | toggling a filter rebuilds the message list |
+| `cbMenu` | `ComboBoxNew`, 5 entries | top right | `!Save`, `!Load`, `!Options`, `!Main Menu`, `!Quit` | §3.8.8 |
+| `goodInfoPanel` | `GoodInfoPanel`: `selector` + `goodInfo0..3` | top right, 420 × 32 | four goods of the current good set (§3.8.3) | `selector` cycles the set |
+| `sacrificePanel` | `SacrificePanel` with `buff` / `antibuff` templates | | own and incoming sacrifices (§3.8.9) | click selects the building |
+| `selection` | holds `actionbuttonpanel`, `actionbuttons`, `infoboxes`, `infobox<Kind>` | bottom centre | §3.5–§3.7 | |
+| `overlayPanel` | `OverlayPanel` with `alphaPlane`, `overlay` | full screen | world overlays (§3.8.6) | |
+| `pause` | picture with `bar` | | shown while paused, pulsing | |
+| `sacrificestartedeffect` | picture | | shown at alpha 1 and faded out over 1.1 s when a sacrifice that concerns the local player starts | |
+| `sacrificetargetpanel` | `SacrificeTargetPanel` with template button `entry` | at the cursor | enemy players as targets | §3.8.9 |
+| `messages` | `Messages` with `last`, `up`, `down` | right edge | message slots (§3.8.5) | |
+| `questlog` | `QuestLog` | centre, 370 × 492 | quest list and description | |
+| `tutorial` | `Tutorial` | | tutorial pages (`menu.addTutorialPage`) | `btPrev` / `btNext`, slider |
+| `cutsceneDebug` | `ListBox2`, hidden | | debug list | |
+
+In this order [known] S 005ecaf0: the seven `cbMessages` items get user data 1..7 and are all marked (every
+filter on); `cbMenu` is loaded; in a network role 1..4 its item 3 is relabelled
+`!Surrender and back to Lobby`; the `cbMenu` items get user data 0..n; **outside the offline role (role ≠ 0)
+item 0 is removed twice, i.e. `!Save` and `!Load` leave the menu** and the remaining items keep the user data
+2, 3, 4. Later an alpha pulse animation is attached to the child `text` of the pause panel, and a root
+attribute `zoomInTime` > 0 attaches a scale-in animation to the HUD root (shipped value 0: none).
+
+`SetupHud` S 005ed700 runs on entering a match: creates overlay, sacrifice and message panels, wires the two
+drop-downs, adds and activates the chat channel `Chat` (id 1), calls `MenuSelection::CreateInfoBoxes`, creates
+goods bar, quest lines, minimap, quest log and tutorial [inferred]. `DestroyHudWidgets` S 005ea650 undoes it
+on leaving and deletes the panels at +0xcc70..+0xcc84.
+
+**World hover tooltip** [inferred] S 005ef740, S 005efd60: only when the world is not in state 3, the cursor is
+visible, the hovered cell is explored by the local player and no dialog has focus. Priority: own picked object
+(building, settler: property name; carrier: `!Carrier`; soldier: the soldier tooltip at its screen position);
+a flag on the cell: `!Flag`; own building: localised name plus productivity in percent or
+`!(Under construction)` / `!(Construction stopped)`; else the resource or deposit name of the cell. Cursor 2
+over an own object, else cursor 0.
+
+**Network hang notice** [inferred] S 005ebf90: in a network session, while not paused, the hang reason text of
+the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTip` background.
+
+### 3.5 Clicks on the world: `MenuSelection` [known] S 00617910, S 00617bc0, S 006176d0, S 00617770, S 00617800
+
+**Left click** (`HandleClick`). First the clicked cell is copied from the game cursor (system +0x24 / +0x28)
+into +0x8c / +0x90. Then by mode:
+
+- **Mode 1 (normal).** `RefreshFromGameSelection(refreshPanel = true)`: push the selection to the scene's
+  highlight, build the target id from the game selection (a ship that sails a route selects the route; a ship
+  that belongs to a building selects the building), resolve its render instance, update the preview picture,
+  compute the selection kind (§3.6) and call `SetSelectionKind`. If afterwards no info box is active and no
+  object is selected, the cell's build flags for the local player are read
+  (`nGame::Cursor::GetBuildFlagsAtCell`): if `flags & 0x1f != 0` (some building fits) → `BeginBuildPlacement`:
+  store the flags in the create-building box (+0x1638) and its "direct" flag (+0x1634 = 1), mode = 2, selection
+  kind 0xc, and mark the cell in the scene (marker x = cellX × 4, +2 on odd rows, y = cellY × 4, size 4). Else
+  if `flags == 0x20` (only a flag fits) → `SelectCell`: selection kind 0x13 and the same marker. The result is
+  "an info box is open".
+- **Mode 2 (build placement).** If the create-building box has a chosen building type (+0x1630 ≠ −1):
+  `SendPlaceBuildingAtCursorCell(type)` → **`0x20002` GE_Building_Create**; consumed. Otherwise mode = 1, the
+  selection is reset and the click is processed again as a mode-1 click.
+- **Mode 3 (street placement).** With no street mode active: consumed. Else
+  `StreetBuildMode::HandleClick(cell)` ([game-commands.md](game-commands.md) §3.4 `0x20006` / `0x20008`) and
+  its result: 0 → sound `uiClick0`, close the action panel unless confirming; 1 → sound `uiCancel`; 2 → reset
+  the selection and `SelectCell` (selection kind 0x12 because the mode is still 3); 3 → `Cancel` (mode 1,
+  `0x20007` if a planned path exists, reset). Always consumed.
+- **Mode 4.** mode = 1, reset, close the action panel unless confirming; then processed again as mode 1.
+- **Mode 0.** Reset, then processed again with the mode unchanged; no writer of mode 0 was found (the
+  constructor sets 1) [inferred].
+
+**Right click** (`HandleRightClick`): mode 2 → if the create-building box is not visible, show it and return
+"consumed"; else mode = 1 and reset. Mode 3 → with no street mode active: consumed, nothing else; else the test
+`Unk_Member10_Vslot2ThenVslot5` S 0078b180 on the active street mode (two virtual calls, slots 2 and 5, on the
+object at street mode +0x10; [TODO] not established: what they test, a read of that object's class settles
+it): true → keep mode 3, false → `Cancel` and consumed. Mode 4 → mode = 1, reset. Any other mode → reset. The
+paths that do not return "consumed" then close the action panel unless confirming and return "not consumed".
+
+**Street placement start** (`BeginStreetBuild` S 00615e30, action 9): mode = 3,
+`nGame::System::BeginStreetBuildMode(position of the selected flag)`, selection reset. `MenuSelection::Update`
+S 006163f0 [known] stays in mode 3 only while all of these hold: a street mode exists, its point vector
+(+0x24 / +0x28, 8-byte entries) is not empty, `StreetBuildMode_IsValid` is true, the test S 0078b180 above is
+false and its byte +0x39 is 0; otherwise it calls `Cancel`.
+
+**Cancel** (S 006162e0) [known]: plays `uiCancel` unless silent, mode = 1, calls `StreetBuildMode::Cancel` if
+a street mode with a non-empty point vector and byte +0x39 = 0 exists, then resets the selection.
+
+**Reset** (`ResetSelection` S 00615d10) [known]: hide the active box, target id = −1, kind = −1, hide the
+confirmation box and close the action panel unless confirming, set the four action buttons to action 0, show
+`noSelectionTexture` / `noSelectionMapping` in the preview picture if a texture name is set, clear the cell
+marker in the scene (cell −1, −1), cell = −1. The game's own `Selection` is not changed here.
+
+**Cycling** (`btBack` / `btForward`): the game selection moves to the previous / next object of the same type
+and the selection is refreshed with the camera focused on it [inferred] S 005eb850.
+
+### 3.6 Selection kinds, info boxes and their action buttons
+
+`MenuSelection_ComputeSelectionKind` S 006156a0 [known]. "Own" = owner index equals the local player's.
+
+| Game selection | Condition (first match) | Kind |
+|---|---|---|
+| None | | −1 |
+| Building, property `territoryBuilding` set | owner is an enemy and the building's fight is active with the local player as attacker | 7 |
+| | owner is an enemy | 6 |
+| | not own | −1 |
+| | own, not a depot, upgrade running (byte at `*(building+0x104)+8`) | 4 |
+| | own, not a depot, no construction pending | 3 |
+| Building (others, and territory buildings not caught above) | not own | −1 |
+| | construction pending (`+0x70 > 0` or `+0x74 > 0` on the object at building +0x44) | 4 |
+| | property byte +0xb0 set (catapult) | 0xe |
+| | property `casern` set and not `depot` | 2 |
+| | working mode (+0x80) = 9 (sacrifice site) | 8 if the building's sacrifice is idle, else 9 |
+| | mine: property `size` (+0x3c) = 8 (`SizeMine`) and working mode = 6 (S 0055bf60) | 0xb, or 0xf if the owner test below is true |
+| | property has goods (`HasGoods(0)`) | 0xa, or 0xb if `stockLimit` (+0x84) < 1 |
+| | `plantingDeposit` (+0xd4) names a deposit whose `good` (+0x3c) ≠ −1 (S 00553040) | 0xb |
+| | `depot` set | 0xd |
+| | else | 0x10, or 0x11 if working mode = 0xb |
+| Flag | own | 5, else −1 |
+| Settler | a soldier that is in a fight with a building reference: the selection becomes that building and is evaluated again; any other settler | −1 |
+| Street | own | 0x12, else −1 |
+| Ship | own | 1, else −1 |
+| ShipRoute | the route's building or its second reference belongs to the local player | 0, else −1 |
+
+Owner test of the mine row (`Player_IsStateNotDefault` S 005be330) [known]: with the owner's `kind` (+0x08)
+equal to 1 it is `level ≠ 3`, otherwise `level ≠ 0`, where `level` is the player field +0xec, the match's
+start-resources / difficulty level 0..3 ([players-victory.md](players-victory.md) §2). So a mine opens the
+`Mine` box (0xf) unless that level is 0 (3 for a kind-1 owner), in which case it opens the plain production
+box (0xb). The same pair (size 8, working mode 6, player level) gates the miners' food rule
+([properties-data.md](properties-data.md), sacrifice flag 7). The building fields used above: owner +0x08,
+property +0x0c, construction object +0x44, production +0x48, fight reference at `*(building+0xe0)+0x70`,
+upgrade object +0x104, sacrifice +0x128; property bytes `depot` +0x54, `casern` +0xf1, `territoryBuilding`
++0xf5 [known] S 006156a0.
+
+Info boxes created by `CreateInfoBoxes` S 006167b0 [known: key → constructor] and the actions `SetSelectionKind`
+S 00616f40 [known] puts on buttons 1..4 (action numbers of [game-commands.md](game-commands.md) §5.1):
+
+| Kind | Info box class (XML element) | Button 1 | Button 2 | Button 3 | Button 4 |
+|---|---|---|---|---|---|
+| 0 | `InfoBoxShipRoute` (`infoboxShipRoute`) | 1 start expedition | 2 stop expedition | 3 finish expedition | |
+| 1 | `InfoBoxShip` (`infoboxShip`) | | | | |
+| 2 | `InfoBoxCasern` (`infoboxCasern`) | 4 destroy | 15 / 16 training sword on / off | 17 / 18 training bow on / off | 19 / 20 upgrading on / off |
+| 3 | `InfoBoxTerritoryBuilding` (`infoboxTerritoryBuilding`) | 4 destroy | 5 upgrade | 13 set to swordsmen if the military component's kind (+0x68) is 1, else 14 set to bowmen | |
+| 4 | `InfoBoxConstruction` (`infoboxConstruction`) | 4 destroy | 6 pause construction (7 resume, swapped by the button) | 30 cancel upgrade, only when an upgrade is running | |
+| 5 | `InfoBoxFlag` (`infoboxFlag`) | 8 destroy flag | 9 build street | | |
+| 6 | none | 11 attack; the attack slider is shown and bound to the building | | | |
+| 7 | `InfoBoxFight` (`infoboxFight`) | 12 retreat | | | |
+| 8 | `InfoBoxSacrificeSelect` (`infoboxSacrificeSelect`) | 4 destroy | 23 abort sacrifice | 22 start sacrifice | 21 abort research |
+| 9 | `InfoBoxSacrificeRunning` (`infoboxSacrificeRunning`) | 4 | 23 | 22 | 21 |
+| 0xa, 0xb, 0xf | `InfoBoxProduction` (`infoboxProduction`; 0xf is named `Mine`: `infoboxMine`) | 4 destroy | 24 pause production if enabled, else 25 resume | | |
+| 0xc | `InfoBoxCreateBuilding` (`infoboxCreateBuilding`) | 29 create flag, only if the clicked cell is inside the map | | | |
+| 0xd | `InfoBoxDepot` (`infoboxDepot`) | 4 destroy | | | |
+| 0xe | `InfoBoxCatapult` (`infoboxCatapult`) | 4 destroy | 26 pause catapult if its target cell is inside the map, else 27 resume | | |
+| 0x10, 0x11 | `InfoBoxBuildingDefault` (`infoboxBuildingDefault`) | 4 destroy; 0x11 also: 24 / 25 on button 2 | | | |
+| 0x12 | `InfoBoxStreet` (`infoboxStreet`) | 28 destroy street | 29 create flag | | |
+| 0x13 | `InfoBoxCreateFlag` (`infoboxCreateFlag`) | 29 create flag | | | |
+| 0x14 | `InfoBoxSacrificePanelSelect` | 23 | 22 | 21 | |
+
+`SetSelectionKind` in order: all four buttons to action 0 (hidden) and the attack slider hidden; the per-kind
+assignment; if a building is selected and the script override (`menu.allowActions`,
+[game-commands.md](game-commands.md) §5.1) has an entry for its building type, every button whose action is
+neither 0 nor 4 is made unavailable with the override's failure code; if the box for the kind differs from the active one, the old box
+is hidden and the new one initialised, refreshed and shown (a kind without a box leaves none active); the box's
+`focusedActionButton` (XML, −1 = none) selects which button the cursor is warped to; with `refreshPanel` the
+action panel is opened (fade 0.2 s) and positioned at the cursor (§3.7).
+
+**Info box frame** (`nMenu::InfoBox`, a `Picture`) [inferred] S 00631820, S 00631310, S 00631a50, S 00631bc0:
+children `headline` (label), `closeButton`, `helpButton` (its tip is the rich tooltip kind 4 for the selected
+object's type, or a fixed help text); attributes `focusedActionButton`, `zoomTime` (default 0.3), `zoomInAngle`
+/ `zoomOutAngle` (±40), `moveInTime` / `moveOutTime` (0.3), `fadeInTime` / `fadeOutTime` (0.2). The element
+`infoboxes` is loaded into every box first (common frame), then the box's own element. Show: move in from the
+deployment offset, fade in, scale in; hide: z-order −1, move out, fade out, scale out. A click on `closeButton`
+resets the selection. Every box's per-frame update closes the box (selection reset and refresh) when the
+selected object is gone.
+
+What each box shows, and which commands its own controls send:
+
+| Box | Content | Controls → command |
+|---|---|---|
+| ShipRoute S 0063cb70 | ship name; state `!LOADING` / `!UNLOADING` (standing, by ship state 2 / 3), `!EXPEDITION` / `!TRANSPORT` (moving); 128 × 128 ship preview; tab "transport": cargo goods and settlers aboard; expedition part: required goods and settlers; military part: soldiers (`militarySoldiers`, 6 slots) | good buttons focus the camera on the unit; commands only through action buttons 1..3 |
+| Ship S 0063c100 | ship name; tabs goods / settlers aboard | none |
+| Casern S 0063b590, S 0063abc0 | 2 × 3 soldier buttons (`compStd0..2`, `compBow0..2`): stock, queued, lock state, accept flag; recruit costs per class (`costStd`, `costBow`, shared `costBoth0/1` as `have/need`); upgrade cost | click on a soldier button → **`0x2001E` GE_Depot_ToggleFlags_UID** (building, that soldier good) |
+| TerritoryBuilding S 0063a4b0 | soldier slots (capacity scaled by health, at most 12) with the garrison; border-distance icon (3 classes); health bar and `N%`; soldier count text | none (action buttons) |
+| Construction S 006397e0 | progress = ((1 − a) + (1 − b)) ÷ 2 of the two remaining-work fractions (+0x70, +0x74) as bar and `N%`; building icon; missing and delivered material; the builder | none |
+| Flag S 00638b10 | goods lying at the flag; help text `!Infobox_Flag_Help` or `!Infobox_Harbor_Help` (flag with a harbour) | none |
+| Fight S 006382e0 | local player's name `VS` opponent's name; two soldier counts per side (unknown side: `?`); a changed counter pulses (scale 1.4 → 1.0 in 0.5 s) | none (action 12) |
+| SacrificeSelect S 00637340 | up to 2 × 8 `sacrificebutton`s (`sacrifice_<row>_<col>`): the player's available sacrifices; row 1 = those whose static-access property is positive, row 0 the others | click → **`0x20024` GE_Sacrifice_Order** if the sacrifice can be ordered, else **`0x20027` GE_Sacrifice_StartResearch** if research is possible, else nothing (S 0062f390) |
+| SacrificeRunning S 00636d80 | the sacrifice, its cost goods, title `!SACRIFICE READY` / `!SACRIFICE` / `!PREPARING SACRIFICE`, remaining time `m:ss`, progress bar, description | none (action buttons) |
+| Production / Mine S 00635c50 | input goods incl. those in the production slots; the worker; up to two products with tooltips; productivity bar and percent; buildings without inputs hide the input column and use the `noEntryPercentPos` / `noEntryPercentOffset` layout | none (action buttons) |
+| CreateBuilding | §3.8.10 | **`0x20002`** |
+| Depot S 00633b60, S 00632e40 | tab 0: all goods of the tribe with stock, in-transit count for the tribe's special cost good, arrow = accept flag; tab 1 (only for buildings whose property bytes +0x54, +0xf1, +0xf5 are set): soldiers per kind and level | click on a good button → **`0x2001E`** (building, good id) |
+| Catapult S 006329f0 | preview of the target and its owner; stones in stock and on the way; the worker; health bar and `N%` | none (action buttons) |
+| BuildingDefault S 00631d80 | headline and the worker | none |
+| Street, CreateFlag, SacrificePanelSelect | frame only | none |
+
+Good buttons everywhere: a click on one that carries a unit id closes the action panel (unless confirming) and
+focuses the camera on that unit [inferred] S 0062fe50.
+
+### 3.7 Action buttons [known] S 006243c0, S 005f05c0; [inferred] S 00623600, S 00623470, S 00624430, S 005f0880
+
+The panel (`actionbuttonpanel`) holds `btAction1..4` (templates `bt_action1..4`, hotkeys `1`..`4`), the
+`attackslider` and a `messagebox`.
+
+- **Assigning an action** (`SetAction`): action 0 hides the button. Otherwise the highlight colour is red for
+  actions {2, 4, 8, 12, 21, 23, 28, 30} and green for the others; the icon rectangle comes from a table built
+  from the XML element `actionbuttons` (attributes `start`, `size`, `spacing`, `mouseoveroffset`: shipped
+  `576 288`, `44 45`, `48 48`, `0 96`): rectangle x = start.x + column × spacing.x, y = start.y + row ×
+  spacing.y, w × h = size, with the fixed (column, row) per action below; the tooltip is the action's command
+  name; availability is evaluated. Icon and tooltip are rewritten only when the action number changes.
+  The table is built in the `MenuSelection` constructor and again at the end of its `LoadFromXml`
+  [known] S 00622f40, S 006164f0. [TODO] not established: how `mouseoveroffset` is applied (it is only stored
+  by S 00624470; a read of the readers of `g_ActionButtonMouseOverOffset` settles it).
+
+  | Action | col, row | Action | col, row | Action | col, row | Action | col, row |
+  |---|---|---|---|---|---|---|---|
+  | 0 | 8, 4 | 8 | 8, 1 | 16 | 4, 4 | 24 | 6, 1 |
+  | 1 | 5, 2 | 9 | 2, 2 | 17 | 5, 4 | 25 | 5, 1 |
+  | 2 | 6, 2 | 10 | 1, 2 | 18 | 6, 4 | 26 | 0, 3 |
+  | 3 | 7, 2 | 11 | 3, 3 | 19 | 7, 4 | 27 | 1, 3 |
+  | 4 | 8, 2 | 12 | 2, 3 | 20 | 8, 4 | 28 | 3, 2 |
+  | 5 | 8, 3 | 13 | 5, −1 | 21 | 7, 6 | 29 | 7, 1 |
+  | 6 | 1, 0 | 14 | 6, −1 | 22 | 8, 5 | 30 | 7, 3 |
+  | 7 | 0, 0 | 15 | 3, 4 | 23 | 8, 6 | | |
+
+- **Availability** (`RefreshAvailability`, rules in [game-commands.md](game-commands.md) §5.1): an unavailable
+  button is disabled and marked, and its tooltip is the failure text for the action's failure code
+  [known] S 00623470. The texts are the `tag`
+  attributes of the elements `<ActionName>_<code>` under `actionfailurecodes` in the XML (the element is a
+  child of `btAction4` in the shipped file, read once into a global table) [inferred] S 00624470.
+- **Click or hotkey**: actions {4, 8, 12, 21, 23, 28} (destroy building, destroy flag, retreat, abort research,
+  abort sacrifice, destroy street) set a pending flag and open the confirmation box (`!`-keyed title and text,
+  Yes / No); when the box reports result 0 (Yes) the action is executed once. All other actions execute at
+  once (`ExecuteAction`, [game-commands.md](game-commands.md) §5.1). Note that the red-highlight set and the
+  confirmation set differ (2 and 30 are red without confirmation) [known].
+- **Placement** (`PositionAtCursor`): the panel is centred on the cursor, clamped to the screen; with the
+  "smart cursor" option (user profile byte +0x31) the cursor is warped onto the focused button.
+- **Closing**: any key, a middle click, the cursor entering the world, a click on a good button: fade out in
+  0.2 s, but never while the confirmation is open and unanswered.
+- **Attack slider** (kind 6): a `Slider2` (`value` 0.5 initially) with labels `textL` / `textR` showing the
+  soldier counts for the slider position (attackable-soldier computation for the target, capped by the
+  available count); action 11 then sends **`0x2000D` GE_Military_Attack** with the slider fraction
+  ([game-commands.md](game-commands.md) §3.4, [military.md](military.md) §3.5) [inferred] S 006247a0,
+  S 00624700.
+
+### 3.8 Panels
+
+#### 3.8.1 Statistics (`menuStatistics.xml`, `nMenu::StatisticPanel`) [inferred] S 006225d0, S 00621910; [known] S 00621820
+
+Created on first use, toggled by `btStatistics`; fade 0.2 s. Four tabs. Content:
+
+- **Players**: `playerInfo0..5`: name in player colour, state text `textFriendly` (colour `colGreen`) or
+  `textInWar` (`colRed`), avatar; a player not yet met by the local player shows `textEmpty`. Each row's button
+  shows / hides that player's curve.
+  **Six rows are a hard limit of the panel**: the constructor creates exactly six row objects and gives row
+  `i` the player slot `i` (0..5); there is no paging and no remapping [known] S 00621d20, and the click handler
+  searches the same six rows [known] S 00621910. The simulation has eight player slots and the graph handles
+  all eight; the curve switch of every slot starts on [known] S 00642f00. So the players in slots 6 and 7 have
+  a curve (under the same conditions as the others) but no row, and their curves cannot be switched off
+  [inferred]. Details: [hud-panels.md](hud-panels.md) §3.1.4, §3.1.6.
+- **Player graph** (`graphPlayers`, `graph0..7`): one curve per player for the category chosen in the combo box
+  `filter`: `!Regions`, `!Buildings`, `!Settlers`, `!Goods`, `!Military Strength`, `!Coin Amount`,
+  `!Productivity`, `!Defeated Enemies` [known: data; index → per-player history vector `category × 0x10`,
+  [players-victory.md](players-victory.md)]. Points: x = i ÷ (n − 1), y = value ÷ max; a curve is drawn only for
+  an active player known to the viewer.
+- **Inventory**: `goods` (22 rows) and `soldiers` (6 rows): icon, stock in depots (red when 0), signed change
+  outside (red when negative); clicking a row adds / removes that good's curve in `graphInventory` (curve
+  colour from `IconConfig`, alpha 0.9).
+- **Buildings**: one `building` row per building type of the tribe in a grid (`bldOffset`, `bldSpread`,
+  `numBldPerLine` = `26 22`, `128 128`, 7): icon, name, count and count under construction (row alpha 0.4 when
+  both are 0), average productivity or average health as a bar; a click selects one building of that type and
+  moves the camera there. A tribe-specific child `techtree<Tribe>` is shown.
+- **Time axis**: slider `timeScaling` (0..1) per graph: range in game minutes =
+  `floor(round(v × 900 + 60) ÷ 6) × 6`, i.e. 60..960 in steps of 6; seven x labels from "now − range" to "now",
+  two y labels (max ÷ 2, max).
+
+No command is sent. When the panel was opened from the game-ended popup with "end", closing it leaves the match
+(§3.9).
+
+#### 3.8.2 In-game settings (`menuIngameSettings.xml`, `nMenu::IngameSettingsPanel`) [inferred] S 00621480, S 00620970, S 00641ab0, S 006412f0
+
+Opened by `btSettings`. Two tabs.
+
+- **Military** (`contSettings`): sliders `sliderNear`, `sliderMedium`, `sliderFar` (garrison share by border
+  distance) and `sliderDefense`, initialised from the local player's values.
+- **Transport priority**: 19 slots `goodprioslot<N>` in rank order with the good's icon; an unused rank shows
+  `texturePrioNotUsed` / `mappingPrioNotUsed` and is disabled. Click a slot to pick it up (`dragslot` follows
+  the cursor), click another slot to move the good to that rank (local copy of the priority list); a click
+  elsewhere drops it back, cancelling plays `uiCancel`.
+- **`btConfirm`** sends, in this order, the values of `sliderNear`, `sliderMedium`, `sliderFar`
+  (**`0x20013`**, **`0x20014`**, **`0x20015`** GE_Military_Set{Near,Medium,Far}DistanceAllocationFactor), the
+  whole priority list (**`0x20021` GE_Good_MoveTransportPriority**) and `sliderDefense` (**`0x20011`
+  GE_Military_SetDefenseFactor**), whether or not they changed; then the panel closes. Nothing is sent before
+  the confirm [known] S 00620970; ids per sender from [game-commands.md](game-commands.md) §3.4.
+- **Diplomacy view** (`MilitaryPanel`, rows `player0..5`): for each active, valid player that the local player
+  has met: ally or enemy shape, name in player colour, `!FRIENDLY` (RGB 0, 255, 138) or `!ENEMY`
+  (255, 144, 0), avatar; else `lbEmpty`. Display only: the game has no diplomacy command
+  ([game-commands.md](game-commands.md) §3.4 lists none) [inferred].
+- **Goods distribution** (tab 1, `contGoodSpreading`, `GoodArrangementPanel`): up to 10 `waregroup<N>` buttons,
+  one per good that more than one building type consumes; selecting one shows up to 6 pairs
+  `building<N>` + `slider<N>` with the current weights. Moving a slider sends **`0x2001F` GE_Good_SetModifier**
+  (good id, entry index, new weight) at once, without confirm.
+
+#### 3.8.3 Goods bar (`goodInfoPanel`) [inferred] S 006460d0, S 006287b0, S 0062a820
+
+Four `goodInfo<N>` entries: icon, text `amount / delta` with the delta signed, red (`textColRed`) when
+`amount < −delta` (the stock would run out), else green; tooltip kind 2. The four goods come from the current
+**good set** of the local player's tribe; `selector` advances to the tribe's next set cyclically. Sets are
+defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) presets an entry.
+
+#### 3.8.4 Quests [inferred] S 00627650, S 00627ee0, S 005ea100, S 005e9f40
+
+- **Quest lines** (`questInfo`, seven `quest` children in the shipped file): while the game is not paused,
+  quests that are active, not in state 2 and started more than 10 ticks ago are bound to the lines in start
+  order. A line shows the localised title and, for a quest with progress, ` (<progress>)` with the parts before
+  and after `/` coloured `finishedColor` / `unfinishedColor`. After `inactiveDelay` without hovering the line
+  fades to `inactiveOpacity` over 1 s.
+- **Quest log** (`questlog`): list of all visible quests, main quests first then by order key, with header rows
+  `!MAIN QUESTS` / `!SUB QUESTS`; icons `iconFinished` / `iconFailed`; selecting a row shows the text of the
+  key `<title key>_desc`. The child `Difficulty<N>` matching the player's difficulty (0..3) is shown.
+
+#### 3.8.5 Messages and minimap
+
+**Messages** [inferred] S 005f86a0, S 005f8b90, S 005f75a0; constants [known] S 005f86a0
+
+- Eight slot rows are created, seven are filled: the filtered list (types whose filter is on) from the scroll
+  index. A row = type icon button (§2.10) + label (title, or `title (extra)`), read messages grey
+  (200, 200, 200) and pressed, unread white.
+- Row alpha: `alphaMin + (1 − alphaMin) × timeRemaining ÷ 600` with the record's float at +0x18, which starts
+  at 600.0 for a new message (§2.10): a new row is opaque and fades towards `alphaMin` (shipped 0.4) as the
+  message's time runs down [known] S 005f86a0; the rate at which `timeRemaining` falls is in
+  [players-victory.md](players-victory.md) §2.7.
+- Left click on a row: mark read and move the camera to the message's cell. Right click: delete the message,
+  sound `uiRemove`. Tooltip `!Left Click for go to, right click for delete.`
+- `up` / `down`: scroll with 0.05 s auto-repeat; `last`: jump to the newest and stick to it. A new message while
+  the list is visible plays the sound of §2.10 and, if it has a cell, adds the minimap symbol of §2.10.
+- A listener callback from the player's message store pulses the row of a new message (scale `scaleMax` → 1 in
+  `scaleTime`).
+
+**Minimap** (`nMenu::MiniMap`) [inferred] S 005f3dd0, S 005f3fc0, S 005f4390, S 005f5bb0, S 005f2130
+
+- Base image: the scene renders the map into a 512 × 512 target; a copy masked by the local player's explored
+  cells is the widget's texture. Refreshed after a device reset and on a delayed request.
+- Overlay 0 (256 × 256, half resolution): territory. Each cell in the owner's colour; interior cells alpha
+  0x99, border cells (grid-state bit 0x20) opaque; unexplored cells transparent.
+- Overlay 1: objects. Building 0xffaaaaaa; a building whose property byte +0xf5 is set 0xffffffff or 0xffff8888
+  (by property +0x54); a sacrifice site (working mode 9) `sacrifices_color`; a chest `chests_color`; nothing
+  on unexplored cells. Both overlays are rebuilt when a building is created or removed or a sacrifice starts.
+- Symbols (on top): own ships that are not moving (symbol 3), fights of the local player (4), other fights at
+  half alpha unless both sides are enemies of the local player, the camera frustum as a clipped trapezoid (if
+  `renderfrustrum`), and the script / message symbols with their lifetime.
+- Input: left click or left drag moves the camera to the map point (y flipped); dragging with the middle mouse button (button index 2, `WM_MBUTTONDOWN`
+  S 00401f30; its pressed byte is Event face +0x11 + 2, read by S 005f2130) [known] pans the minimap
+  view inside the texture; the wheel zooms (§3.3.3).
+- Symbol definitions: `mapSymbols.xml` (§6).
+
+#### 3.8.6 World overlays (`overlayPanel`) [inferred] S 006403c0, S 0063dd30, S 0063d870, S 0061fa40
+
+One overlay widget per soldier and fight, and per building **whose owner has `kind` (+0x08) = 2, the local
+human player** (other players' buildings get none [known] S 0061f980), created and destroyed from the
+simulation's callbacks (building created / removed, soldier added / removed, fight added / removed),
+positioned every frame at the projected world position (widget centred on the projected point plus an offset
+[known] S 0063d870).
+
+- **Building** (template `overlayBuilding`): name coloured by productivity (> 66 green, > 33 orange, else red:
+  `textColGreen` / `textColOrange` / `textColRed`); under construction `N%` and a bar; military buildings:
+  swordsmen and bowmen counts and a hit-point bar; warning icons `notShooting`, `noWorker`,
+  `productionStopped`, `noCoins`, `exclamation0..2`; up to 10 pulsing icons of the goods the building lacks.
+  Screen lift by the property's `size` mask, first match of bit 0 / bit 1 / bit 2: the overlay's
+  `offsetSmall` / `offsetMedium` / `offsetLarge`, subtracted from y as a fraction of the screen height; a mask
+  with none of these bits (mine, ship) gets no lift [known] S 0063e770. [inferred, from the mapped description
+  of the constructor and of the loader S 0063ef50] the three are XML attributes of those names with the
+  defaults 0.04 / 0.06 / 0.09.
+- **Soldier** (template `overlaySoldier`): health bar, green above 0.6, yellow above 0.3, else red; a player
+  colour icon.
+- **Fight** (template `overlayFight`), **Settler** (template `overlaySettler`).
+- An overlay carries five category flags (bytes at +0x1b0) and is shown while it is on screen and the panel
+  has one of its categories switched on [known] S 0063d870. `btInfoMap2` toggles category 0, `btInfoMap3`
+  category 1 (§3.4). A building overlay gets category 1 if its property is a `casern` (+0xf1) or has `health`
+  (+0x8c) > 0, else category 0 [known] S 0061f980; a soldier overlay gets category 1 [inferred] S 0061f770
+  (the constant is read from the mapped disassembly note). While at least one category is on, the
+  `alphaPlane` is faded in [inferred] S 0061fa40. [TODO] not established: the category of fight and settler
+  overlays (a read of `OverlayPanel::CreateFightOverlay` S 0061f830 settles the first).
+
+#### 3.8.7 Message boxes
+
+`nMenu::MessageBox2` (template `messagebox`; inside panels) [inferred] S 0062c610, S 0062c150, S 0062c320:
+attributes `type` (mode), `fadeInTime`, `fadeOutTime`, `buttonspread`; children `title`, `text`,
+`buttoncontainer`, `button` (template for up to three buttons).
+
+| Mode | Buttons → result | Hotkeys | Enter gives |
+|---|---|---|---|
+| 0 YesNoCancel | 0 / 1 / 2 | Enter / – / Esc | 0 |
+| 1 YesNo | 0 / 1 | Enter / – | 0 |
+| 2 AbortRetryIgnore | 3 / 4 / 5 | Esc / Enter / `i` | 4 |
+| 3 Abort | 3 | Enter | 3 |
+| 4 OK | 0 | Enter | 0 |
+| 5 OKCancel | 0 / 2 | Enter / – | 0 |
+| 6 RetryAbort | 4 / 3 | Enter / Esc | 4 |
+
+Results and the Enter column are [known] S 0062c150, S 0062c320; the hotkeys are the values `SetupButtons`
+S 0062c610 writes (13, 27, 0x69) [known]: it writes none for `!No` in mode 1 and none for `!Cancel` in mode 5,
+so Esc answers neither unless the `button` template itself carries a hotkey [inferred]. Button captions:
+`!Yes`, `!No`, `!Cancel`, `!Abort`, `!Retry`, `!Ignore`, `!OK`. Result −1 = open. Showing it warps the cursor to button 0 (smart cursor option). Listeners
+(`IMessageBoxListener`) get the result. `nMenu::MsgBox` (dialog slot 6) is the stand-alone variant with
+code-created style-8 buttons at x = 0 / 146 / 292 px [inferred] S 005ff150.
+
+#### 3.8.8 Game menu `cbMenu` and the requester [inferred] S 005eb310, S 00600300, S 006009b0, S 006008b0
+
+| Item | Label | Effect |
+|---|---|---|
+| 0 | `!Save` | offline role only: close load and options, toggle the save panel. Outside the offline role the entry is not in the menu (§3.4) |
+| 1 | `!Load` | offline role only: toggle the load panel; removed likewise |
+| 2 | `!Options` | close save / load, toggle `OptionsPanel` (`menuoptions.xml`; 27 option controls bound by name; closing writes the user settings) |
+| 3 | `!Main Menu` (network: `!Surrender and back to Lobby`) | close all panels, open the requester (slot 4) with type 2: text `!Back to Lobby` in a network role, else `!Exit to title?` |
+| 4 | `!Quit` | requester type 1: `!Exit to desktop?` |
+
+Requester (`menurequester.xml`: `yes`, `no`, `title`, `autosave`): Enter = Yes, Esc = No. In a match an
+`!Autosave...` check box is shown (choice stored in the user profile). Yes: the buttons are disabled, the text
+becomes `!Finalizing...`, in a match the session event "user leaves" is sent
+([network-session.md](network-session.md)); when the session allows it the action runs: type 1 → autosave if
+ticked, log out, quit; type 2 → in a lobby match send the referee "give up" and return when it answers, else
+autosave if ticked and return to the main screen.
+
+Load and save panel (`menuLoadSave.xml`, `nMenu::LoadSavePanel`, mode 0 load / 1 save): see
+[save-format.md](save-format.md) §3.7. UI rules: Enter = confirm; clicking a row copies its name into the edit
+field; save over an existing name asks `!Overwrite file?`; delete asks `!Remove this file?`; a chosen file is
+handed to `nMenu::System` (+0x68) and started on the next update.
+
+#### 3.8.9 Sacrifice bar and target chooser [inferred] S 006264d0, S 00625300, S 00625d90, S 00627210, S 00626c20
+
+- **Bar** (`sacrificePanel`, 15 + 15 buttons): row 1, left to right: source buildings of running own
+  sacrifices, own sacrifice buildings that are ready or have an order pending, the running research. Each with
+  icon, state tooltip (`!ready`, `!ordered`, `!blocked`, `!samestillrunning`, `!noEnemy`, running), countdown
+  or progress, regeneration and research fans. Row 2, right to left: sacrifices currently aimed at the local
+  player ("antibuffs") with countdown `mm:ss`. The panel resizes to its content and hides when empty. A click
+  on a row-1 button selects that building (selection kind by §3.6) and sets the selection cell.
+- **Target chooser** (`sacrificetargetpanel`): opened by action 22 when the sacrifice needs a target. One
+  button (clone of `entry`) per enemy player that is active, eligible and not yet eliminated
+  (`victoryConditions +0xe8 + i × 4 == 0`), labelled and tinted with the player's name and colour, in a column
+  centred on the cursor. Click → **`0x20026` GE_Sacrifice_StartOrdered** (building id, target player index),
+  fade out. Esc or a cancel input closes it.
+
+#### 3.8.10 Build menu (`infoboxCreateBuilding`) [inferred] S 00634db0, S 006343f0; [known] S 00617910, S 006176d0; S 006340b0
+
+- **Content**: for every building id of the local player's tribe whose property `constructionTime` (+0x88) > 0
+  and whose `size` mask (+0x3c, [properties-data.md](properties-data.md) §3.6) is not 0, one `BuildingButton`
+  (clone of the template child `buildingButton`, icon from `IconConfig`, tooltip kind 0) on the tab of the
+  lowest set bit among bits 0..4: 0 `!SMALL` (size 7), 1 `!MEDIUM` (6), 2 `!BIG` (4), 3 `!MINE` (8),
+  4 `!SHIP_SIZE` (16) [known] S 00634db0; captions [known: `menuingame.xml` `tabButton0..4`]. A button is
+  enabled unless the filter stored at +0x1638 is not 0 and `Building_TypeFitsConstructionFlags(filter, type)`
+  fails, or the type is locked for the player (`menu.lockBuilding`). Tabs without an enabled button
+  are disabled; the tab of the filter's highest bit is selected first.
+- **Layout**: grid from `itemsOffset`, `itemsSize`, `itemsSpread`, `numItemsPerLine` (shipped `6 6`, `56 56`,
+  `71 64`, 7; constructor defaults 0 0, 80 80, 85 85). The row wrap happens once per tab, at index =
+  `numItemsPerLine`: the column counter is not reset after the wrap [inferred] S 006343f0. A remake that wants
+  identical layouts needs at most two rows per tab.
+- **Opening**: a left click on an empty cell where something can be built (§3.5); the box is opened in
+  "direct" mode with the clicked cell remembered. Help text: `!Infobox_Anchor_Help` (filter bit 0x10),
+  `!Infobox_Mine_Help` (bit 0x8), else `!Infobox_CreateBuilding_Help`.
+- **Choosing** [known] S 006340b0: a click on a building button stores the type (+0x1630). In direct mode
+  with the remembered cell (`MenuSelection +0x8c`) inside the map it sends **`0x20002` GE_Building_Create**
+  (type, cell) immediately, sets mode 1 and resets the selection. With the direct flag clear the clicked
+  button is marked instead and the next left click on the world sends `0x20002` for the cell under the cursor
+  (§3.5 mode 2). The only writer of the direct flag found is `BeginBuildPlacement`, which sets it to 1.
+- Action button 1 = 29 "create flag" at the clicked cell (**`0x20004` GE_Flag_Create**).
+
+### 3.9 Screen flow
+
+Top-level screens: `Splash` (at start, if enabled) → `Main` (`menumain.xml`) → `Game`; `Exit`. The flow is
+code ([`UI_FINDINGS.md`](../UI_FINDINGS.md) §3 for the general finding). In-game:
+
+1. A map or save path placed in `System +0x68` (free-game panel, load panel, campaign, lobby) is consumed by
+   `System::Update`: `StartPendingMap` S 005d9fd0 closes all screens, makes `Game` current and calls its
+   `OnEnter` S 005eed00, which shows the `LoadingPanel` (`menuLoading.xml`; progress bar with a glow at the bar
+   tip, redrawn synchronously on every progress call), builds the world, then `SetupHud` [inferred].
+2. While playing, `Game::Update` S 005efea0 [known for this block] checks, when the world is not in state 3,
+   no `Victory` / `Report` / `Defeat` dialog is open and no cinematic is open:
+   - local player eliminated (`victoryConditions +0xe8 + player × 4 ≠ 0`) → open **`Defeat`** (slot 5);
+   - else the current map's completion is pending in the user profile → mark it, then open **`Victory`**
+     (slot 3) if the map type (`MapInfo +0x1d0`) is 1 or 0x65 (campaign), else **`Report`** (slot 0).
+3. The three end dialogs derive from `GameEnded` (`menugameend.xml`; attributes `wonTitle` / `wonDesc`,
+   `reportTitle` / `reportDesc`, `defeatTitle` / `defeatDesc`; in a network role the text key gets the suffix
+   `MP`). `btContinue` closes the popup and opens the statistics; `btEnd` does the same and marks the
+   statistics panel "leave on close"; `Defeat` disables `btContinue` [inferred] S 0061ff50, S 006201f0,
+   S 005fe6c0.
+4. Closing that statistics panel sets `Game +0xb330`; the next `Game::Update` detaches dialogs 5, 3, 0 and
+   leaves the match: campaign map → main screen; otherwise log out of the referee (if a lobby exists) and main
+   screen or back to the 3D lobby [inferred] S 005eae90, S 0061fea0.
+5. Leaving through the requester: §3.8.8.
+
+Dialogs (`Overlapped`): opening one closes the others (`ToggleScreen` S 005ea960 [known]); the requester is
+drawn again after the whole tree so it is always on top [inferred] S 005d9800.
+
+### 3.10 Localisation and fonts
+
+**Text tables** [inferred] S 004966d0, S 00496b80, S 00496070; [known: data]. On start and on a language
+change, these files are read from `[data]\language\<lang>\` in this order, later files overriding earlier keys:
+`briefings.txt`, `ui.txt`, `credits.txt`, `lobby_ui.txt`, `lobby_items.txt`. Format: plain text, single-byte
+code page (the German files are Windows-1252), one entry per line, lines separated by CR LF, LF or CR. A line
+starting with `//`, `;` or `#` is a comment. Otherwise **key = text before the first TAB, value = text after
+the last TAB**, with `\n` in the value turned into a line break. The keys in the files include the leading
+`!` (e.g. `!1 Hour` → `1 Stunde`) [known: `ui.txt`].
+
+**Lookup** (`Localization::GetText`): empty key → empty string; a known key → its value; an unknown key → the
+key itself (and it is inserted, so it stays that way). `Localization_FormatText` uses the value as a `printf`
+format; its lookup variant returns `(MBT)<key>` for a missing key [inferred] S 004965a0.
+
+**When a string is localised**: `nUi::Text::SetText(str, localize)`; the XML loaders pass
+`localize = (first character == '!')` for `content`, `string<N>`, tip `description` [known] S 004b46d0. Code
+passes `!`-keys explicitly. Colour markup inside texts: `<r g b a>` tags and `<right>`, `<c>` are interpreted
+by the text block renderer [inferred] S 00627e30; [TODO] the full markup grammar (a read of `nUi::TextBlock`
+draw, S 004b7dc0 onwards, settles it).
+
+**Fonts** [known: data]; [inferred] S 004946c0, S 004941a0. A font name (case-insensitive) maps to
+`[data]\language\<lang>\fonts\<name>.fnt` plus its page image `<name>_00.tga`. The `.fnt` files are AngelCode
+BMFont **text** descriptors (`info face="Arial" size=13 … / common lineHeight=15 base=11 scaleW=256 scaleH=256
+pages=1 / char id=…`), not encrypted. Shipped: `Body_Arial` (default of every widget), `Subline_Garamond`,
+`Chapter_Garamond`, `Head_Garamond`, `Gamertags_Garamond`, `Mini_Silk`, `mini`, `title`, `system`,
+`light_system`, `dark_system`, `light_system_outlined`, `font_big_white`, `small_no_alias_white`, `editor`.
+Fonts are bitmap fonts drawn at their native size; there is no scaling attribute.
+
+**Localised textures**: `[data]\language\<lang>\<name>.dds` (e.g. `ui_s2logo.dds`) [inferred] S 00494470.
+
+---
+
+## 4. Update order
+
+Per frame (`CApplicationEx::FrameTick_InGame` S 004018e0; the calls below are in the order of that function)
+[known] unless tagged:
+
+1. Window messages arrive outside the frame function → `nUi::Root::HandleInputEvent` (§3.3.1); handlers run
+   immediately, including `QueueGameCommand` (offline: the command executes inside the click,
+   [game-commands.md](game-commands.md) §3.1). Exceptions are the three round buttons polled in step 4.
+2. Frame timer update; layout hot reload if one was requested (`XMLHandler::ReloadAllIfRequested`); the key
+   table is told whether the window is active and not minimised.
+3. Only if the game screen is open: `nGame::System` update (cursor, camera; S 00780d20) and then
+   `nMenu::Messages::Update` S 005f86a0, both called directly from the frame function, before the menu system
+   [inferred: the two virtual targets are taken from the member types, not from the vftables].
+4. `nMenu::System::Update` S 005da500:
+   1. reload the text tables if the language changed; `Cursor::Update`;
+   2. if the UI is not suppressed (System +0xa4 = 0): every open dialog of the nine slots is updated with
+      argument 0; then the topmost open dialog that accepts focus (slots searched from the last to the first)
+      is updated once more with argument 1 and System +0xa is set; text input is disabled while the message
+      box (slot `msgBox`) is open; then the **`nUi::Root` update** (recursive `Object::Update` S 004a3920: tick
+      the widget's animations and delete finished ones, mouse-over arbitration if the widget's dirty value is
+      1, then, only if the widget is visible, update every child whose virtual slot +0x10 returns true, over a
+      copy of the child list). [TODO] not established: the Root virtual slot +0x84 called right after the tree
+      update; a read of the Root vftable settles it;
+   3. `MinimapSymbolList_TickExpire` S 005f2690: every symbol with a positive counter loses 1, a symbol at 0
+      is deleted, a negative counter is permanent. The `lifetime` of `mapSymbols.xml` is therefore a number of
+      menu updates (frames), not seconds or logic ticks [inferred: the counter is taken as the copy of
+      `lifetime`];
+   4. start of a pending map (`StartPendingMap`, when the pending path is not empty).
+5. NComm pump (if a manager exists), Lua threads, `NLogic::System::Update` (0..n logic ticks), sound update.
+6. Render (`App_RenderWorldFrame` S 00401260; not while minimised; while the 3D lobby world is active the
+   lobby object's update runs instead [inferred]): the scene, then `nMenu::System::Render`
+   S 005d9800 → `nUi::Root::Render` S 00491660: the widget tree in child order unless the debug variable
+   `ui.Hide UI` is set (per widget: nothing if invisible, else pre-render, draw, children, post-render,
+   S 004a1370; the base draw S 004a0500 stamps the widget with the next value of a global render counter, the
+   render id of §2.1), then the item widgets of an open combo box on top of the tree; after that
+   `System::Render` draws the requester once more if it is open.
+
+`nMenu::Game::Update` S 005efea0 is the game screen's override of the widget update and runs inside step 4.2
+[inferred: reached through the tree]. Its order [known]:
+
+1. Nothing if the screen is not open. If the deferred-leave flag (Game +0xb330) is set: clear it, leave the
+   match (`PerformDeferredLeave`), return.
+2. Base `Object::Update` (animations, mouse-over, all HUD children).
+3. Everything below is skipped while the game is paused (Game +0xfff9).
+4. Delete closed panels: the loading panel (+0xcc70, hidden first), then +0xcc7c, +0xcc80, +0xcc84, +0xcc78,
+   each when it is no longer visible.
+5. Scene colour fade (0.2 s linear interpolation of four floats, started by `btInfoMap1`).
+6. `btBack` / `btForward` enabled when `Selection_IsKind1` of the game selection is true; the children
+   `x2` / `x3` of `btSpeed` are shown when the profile's speed scale truncates to 2 / 3.
+7. `MenuSelection::Update`; the four debug toggles.
+8. Only if the `nGame::System` state (+0x2d8) is not 3:
+   - if the cursor is visible, the click latches of `btSettings` (open the settings panel), `btSpeed` (send
+     `0x20023`) and `btOptions` (open the options panel) are read in this order; the first one found set ends
+     the update for this frame;
+   - if menu screen slot 1 is attached or the UI is suppressed: one more `nGame::System` update, nothing else;
+   - otherwise: the world hover tooltip (`UpdateHoverTooltipIfCellVisible`), only if no focus dialog was
+     updated this frame (System +0xa = 0), the byte at Game +0x164 is set (+0x144 of the screen's root
+     widget, the hover flag [inferred]) and the message list's byte +0x42e9 is clear;
+     then the end-of-game checks, only while neither the victory nor the report dialog is open and screen
+     slots 5 and 0 are not attached: if the victory state of the local player
+     (`victoryConditions + 0xe8 + 4 × player`) is not 0 and slot 8 is not attached → `ToggleScreen(5)`; else if
+     the user profile reports a pending map completion and slot 8 is not attached → mark it handled and
+     `ToggleScreen(3)` for map types 1 and 0x65, `ToggleScreen(0)` for the others.
+
+Per logic tick the UI does nothing; it is called back by the simulation through `NLogic::CallbackReceiver`
+(building created / removed, soldier, fight, sacrifice started) and the message listener, at whatever point of
+the tick those events occur [inferred].
+
+On entering a match: §3.9 step 1; `ActivateGameScreen` S 005d9f10 hides the message slots, makes the game
+screen current, calls its enter hook and clears the minimap symbol list [known]. On leaving: `Game::OnLeave`
+S 005eb030 unregisters the callback receiver (unless the UI is suppressed), clears the two NComm sinks, shuts
+NComm down, calls `DestroyHudWidgets`, shuts `nGame::System` down, resets the load descriptor, resumes the
+sounds if the game was paused, clears the local player entry and the minimap symbol list [known].
+
+---
+
+## 5. Inputs and outputs
+
+**Consumes**
+
+- Window input (§3.3.1); `GetAsyncKeyState` polling for the key table.
+- Layout XML, `templates.xml`, `iconconfig.xml`, `goodinfosets.xml`, `mapSymbols.xml`, `cursors.xml`, text
+  tables, fonts, UI textures (§6).
+- Read-only simulation state: the game selection, the hovered cell and its build flags, buildings (type,
+  owner, construction, production, stock, garrison, hit points, sacrifice), flags, ships and routes, players
+  (colour, name, relations, lock maps, statistics histories), quests, messages, victory state, the explored
+  mask, game speed, pause, NComm role and hang reason.
+- Lua: `menu.*`, `ui.*`, `txt.*` ([lua-runtime.md](lua-runtime.md) §3.7), registered by
+  `nMenu::System::Initialize` S 005dda30.
+
+**Produces**
+
+- Game commands ([game-commands.md](game-commands.md)). Complete list of UI senders:
+
+  | Control | Command |
+  |---|---|
+  | Action buttons 1..30 | table in [game-commands.md](game-commands.md) §5.1 (`0x20003`, `0x20005`, `0x20009`, `0x2000A`, `0x2000B`, `0x2000D`, `0x2000E`, `0x2000F`, `0x20010`, `0x20012`, `0x20018`, `0x20019`, `0x2001A`..`0x2001C`, `0x20025`, `0x20026`, `0x20028`, `0x20029`, `0x2002A`, `0x20004`); action 9 sends nothing (it starts street placement) [known] S 00623730 |
+  | Build menu button / world click in build placement | `0x20002` |
+  | World clicks in street placement (`ai::game::StreetBuildMode::HandleClick` S 0078bed0, `Cancel` S 0078b1d0) | `0x20006`, `0x20008`; cancel `0x20007` |
+  | Depot good button, casern soldier button | `0x2001E` |
+  | Sacrifice button in the temple box | `0x20024` or `0x20027` |
+  | Sacrifice target button | `0x20026` |
+  | Settings confirm | `0x20013`, `0x20014`, `0x20015`, `0x20021`, `0x20011` |
+  | Goods distribution slider | `0x2001F` |
+  | Speed button (click latch polled in `Game::Update`, §4) | `0x20023` |
+
+  Not sent by any shipped control: `0x20016` (military reset), `0x20017` (ignore distance), `0x20020`,
+  `0x20022` (goods resets) [known: every `nGame::System::Send…` function has only the callers of the table;
+  the four ids have no `Send…` function; game-commands.md §3.4].
+- Session events: chat to all / to team, "user leaves", referee "give up" (§3.8.8).
+- Local effects: camera focus, scene selection marker, sounds (`uiClick0`, `uiCancel`, `uiMessage0`,
+  `uiMessage1`, `uiRemove`, also preloaded `uiClick1`, `uiDialog0`, `uiKey0`), user profile (options, autosave
+  choice, smart cursor), save files through `GameFile_Save`.
+- Script events `<name>_isClicked`, `<name>_isPressed`.
+
+---
+
+## 6. Data-driven parameters
+
+All under `[data]\ui\layout\` (game data folder `data\game\ui\layout`), encrypted XML; `templates.xml` is shared
+with the lobby.
+
+| File | Root | Feeds |
+|---|---|---|
+| `menuingame.xml` | `menuingame` (`chatFadeOutTime="15.0"`, `chatFadeInTime="0.1"`, `zoomInTime="0"`) | the game screen (§3.4) |
+| `templates.xml` | `templates` (289 top-level elements) | templates: `roundingamebutton`, `bt_action1..4`, `combobox`, `goodList`, `goodIngameButton`, `progressbar*`, `tabControl`, `container`, `overlayBuilding`, `tip*`, `messagebox`, `slider`, `graph`, `NormalDialog_*`, … |
+| `menuStatistics.xml` | `menuStatistics` (`bldOffset`, `bldSpread`, `numBldPerLine`) | §3.8.1 |
+| `menuIngameSettings.xml` | `menuIngameSettings` (`colRed="1 0 0 1"`, `colGreen="0 1 0 1"`, `textFriendly="!FRIENDLY"`, `textInWar="!IN WAR"`, `mappingPrioNotUsed="688 856 40 40"`, `texturePrioNotUsed="ui_ingame.dds"`) | §3.8.2 |
+| `menuoptions.xml` | `menuoptions` (`minResolutionX="1024"`, `minResolutionY="720"`) | options panel |
+| `menuLoadSave.xml` | `menuLoadSave` (`textLoad="!Load"`, `textSave="!Save"`) | load / save panel |
+| `menurequester.xml` | `menuLoadSave` | requester |
+| `menugameend.xml` | `menuGameEnd` (`wonTitle="!TitleWon"`, `wonDesc`, `reportTitle`, `reportDesc`, `defeatTitle`, `defeatDesc`) | end dialogs |
+| `menuLoading.xml`, `menucinematic.xml`, `menunetinfo.xml` | `menuLoading` (`tipOfTheDayCount="51"`, `loadingScreenCount="1"`, `loadingScreen0="ui_loadingscreen"`), `menucinematic`, `menuNetInfo` | loading panel, cinematic, net info |
+| `menumain.xml`, `menufreegame.xml`, `menuselectmapdialog.xml`, `menucampaign.xml`, `campaigns.xml`, `menusplash.xml`, `menusplash_dev.xml` | | front end (out of scope) |
+| `iconconfig.xml` | `IconConfig` | every icon is `<Name texture pos="x y" size="w h"/>`, e.g. `<Wood texture="ui_ingame" pos="8 712" size="40 40"/>`. Top-level groups read by S 00611320 [known]: `Goods`, `SmallGoods`, `SmallRedGoods` (for every good of the property database the child named like the good, spaces as `_`; 93 / 62 / 39 children shipped, the surplus ones such as `Food_Bav`, `Halberd0`, `Woodcutter` are not goods names); `Goods/EmptyGood` and `Goods/ForesterTree` (fixed icons); `Sacrifices` (one child per sacrifice name, 47 shipped, e.g. `carrierSpeed`, texture `ui_buffs`; stored in the same map as the large good icons [inferred]); `Tactic/tactic0..2`; `BorderDist/dist0..2`; `Buildings` (one group for all tribes, 50 children: for every building of every tribe the child named like the building in lower case, spaces as `_`, e.g. `claymore_smithy`, texture `ui_buildings2008`, 56 × 56; a missing child prints `no building config for '<name>' found` and a default icon is stored); `GoodColors` (per good `color="r g b"`, 0..255, 36 shipped); `PlayerColors` (attributes `blue`, `red`, `green`, `yellow`, `white`, `black`, `magenta`, `grey`, each `r g b a` 0..1; the eight global player colours). In the data but not named in S 00611320: `Good_NotAvailable`, `Good_MovingToConstructionSite` ([TODO] reader not established; a string search for the two names settles it) |
+| `goodinfosets.xml` | `GoodSets` | `<Set name="constructionWares" tribe="Bavarian"><Good name="Wood"/>…`: four goods per set; five sets (`constructionWares`, `foodWares`, `minerWares`, `militaryWares`, `miscWares`) for each of `Bavarian`, `Egyptian`, `Scots`; only children named `Set` (any case) are read [known: data, S 0062a820] |
+| `mapSymbols.xml` | `mapSymbols` | `<symbol type="N" name texture mapping lifetime center>`: 0 Message, 1 Military, 2 Quest, 3 Ship, 4 Fight, 5 Chest; `lifetime` 100 for 0, 1, 5 and −1 (permanent) for 2, 3, 4, counted in menu updates, i.e. frames (§4); `center` (`2 3` everywhere) is in the data but not read by S 005f4c90, which reads `texture`, `name`, `mapping`, `lifetime` [known: data, S 005f5400, S 005f4c90] |
+| `cursors.xml` | `cursors` | §3.2.4 |
+
+Textures named by the in-game layouts [known: data]: `ui_ingame`, `ui_ingame2`..`ui_ingame6`, `ui_menus`,
+`ui_menubar`, `ui_buildings2008`, `ui_buffs`, `uiElements0`, `opferung_frame`, `ui_loadingscreen`,
+`techtree_bavaria.dds` / `techtree_egypt.dds` / `techtree_scots.dds`, and the masks `ui_mask.tga`,
+`ui_mask_minimap.tga`. Named by code: `uiElements3` (debug icon row of `SetupHud` S 005ed700) [inferred].
+All are in `[data]\gfx\` (`GetOrLoadTexture` S 00494000; see `asset-formats.md`). `uiTip.dds` exists there
+too; [TODO] not established: what names it (no in-game layout does).
+
+Attributes that hold several numbers (`pos`, `size`, `offset`, `mapping`, colours) are split at any of the
+characters space, LF, CR, VT, TAB (the delimiter string `" \n\r\v\t"` at S 0087bf34, set by S 007bfe80)
+[known]; the other three tokenizer arguments are the string at S 0087bf18, which has no initialiser and is
+used elsewhere as the empty string [inferred]. The data pads with several spaces (`pos="8   712"`).
+
+Action icons [known] S 00622f40, S 00623600: the icon of action *k* is the atlas rectangle
+`x = start.x + col × spacing.x`, `y = start.y + row × spacing.y`, `w h = size`, with `start`, `spacing`, `size`
+from `actionbuttons` (shipped `576 288`, `48 48`, `44 45`) and the cell (col, row) fixed in the code per action
+number of [game-commands.md](game-commands.md) §5.1:
+
+| Action | Cell | Action | Cell | Action | Cell | Action | Cell |
+|---|---|---|---|---|---|---|---|
+| 0 | 8, 4 | 8 | 8, 1 | 16 | 4, 4 | 24 | 6, 1 |
+| 1 | 5, 2 | 9 | 2, 2 | 17 | 5, 4 | 25 | 5, 1 |
+| 2 | 6, 2 | 10 | 1, 2 | 18 | 6, 4 | 26 | 0, 3 |
+| 3 | 7, 2 | 11 | 3, 3 | 19 | 7, 4 | 27 | 1, 3 |
+| 4 | 8, 2 | 12 | 2, 3 | 20 | 8, 4 | 28 | 3, 2 |
+| 5 | 8, 3 | 13 | 5, −1 | 21 | 7, 6 | 29 | 7, 1 |
+| 6 | 1, 0 | 14 | 6, −1 | 22 | 8, 5 | 30 | 7, 3 |
+| 7 | 0, 0 | 15 | 3, 4 | 23 | 8, 6 | | |
+
+Row −1 is one row above `start` (y = 240 with the shipped values). `SetAction` copies the rectangle into the
+button when its action changes. [TODO] not established: which texture the rectangle is cut from and how
+`mouseoveroffset` (shipped `0 96`) is applied; a read of the action button's draw / mapping refresh settles
+it. The failure texts are the children `<ActionName>_<n>` of `actionfailurecodes` with attribute `tag`, read
+for *n* = 0, 1, … until the first missing child, for each of the 31 action names [known] S 00624470.
+
+Layout values of the shipped HUD that a remake needs as defaults (all pixels) [known: `menuingame.xml`]:
+selection picture 244 × 244 at bottom left, offset 0 −6; minimap 188 × 188 at bottom right, offset −35 −38;
+`cbMessages` 124 × 32 at top right, offset −560 0; `cbMenu` 124 × 32, offset −428 0; goods bar 420 × 32 at top
+right; info box 518 × 198 at bottom centre, offset 0 −3, nine-slice border 16; action panel 96 × 131; quest log
+370 × 492 centred; messages `scaleMax="6"`, `scaleTime="0.5"`, `alphaMin="0.4"`, `scaleOnRefresh="false"`.
+
+User profile values used by the UI: game speed scale (+0x24, f32; read and written by pause, S 005ea9b0,
+S 005da400), smart cursor (+0x31, S 005f0880), autosave choice (+0x34, written by S 006009b0) [known for
+the three accesses; the offsets' names inferred].
+
+---
+
+## 7. Save and load
+
+Nothing of the UI is in a save game [inferred: no `nUi` / `nMenu` class is among the sections listed in
+[save-format.md](save-format.md) Appendix A; the member with the `NCore::IStoreable` vftable at
+`nMenu::Overlay` +0x1a0 is the key under which the overlay is entered in the overlay registry S 0088c1a4
+(S 0063dc50), taken to be the `NLogic::Unique` of the overlay's object]. Rebuilt on every match start: all HUD
+widgets (`SetupHud`), info boxes, overlays (from the creation callbacks fired while the world loads), the
+minimap textures, the statistics panel [inferred].
+
+State that the UI shows and that **is** saved by its owner: player messages (type 8 messages are dropped on
+load), quests, statistics histories, military and goods settings, sacrifice state
+([save-format.md](save-format.md) §7, [players-victory.md](players-victory.md) §7). The lock maps behind the
+build-menu filter are **not** saved; the map script's `onLoaded` sets them again
+([players-victory.md](players-victory.md) §7).
+
+Lost on save / load: the selection, the selection mode (a running street placement is cancelled by leaving the
+screen), minimap zoom and pan, message filters and scroll position, the chosen good set, statistics graph
+choices, tutorial pages and the tutorial button, script minimap symbols (`ActivateGameScreen` clears the
+symbol list, S 005d9f10 [known]; so does `Game::OnLeave` S 005eb030), panel positions [inferred for the
+rest of the list: none of it is in a saved section].
+
+Outside the save: options and the autosave choice in the user settings file.
+
+---
+
+## 8. Determinism notes
+
+The UI is presentation and command entry. Evidence that it does not touch simulation state:
+
+- Every control handler that changes the world ends in `NComm_Manager::QueueGameCommand`, either through a
+  `Send…` function of `nGame::System` or with an event built in the handler itself (`ExecuteAction`
+  S 00623730, `SacrificeButton::OnClicked` S 0062f390, `SacrificeTargetPanel::OnChildClicked` S 00626c20)
+  (§5 table; [game-commands.md](game-commands.md) §3.1). The sender's own simulation changes only when the
+  event comes back through the tick stream (offline: at once, inside the call).
+- The per-frame updates only read the simulation [inferred]. UI time is wall-clock time
+  (`Timer_GetTotalSeconds`, frame delta); the UI does not call the simulation's random generator [inferred].
+  The one random use found is the C runtime `rand()` in `OverlayBuilding::InitAndAttachToParent` S 0063f550:
+  each of the ten good icons of a building overlay gets an alpha pulse animation whose float at +0x2c is
+  `1 + ((rand() & 0x3f) − 32) ÷ 320` (0.9 .. 1.097; taken to be the pulse rate) [known]. It runs when an
+  overlay is created, so the number of `rand()` calls differs between machines; a remake must not let the
+  simulation share that generator.
+
+Exceptions, all local-only or offline-only:
+
+| What | Effect | Guard |
+|---|---|---|
+| Pause (`p`) | `TogglePause` S 005da400: saves the profile's speed scale and sets it to 0 (unpause restores it, at least 1.0), pauses all sounds, fades in the pause panel; the HUD logic of `Game::Update` stops (§4) | no effect in network roles 1..4, when the game screen is not open or while the cinematic dialog is open; the key works while the session hangs [known] |
+| Chat cheats on Enter: `WhatTheHell` (speed scale 20), `WhatCanEyeSee` (explore the whole map for the local player), `DontWantToLose` (records the current map as completed in the user profile and saves it; `Game::Update` then opens the end screen, §4), `ThatsANiceView` (camera state 0 ↔ 2), `ItsLikeAJackpot` (adds 10 of every good of the tribe's two good lists whose good type is neither 2 nor 3 to the stock of the completed building of the local player that `NVillage::System` returns first) | the first, second and last change simulation state directly | offline role (role 0) only; the line is still sent as chat afterwards [known] S 005ec340, S 005eba50 |
+| `ComputeSelectionKind` on a soldier in a fight, `MakeUniqueFromState` on a ship | change the **local selection** (not simulation state) | – |
+| Lua `menu.*` world edits | [lua-runtime.md](lua-runtime.md) §3.7 | map scripts run identically on all peers |
+| Emergency save, autosave notice | file output | – |
+
+Hotkeys and tooltips depend on frame timing and resolution; none of that reaches a command's content except
+the cell under the cursor at the moment of the click.
+
+---
+
+## 9. Notes for a Godot reimplementation
+
+**Maps onto engine features**
+
+- Widget tree, visibility, z-order, clipping, nine-slice sprites, bitmap fonts, tab containers, sliders,
+  scroll lists, tooltips with delay: `Control` nodes, `NinePatchRect` / `AtlasTexture`, `FontFile` (Godot
+  imports AngelCode `.fnt` text files with their page images directly), `TabContainer`, `Tween`.
+- Anchoring: the original has only "dock to an edge and stretch along it", "fill", and per-axis
+  left / center / right alignment with a pixel offset, all relative to the parent. Each maps to Godot anchors
+  (0, 0.5 or 1 per side) plus pixel offsets. Percent tokens map to fractional anchors.
+- Elliptic hit areas (`intersectionType="1"`, used by the round buttons and the minimap): override
+  `_has_point`.
+- Masked sprites (`mask`, `maskUV0/1`): a two-texture shader; needed for the round minimap and the selection
+  preview.
+
+**Reproduce exactly**
+
+- The click → command mapping (§3.5–§3.8, [game-commands.md](game-commands.md) §5.1), including which actions
+  ask for confirmation, the order of the five commands of the settings confirm, the immediate send of the
+  distribution sliders, and "nothing is predicted locally".
+- The selection-kind classification (§3.6): it decides which commands a player can issue for an object.
+- The build-menu filter by the cell's build flags and by the lock map; the direct-mode send.
+- Input swallowing while the session hangs (otherwise commands are dropped silently and the player sees no
+  reason), and the hang notice.
+- Message type → icon / sound / minimap symbol, left click = go to, right click = delete.
+- The statistics time range formula if graphs are to match.
+- Localisation lookup: missing key → key shown; `!` prefix convention; key = before first TAB, value = after
+  last TAB.
+
+**Free to change**: fade times, the hover highlight, cursor warping, the icon-grid wrap quirk of the build
+menu, pixel-exact layout (a remake should scale the HUD with the resolution, which the original does not),
+the layout-dependent character hotkeys (map them to physical keys and make them configurable).
+
+**Converter output** (from the player's install, into the cache)
+
+| Source | Output |
+|---|---|
+| layout XML + `templates.xml` | either scenes (`.tscn`) generated per screen with templates expanded by the rules of §3.1.3, or a neutral JSON tree `{name, type, deployment{pos,size,offset,anchor,alignx,aligny}, shape{…}, text{…}, tip, hotkey, children[]}` with lengths kept as `{value, unit: px|percent}`; the second keeps the data inspectable and lets the remake apply its own scaling |
+| `iconconfig.xml` | atlas regions (`AtlasTexture` resources or one JSON `{good|building|sacrifice → texture, x, y, w, h}`) |
+| `goodinfosets.xml`, `mapSymbols.xml`, `cursors.xml` | JSON; cursor images as PNG with hot spots |
+| `language\<lang>\*.txt` | a translation resource (CSV or `.po`), keys kept verbatim including `!`; decode Windows-1252 to UTF-8 |
+| `language\<lang>\fonts\*.fnt` + `*_00.tga` | `.fnt` is AngelCode BMFont text (`info face="Arial" size=13 … charset="ANSI"`), not encrypted; copy it and convert the `.tga` page to PNG, adjusting the page file name in the `.fnt` [known: data] |
+| UI textures (`.dds` / `.tga`) | PNG or kept as DDS; atlas pixel coordinates in the layouts refer to the original texture sizes, so textures must not be resized |
+| `actionfailurecodes` in `menuingame.xml` | table `{action name, code → text key}` |
+
+The action icon cells and the action names are in the binary, not in the data; a remake ships its own table
+of 31 action names (they are listed in [game-commands.md](game-commands.md) §5.1) with the cells of §6 and
+reads the icon grid parameters from `actionbuttons`.
+
+---
+
+## 10. Open questions
+
+| # | Question | What settles it |
+|---|---|---|
+| 1 | Texture of the action icons and how `mouseoveroffset` is applied (the cell per action is in §6) | static read of the draw / mapping refresh of `nMenu::ActionButton` (the reader of button +0x480..+0x49c) |
+| 2 | Exact attribute semantics of Slider, Slider2, SliderEx, StackedSlider, ListBox2, Graph, TextScroller, EditEx | static read of each `LoadFromXml` and `Update` (§3.1.9) |
+| 3 | Text markup grammar of `TextBlock` (`<r g b a>`, `<right>`, `<c>`, others) | static read of `nUi::TextBlock` layout / draw |
+| 4 | Meaning of building property +0x3c = 8 and of the owner test behind selection kinds 0xb / 0xf; of property +0xb0 (taken as "catapult" from the box it selects) and +0xf5 / +0x54 (minimap colours, depot soldier tab) | static read of the `BuildingProperty` loader ([properties-data.md](properties-data.md)) |
+| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060) | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0; or observation in the game |
+| 6 | The condition under which a right click in street placement steps back instead of cancelling | static read of S `Unk_Member10_Vslot2ThenVslot5` and `ai::game::StreetBuildMode` |
+| 7 | Whether hotkeys really fail with Caps Lock / Shift (character-code comparison) | observation in the game |
+| 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
+| 9 | The Root virtual slot +0x84 called after the tree update in `nMenu::System::Update` (§4) | read of the `nUi::Root` vftable |
+| 10 | Reader of `Good_NotAvailable` / `Good_MovingToConstructionSite` in `iconconfig.xml`; what names `uiTip.dds` (§6) | string search in the binary |
+| 11 | Whether `nMenu::Messages::Update` also runs through the widget tree (it is called directly by the frame function, §4) | read of the Messages vftable and of where `SetupHud` attaches the panel |
+
+---
+
+## 11. Function reference
+
+| Address | Name | Role |
+|---|---|---|
+| 004913f0 | `nUi::Root::HandleInputEvent` | input entry, capture, char → hotkey |
+| 00491660 | `nUi::Root::Render` | draws the tree (unless `ui.Hide UI`), then an open combo box's items |
+| 004a1370 / 004a0500 | `nUi::Object::RenderRecursive` / `Render` | tree walk; render id stamp |
+| 00491ac0 | `nUi::XMLHandler::LoadFromFile` | open, parse, hand to the owner |
+| 00491c90 | `nUi::XMLHandler::ReloadAll` | hot reload |
+| 004ab3e0 | `nUi_Templates_Load` | loads `templates.xml` |
+| 004ab6f0 / 004ab9f0 | `nUi::Configurable::LoadFromXmlWithTemplate` / `LoadChildFromXml` | template resolution |
+| 004ab530 | `nUi::Configurable::ApplyTemplate` | template by name from code |
+| 004c21d0 | `nUi::Factory::CreateChildrenFromXml` | `controltype` children |
+| 004c2730 / 004c28a0 | `nUi::Factory::CreateObjectByName` / `CreateObject` | type name → class |
+| 007bf5f0 | initializer of the widget type-name table | 39 names |
+| 0060c880 | `nMenu::Factory::CreateObjectByName` | seven `nMenu` widget types |
+| 004a76c0 | `nUi::Object::LoadFromXml` | common attributes |
+| 004bcb80 | `nUi::Deployment::LoadFromXml` | `pos`, `offset`, `size`, `anchor`, `alignx`, `aligny` |
+| 004bc0b0 / 004bc570 | `nUi::Deployment::ApplyAlignment` / `ApplyDock` | layout formulas |
+| 004aae00 / 004aac10 | `nUi::Position::LoadFromXml` / `nUi_ParseLengthValue` | `%`, `px`, bare number |
+| 004aa700 | `nUi::Shape::LoadFromXml` | sprite attributes |
+| 004a8f70 | `nUi::Shape::DrawSliced` | nine-slice draw |
+| 004b46d0 / 004b3fe0 | `nUi::Text::LoadFromXml` / `SetText` | text attributes, localisation, case |
+| 004afed0 | `nUi::Button::LoadFromXml` | button attributes |
+| 004b12d0 / 004b1470 | `nUi::Button::OnClicked` / `OnPressed` | click chain, script events |
+| 0049ffc0 | `nUi::Object::HandleHotkey` | hotkey match |
+| 004a07a0 / 004ab060 | `nUi::Object::DispatchEvent` / `nUi::Event::DispatchEvent` | routing, event types |
+| 004a1b00 / 004a1820 | `nUi::Object::UpdateMouseOver` / `HitTest` | hover arbitration, rectangle / ellipse |
+| 004a3920 | `nUi::Object::Update` | per-frame widget update |
+| 004b5a70 / 004b5d80 | `nUi::Tip::Update` / `LoadFromXml` | tooltip timing, `<tip>` |
+| 00493190 / 00492d80 | `nUi::Cursor::LoadFromXml` / `nUi::StyleData::LoadCursorFromXml` | `cursors.xml` |
+| 00490f50 / 00490e90 | `nUi::BaseAction::OnKeyEvent` / `PollAsyncKeys` | key state table |
+| 004966d0 / 00496b80 / 00496070 | `ai::ui::Localization::LoadTextFile` / `LoadAllTextFiles` / `GetText` | text tables |
+| 004946c0 / 00494000 | `ai::ui::UiResourceManager::GetFont` / `GetOrLoadTexture` | fonts, textures |
+| 005dda30 | `nMenu::System::Initialize` | creates all screens, Lua libraries, sounds |
+| 004018e0 / 00401260 | `CApplicationEx::FrameTick_InGame` / `App_RenderWorldFrame` | frame order (§4) |
+| 005da500 / 005d9800 | `nMenu::System::Update` / `Render` | frame pump |
+| 005f2690 | `MinimapSymbolList_TickExpire` | symbol lifetime, one step per menu update |
+| 005d9f10 / 005eb030 | `nMenu::System::ActivateGameScreen` / `nMenu::Game::OnLeave` | enter / leave the game screen |
+| 005da400 / 005ea9b0 | `nMenu::System::TogglePause` / `nMenu::Game::SetPaused` | pause |
+| 005d97a0 / 005d9650 | `nMenu::System::ActivateScreenById` / `CloseAllDialogs` | dialog slots |
+| 005d9fd0 | `nMenu::System::StartPendingMap` | enters a match |
+| 005ee5d0 / 005ecaf0 | `nMenu::Game::ctor` / `LoadFromXml` | game screen, HUD binding |
+| 005ed700 / 005ea650 | `nMenu::Game::SetupHud` / `DestroyHudWidgets` | HUD lifetime |
+| 005efea0 | `nMenu::Game::Update` | per-frame HUD logic, end-of-game checks |
+| 005eaae0 / 005eab40 | `nMenu::Game::OnMousePress` / `UiMenuSelection_ForwardRightClick_SetFlag12` | world clicks |
+| 005eb180 / 005ec340 / 005eb230 | `nMenu::Game::OnChar` / `OnKeyDown` / `OnKeyUp` | `p`, `h`, `x`, Enter, Shift, cheats |
+| 005eba50 | `nMenu::Game::Cheat_FillStoreWithGoods` | `ItsLikeAJackpot` |
+| 005eb850 / 005eb310 | `nMenu::Game::OnButtonClick` / `OnMenuComboSelected` | HUD buttons, game menu |
+| 005ef740 | `nMenu::Game::UpdateWorldHoverTooltip` | world tooltip, cursor choice |
+| 00617910 / 00617bc0 | `nMenu::MenuSelection::HandleClick` / `HandleRightClick` | click state machine |
+| 006156a0 | `MenuSelection_ComputeSelectionKind` | selection kind |
+| 00616f40 | `nMenu::MenuSelection::SetSelectionKind` | actions per kind, info box switch |
+| 006167b0 | `nMenu::MenuSelection::CreateInfoBoxes` | kind → info box class |
+| 006176d0 / 00617770 / 00615e30 | `BeginBuildPlacement` / `SelectCell` / `BeginStreetBuild` | modes 2, 3 |
+| 00623600 / 00623da0 / 00623730 | `nMenu::ActionButton::SetAction` / `RefreshAvailability` / `ExecuteAction` | action buttons |
+| 006243c0 / 005f05c0 | `nMenu::ActionButton::OnClick` / `IsActionKindInSet_4_8_C_15_17_1C` | confirm rule (actions 4, 8, 12, 21, 23, 28) |
+| 00624470 | `nMenu::ActionButton::LoadFromXml` | icon grid parameters, failure texts |
+| 00622f40 | `ActionButton_BuildIconRectTable` | icon cell per action (§6) |
+| 005f0880 / 005f0c80 | `nMenu::ActionButtonPanel::PositionAtCursor` / `ShowExecuteConfirmation` | panel placement, confirmation |
+| 006247a0 / 00624700 | `nMenu::AttackSlider::UpdateLabels` / `ExecuteAttack` | attack |
+| 00631820 / 00631310 | `nMenu::InfoBox::ctor` / `LoadFromXml` | info box frame |
+| 00634db0 / 006340b0 | `nMenu::InfoBoxCreateBuilding::RebuildBuildingButtons` / `OnChildClicked` | build menu |
+| 00632e40 / 0063abc0 | `nMenu::InfoBoxDepot::OnChildClicked` / `nMenu::InfoBoxCasern::IUpdateable_Update` | `0x2001E` senders |
+| 0062f390 | `nMenu::SacrificeButton::OnClicked` | `0x20024` / `0x20027` |
+| 00626c20 / 00627210 | `nMenu::SacrificeTargetPanel::OnChildClicked` / `ShowTargetChoice` | `0x20026` |
+| 00620970 / 00621480 | `nMenu::IngameSettingsPanel::OnButtonClick` / `OnXmlLoaded` | settings confirm |
+| 006412f0 | `nMenu::GoodArrangementPanel::OnSliderValueChanged` | `0x2001F` |
+| 00641ab0 | `nMenu::MilitaryPanel::UpdatePlayerRow` | diplomacy view |
+| 006225d0 / 00621820 | `nMenu::StatisticPanel::OnXmlLoaded` / `OnSliderChanged` | statistics |
+| 005f86a0 / 005f75a0 / 005f73e0 | `nMenu::Messages::Update` / `SetupSlot` / `PollNewMessages` | message HUD |
+| 005f49e0 / 005f3fc0 / 005f4390 / 005f5bb0 | `nMenu::MiniMap::Render` / `UpdateTerritoryOverlay` / `UpdateObjectOverlay` / `RenderSymbols` | minimap |
+| 006403c0 / 0063dd30 | `nMenu::OverlayBuilding::UpdateFromBuilding` / `nMenu::OverlaySoldier::UpdateHealthAndColor` | world overlays |
+| 00627650 / 005ea100 | `nMenu::QuestInfoPanel::Update` / `nMenu::QuestLog::RebuildList` | quests |
+| 0062c610 / 0062c150 | `nMenu::MessageBox2::SetupButtons` / `GetClickedResult` | message box modes |
+| 00600300 / 006009b0 / 006008b0 | `nMenu::Requester::Open` / `Update` / `ExecuteConfirmed` | leave / quit |
+| 0060d000 / 0060d430 | `nMenu::LoadSavePanel::Confirm` / `OnButtonClick` | load / save |
+| 0061ff50 / 0061fea0 | `nMenu::GameEnded::OnButtonClick` / `nMenu_Game_LeaveMatchToMainMenu` | end of match |
+| 00611320 | `nMenu::IconConfig::LoadFromXml` | `iconconfig.xml` |
+| 0063f550 | `nMenu::OverlayBuilding::InitAndAttachToParent` | overlay widgets, `rand()` pulse rate |
+| 007bfe80 | initializer of the attribute delimiter string S 0087bf34 | `" \n\r\v\t"` |
+| 0062a820 / 005f5400 | `nMenu::GoodSetsReader::OnXmlLoaded` / `nMenu::MapSymbolDatas::LoadFromXml` | `goodinfosets.xml`, `mapSymbols.xml` |

@@ -186,7 +186,7 @@ void SADK_CDECL execute_action(std::int32_t *action)
     if (selection->kind != game::ai::game::ESelectionKind::ShipRoute || route.idHi < 0) return;
     game::NComm_Manager *manager = fn::NComm_GetManager();
     std::int32_t slot = fn::NComm_Manager_FindLocalPlayerSlot(manager);
-    std::int32_t net = fn::NComm_Manager_NetworkVcall_30(manager);
+    std::int32_t net = static_cast<std::int32_t>(fn::NComm_Manager::GetLocalNetId(manager));
     game::NComm::EventInt64_1Integer command;
     fn::NComm::EventInt64_1Integer::ctor(&command, kPrepareInvasionCommand, net, slot, route.idLo,
                                          static_cast<std::uint32_t>(route.idHi), local_player());
@@ -287,7 +287,7 @@ void land_attackers(Ship *ship)
 {
     game::NLogic::ReferencesSettler &soldiers = ship->military->soldiers;
     for (void **it = soldiers.refs_first; it != soldiers.refs_last; ++it) {
-        Settler *soldier = fn::ReferenceSettler_Resolve(*it);
+        Settler *soldier = fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it));
         if (!soldier || !fn::Settler_IsAboardShip(soldier->movement)) continue;
         fn::NavyLink_UnlinkCargoSettler(ship, soldier);
         fn::ai::settlers::SettlerMovement::DisembarkAt(soldier->movement, ship);

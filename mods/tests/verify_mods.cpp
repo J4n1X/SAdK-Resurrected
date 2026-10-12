@@ -20,6 +20,7 @@ bool takeover_start();
 bool cheatstart_start();
 bool oscursor_start();
 bool nopreview_start();
+bool mpsave_start();
 
 int main(int argc, char **argv)
 {
@@ -51,11 +52,13 @@ int main(int argc, char **argv)
     cheatstart_start();
     oscursor_start();
     nopreview_start();
+    mpsave_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 6 + 1 + 1 + 22 + 1 + 3 + 2;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
-                                                       // navalcombatfix 22 hooks, cheatstart 1 hook, oscursor 3
-                                                       // hooks, nopreview 2 hooks (events are not verified)
+    const int expected = 6 + 1 + 1 + 22 + 1 + 3 + 2 + 12;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
+                                                        // navalcombatfix 22 hooks, cheatstart 1 hook, oscursor 3
+                                                        // hooks, nopreview 2 hooks, mpsave 9 hooks and 3 redirected
+                                                        // calls (events are not verified)
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

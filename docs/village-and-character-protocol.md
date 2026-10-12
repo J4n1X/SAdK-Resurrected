@@ -411,9 +411,22 @@ Rules:
 - **Never send a malformed or truncated 1001.** A 2-byte body crashed the client about 1 s later.
   Keep probes well-formed and vary only the values. [PROVEN 2026-07-31, negative control]
 - The client does **not** apply a Location block to its **own** avatar
-  (`ReadLocationBlock` S 004824b0 skips the own-avatar branch). Do not send a player their own id.
-  Whether the skipped bits are still consumed is [TODO], so a Location block for the own id could
-  desynchronize the rest of the body. [inferred]
+  (`ReadLocationBlock` S 004824b0). The bits are consumed, so the body stays in sync: the 16-bit
+  tick is stored for every avatar; then, for proxy id == `LM+0x54c`, posx 11, posy 11, posz 11,
+  rot 7, zone 4 (S 0048f790), ghstzne 4 (S 0048f970) and rnng 1, jmp 1 (S 0048f950) are read and
+  dropped, 50 bits. [known] That the storing branch (S 0048f670, S 0048f930) reads the same widths
+  rests on the field names. [inferred] The Style, ActiveItems and Stats blocks have no own-id
+  branch (`ReadDataBlocks` S 00482c20) and are applied to the own proxy, so a 1001 for the own id
+  is a working way to set the own avatar's style, equipped items and stats. [known] `CLobbyClient::UpdateAvatar` S 00503620 then pushes a movement sample only to a net controller
+  (controller slot `+0x10`); the own avatar's `CLocalController` returns 0 there (vftable
+  S 007e70e8 slot 4 = S 0072db80), so nothing is pushed and the avatar neither moves nor
+  vanishes; `CGfxObjAvatar::UpdateAppearance` runs and shows the new look. [known]
+- The own avatar is in the avatar map without any 1001: `+0x170` points at the map at `LM+0x558`,
+  and `LobbyManager::SetLocalAvatar` S 004626c0 inserts a copy of the chosen character there before
+  the village login is sent (`OnUserCommLoggedIn` S 004704e0). The `ownr` lookups of 0xC1C–0xC1E
+  and 0xC80 / 0xC81 therefore find it. Nothing empties the avatar map while the local proxy stays
+  registered (`ClearAvatarsAndEventQueues` S 0046fab0 runs only after `ClearLocalAvatar`, in
+  `HandleLoggedOut` and `HandleDisconnected`). [known]
 - One village connection per player. When a client reconnects, address only the newest
   connection, or every message arrives twice. [PROVEN, stub `_in_world_conns`]
 
@@ -469,8 +482,49 @@ client A                         server                          client B
 | 0xC1C / 0xC1D / 0xC1E | re-sync active items / inventory / both, by `ownr` | inventory: `sltcnt` is read and **ignored**; send exactly the client's slot count (0 before init, otherwise max(20, n)) | [known, S 0048ac20] |
 | 0xC80 `{ownr, lvl, exp}` / 0xC81 `{ownr, lvl, exp, gold, glod}` | stats update | unknown `ownr` is dropped silently; 0xC80 fires no UI notify | [known] |
 
-`itmid` values are game-data item ids from the encrypted item tables. They cannot be derived from
-the binary. [TODO]
+`itmid` values are the item ids of `ItemsClient.txt`, a plain-text file (not an encrypted
+container) in the install's `data/lobby/config/`; the shipped file defines 36 items, ids 1..36.
+`LobbyManager::Initialize` S 004643d0 loads it once with `ItemDatabase::LoadFromFile` S 0048bfd0
+into a map (item id → ItemInfo) at `LM+0x570`; if the file cannot be opened it logs `Loading of
+ItemDatabase failed!` and returns before the comm layer is created, so the lobby never starts.
+[known] That 3100–3102 `itmid` uses these ids is [inferred]; for 0xE11 `ItemID` it is [known]
+(S 0045b790).
+
+Parsing [known]: each line is trimmed; a line whose first character is `#` is skipped; the rest is
+tokenised on `;` with `"` as quote and `\` as escape and must give exactly 9 tokens, otherwise it
+is logged (`Invalid line %d (only %d tokens)`, an empty line included) and skipped. A duplicate id
+is ignored (first wins) [inferred].
+
+| Token | ItemInfo | Meaning | Tag |
+|---|---|---|---|
+| 0 | `+0x00` u32 | item id | [known] |
+| 1 | `+0x04` string | name (text key, e.g. `!LOBBY_ITEM_CROWN`) | [known] |
+| 2 | `+0x20` string | description (text key) | [known] |
+| 3 | `+0x3c` u32 | always 4 in the shipped file; no reader found; meaning [TODO] | [known] offset |
+| 4 | `+0x44` int | always 1 in the shipped file; ≥ 1 makes the item valid (below); meaning [TODO] | [known] offset |
+| 5 | `+0x40` u32 | equipment slot mask (below) | [known] |
+| 6 | `+0x48` string | mesh name | [known] |
+| 7 | `+0x64` string | icon name, resolved through `itemicons.txt` (plain text, 6 tokens, loader S 00430ae0) | [known] |
+| 8 | `+0x80` u32 | base value: the shop sell price of an item the open shop does not list is base value × SellMod (§6.1) | [known] |
+
+- **Slot mask.** `CanItemGoToSlot` S 0044d390: container 0 (backpack) always fits; containers 2, 3,
+  4, 5 need a valid item and mask bit 0, 1, 2, 3. [known] In the shipped file the head items have
+  mask 1, the right-hand items 2, the Slord and the ring 4, the pets 8, so container 2 = head,
+  3 = right hand, 4 = left hand, 5 = pet. [inferred, from the data rows and the equip order in
+  S 0044e0f0] Which code interprets the wire field `sltt` is [TODO].
+- **Valid item** (S 0048b100): (id ≠ 0 and name not empty) or token 4 ≥ 1. [known] Every shipped
+  item is valid.
+- **Unknown id.** The network handlers do not check ids. `ItemDatabase_GetItemInfo` S 0048b6c0
+  never fails: an id outside the file returns the shared placeholder `g_InvalidItemInfo`
+  S 00885978 (id 0, name `!INVALID_ITEM_NAME`, mesh `InvalidItemMesh`, icon `InvalidItemIcon`, all
+  numbers 0), which is not valid, fits no equipment container and gets the `InvalidIcon` shape
+  (S 0042f670). [known] One path does not return cleanly: with a shop open, hovering an inventory
+  slot that holds such an id reaches `GetShopSellPriceByItemId` S 0046d6d0, which calls
+  `_invalid_parameter_noinfo` and then reads one entry past the end of the stock vector
+  (S 0046d73e..0046d7dd). [known] On an avatar an unknown `itmid` shows nothing:
+  `CGfxObjAvatar::SyncEquipmentSlot` S 00507f60 attaches only a valid item and clears a slot that
+  showed one before. [known] Whether the shop path ends the process is covered in
+  `docs/live-checks/2026-10-12_read-from-code.md` ("Unknown item id (part b)").
 
 ---
 
@@ -499,24 +553,49 @@ server                                         client
 | `bdyprt` | 0–15 | stored at `+0x48`; not used for the NPC look | [known] |
 | `npctyp` | 1 = settler template person, 2 = letterbox; anything else = no visual | | [known, S 004f6ea0] |
 | `actcnt` | **0–3** | **≥ 4 corrupts the heap**: the `actChat` strings are written without a bound | [known, S 0047b5c0 disasm] |
-| `act` | LobbyAction id (below) | sets one of the 3 village-screen action buttons | [PROVEN 2026-08-02, S 004325b0] |
-| `actChat` | UTF-8 string | button label or spoken line: [TODO] | — |
+| `act` | LobbyAction id (below) | copied unchanged into the world screen's three action slot codes when the NPC is selected (S 0047b200); a single action in slot 0 is dispatched at once on selection, see §5.2. The slot parameter is always 0 for an NPC | [known, S 00437760] |
+| `actChat` | UTF-8 string (read with the UTF-8 → ANSI string reader into `NPCProxy+0xc8 + i·0x1c`) | the NPC's **spoken line** for that slot: speech bubble plus a chat line, see §5.2. Not a button label | [known, S 004337f0] |
 
-LobbyAction table (S 004325b0):
+LobbyAction table (button templates S 004325b0; what a code does is the switch on `code − 2` in
+`DispatchSlotAction` S 00434230 [known]). "NPC text" = the slot's `actChat` is shown afterwards:
 
 | `act` | Action |
 |---|---|
-| 0, 19, other | None (button hidden) |
+| 0, 19, other | None (button hidden); no case in the switch |
 | 1 | HairColor: labels the button only; `DispatchSlotAction` S 00434230 has no case for it, so the button does nothing (live 2026-10-07) |
-| 2–6 | MinigameMatchmaking |
-| 7 | Mailbox |
-| 8, 18 | HostGame |
-| 9 | ListGames |
-| 10 | Hall of Fame |
-| 11 | OpenShop |
-| 17 | Tailor (clothes): checks gold ≥ 50, asks `!TAYLOR_QUESTION`, opens the tailor (S 00434230) |
+| 2–6 | MinigameMatchmaking: sound 0x63c3110f, CLobby vtbl+0xd4, `MiniGameMatchMakingDialog::Open(true, code − 2, −1, mode 0, 0)`, NPC text. Local |
+| 7 | Mailbox: if the mailbox dialog exists, is usable and not shown: sound 0x63c3110d, show it, `PostOffice::RequestMailHeaders` |
+| 8 | HostGame: `ServerList::CreateGameServer` (the host-game request on the lobby connection); on success clears the setup-game flag (`+0xBA8`) |
+| 9 | ListGames: toggles the browse-games dialog. Local |
+| 10 | Hall of Fame: sound 0x63c3110e, `System::OpenHallOfFameDialog`, NPC text |
+| 11 | OpenShop: sound 0x63c3110c, `SendOpenShop(selected actor id)` → village 0x2E10, NPC text |
+| 12, 13 | create a minigame table: CLobby vtbl+0xd4, `Open(true, code − 12, table = slot parameter, mode 1, 0)`. Local |
+| 14, 15 | join a minigame table: CLobby vtbl+0xd4, `Open(true, code − 14, −1, mode 2, slot parameter)`. Local |
+| 16 | NPC text only |
+| 17 | Tailor (clothes): if CLobby vtbl+0x74 is false and the own avatar exists: gold < 50 → `!TAYLOR_QUESTION_NOMONEY`, else asks `!TAYLOR_QUESTION` (callback `OnTailorQuestionResult`). Nothing is sent here |
+| 18 | clears the setup-game flag if set. Local |
 
-- No message for **removing** an NPC record has been identified. [TODO]
+Codes 12–15 from an NPC would use table / parameter 0, because an NPC's slot parameters are always 0.
+
+- **No message removes an NPC record.** [known] The village dispatcher `HandleMessage` S 00470a90
+  handles exactly 24 ids (0xD8–0xDC, 0x12F, 1000–1006, 0xC1C–0xC1E, 0xC80, 0xC81, 0xE11, 0xE1B,
+  0xE25, 0xED7, 0xF46, 0xF5A) and drops everything else silently; only 1004 touches the NPC map
+  (`+0x174`, which points at the map at `LM+0x564`), and it only adds or re-reads in place
+  (S 0046f8c0). 1003 concerns the avatar map only. The map is emptied by `ClearNPCs` S 0046fc10,
+  called only from `HandleLoggedOut` and `HandleDisconnected`: it fires the "NPC removed" observers
+  (`+0x44` → `CLobbyClient::OnNPCRemoved` S 005031d0, which destroys the 3D object) for every
+  record. The connection's destructor (S 0046e922) also clears it, without firing the observers.
+  So NPCs disappear only when the village connection logs out or drops.
+- A 1004 for a known id re-reads the proxy in place (name, position, act ids, actChat) and fires
+  observers `+0x38` again, but `OnNPCAdded` S 005031a0 returns at once when the proxy already has a
+  3D object, so the existing object is not rebuilt. [known] A re-sent 1004 does not move the
+  visible NPC but changes its label: a kind-1 NPC (class `Settler`, controller `character`) has a
+  `CNetController` in interpolation mode 2 (NPCProxy vftable S 007dc7d8 slot 1 = S 004f1ea0), which
+  outputs the creation transform for ever (`CNetController::Update` S 00519d50 interpolates in mode
+  1 only; `PushActorSample` S 00519b20 is called from the 1001 path only), while
+  `CGfxObjAvatar::DrawNameTag` S 00506860 reads the proxy's name when it draws. A kind-2 NPC has a
+  `CStaticController` with a constant pose (S 005197f0). [known] Not read: whether the selection
+  distance or the minimap use the proxy's position.
 - "Walkers" (moving ambient figures) are ordinary 1001 avatars with ids in the NPC range. They have
   no interaction, and they need the 1 Hz waypoint refresh. [PROVEN 2026-08-02, stub `npcs.py`]
 - `npcidx` → model: it indexes the **male** `<bodypartset>` of `data/lobby/config/npc_bodyparts.xml` in
@@ -615,9 +694,11 @@ walker (`lobby/sadk_lobby/npcs.py`).
 
 ### 5.2 NPC interaction
 
-Clicking an NPC fills the three action buttons from its `act` list. Each button runs a local
-LobbyAction (matchmaking dialog, host/list games, hall of fame, mailbox, tailor). Only **OpenShop**
-is known to put a village message on the wire (§6.1). [inferred]
+Selecting an NPC copies its `act` list into the world screen's three action slot codes. An NPC
+whose only action sits in slot 0 runs that action at the moment it is selected, and the selection
+then returns to the own avatar. [known, S 00437760] Most actions are local (matchmaking dialog,
+host/list games, hall of fame, mailbox, tailor); only **OpenShop** puts a village message on the
+wire (§6.1), and codes 7 and 8 send through the PostOffice and the server list. [known, S 00434230]
 
 The chain, read in Ghidra on 2026-10-08 [known statically]:
 - `WorldScreen::RefreshActionSlots` S 00433f60 (every frame) takes the codes from a selected scene object
@@ -626,20 +707,50 @@ The chain, read in Ghidra on 2026-10-08 [known statically]:
   (`AvatarProxy` S 00482490) gives none. With nothing or yourself selected: host 8 and list 9.
 - `WorldScreen::SetActionButton` S 004325b0 applies the button template `LobbyAction_*` (all present in
   `game/ui/layout/templates.xml`, codes 2-6 → `LobbyAction_MinigameMatchmaking`) and enables the button.
-- `WorldScreen::DispatchSlotAction` S 00434230 runs the clicked code. Codes 2-6 call
+  Its only call site (S 0043414f) is in the "nothing or own avatar selected" branch of
+  `RefreshActionSlots` (codes 8 + 9, or 0x12 + 0x13). For a selected NPC, other avatar or scene object
+  the codes are filled in, but all three buttons (`+0x3560` / `+0x3564` / `+0x3568`) get the template
+  `LobbyAction_None` and button vtbl+0x24(0) (loop S 00434175..0043420e). [known] Slot `+0x24` of the
+  button vftable (S 007dff14) is `nUi::Object::SetVisible` S 004a1090; with 0 it calls `Hide`, so the three
+  buttons are hidden. A hidden button cannot latch a click: `Object::OnMouseButton0Up` S 0049ff60 sets the
+  latch only when the widget's visible test (slot `+0x2c`) holds. [known] The minigame
+  functions `LeaveMiniGameMode` (S 00431b31) and `HideMinigameObserverDialog` (S 00431f21) call
+  vtbl+0x24(1) on all three buttons whatever is selected.
+- `WorldScreen::HandleButtonClicks` S 00437760 is the only caller of `DispatchSlotAction`. It returns
+  early when the base screen handler returns false or CLobby vtbl+0x8c (S 004f50d0, byte `+0x11` of the
+  lobby client) is true. Then: the selection-changed latch (`+0x3638`, set only when the selected actor
+  pointer changes, S 00434068) is tested and cleared; if it was set and slot 0 holds a code while
+  slots 1 and 2 are 0, it calls `DispatchSlotAction(0)` and then CLobby vtbl+0xc0 (`SelectLocalAvatar`
+  S 004f5e00). After that the click latches of the three buttons dispatch slot 0 / 1 / 2, with no test
+  of what is selected. [known] Consequences: the automatic dispatch is the only path for an NPC's codes; an
+  NPC with two or three actions gets no automatic dispatch and its buttons are hidden, so none of its
+  actions can be run and `actcnt` is effectively 0 or 1 for a working NPC [known; live 2026-10-12 for a
+  two-action NPC]. A shop action in slot 0 next to a second action therefore sends no 0x2E10. In the scene-object path
+  `selectedObject` (`+0x3630`) is 0 (S 00434047), and code 11 reads it without a null check.
+- `WorldScreen::DispatchSlotAction` S 00434230 runs the code. Codes 2-6 call
   `MiniGameMatchMakingDialog::Open(true, tavernId = code - 2, table 0xFF, mode 0 = search, 0)` S 00444cb0
   (phase 1, "create" / "search"). Its `Update` S 00445cf0 lists only tables whose `scntblLo - 2` equals the
   tavernId, so a tavern's matchmaker needs code = the tavern's scene id (stub: 3 for taverne02, 2 for
   taverne03). A game created there goes out as 2001 with `tvrn` = tavernId and `tblidx` 0xFF, which the stub
   handles (first free table). `Open` also registers a 2-unit walk-away watch (`CLobby::AddDistanceWatch`
   S 004fb5f0) that closes the dialog once the avatar moves farther than that from where it was opened.
-- **`actChat`** is the NPC's line for that button: codes 2-6, 10 and 11 fall through to
-  `ShowNpcSlotText(npc, actChat[slot])`, and code 16 shows only that text. [known statically; not seen live]
+- **`actChat`** is the NPC's spoken line for that slot: codes 2-6, 10 and 11 fall through to
+  `ShowNpcSlotText(npc, actChat[slot])` S 004337f0, and code 16 shows only that text; codes 7, 8, 9,
+  12-15, 17 and 18 never show it. The single accessor is S 0047b250 (`&actionChat[index]`, the shared
+  empty string for index > 2). `ShowNpcSlotText` does nothing for an empty text; a text starting with
+  `!` is first replaced by the localized string for that key. The text then goes (a) to the NPC's 3D
+  object (`CLobby` vtbl+0xe4 S 004f53d0 → `CGfxObjAvatar::ShowChatText` S 005079b0): a text containing
+  `/word` is tried as an emote (lower-cased; no bubble if the emote plays), otherwise it becomes the
+  speech bubble for (length + 10) × 75 ms; and (b) into chat tab 0 as
+  `[<NPC name>] <!LOBBY_CHAT_FROM> : <text>`, whether or not the bubble is shown. [known statically;
+  not seen live]
 
-**Open: the matchmaker NPC does nothing when clicked** (maintainer, live). Statically every step above
-holds, and nothing in it touches the network, so the stub's log cannot show where it stops. [TODO] Live
-trace with the Frida MCP: hook `DispatchSlotAction` S 00434230 (slot and code), `MiniGameMatchMakingDialog::Open`
-S 00444cb0 and the walk-away callback S 00443090 to see which step does not happen.
+**Open: the matchmaker NPC does nothing when clicked** (maintainer, live). [TODO] Established: a
+one-action matchmaker NPC (code 2..6) is dispatched on selection exactly like a shop NPC (sound,
+CLobby vtbl+0xd4, `MiniGameMatchMakingDialog::Open` in search mode), and nothing in that path depends
+on a button or touches the network, so the stub's log cannot show where it stops. Not established:
+what CLobby vtbl+0xd4 (S 004fad00) does and what `Open` S 00444cb0 requires; whether
+`DispatchSlotAction` is reached at all in the live case (`docs/live-session-queue.md`).
 
 ---
 
@@ -667,12 +778,26 @@ client                                              server
 - `Result = 1` means success. [inferred] After a purchase or sale, push the new inventory (0xC1D or
   0xC1E) and stats (0xC81) so the UI shows the new state. [inferred; no client request asks for
   them]
-- [TODO] In live tests, clicking an NPC with `act = 11` put nothing on the wire. Open question:
-  whether `act 11` becomes slot code 11 (set by `RefreshActionSlots` S 00433f60, not by
-  `SetActionButton` S 004325b0, which only labels the button).
+- `act 11` becomes slot code 11 unchanged (S 0047b200) and is dispatched on selection when it is the
+  NPC's only action, in slot 0 (§5.2). [known] A live click on 2026-08-02 put nothing on the wire;
+  that observation is unexplained [TODO]: statically nothing else gates the send, and a record with
+  more than one `act`, or with 11 not in slot 0, would send nothing. [inferred]
+- The 0xE11 dispatch looks at the message id only, not the category (S 00470a90). `ShopDialog::SetShop`
+  S 0045d580 refuses, silently, only when the dialog is already visible for another NPC or ShopID.
+  [known]
+- The dialog shows **at most 25 stock entries** (25 slot widgets, first index always 0, no paging,
+  S 0045b790). A slot is enabled only when its Buy price ≤ the avatar's gold. An ItemID outside
+  `ItemsClient.txt` shows as an empty slot but keeps its stock index. [known]
+- **Sell price.** The client computes the price it shows in `!LOBBY_SELL_ITEM_QUESTION`
+  (S 0046d800): the Sell value of the open shop's stock entry with the same ItemID if the shop lists
+  the item, otherwise the item's base value (§4.3) × SellMod, truncated toward zero, 0 when below 1.
+  A price of 0 shows `!LOBBY_TRADER_NOT_WANTS_ITEM` (valid item) or `!LOBBY_CANT_SELL_ITEM` and
+  sends nothing. 0x2E24 goes out only after the question is answered Yes; buy and sell both carry
+  QTY 1. Closing the dialog sends nothing. [known]
 
-**Stub:** has `village.send_shop_inventory`, but no handler for 0x2E10/0x2E1A/0x2E24 (they are
-logged and dropped).
+**Stub:** `dispatch._ECONOMY_HANDLERS` routes 0x2E10 / 0x2E1A / 0x2E24 to `economy.handle_open_shop` /
+`handle_buy` / `handle_sell`; the wire layouts match. It credits a different sell amount than the
+client shows (`mapping/work/protocol_gaps/stub_differences.md`).
 
 ### 6.2 Inventory (client-initiated, no dedicated reply)
 
@@ -787,9 +912,9 @@ match-start chain; S 0046ec50, S 0046bde0]
 | Pong | echo within 30 s | 3.4 |
 | Clock | 1005 before waypoints; high dword 0 | 4.2 |
 | Location relay | server-clock stamp `now − 1000`; zone/ghstzne verbatim; ~1 Hz refresh | 4.2 |
-| Own avatar | never send a player their own id | 4.1 |
-| NPC record | `actcnt ≤ 3`; `npctyp` 1 or 2; ids disjoint from players | 5.1 |
-| Shop | 0xE11 only as the reply to 0x2E10 | 6.1 |
+| Own avatar | a 1001 for the own id is not needed and is safe on the wire; its Location values are dropped | 4.1 |
+| NPC record | `actcnt ≤ 3`, one action (slot 0) for it to run; `npctyp` 1 or 2; ids disjoint from players | 5.1 |
+| Shop | 0xE11 only as the reply to 0x2E10; at most 25 stock entries; item ids 1..36 | 6.1 |
 | Minigame | `mngt` low nibble 1–3; seats ≤ 8, used = 1 | 6.4 |
 | Leave | 1006 on 2002, second 1006 when the UC socket closes; never close the socket | 7 |
 
@@ -799,13 +924,15 @@ match-start chain; S 0046ec50, S 0046bde0]
 
 1. Which id reaches the server in the village 213 token when `char_id ≠ perm_id`, and what the
    village login expects there (§2.3).
-2. Whether `act = 11` reaches `OpenShop` (`RefreshActionSlots` S 00433f60). Live clicks sent
-   nothing (§6.1).
+2. Why a live click on an `act = 11` NPC sent nothing on 2026-08-02 (§6.1); whether an action button
+   can fire for an NPC with more than one action (§5.2).
 3. The index of the stats, active-items and inventory blocks inside the 6-part character blob
    (§1.4).
 4. Tribe value range: the select icons use 0–2, the model path clamps to 1–5 (§2.2, §4.3).
-5. Whether the own-avatar Location block's bits are consumed or skipped (§4.1).
-6. Meaning of `actChat` (button label or spoken line); NPC removal (§5). (The `npcidx` → model table is settled, §5.)
+5. What a 1001 for the own id does to the locally controlled avatar beyond style, items and stats
+   (§4.1).
+6. Whether a re-sent 1004 moves the visible NPC (§5.1); why the matchmaker NPC does nothing (§5.2).
+   (The `npcidx` → model table is settled, §5.)
 7. The minigame request/reply pairing and the exact table-state layouts per game, beyond the board
    facts (§6.4).
 8. Any timeout in EnteringVillage (8) or LeavingVillage (10).

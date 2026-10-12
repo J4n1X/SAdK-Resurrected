@@ -194,7 +194,8 @@ After fixing it, every integer the stub puts on the wire was audited. The rule:
 little-endian, which is wrong by the rule above. It does not bite today:
 `RefereeServerConnection_OnRegisterGameResult@0x0047a580` reads `GameID` but **never compares it**; its
 only branch is `if (Result == 0)`, and `Result = 0` is byte-order symmetric; `GameSeed` is byte-swapped
-but our fixed constant swaps identically for every client, so lockstep still agrees; `PermID` in
+but our fixed constant swaps identically for every client, so every client gets the same value (it
+seeds only the chest contents, `docs/MATCH_START.md` Phase 2); `PermID` in
 LoginSuccess is ignored (the client gates on the message id). Deliberately **left unchanged** — the
 referee path has never been exercised end to end, so changing an untested encoding on an inference could
 introduce a fresh bug we have no way to detect. Fix it *when* that path is first driven for real, and

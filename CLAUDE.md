@@ -87,16 +87,16 @@ Two tracks:
 | Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
 | Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
 | In-world content: NPCs (shops, tailor, hall of fame, games, matchmakers, mail) | ✅ on (`config.VILLAGE_NPCS_ENABLED = True`); models: only the male set of `npc_bodyparts.xml` is reachable (`docs/village-and-character-protocol.md` §5.1) |
-| Village economy (gold, items, shop, tailor) | ⚠️ implemented 2026-10-07; tailor ✅ live 2026-10-07 (owner and others see the new look); shop/inventory `[TODO]` |
+| Village economy (gold, items, shop, tailor) | ✅ tailor live 2026-10-07 (owner and others see the new look); the shops open and show their items (maintainer, 2026-10-12); sell prices and unknown item ids are open points (`docs/live-session-queue.md`) |
 | Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
 | Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`lobby/sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
-| Mail, buddy lists + presence, whispers, channel leave | ⚠️ implemented 2026-10-07, not live-tested — `[TODO]` |
+| Mail, buddy lists + presence, whispers, channel leave | ✅ working in live play (maintainer, 2026-10-12) |
 | Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
 | Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
-| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); in the game `[TODO]` (property reload between offline matches ✅ live) |
+| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); ✅ working in the game: server mods are downloaded and switched per match (maintainer, 2026-10-12; the shim log of that day shows assetshare serving three server mods to a joiner) |
 | **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
 | In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ✅ live 2026-10-10 (server log: all three sent by the clients and answered; rewards credited) |
-| Match wagers (`lobby/sadk_lobby/wagers.py`: registration checks, the loser pays the winner in two-player matches) | ⚠️ implemented 2026-10-12, offline-tested; in the game `[TODO]`; matches of more than two players move no gold until the server knows the teams |
+| Match wagers (`lobby/sadk_lobby/wagers.py`: registration checks, the loser pays the winner in two-player matches) | ✅ live 2026-10-12: two players, wager 357, one gave up, the other's game reported itself the winner, the server moved 357 gold and queued both chat notices; the refusal codes and matches of more than two players (no gold moves until the server knows the teams) are `[TODO]` |
 
 The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
 arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The

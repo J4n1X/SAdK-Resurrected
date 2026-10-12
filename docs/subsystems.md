@@ -254,8 +254,10 @@ RTS code tagged under other names.
 **Loop.** `FrameTick_InGame` calls `NLogic::System::Update`, which runs as many fixed ticks as
 `NComm_Manager_CanAdvanceTick` allows. Each tick updates all subsystems and calls `AdvanceNetTick`. Player
 input becomes command events that travel through NComm and run on every peer in the same tick [inferred]. The
-`GameSeed` from the referee seeds this deterministic simulation [PROVEN: match start needs it,
-`RegisterGameResultReceived` S 0047a580].
+`GameSeed` from the referee does not seed this simulation: it seeds only the chest contents of a network
+match (`Game_DistributeChestsForNetworkMatch` S 00775dd0), and the simulation has its own global generator
+(S 00889b08, constructed with a constant) [known]. Match start needs the `RegisterGameResult` message, whose
+handler starts the load (`RegisterGameResultReceived` S 0047a580 -> S 00431800).
 
 ### 2.8 Rendering
 
@@ -311,7 +313,7 @@ references], so PhysX appears to drive avatar movement and collision in the 3D l
 | `NCore::FileStream` / `NCore::FileStreamCrypt` | S 0057d140 / S 007807f0 | Plain and encrypted file streams (saves) [inferred] |
 | `NBase::gDecryptData` | S 006e6660 | Decrypts a `sadk` container: FCC check, per-file key from the file name, key CRC, descramble + unpack, data CRC. A mismatch forces a crash [known] |
 | `FileCrypt_DecryptAndUnpack` / `FileCrypt_PackAndEncrypt` | S 006ee9d0 / S 006ee8e0 | The unpack codec (S 007624a0) is not identified [TODO] |
-| `GameFile_*` | `LoadMap` S 005aa7b0, `LoadImpl` S 005aaed0, `Save` S 005aa260, `SaveMap` S 005a9fa0, `LoadMapInfo` S 005aaa30 | Map and save files, map-info caches by GUID, desync dumps [inferred] |
+| `GameFile_*` | `GameFile_LoadMap` S 005aa7b0, `GameFile_LoadImpl` S 005aaed0, `GameFile_Save` S 005aa260, `GameFile_SaveMap` S 005a9fa0, `GameFile_LoadMapInfo` S 005aaa30 | Map and save files, map-info caches by GUID, desync dumps [inferred] |
 | `DirectoryWatcher` | S 00581200 | Watches data directories for hot reload [inferred] |
 
 The map file format is documented in [map-format.md](map-format.md),

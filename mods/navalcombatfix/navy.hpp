@@ -84,10 +84,10 @@ inline float falloff(std::int32_t d)
     return f / 24.0f;
 }
 
-// An entry of the game's player table (PlayerTable_GetEntry S 005bdd50).
+// An entry of the game's player table (ai::player::PlayerTable::GetEntry S 005bdd50).
 inline game::ai::player::Player *player_entry(std::int32_t index)
 {
-    return fn::PlayerTable_GetEntry(logic()->playerTable, &index);
+    return fn::ai::player::PlayerTable::GetEntry(logic()->playerTable, &index);
 }
 
 // The first player FindBuildingPosition S 005b7e50 passes to the placement test: entry 8 of the player table

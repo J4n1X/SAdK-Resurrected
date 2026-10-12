@@ -594,7 +594,7 @@ void SADK_THISCALL finish_mission(NavyMission *m)
         // From the end: unlinking removes the entry from this list.
         for (void **it = m->soldiers.refs_last; it != m->soldiers.refs_first;) {
             --it;
-            auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::ReferenceSettler_Resolve(*it));
+            auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it)));
             if (!soldier) continue;
             game::NLogic::Unique &id = soldier->fightState.fightRef.unique;
             bool inFight = id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
@@ -605,7 +605,7 @@ void SADK_THISCALL finish_mission(NavyMission *m)
     game::NSettlers::Soldier *aboard[kMaxAboard];
     int count = 0;
     for (void **it = m->soldiers.refs_first; it != m->soldiers.refs_last && count < kMaxAboard; ++it) {
-        auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::ReferenceSettler_Resolve(*it));
+        auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it)));
         if (soldier && soldier->fightState.inFight && fn::Settler_IsAboardShip(soldier->base.movement))
             aboard[count++] = soldier;
     }

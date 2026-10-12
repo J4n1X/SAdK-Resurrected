@@ -412,5 +412,7 @@ Packets, flow, speed and pitfalls: `docs/s2tftp.md`.
 | 0x00457a00 | `LobbyMenu::SetupGameDialog::Update` | un-readies the local player when gold < wager `[known]` |
 | 0x0046b3d0 | `RefereeResult_GetName` | result code 0..20 → name, table `0x0087aee0` `[known]` |
 
-Fields: `LobbyManager +0x54c localAvatarId`, `+0x554 localAvatar`; `NComm::EventGameInformation +0x22f gameSeed`,
+Fields: `LobbyManager +0x54c localAvatarId`, `+0x554 localAvatar`, `+0x558` avatar map (aliased by
+`VillageServerConnection +0x170`) `[known]`, `+0x564` NPC map (aliased by `VillageServerConnection +0x174`)
+`[inferred]`; `NComm::EventGameInformation +0x22f gameSeed` (chest contents only, S 00775dd0),
 `+0x233 wager`, `+0x237 settingsCrc`. Protocol side: `docs/message-catalog.md`, 0xDB6 RegisterGame.
