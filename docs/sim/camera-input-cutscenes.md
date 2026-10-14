@@ -480,9 +480,13 @@ tracks of a file have equal length, path durations 9..230 s, 40 files call `setR
   S 006ef8a0, which looks a file up **by its lower-cased name alone** in the index built at start-up and, when
   exactly one file of that name exists, returns that file's real directory whatever directory was asked for
   [known]; the three files exist once each, in `maps\campaignMaps\` [known: data]. A converter must resolve
-  script and cutscene paths the same way: by file name, case-insensitive. [TODO] not established here: the
-  branch for several files of one name (the function's summary says the candidate whose parent directory
-  appears in the request wins); settled by reading the rest of S 006ef8a0
+  script and cutscene paths the same way: by file name, case-insensitive. Several files of one name
+  (S 006ef8a0, `FileScan::PickCandidateByParentDir` S 006ef680) [known]: if the request contains a `\`, the
+  first directory of the name's index list whose last component (lower-cased, with its `\`) occurs anywhere
+  in the lower-cased request wins (a plain substring test, so `maps\` also matches `...\campaignmaps\...`;
+  only one component is ever compared); no candidate matches, or the request has no directory, → the empty
+  path, which then fails like a missing file (next item). A name that is not in the index gives the empty
+  path as well. The order of a name's list is the order of the start-up scan [inferred]
   ([../data-loading.md](../data-loading.md)).
 - A file that really is missing: `gReadFileData` logs `Can't open file: %s` and returns a null buffer with size
   0; `File_ReadAndDecrypt` S 006e7770 then calls `NBase::gDecryptData` S 006e6660, which reads the header at
@@ -1069,7 +1073,7 @@ Scroll and cursor options live in `settings.cfg`; screenshots are write-only.
 | 7 | The anchor object of a render character (vectors at +0x00, +0x20, +0x30) used by the follow view | Static read of the character class's slot 2 |
 | 8 | What the flag of a speaker tag changes: it is stored in the speaker slot (`CinematicSpeakerSlot::SetSpeaker` S 0062d7b0) and passed as the last argument of `S2CG::InGameAvatar::RenderAvatar`; and which files a speaker name loads (`InGameAvatar::LoadAvatar` S 0068bf30; the name `none` is skipped by `PreloadSpeaker` S 0062d520) | Static read of S 0068c490 and S 0068bf30 |
 | 9 | The slope classes and sprite rectangles of the street overlay | Re-read of S 00788f90 against `ui_ingame5` |
-| 10 | `FileScan::ResolvePath` for a file name that exists in several directories (§3.7) | Static read of the rest of S 006ef8a0 |
+| 10 | Answered (§3.7): the first indexed directory whose last component occurs in the lower-cased request wins (S 006ef8a0, S 006ef680); no match or no directory in the request → empty path, the read fails | — |
 
 ---
 

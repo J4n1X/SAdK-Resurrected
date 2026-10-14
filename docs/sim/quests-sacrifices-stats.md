@@ -324,8 +324,12 @@ most 40 quests `[known]` data.
 - A `MapInfo` of version <= 12 has no usable lists; the loader `NLogic::MapInfo::Load` S 0052bd40 then clears the
   map and fills it, for every tribe of the property database, with a copy of the tribe's allowed list
   (`tp_addAllowedSacrifice`, `TribeProperty +0xa0`) `[known]` S 0052bb40. The second tribe list
-  (`tp_addSacrifice`, `TribeProperty +0x50`) is only validated and appended; `[TODO]` not established: a
-  reader of `TribeProperty +0x50` outside the property loader (a search for accesses to that field settles it).
+  (`tp_addSacrifice`, `TribeProperty +0x50`) is only validated and appended, and nothing reads it `[known]`
+  (properties-data.md §2.3: of the 593 functions that reach the property database only `AddSacrifice`
+  S 00556400 touches the field). Nothing else fills `MapInfo +0x204` either: besides `Load` and
+  `ResetSacrificesFromTribes` only the constructor (empty), the destructor, `Store`, the copy `MapInfo::Assign`
+  S 007849f0 and the two readers touch it, and `MapInfo::Reset` S 0052b8d0 leaves it alone `[known]`. A map
+  that was never loaded from a file therefore has an empty list (properties-data.md §7).
 - The **cost** of a sacrifice is its `costs` list: goods delivered to the building by the normal transport
   system. There is no other currency. A sacrifice has no settler cost.
 
@@ -594,10 +598,25 @@ Callers `[known]`:
   (`RemoveBuilding(…, spill = false)` → `Building::dtor`) and constructs a new one with
   `Building::ctor_Transfer` S 0055d4e0, which allocates a fresh `VillageSacrifice` (state 2, no definition) and
   an empty research reference `[known]`. So a running sacrifice ends as in a destruction (cool-down and, for an
-  abortable definition, `!Sacrifice expired!` for the **old** owner), an order is lost together with the goods
-  already in the old input stock, a research running there is dropped without a record (§3.2.10), and the new
-  owner gets a building that is ready `[inferred]`. `[TODO]` not established: which stocks `ConquerBuilding`
-  carries over into the new building (it moves stocks around its call; read S 0055a890).
+  abortable definition, `!Sacrifice expired!` for the **old** owner), an order is lost (on the soldier-capture
+  path together with the goods already in the old input stock), a research running there is dropped without a
+  record (§3.2.10), and the new owner gets a building that is ready `[inferred]`. On the two `ConquerBuilding`
+  paths the goods are kept
+  `[known]` S 0055a890: before the transfer it moves the old depot's output/store stock (`Depot +0x28`) and
+  input stock (`Depot +0x0c`) into two static temporary stocks and counts the present soldiers per level; after
+  `TransferBuildingOwnership(…, notify = 0)` it spawns one worker if the old building had any, spawns the
+  counted soldiers per level on the new building (level range of the new owner's tribe), moves both stocks
+  into the new building's stocks and empties the temporaries. So for a sacrifice building conquered this way
+  the goods delivered for the lost order stay in the new building's input stock; the soldier-capture path
+  S 00571af0 calls `TransferBuildingOwnership` directly and moves no stock itself (its callees contain no
+  stock function) `[known]`.
+  `logic.pl_changePlayer` (S 005ad4e0 → `NLogic::System::TransferPlayerAssets` S 00529040) takes the
+  `ConquerBuilding` path `[known]`: `NVillage::System::TransferAllBuildingsOfPlayer` S 0055aac0 hands over the
+  territory buildings (type flag `+0xf5`) in a first pass and all others in a second; a building whose
+  construction (`building +0x44`) still has `remainingA` or `remainingB` above 0 is removed
+  (`RemoveBuilding(…, spill = false)`) instead, and every finished one, sacrifice buildings included, goes
+  through `ConquerBuilding`. Afterwards the old owner's settlers are removed and its flags, streets and ships
+  are re-created for the new owner.
 
 The `markedOutsideTerritory` byte is written true only by `NVillage::System::MarkBuildingsOutsideTerritoryNear`
 S 00558170 (called from the territory change handler `MapModifier::OnTerritoryChangedAt` S 00673a50: every
@@ -1265,8 +1284,8 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | `[TODO]` Does anything read `TribeProperty +0x50` (the `tp_addSacrifice` list, 70 calls in the data) after loading? In the decompiled functions that use the typed field only the constructor S 00556300 and `TribeProperty::AddSacrifice` S 00556400 touch it `[inferred]` no reader; an access through an untyped pointer is not excluded. Also open: where a **new** map's `MapInfo +0x204` is filled (`ResetSacrificesFromTribes` has `MapInfo::Load` as its only caller) | static: cross-references to the field in Ghidra (data-flow of `TribeProperty +0x50`); the map editor / map creation path for `MapInfo +0x204` |
-| 2 | `[TODO]` Whether `logic.pl_changePlayer` (S 005ad4e0 → `NLogic::System::TransferPlayerAssets`) moves sacrifice buildings through `TransferBuildingOwnership` like the paths of §3.2.8, and which stocks `ConquerBuilding` S 0055a890 carries into the new building | static: read `TransferPlayerAssets` and S 0055a890 |
+| 1 | Answered (§3.2.1): nothing reads `TribeProperty +0x50` (only `AddSacrifice` S 00556400 and the constructor touch it), and nothing fills a new map's `MapInfo +0x204`: only `Load` / `ResetSacrificesFromTribes` and the copy `MapInfo::Assign` write it, so a map never loaded from a file has an empty list | — |
+| 2 | Answered (§3.2.8): `pl_changePlayer` → `TransferPlayerAssets` S 00529040 → `TransferAllBuildingsOfPlayer` S 0055aac0 removes construction sites and sends every finished building, sacrifice buildings included, through `ConquerBuilding` → `TransferBuildingOwnership`; `ConquerBuilding` carries the input and output stocks, one worker and the present soldiers per level into the new building | — |
 | 3 | Answered (§3.4): a kind-0 chest's `ClaimChestResult` has no effect inside the match beyond the log line; the observer lists `RefereeServerConnection +0x38 / +0x44` have no subscriber | static: the list argument of every `ObserverList::Subscribe` S 00458860 call |
 | 4 | Answered (§3.2.7, effect 1001): the building's own worker carries the output stock to the building's flag, one plain ware per walk (`BringGoodOut`, lowest good id first); `ChooseNextWork` tests the stock first and, for working mode 9, has nothing else to start, so the test repeats every tick. State 0 ends on the first building update with an empty output stock (total units 0). From the flag the wares are free packages. The four sacrifice building types share the rule (mode 9, a worker, no `depot` flag) | static: S 0065d660, S 0065cc40, S 0077c510, S 0055b120, S 0055b1b0, S 0065d7f0, S 00561940; `buildings.lua` |
 | 5 | `[TODO]` Which player the two letter senders address: both pass the index of the player entry the game screen holds (`menu.createLetter` S 005da720 reads it at active screen +0xfff4; `nMenu::Game::ShowCommMessageAsLetter` S 005eb120 through its own screen pointer), while the autosave notice S 0078b040 uses `ai::player::PlayerTable::FindLocalPlayer` `[known]`. Not established: that the screen's player is always the local player | static: the writer of the game screen's player pointer (+0xfff4) |

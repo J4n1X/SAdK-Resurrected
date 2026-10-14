@@ -160,7 +160,7 @@ direction 5 (SE), from there direction 0 (E). Directions are those of
 | +0x90 | `remainsByUnique`: `map<Unique, Remains*>` | ruins |
 | +0x9c / +0xac | `sacrificeBuildings` / `sacrificeBuildingsByUnique`: vector + map | `workingMode == 9` |
 | +0xb8 | `orderSystem`: `OrderSystem*` | settler orders (§2.6) |
-| +0xbc | `flagBC`: byte | saved and loaded first; [TODO] meaning not established |
+| +0xbc | `flagBC`: byte | "initialised": 0 in the constructor S 005592c0 and in `Clear` S 00559020 (called by `NLogic::System::Reset`), 1 in `Init` S 00557610 (called by `NLogic::System::InitSubsystems`); saved and loaded first; never read otherwise [known: §10 Q4]; no behaviour |
 
 Each vector is a 16-byte MSVC `std::vector` member (first / last / end at +4 / +8 / +0xc of the member) and each
 map a 12-byte `std::map` member (head node at +4, size at +8) [known] S 005592c0.
@@ -240,7 +240,7 @@ That B is the frame phase and A the main phase follows from `RequestMaterials`, 
 
 | off | field | meaning |
 |---|---|---|
-| +0x08 | byte | set true at placement; default true for old saves; [TODO] meaning not established |
+| +0x08 | byte | `flag08`: 0 in the constructor S 0055b340, true at placement and transfer (`Generic_SetByte08_True` S 00599cb0 from S 0055d980 / S 0055d4e0, not in the load constructor), saved S 0055ad30, loaded S 0055ada0 (true for old saves); never read otherwise [known: §10 Q4]; no behaviour |
 | +0x0c | `stockA` (`NLogic::Stock`) | **input stock**: wares delivered for production |
 | +0x28 | `stockB` (`NLogic::Stock`) | **output / store stock**: products, stored wares, stored settlers (as goods) |
 | +0x44 | `needGoods` (`NTransport::NeedGoods`) | open ware requests, one entry per requested unit |
@@ -411,9 +411,12 @@ to the command router:
 - Then `Construction::StartWithType(type)`.
 
 Levelling is instantaneous at placement: the builder goes straight to building and the ground is level at once;
-there is no levelling phase [live, 2026-10-14]. `cfg_setBulldozeTime` (55) is not read here, and a read
-watchpoint on `GameConfig+0x14` saw no read in 45 s of play with 8 new construction sites [live, 2026-10-14].
-[TODO] that it is never read: field xrefs on the `GameConfig` block would make it [known].
+there is no levelling phase [live, 2026-10-14]. `cfg_setBulldozeTime` (55, `GameConfig+0x14`) is never read
+[known]: the property database is reached only through `NProperties::StaticAccess::EnsureInstance` S 0054a140
+(the only reader of its global besides the destroy function); in the decompiled bodies of its 593 callers
+`gameConfig` is used only for direct field reads of other fields and by the `cfg_*` setters, never stored or
+passed on, and no slot of the `StaticAccess` vtable (S 007e8030) reads `PropertiesDb+0x24`. The setter
+S 0054c470 is the only access to `+0x14`.
 
 ### 3.4 Construction
 
@@ -504,6 +507,8 @@ the site is removed when the ship is finished or no launch cell is found (`Remov
 S 0055a7a0) [known]: ignored when a destroy countdown is already running (`destroyCountdown >= 0`). If the
 building is the target of a fight (`military` fight reference valid): set
 `destroyCountdown = mi_setActionsInFightDelayTime` (300 ticks). Otherwise `RemoveBuilding(spill = true)`.
+No other code starts the countdown: its writers are the constructor (−1), `StartDestroyCountdown` S 0055fc10,
+the decrement below and `Military::Load` S 005604d0 [known].
 
 **Countdown** (`Military::Update` S 005609b0, step 7 of §3.6, so only for finished, unmarked buildings)
 [known]: headquarters types skip it. Otherwise, when `destroyCountdown > 0` it is decremented by 1 per tick
@@ -747,7 +752,12 @@ product slots move any units of the recipe goods from the output stock back to t
   `Map_IsCellWalkable` (S 005429c0; the anchor itself is always accepted). The first cell reached wins on
   which `NResources::System::FindHuntableAnimalAt` returns an animal whose animal property has a non-zero
   stack good count for the owner's tribe (player +0x44) and whose position (animal +0x38) the owner has
-  explored (S 00542c40) [known]; the tests inside `FindHuntableAnimalAt` were not read. In every other tick
+  explored (S 00542c40) [known]. `FindHuntableAnimalAt` S 0053ee60 looks the cell (`y × mapWidth + x`) up in
+  the per-cell animal index and returns the **first** animal of that cell's vector for which
+  `Animal::IsAliveAndUnreserved` S 00541c60 holds (state not 5, 7, 8 or 9, and no hunter reservation; animal
+  states in [map-resources.md](map-resources.md)); only that one animal is then tested for goods and
+  exploration, so a cell fails when its first free animal fails even if a later animal of the cell would pass
+  [known] S 0053ee60, S 00542c40. In every other tick
   this function increments `tickCounter` again.
   The counter therefore
   advances by 2 per tick (0, 2, …, 100, then 0): the searches run every 51 ticks [inferred from the two
@@ -882,9 +892,9 @@ is never served keeps growing. Owner of the surrounding rules: [military.md](mil
 
 The iterator keeps one "served" byte per category (+0x10..+0x16), cleared when it moves to the next player.
 The byte of category 1 is the one the iterator tests before entering category 2: once a category-1 order of a
-player was served in a pass, category 2 is skipped for that player in that pass [inferred: S 005691c0 writes
-byte `+0x10 + category`, S 00569760 tests the byte at +0x11]. No reader of the other six bytes was found in
-the functions read.
+player was served in a pass, category 2 is skipped for that player in that pass [known: S 005691c0 writes
+byte `+0x10 + category`, `NextNodeInPlayer` S 00569760 tests the byte at +0x11 (S 005697b5)]. The other six
+bytes are never read [known, §10 Q5].
 
 **Arrival** (`VillageOrder_LinkSettlerToDestination` S 00561e20) [known], by order category first: 4 → the
 soldier is paired with the waiting soldier and linked to slot 1 of the military building; 1 and 5 → linked
@@ -1078,7 +1088,11 @@ Step 1 does not skip step 2: during an upgrade every delivered unit is credited 
 site and once to the finished building's input (or output) stock, whichever request it was meant for. The
 function does not look at which list requested the good. Seen in the running game: each of the 8 deliveries
 to an upgrading guard house made two `Stock::AddOne` calls, and the 8 extra units were still in the input
-stock of the finished tower [known: live 2026-10-12].
+stock of the finished tower [known: live 2026-10-12]. The code cuts that stock when the upgrade completes:
+`Upgrade::Complete` S 005672c0 → `RescaleToTypeMax` S 0055b990 → `Hitpoints::OnChanged` S 0055b8b0 →
+`ClampStockToLimit` S 0055b090, every entry to `max(1, trunc(hp ratio × stockLimit))` of the new type (tower
+4: `stone 5` becomes 4) [known]. [TODO] not reconciled with the live count above; reading the tower's input
+stock right after completion would settle it ([tribes-content.md](tribes-content.md) §2.4.4).
 
 ## 4. Update order
 
@@ -1351,9 +1365,13 @@ references go through untagged variants, the other components through their norm
   `<` on path cost (first found wins ties).
 - A served order sets a per-category "served" byte in the iterator (S 005691c0). The byte of category 1
   makes the iterator skip category 2 for that player in the same pass (§3.12) [known] S 00569760. The other
-  six bytes (+0x10, +0x12..+0x16) are only written (mark, per-player reset, constructor) in the decompiled
-  bodies of the iterator's functions (S 00569170..S 00569840) and of `OrderSystem::Update` [known]; a reader
-  elsewhere is not excluded [inferred: the iterator is a private member of `OrderSystem`, +0x3e0].
+  six bytes (+0x10, +0x12..+0x16) are only written (mark, per-player reset, constructor) and never read
+  [known]: no instruction of the program addresses `OrderSystem+0x3f0..+0x3f6` directly; the iterator's
+  address (`OrderSystem+0x3e0`) is taken only by the constructor, the destructor, `OrderSystem::Update` and
+  `OrderSystem::FindOrderForSoldier` S 00561cb0, which pass it only to the iterator's functions; among those
+  (S 00569170..S 00569840) the only byte read in +0x10..+0x16 is the +0x11 test at S 005697b5.
+  `FindOrderForSoldier` (called by `Soldier::TryCompleteOrderAtCurrentPos` S 0065a340) starts with
+  `NextPlayer` S 005691d0, which clears all seven bytes, and ends with `Reset` [known] S 00561cb0.
 - The worker-request ticker is per building and saved; its phase depends on how many ticks the building has
   spent in the "finished" branch of `Building::Update` [known] S 0055ccd0.
 - **Floating point** [known]: `remainingA/B` and `workPerStroke` are 32-bit floats, x87 arithmetic,
@@ -1405,13 +1423,13 @@ references go through untagged variants, the other components through their norm
 |---|---|---|
 | 1 | Answered (§3.8): at start-resources level "high" the mines of a human player work without food and request none; a computer player's mines do so only at level 3 | static: S 005be330, S 00565bd0, S 005657c0, S 00565a70, S 005bea90, S 005abb60 |
 | 2 | Answered (§3.2): direction 1 (the entrance flag) points to the building's bottom side, slightly left (about south-south-west) on an unrotated screen; it is not the lower-right neighbour, and neither the data names (`DoorOffsetNorthWest` = 4) nor map-format's compass labels are screen directions [live, 2026-10-14] | — |
-| 3 | Where `cfg_setBulldozeTime` (`GameConfig+0x14`) is consumed. Answered (§3.3): no builder plays a levelling phase, and no read of `+0x14` was seen in 45 s with 8 new sites [live, 2026-10-14]; "never read" is still to be made [known] | field xrefs on the `GameConfig` block |
-| 4 | `System+0xbc`, `Depot+0x08`: meaning. In the decompiled bodies that use the typed fields, `System+0xbc` is touched only by the constructor (0), `Store` and `Load`; `Depot+0x08` by the constructor (0), the placement and transfer constructors (true), `Save` and `Load`. `Building+0x38` is answered (§2.3): a reserved field, written 0 by the three constructors and otherwise only saved, loaded and checksummed; a reimplementation keeps it in the save and checksum layouts and gives it no behaviour | field xrefs / data-flow in Ghidra |
-| 5 | Iterator "served" bytes other than category 1 (+0x10, +0x12..+0x16): a reader outside the iterator's own functions and `OrderSystem::Update` (none inside, §8) | raw-offset xrefs to `OrderSystem+0x3f0..+0x3f6` |
-| 6 | The tests inside `NResources::System::FindHuntableAnimalAt` (which animals count as huntable at a cell, §3.9) | static read of that function |
+| 3 | Answered (§3.3): `cfg_setBulldozeTime` (`GameConfig+0x14`) is never read; its setter S 0054c470 is the only access (the 593 callers of `EnsureInstance` S 0054a140 and the `StaticAccess` vtable checked), and no builder plays a levelling phase [live, 2026-10-14] | — |
+| 4 | Answered (§2.2, §2.5): `System+0xbc` is an "initialised" byte (0 in the constructor and `Clear` S 00559020, 1 in `Init` S 00557610) and `Depot+0x08` a byte set at placement and transfer (S 00599cb0); both are only saved and loaded besides that and never read (every function with a byte access at +0xbc / +0x08 below S 006f0000 decompiled; no shared getter of either). `Building+0x38` (§2.3): a reserved field, written 0 by the three constructors and otherwise only saved, loaded and checksummed. A reimplementation keeps all three in the save layouts and gives them no behaviour | — |
+| 5 | Answered (§3.12, §8): the served bytes of categories 0 and 2..6 are written and never read; the only reader is the category-1 test S 005697b5 | — |
+| 6 | Answered (§3.9): the first animal of the cell's vector that is alive (state not 5, 7, 8, 9) and not reserved by a hunter; only it is tested for goods and exploration | — |
 | 7 | Answered (§3.5, §3.4): the two messages are not posted after a countdown that started above 0 (the building is removed in the tick of the last decrement, the 300th building update after the command); a paused site never disappears by itself | static: S 005609b0, S 0055a640, S 00560890, S 0055fc10; users of `Construction +0x78` |
 | 8 | Answered (§3.19): every ware delivered during an upgrade is credited twice, and the extra units stay in the finished building's input stock | static: S 0055aca0, S 00539de0, S 005671a0; live 2026-10-12 (8 of 8 deliveries) |
-| 9 | Writers of `Military.destroyCountdown` that do not go through `StartDestroyCountdown` S 0055fc10 (its two callers are the player command and the AI, §3.5). The decompiled bodies that use the typed field show only the constructor (−1) and the decrement in `Military::Update`, apart from the load code | raw-offset xrefs of `Military+0x90` |
+| 9 | Answered (§3.5): `Military.destroyCountdown` is written only by the constructor (−1, S 0055fef0), `StartDestroyCountdown` S 0055fc10, the decrement in `Military::Update` S 005609b0 and `Military::Load` S 005604d0 (every write to and address of `+0x90` below S 006f0000 decompiled; no shared setter) | — |
 | 10 | Answered (§3.8): a mine gets `min(n, 8) − 1` products out of a resource cell with amount `n` | static: S 00674650, S 00674e70, S 0055c860, S 00565f80 |
 | 11 | Harbours: no building type in `buildings.lua` is a harbour; harbours come from `harbors.lua` and the navy code | see [../navy-and-military.md](../navy-and-military.md) §5 and [navy.md](navy.md) |
 

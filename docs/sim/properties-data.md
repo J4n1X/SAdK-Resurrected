@@ -88,9 +88,14 @@ Four flags are set to 1 by `Properties_RegisterLuaLibrary` before the bindings a
 `GameConfig+0x3c`, the sign table's byte (`PropertiesDb+0x58`), `MilitaryConfig+0x10c`, `ShipConfig+0x00`
 [known]. `Properties_Db_ClearAll` S 005494a0 clears all four: `GameConfig+0x3c` (S 00555810),
 `MilitaryConfig+0x10c` (S 00553f10), `ShipConfig+0x00` (S 00661ab0), and the sign table's byte as the last store
-of the tree clear S 00556f20 (`tree+0xc` = `PropertiesDb+0x58`) [known]. No reader of the four flags was found:
-none of the decompiled functions that fetch `PropertiesDb.gameConfig`, `.militaryConfig` or `.shipConfig`
-accesses these offsets [inferred from a search of the function cache; a field cross-reference would confirm it].
+of the tree clear S 00556f20 (`tree+0xc` = `PropertiesDb+0x58`) [known]. `GameConfig+0x3c` and
+`MilitaryConfig+0x10c` have no reader [known]: the property database is reached only through
+`StaticAccess::EnsureInstance` S 0054a140, none of its 593 callers accesses either offset, and the only
+functions typed on the two blocks are their constructors, setters and (for `MilitaryConfig`) the lookups
+S 00553f40..S 00554750, none of which reads them. For `ShipConfig+0x00` and the sign table's byte no reader was
+found either, but `NNavy::Ship` keeps the `shipConfig` pointer (its constructors S 005baba0, S 005bad60,
+S 005bb290) and the sign table
+is used through its own methods, so those two rest on the callers of `EnsureInstance` only [inferred].
 
 `Properties_Db_ClearAll` empties the thirteen record tables and the sign table and sets `bLoaded` to 0; its only
 caller is `CApplicationEx::Shutdown` [known]. Its three other callees are the one-instruction flag stores named
@@ -176,7 +181,7 @@ Ctor S 00556300 [known]. Three records: `bavarians` `b0d378a3`, `egyptians` `f50
 | +0x20 | `goods` | vector&lt;i32&gt; | `tp_addGood` | empty | the tribe's wares, in script order. Order matters: group members are enumerated in this order (§3.4), good priorities and statistics are seeded from it |
 | +0x30 | `jobs` | vector&lt;i32&gt; | `tp_addJob` | empty | settler goods the tribe owns beyond workers: soldier ranks, `good_oxen`. Read with `goods` by `MapInfo::NormalizeInitialGoodsForTribes` S 0052a670 (§3.7) |
 | +0x40 | `buildings` | vector&lt;i32&gt; | `tp_addBuilding` | empty | building types of the tribe (build menu, AI type finders, producer search §3.5) |
-| +0x50 | `sacrifices` | vector&lt;i32&gt; | `tp_addSacrifice` | empty | the tribe's sacrifices ([inferred] the full set, including those that need research); `AddSacrifice` S 00556400 looks the sacrifice up first, so the id must exist [known]. [TODO] not established: a reader of this vector; in the function cache the field is touched only by the ctor and `AddSacrifice`, and the selection panel and the AI take their lists from the map (see `allowedSacrifices`) |
+| +0x50 | `sacrifices` | vector&lt;i32&gt; | `tp_addSacrifice` | empty | the tribe's sacrifices ([inferred] the full set, including those that need research); `AddSacrifice` S 00556400 looks the sacrifice up first, so the id must exist [known]. The vector has no reader [known]: the property database is reached only through `StaticAccess::EnsureInstance` S 0054a140 (its global S 00889dd8 is read nowhere else), and of the 593 functions that call it only `AddSacrifice` touches the field; the ctor S 00556300 initialises it. The selection panel and the AI take their lists from the map (see `allowedSacrifices`); the list is inert data |
 | +0x60 | `menuX` | i32 | `tp_setMenuX` | 0 | UI: x offset in the building icon texture (16 / 184 / 352) [inferred from the name and values] |
 | +0x64 | `buildingsTextureName` | string | `tp_setBuildingsTextureName` | `"Unknown"` | UI texture `uiBuildings0..2` |
 | +0x80 | `startResources` | vector&lt;{good, amount}&gt; | `tp_addStartResources` | empty | default of a map's initial goods; only for maps older than save format 14 and `MapInfo::Reset` ([../data-loading.md](../data-loading.md) §1) |
@@ -338,12 +343,12 @@ Use of these fields is specified in [map-resources.md](map-resources.md) §2.5 a
 | +0x00 | `id` | i32 | `dp_create` | -1 | |
 | +0x04 | `name` | string | `dp_setName` | `"unknown"` | |
 | +0x20 | `gfxName` | string | `dp_setGfxName(d, name, 0)` | `"unknown"` | the scripts pass a third argument 0 that the binding does not read [known: S 0054df10, data] |
-| +0x3c | `good` | good id | `dp_setGood` | -1 | yield of a harvest (wood 38 records, stone 12, corn 1, egyptCorn 1). One record, `tent`, names the settler good `good_helper` (with growing start size 0.01 and speed 0.1) [known: data]. No other property script refers to `tent` (no `bp_setPlantingDeposit`, no `dp_nextDeposit`), and it has no tree type tags, so §3.8 never picks it: it exists only where a map or a map script places it [known: data]. The harvest step `NResources::System::HarvestDepositAt` S 00540c40 does not read `good` [known]; [TODO] not established: which worker search would select a deposit whose good is a settler good ([map-resources.md](map-resources.md)) |
+| +0x3c | `good` | good id | `dp_setGood` | -1 | yield of a harvest (wood 38 records, stone 12, corn 1, egyptCorn 1). One record, `tent`, names the settler good `good_helper` (with growing start size 0.01 and speed 0.1) [known: data]. No other property script refers to `tent` (no `bp_setPlantingDeposit`, no `dp_nextDeposit`), and it has no tree type tags, so §3.8 never picks it: it exists only where a map or a map script places it [known: data]. The harvest step `NResources::System::HarvestDepositAt` S 00540c40 does not read `good` [known]. No worker search selects it [known]: both searches that match deposits by `good`, `Resources_FindNearestFreeDeposit` S 00540870 (sole caller `NVillage::Building::UpdateDepositSearch` S 0055bfb0) and `Resources_CountDepositsInRange` S 00540940 (sole caller the AI site scorer S 00534830), use the `miningGood` (+0xbc) of the wanted good as the key, and no good in `Goods.lua` has `miningGood = good_helper` (the keys are the raw resources wood, stone, corn, egyptCorn, fish and the five mine goods) [known: data] |
 | +0x40 | `nextDeposit` | deposit id | `dp_nextDeposit` | -1 | the type this deposit becomes after one harvest; -1 = it disappears. Stone piles form two chains, `stone_06 → … → stone_01` and `med_stone_06 → … → med_stone_01`; `CountChainStages` S 00532480 = 1 + number of links |
 | +0x44 | `growingStartSize` | float | `dp_setGrowingStartSize` | 0.1 | growth value after planting (fields 0.2) |
 | +0x48 | `growingSpeed` | float per tick | `dp_setGrowingSpeed` | 0.0009 | `field_01` 0.00075, `field_egypt` 0.0005 |
 | +0x4c | `randomFinePosOffsetState` | bool | `dp_setRandomFinePosOffsetState` | true | random display offset within the cell |
-| +0x50 | `elevationSize` | i32 | `dp_setElevationSize` | 1 | 1 or 2 on stone piles; [TODO] reader not established |
+| +0x50 | `elevationSize` | i32 | `dp_setElevationSize` | 1 | 1 or 2 on stone piles; no reader in the program [known] ([map-resources.md](map-resources.md) §2.5) |
 | +0x54 | `blocking` | bool | `dp_setBlocking` | false | the cell is not walkable |
 | +0x58 | `undergroundPatterns` | vector&lt;pattern id&gt; | `dp_addUndergroundPattern` | empty | pattern painted under the deposit (`pattern_acre` under fields, `pattern_meadow2` under stone) |
 | +0x68 | `doodadAfterDestruction` | doodad id | `dp_setDoodadAfterDestruction` | -1 | never set by the shipped scripts [known: data] |
@@ -571,7 +576,7 @@ street positions, 34 ship positions over 8 records). Readers: `GameQuery::IsHarb
 | +0x08 | `borderPattern` | pattern id | `cfg_setBorderPattern` | -1 | not in `config.lua`; `patterns.lua` sets it to `pattern_border` (`76d31873`) | [map-resources.md](map-resources.md) |
 | +0x0c | `pickupTime` | float, ticks | `cfg_setPickupTime` | 10 | 3.3 | carriers |
 | +0x10 | `dropTime` | float, ticks | `cfg_setDropTime` | 10 | 3.3 | carriers |
-| +0x14 | `bulldozeTime` | float, ticks | `cfg_setBulldozeTime` | 10 | 55 | [inferred] not read: no decompiled function that fetches `PropertiesDb.gameConfig` accesses `+0x14`, and ground levelling is instantaneous ([village-buildings.md](village-buildings.md) §3.3) |
+| +0x14 | `bulldozeTime` | float, ticks | `cfg_setBulldozeTime` | 10 | 55 | not read [known]: none of the 593 functions that reach the property database (`StaticAccess::EnsureInstance` S 0054a140, the only reader of its global) accesses `gameConfig +0x14`, and no function takes `GameConfig*` besides its setters; ground levelling is instantaneous ([village-buildings.md](village-buildings.md) §3.3) |
 | +0x18 | `constructTime` | float, ticks | `cfg_setConstructTime` | 10 | 30 | builder hammer stroke |
 | +0x1c | `fishingDistance` | i32, cells | `cfg_setFishingDistance` | 3 | 1 | fisher |
 | +0x20 | `flagPackageLimit` | i32 | `cfg_setFlagPackageLimit` | 6 | 2 | capacity of each stack of a flag ([streets-transport.md](streets-transport.md)) |
@@ -585,7 +590,7 @@ street positions, 34 ship positions over 8 records). Readers: `GameQuery::IsHarb
 | +0x40 | `maxWaterStreetWaterDepth` | i32 | `cfg_setMaxWaterStreetWaterDepth` | 100 | 4000 | water streets |
 | +0x44 | `chestDoodadId` | doodad id | `cfg_setChestDoodadId` | -1 | `doodad_chest` | |
 | +0x48 | `openChestDoodadId` | doodad id | `cfg_setOpenChestDoodadId` | -1 | `doodad_openChest` | |
-| +0x4c | (no setter) | i32 | – | 4 | – | [TODO] meaning not established; no decompiled function that fetches `PropertiesDb.gameConfig` accesses `+0x4c` [inferred from a search of the function cache] |
+| +0x4c | (no setter) | i32 | – | 4 | – | written only by the ctor S 00555780 (S 005557e4), never read [known]: none of the 593 functions that reach the property database accesses `gameConfig +0x4c`, and no `GameConfig` method does. A remake can drop it |
 | +0x50 | `spawnPointUpdateTime` | i32, ticks | `cfg_setSpawnPointUpdateTime` | 600 | 1200 | [logic-core.md](logic-core.md) §6 |
 | +0x54 | `sacrificeGoodId` | good id | `cfg_setSacrificeGoodId` | -1 | `sacrificeGood` | only reader: the binding `sf_addCost` S 0054f520 (§3.2) [inferred from a search of the function cache] |
 | +0x58 | (no setter) | u32, ticks | – | 600 | – | idle-outside delay ([settlers-jobs.md](settlers-jobs.md) §6) |
@@ -603,7 +608,7 @@ street positions, 34 ship positions over 8 records). Readers: `GameQuery::IsHarb
 | +0x00 | `soldierId[kind 0..1][level 0..4]`: map tribe → good id (map at `+kind*0x3c + level*0xc`) | `mi_setSoldierId(tribe, kind, level, good)` | empty | 15 calls |
 | +0x78 | `health[kind][level]`: map tribe → i32 | derived (§3.3) | empty | |
 | +0xf0 | `maxLevel[kind]`: map tribe → i32 | derived (§3.3) | empty | |
-| +0x108 | i32 | – | 20 | no setter; [inferred] not read (no access to `+0x108` in the decompiled functions that use the block) |
+| +0x108 | i32 | – | 20 | no setter; not read [known]: written only by the ctor (S 005543fa); no `MilitaryConfig` method and none of the 593 functions that reach the property database accesses `+0x108` |
 | +0x10c | flag byte | – | false | set by the library registration |
 | +0x110 | `regenerationRate` | `mi_setRegenerationRate` | not initialised by the ctor | 100; three readers [known]: `NVillage::Hitpoints::Update` S 0055b910 (building hit point regeneration), `NVillage::SettlerSpawn::Update` S 00564780, `NSettlers::Livepoints::UpdateRegeneration` S 0065dbc0 (soldier in a building); rules in [village-buildings.md](village-buildings.md) and [military.md](military.md) |
 | +0x114 | `waitForTacticTime` | `mi_setWaitForTacticTime` | 100 | 10 |
@@ -1061,6 +1066,11 @@ Registered but never called by the shipped scripts [known: data against the bind
 - A `MapInfo` that was not loaded has an empty sacrifice list: `MapInfo::Reset` S 0052b8d0 (callers: the ctor
   and `GameLoadDescriptor::Reset`) refills the initial goods with `ResetInitialGoodsFromTribes` but neither
   clears nor fills the map at `+0x204`, and `ResetSacrificesFromTribes` is called only from `Load` [known].
+  The complete set of code on `MapInfo+0x204` is the ctor S 0052bc10 (empty map), the dtor S 0052b400,
+  `Load`, `ResetSacrificesFromTribes`, `Store`, the copy `MapInfo::Assign` S 007849f0 and the two readers
+  `GetMapSacrifices` S 00529720 / `HasMapSacrifices` S 00529760 [known: search of the instruction listing for
+  `+0x204`..`+0x20c`]. So nothing fills the list of a new map: a map made without loading a file (the editor)
+  is saved with an empty list, and its players are offered only the lock-map-2 sacrifices of its script.
 - Recomputed on load from properties, not stored: the per-tribe sacrifice lists of old saves
   (`ResetSacrificesFromTribes`, version ≤ 12) and the initial goods of old maps (`ResetInitialGoodsFromTribes`,
   version ≤ 13); initial goods are normalised per tribe only for `MapInfo` versions below 15 (§3.7) [known:
@@ -1129,10 +1139,10 @@ Registered but never called by the shipped scripts [known: data against the bind
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Reader of `DepositProperty.elevationSize` (+0x50); none was found next to the callers of `GetDepositProperty` | static: field cross-references of `+0x50` on a typed `DepositProperty*` (the deposit object keeps a record pointer, so the read may sit in the graphics code) |
-| 2 | Meaning of `GameConfig+0x4c` (default 4), and confirmation that `GameConfig.bulldozeTime`, `GoodProperty.value`, `GoodProperty.plantable`, `MilitaryConfig+0x108` and the four registration flags have no reader | static: field cross-references on the typed structs; the statements in §2 rest on searches of the function cache and of the instruction listing |
-| 3 | A reader of `TribeProperty.sacrifices` (+0x50), and whether anything besides `MapInfo::Load` fills `MapInfo+0x204` (a map made in the editor: `Reset` leaves the list empty, §7) | static: cross-references of the vector at `TribeProperty+0x50`; writers of `MapInfo+0x204` in the map editor's code (the map subscript S 0052b7c0 has no other caller on a `MapInfo`) |
-| 4 | Which worker search would select a deposit whose good is a settler good (`tent` → `good_helper`) | static: the deposit search of `NMovie::Working` / the woodcutter job in [map-resources.md](map-resources.md); or place a `tent` on a test map and watch it |
+| 1 | Answered ([map-resources.md](map-resources.md) §2.5): `DepositProperty.elevationSize` (+0x50) has no reader [known] | — |
+| 2 | Answered (§2.1, §2.10): `GameConfig+0x4c`, `GameConfig.bulldozeTime`, `MilitaryConfig+0x108`, `GameConfig+0x3c` and `MilitaryConfig+0x10c` are never read (the property database is reached only through `EnsureInstance` S 0054a140; none of its 593 callers and none of the typed block methods reads them); `+0x4c` has no meaning in the shipped code. Still `[inferred]` only: `ShipConfig+0x00` and the sign table's byte (the ship keeps the config pointer), and `GoodProperty.value` / `plantable` (no caller of `GetGoodProperty` S 00547560 reads them, but good records are also reached through pointers kept in other objects) | — |
+| 3 | Answered (§2.3, §7): `TribeProperty.sacrifices` has no reader (only `AddSacrifice` and the ctor touch it), and nothing but `MapInfo::Load` (with `ResetSacrificesFromTribes`) and the copy `Assign` fills `MapInfo+0x204`; a new map's list stays empty | — |
+| 4 | Answered (§2.6): no worker search selects a deposit whose good is a settler good; both good-keyed deposit searches (S 00540870, S 00540940) use the wanted good's `miningGood`, and no good has `miningGood = good_helper`, so a `tent` is never harvested | — |
 | 5 | Answered (§4): the game itself never reloads (filled in `Initialize`, emptied in `Shutdown`; no script outside `scripts/properties/` calls a binding), and play does not write into a record: the hashes of all 565 pointer-table records (buildings 104, deposits 53, goods 176, patterns 114, animals 12, AI 6, harbours 8, tribes 3, sacrifices 77, spawn types 12) and of the three config blocks were equal before and after a save load plus some hundred ticks of play [live, 2026-10-14]. For a mod's reload: `ClearAll` S 005494a0 empties all record tables and the sign table; the three config blocks are kept, and every binding on them assigns (`cfg_set*`, `sh_set*`, `mi_set*`), so the values come out the same [inferred]; record addresses change, and the static soldier good lists (§3.3) are not rebuilt | — |
 
 ---

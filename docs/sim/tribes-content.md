@@ -448,8 +448,15 @@ parentheses when `bp_setIgnoreGoodCosts` is called; **Work / rest ticks** = `bp_
 Notes on the economy tables [known: data unless tagged]:
 
 - The Egyptians have **no forester and no sawmill**: `good_forester` exists but no Egyptian building employs it,
-  and no tree deposit has a `dp_nextDeposit`. [inferred] Egyptian wood comes from the trees a map provides and
-  from the two wood exchanges of the temple (§2.8).
+  and no tree deposit has a `dp_nextDeposit`. Egyptian wood comes only from the trees a map provides and from
+  the two wood exchanges of the temple (§2.8): no tree grows back without a forester [known]. The deposits
+  created in a match are those of `NResources::System::CreateDeposit` S 00540b40 and `AddDepositFull`
+  S 00540aa0; their callers are the forester's planting (`NMovie::GoAfforest::Start` S 0077bcb0), the
+  successor stage of a harvested deposit (`HarvestDepositAt` S 00540c40, only when the deposit type has a
+  `dp_nextDeposit`: the 10 stone chains), the script function `map_createDeposit` S 005ad7e0 (shipped scripts
+  create only `tent`, in `C04.lua` and `C09.lua`), and the map-editor tools and `NLogic::Edit` interface
+  (S 00538ae0). Resource spawn points add map resources, not deposits, and no shipped map has one
+  ([map-resources.md](map-resources.md)).
 - The three barracks (`casernHalCross`, `casernSwordBow`, `casernClayStone`) are `casern` and `spawn` types with
   `bp_setAiThreat` 30; their cycle is the training cycle of §3.5.
 - The catapults have `bp_setCatapult`, `bp_setCatapultDamage` 10, `bp_setHealth` 40, `bp_setAiThreat` 100 and
@@ -459,8 +466,15 @@ Notes on the economy tables [known: data unless tagged]:
 - The temples (`sacrificeBav`, `sacrificeClay`, `sacrifice`) and `sacrificeOlympicFlame` have a locked
   distribution weight (`bp_setArrangementLocked`) and no productivity statistic.
 - `sacrificeOlympicFlame` employs the **Egyptian** `good_buildingHelper` for every tribe, and a
-  `good_buildingHelper` costs the Egyptian `tool`. [inferred] A Bavarian or Scottish headquarters can supply
-  that worker only when it holds an Egyptian `tool`. The sacrifice component does not need the worker [known]:
+  `good_buildingHelper` costs the Egyptian `tool`. Nothing in the worker chain tests the tribe [known]: the
+  building orders its `worker` good (S 0055ccd0, village-buildings.md §3.6 step 4), and in the order matching
+  (§3.12 there) a depot supplies it when its output stock holds a `good_buildingHelper` or can pay its cost
+  (`SettlerSpawn::CanSupplyGood` S 005643c0). A Bavarian or Scottish player therefore gets the worker only
+  with an Egyptian `tool` (or that settler) in a connected depot. No Bavarian or Scottish building produces
+  `tool`, and it is in no start or bonus list of theirs (`tribes.lua`) [known: data]; it can reach their stock
+  only from a goods chest or a script with that content (`map_createChest`, `vi_addGoodsToDepot`), or as a
+  stock entry of a conquered building [inferred: no other path that adds a good of another tribe was found].
+  The sacrifice component does not need the worker [known]:
   `Building::Update` S 0055e2f0 calls `ai::village::VillageSacrifice::Update` S 00561940 for every finished mode-9 building,
   and neither it nor `CheckCanOrder` S 00561240 or `CheckCanStart` S 00560f20 tests the building's workers;
   working mode 9 gives the worker no action (`Worker::ChooseNextWork` S 0065d660).
@@ -471,8 +485,17 @@ Notes on the economy tables [known: data unless tagged]:
   walks over the tribe's building list. One such walk [known]: `Economy_CollectConsumerBuildings` S 00534f40
   (the consumer list of the building tooltip) keeps every type of the list with `constructionTime > 0` whose
   product recipe names the good (`BuildingProperty::ConsumesGood` S 00553080, both product slots), which
-  includes the dummy type. [TODO] not established: the same for the goods-distribution panel and the AI's
-  consumer lists (read their walks over `TribeProperty.buildings`).
+  includes the dummy type. The goods distribution includes it too [known]: `GoodArrangement::InitFromTribe`
+  S 005c1370 records every type with weight >= 0 and a slot-0 product with a non-empty cost list under the
+  group of each cost good, so the dummy (product `constructionResources*` = plank + the tribe's stone, or clay
+  + stone) is an entry of weight 0.8 in the groups of those two goods; it is the *default type*
+  (`TribeProperty.constructionGoodId`, S 00533b20) that every building site stands for when the distribution
+  picks a receiver (S 00652b70; [streets-transport.md](streets-transport.md) §3.11). The AI never picks it
+  [known]: its per-building lists hold placed buildings only (the dummy cannot be placed), its producer map
+  `NeedsConstruction::RebuildTypeMaps` S 005936e0 walks the tribe's **goods** list, which has no
+  `constructionResources*` entry (`tribes.lua` sets it only as construction good), and the `AiTribe_Find*`
+  type lookups (S 0059f580..S 0059fb80) ask for a size, working mode, planting or a depot / casern /
+  catapult flag that the dummy does not have [inferred: from their plate comments].
 
 #### 2.4.4 Storage, territory and special buildings [known: `buildings.lua`]
 
@@ -524,9 +547,20 @@ slot. The limit is read through `Building::GetHpScaledStockLimit` S 0055c200, wh
 `Production::RequestAllInputs` S 00565a70 (returns before reading it for a type without a product),
 `Production::AdjustInputRequest` S 00565620, `VillageSoldierTraining_UpdateInputRequests` S 00566ba0 (casern
 types) and `Depot::ClampStockToLimit` S 0055b090 (on a hit-point change, cuts every entry of the building's
-stock to the limit). [TODO] not established: which goods a military building holds in that stock, and so
-whether the limit has any effect for it (read `AdjustInputRequest` and the writers of a military building's
-stock).
+stock to the limit). A military building requests nothing for that stock [known]: of the request sources
+(`NeedGoods::AddRequest` S 0064eb80 / `AddRequests` S 0064ea00) the production ones need a product slot
+(`RebalanceInputRequests` S 00565f00 → `AdjustInputRequest` S 00565620 walks the slot-0 product's cost list),
+training needs `casern`, the ordering component `depot` or `casern`, and the others are the catapult, the
+sacrifice and the expedition. The only goods that reach its input stock are the upgrade materials credited
+twice (`Depot::CollectGoods`, [village-buildings.md](village-buildings.md) §3.19). So the limit acts only
+through `ClampStockToLimit`, which `Hitpoints::OnChanged` S 0055b8b0 calls on every hit-point change and
+once when an upgrade completes (`Upgrade::Complete` S 005672c0: `SetType`, then `RescaleToTypeMax` S 0055b990
+→ `OnChanged`): every entry is cut to `max(1, trunc(hitpoints / maxHitpoints × stockLimit))` of the type the
+building has then (S 0055c200). A guard house is never an upgrade target, so its limit 2 matters only for the
+materials of an upgrade to a tower that is damaged while it runs [known]. [TODO] not reconciled: at full hit
+points the completed tower keeps `plank 3` and cuts `stone 5` to 4, but the live check of 2026-10-12
+(village-buildings.md §3.19) reported all 8 units still in the finished tower's input stock; reading that
+stock in a running game after an upgrade would settle it.
 The watch towers of §2.4.1–2.4.3 are not territory buildings: they only uncover the map (sight 16).
 
 ### 2.5 Professions and carried tools
@@ -1425,12 +1459,12 @@ content needs an equivalent comparison over its converted cache.
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | What uses the ware group `weapons` (`0897d1e3`)? Neither the id nor the string `Weapons` occurs in the image [known]; `ui/layout/iconconfig.xml` has `<Weapons …/>` elements and the language files a `Weapons` entry [known: data] | static: the reader of `iconconfig.xml` and the goods panel code in [ingame-ui.md](ingame-ui.md) (which good names it asks icons for) |
-| 2 | What looks up the three `construction*` dummy building types, and how does their weight 0.8 enter the goods distribution? | static: `NPlayer::GoodArrangement` and `Economy_CollectConsumerBuildings` S 00534f40 with a `SizeInvalid` type; the callers that pass a `constructionResources*` good |
-| 3 | What does a guard house, tower or fortress keep under its stock limit 2 / 4 / 6? | static: readers of `stockLimit` for types without a product slot ([military.md](military.md), promotion in military buildings) |
-| 4 | How do Egyptians obtain wood on a long game: is there any regrowth of trees without a forester? | static: every creator of tree deposits in [map-resources.md](map-resources.md) (spawn points, script functions); or an observation |
+| 2 | Answered (§2.4.3 note): the goods distribution has the dummy as the entry of weight 0.8 that stands for every building site in the groups of its two cost goods (S 005c1370, S 00533b20, S 00652b70); the building tooltip lists it as a consumer (S 00534f40); the AI never picks it | — |
+| 3 | Answered (§2.4.4): nothing but the upgrade materials credited twice (village-buildings.md §3.19); the limit cuts them on each hit-point change and when the upgrade completes. Residue: the live count of 2026-10-12 does not show the cut of `stone 5` to 4 at completion (see §2.4.4) | live: read the input stock of a tower right after its upgrade completes |
+| 4 | Answered (§2.4.3 notes): no; trees are created only by foresters, scripts (shipped ones create only tents) and the editor, and only stone deposits have a successor stage | — |
 | 5 | Which file does `sf_setBuffGfxName` refer to (§6)? | data: search the buff names of `sacrifices.lua` in `settings/*.xml` and `ui/layout/*.xml`; static: the reader of `SacrificeProperty.buffGfxName` |
 | 6 | Which reader uses the `good = "…"` attributes of `settings/items.xml` (the only place that names `boat`)? | static: the loader of `items.xml` (`ItemMgr`, [../data-loading.md](../data-loading.md) §2) and the callers of `PropertiesDb::FindGoodIdByName` S 00545f50 |
-| 7 | Can a non-Egyptian player supply the Olympic flame's `good_buildingHelper` worker at all (the sacrifice itself does not need it, §3.8)? | static: the worker request of a building whose worker good is not in the owner's job list ([settlers-jobs.md](settlers-jobs.md)) |
+| 7 | Answered (§2.4.3 notes): the request and supply have no tribe test, so a depot holding an Egyptian `tool` or a `good_buildingHelper` supplies it; a Bavarian or Scot has no own source of either, only chests, scripts or a conquered building's stock (the sacrifice itself does not need the worker, §3.8) | — |
 
 ---
 

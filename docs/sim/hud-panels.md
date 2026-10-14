@@ -833,7 +833,8 @@ it leaves the match [known] S 0061ff50, S 006217f0. So a defeated player sees th
 with the "spotted" restriction of §3.1.4 still applied) and then leaves; the simulation of the others goes on
 without that client's input ([network-session.md](network-session.md) for the "user leaves" event).
 While the `Defeat` dialog is open the camera can still be moved [live, 2026-10-12, maintainer]; whether selection
-works and whether the explored area changes is [TODO] (the player in that test had no building left).
+works is [TODO] (the player in that test had no building left); the explored area is not changed by the
+defeat (§9, Defeat).
 
 After a win (`Victory`) or a completed free map (`Report`), `btContinue` opens the statistics **without**
 leave-on-close, so the player can close it and play on [known] S 0061ff50.
@@ -1067,9 +1068,13 @@ survives from one match to the next inside one program run depends on the object
 - **Chat**: two scopes (all, allies), Shift+Enter for allies, auto-hide after 15 s. A server-based remake can
   route team chat on the server instead of filtering on the receiver.
 - **Defeat**: the original offers no spectating: "Continue Game" is disabled in the `Defeat` dialog (§3.10).
-  A remake that adds spectating needs a visibility rule of its own; [TODO] not established: whether the
-  original changes the exploration mask for a defeated player (a read of the defeat path in
-  [players-victory.md](players-victory.md) §3.6 terms settles it).
+  A remake that adds spectating needs a visibility rule of its own. The original does not change the
+  exploration mask of a defeated player [known]: the defeat path (`VictoryCond_Update` S 00535d70,
+  `CheckPlayerEliminated` S 00535b90, `DeclareWinner` S 00535990; [players-victory.md](players-victory.md) §3.6)
+  calls no exploration function, and the mask is written only by `NMap::Exploration::RevealHexArea` S 00677570
+  (from `MapModifier::ExploreArea` S 00674800), `Clear` S 00677930 and `Init` S 00677af0 (match reset, load,
+  map export). The player stays active, so his remaining buildings and settlers, and his allies', go on
+  revealing cells for him through `ExploreArea` [inferred: none of its callers tests the victory state].
 
 ---
 
@@ -1080,7 +1085,7 @@ survives from one match to the next inside one program run depends on the object
 | 1 | Exact meaning of the three lists / flags in the trend query (§3.2.2): the order list at `village.orderSystem`, the transport list at +0x448, worker slot +0x28 | static read of the element classes and of the worker vftable |
 | 2 | Second half of `OverlayBuilding::UpdateFromBuilding`: soldier counts, hit-point bar, name colour of military buildings, `exclamation0..2`, the flag that hides the missing-material icons (§3.6.1) | disassembly read of S 006403c0 from 0x00640533 on |
 | 3 | Answered (§3.1): the tech tree tab opens like the other three and shows a text-only tree [live, 2026-10-12] | — |
-| 4 | What a defeated player can still do while the `Defeat` dialog is open: the camera moves [live, 2026-10-12]; open: selection, and whether the exploration mask changes for a defeated player (§3.10, §9) | observation in the game; read of the defeat path of the victory tick |
+| 4 | What a defeated player can still do while the `Defeat` dialog is open: the camera moves [live, 2026-10-12]; open: selection. Answered (§9, Defeat): the defeat does not change the exploration mask (no exploration writer on the defeat path; writers S 00677570, S 00677930, S 00677af0) | observation in the game (selection) |
 | 5 | Whether attackable enemy buildings get a marker of their own (§3.6.2) | observation in the game |
 | 6 | Answered (§3.1): in the first minute the graph lists only the own player and shows no data [live, 2026-10-12] | — |
 | 7 | State that survives from one match to the next in one program run: the message filter bytes, the minimap zoom and pan, the chat log (§7) | read of the combo box mark function and `OnFilterButtonToggled` S 005f8e80; of `Picture::LoadFromXml` and where the HUD layout is reloaded; of the `ChatSystem` attach / detach functions |

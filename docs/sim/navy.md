@@ -218,10 +218,15 @@ and matches S 005ba250 [known].
 (float), `+0x10 size` (int), `+0x14 constructTime` (float), `+0x18 stockLimit` (int), `+0x1c waitTime` (int),
 `+0x20 sinkingTime` (int), `+0x24` map tribe → expedition building type. Constructor defaults: size 1,
 constructTime 50.0, stockLimit 12, waitTime 40, sinkingTime 30 [known] S 005556c0. `size` is written by the
-constructor and by `sh_setSize` only: every other use of the `ShipConfig` pointer in the decompiled program
-(the ship constructors, `BeginSinking`, `Ship::Update`, the ship-building movie, `GetSpeed`,
-`GetExpeditionBuilding`) reads another field, so the value has no effect [inferred: search of the decompiled
-code for the pointer; a raw access through a copied pointer would not be found this way].
+constructor and by `sh_setSize` only (through the shared setter S 004712d0, `[ecx+0x10] = v`), so the value has
+no effect [known]. Evidence: a whole-binary instruction scan that follows every `PropertiesDb` pointer (result
+of `EnsureInstance` S 0054a140 or load of its global S 00889dd8) into a load of `+0x68` finds 18 loads; their
+uses are the seven `sh_*` setters, `GetExpeditionBuilding` (4 callers), `GetSpeed` (2), `constructTime` +0x14
+(the ship-building movie, S 0077f9c0, S 0077fa30) and the copy into `Ship.shipConfig` (+0x04) in the three ship
+constructors; the `PropertiesDb` pointer is never stored outside the stack. The readers of `Ship.shipConfig`
+(decompiled text of the 503 navy / ship functions) read `sinkingTime`, `waitTime`, `stockLimit` (S 005bcc30)
+and the expedition building map only. A pointer spilled to a stack slot and reloaded is not followed by the
+scan; the decompiled text of the navy functions covers those.
 
 `ai::properties::HarbourProperty` (0x9c): `+0x00 id`, `+0x04 name`, `+0x20 waterStreetPosition[4][2]` (exit
 offset per direction, floats), `+0x40 shipPosition[4][2][2]` (two dock offsets per direction, floats),
@@ -302,10 +307,16 @@ In `ctor_UnderConstruction`, `Construction::SetBuildPosition` zeroes both work v
 `NLogic::Edit` object (`g_pGameSystem + 0x38`) answers true on its vtable slot 1 [known] S 005ba640. Slot 1
 (vftable S 007e7c28, S 00538c90) returns the byte at `Edit + 4`, the flag that slot 0
 (`Edit::SetBatchEditing` S 00538a60) sets and whose clearing flushes the map modifier's pending dirty
-rectangles [known]. So a ship-building site placed while a batch edit is open yields a finished ship at once
-[inferred]; which callers open a batch edit (slot 0 is only called virtually) is [TODO]. In a free game with
-ships `SetBatchEditing` was not called and `Edit +4..+7` read 0 [live, 2026-10-12], so in a match a new ship is
-built normally.
+rectangles [known]. The only `Edit` object is the one the game system's constructor creates (the vftable has
+one data reference, S 00538c78 from S 00528360). The only calls of slot 0 are in the debug menu's tool handler
+`nMenu::Debug::HandleToolClick` S 00604dd0, tool mode 6 (place / remove a building): it sets the flag to 1,
+calls `NVillage::System::PlaceBuilding` or `RemoveBuilding`, and sets it back to 0 in the same call [known]
+(whole-binary search of the getter S 00695ea0 on `g_pGameSystem` and of direct `+0x38` loads after
+`g_pGameSystem`; an `Edit` pointer reached through another copied game-system pointer would not be found this
+way). A ship is created only when the constructor later reaches the site (§3.3), on a later tick, so even a
+ship-building site placed with that tool is built normally [inferred]; the instant completion is not reached
+by the shipped callers. In a free game with ships `SetBatchEditing` was not called and `Edit +4..+7` read 0
+[live, 2026-10-12].
 
 **Deletion paths** [known]: state 7 in `System::Update` (§4); `System::EraseShipByUnique` S 005b3890 (script
 `na_destroyShip`, ownership transfer, the debug menu, and the destructor of a building's construction record
@@ -950,8 +961,16 @@ same way [known]:
   end owned by the player, neither `path[0]` nor `path[last]` in the player's forbidden list
   (`ai_forbidHarborPosition`; these are the exit cells, while `UpdateShipRoutes` below compares the harbour
   flag's cell with the same list), and `path[0]` on that continent (S 005a5a80, S 005a5b50). An order that
-  ends with a result other than 1 marks the AI cell full for `1d66b4ae` (S 005a59d0). What
-  `HasFreeProductionOfType` counts is [TODO] not established: read `NAI::Cell::FindFreeProductionOfType`.
+  ends with a result other than 1 marks the AI cell full for `1d66b4ae` (S 005a59d0).
+  `HasFreeProductionOfType(cell, ship)` S 00595750 = `FindFreeProductionOfType(cell, ship, true)` S 00595450
+  [known]: true when the cell's production list holds an `NAI::Production` of the good `ship` (+0x18) that
+  serves no need (`servedNeed` id unset, Production +0x74) or whose need has no building reference (Need
+  +0x7c); a production of a group good (type 3) matches when `ship` is one of its members. The only producer
+  of `ship` is the ship-building site `shipBuilding` (`bp_setGoods(shipBuilding, ship, 1)`; `Building::Init`
+  S 00596ba0 makes one production per unit). So a Scots or Bavarian AI does not order a second site in a cell
+  where its own site still stands; the Egyptian site `shipBuildingEgypt` produces `shipEgyptCosts`
+  (65a7cc73, `Goods.lua`), a plain ware group (type 2), so for an Egyptian AI the test is always false and only
+  the ship / route count and the full mark limit the orders [known: code and data].
 - `NAI::Expedition::UpdateShipRoutes` S 005a02c0 (every 211 ticks, S 00590fd0): only if the player's stock
   holds the full cost (`frameCost ++ cost`) of the expedition building. For each harbour record in the AI's
   cells whose flag cell is not forbidden and each routed exit: if the player has an active expedition on the
@@ -1175,12 +1194,12 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Which callers set the `NLogic::Edit` batch-editing byte (slot 0, S 00538a60), i.e. when a new ship is finished at once (§3.2). Not in a running match: no call, `Edit +4..+7` = 0 [live, 2026-10-12]; the editor and map load remain | cross-references to the vtable slot offset on the `Edit` object (editor tools, map load); breakpoint on S 00538a60 in the game |
-| 2 | Whether `ShipConfig.size` is reached through a raw offset that the search of §2.10 misses | data-flow search for readers of `PropertiesDb + 0x68` followed by `+ 0x10` in the disassembly |
+| 1 | Answered (§3.2): only the debug menu's building tool (`nMenu::Debug::HandleToolClick` S 00604dd0, tool mode 6) opens a batch edit, for the duration of one `PlaceBuilding` / `RemoveBuilding` call; a ship is created on a later tick, so the instant completion is not reached by the shipped callers | — |
+| 2 | Answered (§2.10): no; the whole-binary scan of `PropertiesDb + 0x68` and of the `Ship.shipConfig` copies finds no reader of `+0x10` | — |
 | 3 | Answered (§3.1 rule 3): the null write is not reached through the game's own rules (one ship per player and route, `MoveToHarbor` only to ends of the own route, `ClearRoute` releases the docking position). A sea attack next to an own ship of the same route sends nothing by sea (`SendSoldiersBySea` S 00575510). Not covered: a save edited by hand, data with fewer than two docking positions per exit | static: S 005b97f0 and its five callers, S 005b9340, S 005b7050, S 005b4c50, S 005b3450, S 005b6d30, S 00575510 |
 | 4 | Answered (§3.4, §3.8): an anchored idle ship takes an own-to-own route on another water body (the continent test of S 005b4c50 compares the ship's cell with itself), and its first crossing starts with one straight step from its cell to `path[n-2]` | static: S 005b4c50 (disassembly), S 005bab60, S 005b99d0, S 005bdb30, S 005bd900, S 00772c50, S 005436d0, S 007728d0 |
 | 5 | Answered (§3.4): yes, for the one stay before its first crossing; ship states 3, 1 and 2 run on still ticks (movement state 4, not under way) and use `targetHarbor` only | static: S 005bb500, S 00772b00, S 005bbbe0 |
-| 6 | [TODO] not established: what `NAI::Cell::HasFreeProductionOfType(1d66b4ae)` counts in the AI's ship-building decision (§5.3) | static read of `NAI::Cell::FindFreeProductionOfType` |
+| 6 | Answered (§5.3): a production of the good `ship` in the cell that serves no need or a need without building, i.e. a standing Scots / Bavarian ship-building site; never true for the Egyptian site (`shipEgyptCosts`) | — |
 | 7 | Answered (§3.10 step 3): the founding state calls the flag placement right after the building is placed; the building stands at most `territoryRange - 1` = 8 cells from the harbour cell, so the cell and its 6 neighbours lie inside the new source. No flag in that tick only when a neighbour is outside the map or another player's source wins one of the seven cells | static: S 005b8ac0, S 005b7e50, S 005b5670, S 0067b5a0 |
 | 8 | Answered: no. Ship state 1 exists only on a route whose two ends belong to the ship's player, and no other player passes `CanPlayerAssignShip` there; on a route with two owners there are at most two ships and each takes its own docking position (the dock search refuses only an exit that holds a ship of the same player). Ships do not occupy cells for the path search | static: S 005b6d30, S 005ba970, S 005bc060, S 0052e360, S 005bb500 |
 | 9 | Answered (§3.7): `LoadAtHarbor` reports "worked" on the two skipped ticks of three; with `waitTime` 15 a ferry with nothing to do leaves on the 17th idle phase tick, 49 to 55 ticks (about 5 s at speed 1) after its first call | live 2026-10-12: 4,883 calls, 120 stays of four ferries; S 005bd4e0 |

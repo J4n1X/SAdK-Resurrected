@@ -7,6 +7,11 @@ sadk_noav.exe, `T` = tincat3.dll. Hooks only observe unless an entry says otherw
 permission** write game memory or change what the server sends, and need the maintainer's explicit go-ahead first
 (`HARNESS.md` §2).
 
+**Rule (maintainer, 2026-10-14): a live test may only be asked for when the behaviour cannot possibly be read from
+code.** Read the code path to its end first. What qualifies: what the screen or the speaker shows, timing of real
+networks and hardware, libraries that cannot be read (packed `fmod.dll`, drivers), the original servers' behaviour.
+Confirming a reading is not a reason for a live test.
+
 ## Standing notes (maintainer, 2026-10-12)
 
 - Mail, buddy lists, whispers, the shops (they open and list their items) and per-match server mods work in live

@@ -133,7 +133,7 @@ A multiset of goods [known] S 00539d40 and the struct comments:
 | +0x04 | byte | `flag04` | 0 at construction. Written first by `Store`. When set, `Load` S 00539fa0 clears the map before reading; when 0, `Load` does **not** clear: every loaded unit is added (as by `AddOne`, `changeStamp` included) to what the stock already holds [known]. Only the constructor, `Reset` (both write 0) and `Load` (reads it from the file) write it, so it is 0 unless a file carries 1 [inferred]. |
 | +0x08 | `std::map<int,int>` | goods | Key = good id, value = count. Head node pointer at +0x0c, node count at +0x10. Ordered by good id ascending. |
 | +0x14 | int32 | `totalUnits` | Sum of all counts: +1 per unit added, −1 per unit removed. |
-| +0x18 | int32 | `changeStamp` | +1 on every unit added and on every successful unit removal; never decreases. |
+| +0x18 | int32 | `changeStamp` | +1 on every unit added and on every successful unit removal; never decreases. Never read (§10 Q8) [known for the functions named there]. |
 
 A "good amount" is a pair `{int goodId, int count}` (8 bytes); a "good list" is a vector of such pairs [known]
 S 00539a90, S 00539e10.
@@ -280,8 +280,15 @@ Constants and inputs:
   The value is written to `settings.cfg` (second field of the `UserSettings` section, S 00579640), but
   `UserProfile::LoadSettings` S 00579960 reads it and then overwrites it with 1.0 [known]. Only the speed command
   also changes the network multiplier (manager +0x3c); the other writers change the time scale alone. Pause, options
-  panel and cheat are blocked in network modes 1..4 by the conditions above [known]; whether a cinematic can run
-  in a network match is [TODO] (§10).
+  panel and cheat are blocked in network modes 1..4 by the conditions above [known]. A cinematic has no such
+  block: the only code that opens the cinematic screen is the Lua function `menu.startCinematic`
+  (`LuaMenu_StartCinematic` S 005dd3c0, registered by `nMenu::System::Initialize` S 005dda30; no other function
+  attaches `nMenu::System::cinematic`), and it tests no network mode [known]. Its only shipped caller is
+  `scripts\mapTools\quests.lua` (line 792), used by the campaign map scripts; the free-game maps have no script
+  (§3.3), so in a network match on a shipped map no cinematic runs [known from the files]. A user map whose script
+  starts one in a network match would start it on every peer at the same tick, but the speed blend and the end
+  (`OnHide`, which calls `EndCinematic` and re-enables the AI and the chests) follow local frame time and the
+  local skip key, so the peers would diverge [inferred].
 - `speedFactor` = `NLogic::System + 0x80`, always 1.0 [inferred].
 - `tickInterval` = float at `GameConfig + 4` = **0.1 s** (§6).
 
@@ -458,14 +465,18 @@ in the states other than 3 and 4) the timer +0x24 is re-stamped and transport sl
 every peer; the rest
 only in state 4 and when the transport's `IsHost` (slot +0x38) is true. Slot +0x84 (`FlushPending` in the map)
 calls the TinCat API function at +0xb0 for net id 0xEFFFFFDD (host with at least one user) or 0xEFFFFFCC
-(connected client) [known]; what that API function does is not read: given the period it is the candidate for
-the ping request whose answers feed the samples below [TODO] (`docs/NCOMM_LAYER.md`). Then:
+(connected client) [known]. That API function is `TinCat_CTRL::Send_Ping` T 1000a2a0 (slot +0xb0 of
+`TinCat_CTRL::vftable` T 1004cfcc): a ping request (module 99, message 0x5a89) carrying `GetTickCount()`, whose
+answer comes back through `Received_Ping` T 10009070 as the samples below [known]. Then:
 
 - transport slot +0x44 returns a value < 2: event **0x3000d** with value 1 is appended to the outgoing package,
   every period, whether or not the length is already 1. The slot is S 00408430, a shared accessor that returns
   the int at +0x1c of its object, here the transport: the size field of the user list whose head (+0x18)
   `GetMinUserLevel` and `ClearUserSamples` iterate, i.e. the number of user records [inferred from the list
-  layout]; whether the local user has a record of its own is [TODO] (§10);
+  layout]. A host has a record of its own: `TinCatNetwork::StartUp` S 0041e610 pushes one for net id 0xEFFFFFCC
+  (local name, GUID and connection type) onto that list; every other record is added by `UIS_Add` S 0041e990,
+  whose only caller is `cb_LoggedIn` S 0041eb10, one per client that logs on [known]. So on the host "< 2"
+  means "no client logged on";
 - else read the latency `L` (slot +0x8c S 00419a50: the largest ping sample over all users' sample lists, capped
   at 1000; 0 = no samples → do nothing), `f = L × 0.5`; if mode < 3 or the level `q` < 5: `q` 0 or 1 → `f × 1.7`,
   `q` 2 → `f × 1.4`, `q` 3 → `f × 1.1`; `value = clamp(ceil(k × f × 0.01), 1, 10)` with `k` = float at manager
@@ -473,12 +484,19 @@ the ping request whose answers feed the samples below [TODO] (`docs/NCOMM_LAYER.
 
 `q` is slot +0x60 `GetMinUserLevel` S 004198e0: the minimum of a per-user level (user list node +0x3c) over all
 users, starting from 3, so `q ≤ 3` and one of the three factors always applies (at least × 1.1) [known for the
-function, the rest inferred]. What sets a user's level is [TODO] (`docs/NCOMM_LAYER.md`). The samples come from the
+function, the rest inferred]. The level is the user's connection type (`UserProfile + 0x94`, option
+`cConnectionType`: 0 none, 1 modem, 2 ISDN, 3 DSL/cable, 4 LAN) [known]: the host's own record gets its own value
+in `StartUp`; a client's record starts at 0 (`TinCatUserEntry` ctor S 00419f00, from `UIS_Add`) and is set by
+`UIS_SetUserData` S 0041a720 (slot +0x50) from the connection type in the client's join request 0x30001
+(event +0x48, `HandleEvent` S 0040e560, also stored in its slot with `PlayerInfo::SetConnectionType`), and on a
+rejoin 0x3000e from the slot's stored value [known]. So `q` is 3 when every machine reports DSL/cable or LAN, 2
+with an ISDN user, 0 or 1 with a modem or "none" user or while a client is logged on but its 0x30001 is not yet
+handled; the `q < 5` test is always true [inferred from `q ≤ 3`]. The samples come from the
 transport's ping callback (`cb_Ping_Received` S 0041d910 → S 0041d610), which puts the value at the front of the
 sample list of the user with that net id and then cuts the list to **2** entries, so `L` is the largest of the
-two newest samples of any user [known]; with `L` in milliseconds the formula reads
-"one-way delay in units of 0.1 s logic ticks, rounded up" [inferred from the cap 1000 and the factor 0.01; the
-unit itself is not read]. Example under that reading: worst ping 250 ms, `q` = 3 → `ceil(250 × 0.5 × 1.1 × 0.01)`
+two newest samples of any user [known]. A sample is the round trip in milliseconds (`GetTickCount()` at the
+reply minus the value the request carried, §10 Q2) [known], so the formula reads "one-way delay in units of 0.1 s
+logic ticks, rounded up" [inferred from the factors 0.5 and 0.01]. Example: worst ping 250 ms, `q` = 3 → `ceil(250 × 0.5 × 1.1 × 0.01)`
 = 2 logic ticks per net tick.
 
 0x3000d is queued into the outgoing package, so it is applied at the same net tick boundary on every peer:
@@ -516,7 +534,7 @@ state is 3 or 4) [known unless noted]:
 |---|---|---|
 | 1 | `eReconnectStateInitialisedAndWaitingOnExecutingOldPackages` | Entered through `BeginReconnect` S 00408f60 when the transport lost the session (once, S 00419080). Logic ticks continue: the gate allows state 1, skips the host-side test and only asks for the merged package `N−2`. At a boundary nothing is sent or collected (`reconnectState != 1` guards step 2 and 3 of `AdvanceNetTick`), but the net tick still advances. When the gate finally refuses a tick (last sub-tick of a net tick whose package `N−2` never came), the state 4 action runs in the same frame. |
 | 4 | `eReconnectStateStartLocalServer` | If a host address is stored (+0x08..+0x14, written by the transport's reconnector, S 00425aa0 [inferred]): `ReconnectAndRejoin` S 004093a0, become a client (mode 3 or 1), → state 3; on failure `Reconnector_DropRemotePlayers` S 004109b0. Otherwise `Reconnector_RestartAsServer_DoAction` S 0040b700, become the host (mode 4 or 2), +0x28 = 1, timer +0x04 = `timeHostWaitForClients`, → state 2; on failure the manager shuts down. |
-| 2 | `eReconnectStateHostWaitingOnClientsToJoin` | New host: counts the timer down by frame time. When every human slot is filled again (an unfilled human slot for which `PlayerInfo::IsState3` is true does not hold the wait; that predicate is named by the map and not read [TODO]) or the timer is ≤ 0: each human slot still unfilled is reset and removed with game command 0x2002b (dispatched locally in mode 0, else queued), then `BroadcastGameInfo(true)` S 004090e0 sends event **0x3000f**. |
+| 2 | `eReconnectStateHostWaitingOnClientsToJoin` | New host: counts the timer down by frame time. When every human slot is filled again or the timer is ≤ 0: an unfilled human slot whose player has left the match does not hold the wait (`PlayerInfo::HasLeftGame` S 00414f40, the map's former `IsState3`: slot state +4 == 3, set by `ResetToState(true)` S 00414d10 when a player is removed in a running match, for the old host's slot after a migration, and by this step) [known]. A human slot counts as filled when its owner GUID is valid and its state is 1 (`PlayerInfo::IsFilled` S 00414ed0; outside a reconnect also its net id ≠ 0xEFFFFFEE); AI and closed slots always count [known]. Then each human slot that is not filled, including one already in state 3, is reset to state 3 and removed with game command 0x2002b (payload: the slot's player index; sender slot: the new host's own; dispatched locally in mode 0, else queued) [known], then `BroadcastGameInfo(true)` S 004090e0 sends event **0x3000f**. |
 | 3 | `eReconnectStateClientWaiting` | Rejoined client: waits for 0x3000f. |
 
 Both state 4 actions end with the same reset [known] S 004093a0, S 0040b700: `SendEventUserChecksum(netTick)`
@@ -542,7 +560,15 @@ applies again at `baseTick + 5`. Each peer's tick counter stays equal to the oth
 the same net tick: a peer stalls at sub-tick `S − 1` of the first net tick `N` whose package `N − 2` it lacks, and
 the reset makes it run `S` more logic ticks before closing `N`. The rejoin check on the net tick number is the
 only guard; the logic tick counter itself is never transmitted or compared [known: `AdvanceNetTick` only stores it
-in +0x48]. Whether two surviving peers can stall in different net ticks and still pass that check is [TODO] (§10).
+in +0x48]. Two surviving peers that stalled in different net ticks cannot both stay: the net tick does not move
+after the stall (no logic tick in states 2, 3, 4), `ReconnectAndRejoin` sends that frozen `netTick` in 0x3000e,
+and the new host kicks the sender when it differs from its own frozen `netTick` (`HandleEvent` case 0x3000e,
+`KickPlayer(…, "!COULD NOT RECONNECT", true)`) [known] S 004093a0, S 0040e560. Every peer that stays therefore
+stalled at sub-tick `S − 1` of the same net tick `N` as the new host, has executed exactly the merged packages up
+to `N − 3`, and has the same logic tick counter [inferred: equal package history and equal tick lengths, since
+0x3000d is applied at the same boundary everywhere]. Whatever the lists still held (`N − 2`, `N − 1`, own queued
+commands) is discarded on every machine and never executed, so a difference between those discarded sets cannot
+reach the simulation [inferred].
 
 ### 3.3 Simulation random generator
 
@@ -593,9 +619,21 @@ calls `BuildScene` S 007842e0 (→ `SetUp`) and only then `Game_LoadWorldFromDes
 the descriptor's load-path selector is 1: then it only resets and re-initialises the subsystems) loads the
 map file (`nGame_File_load`), and for new-game map types calls `Game_CreatePlayersFromDescriptor` and, when the
 game information carries a `GameSeed` or a game id, `Game_DistributeChestsForNetworkMatch` (§3.5) [known].
-Whether loading the map part of a file draws from the generator before the shuffle (objects created by the map
-load) and which menu or lobby option sets descriptor +0x24 (`GameLoadDescriptor::Reset` S 005a9bb0 writes 0,
-`Assign` S 00784cd0 copies it) are [TODO] (§10).
+The shuffle never runs in this build: descriptor +0x24 is written only by `GameLoadDescriptor::Reset`
+S 005a9bb0 (0, also from the constructor S 005a9c90), `Assign` S 00784cd0 (a copy) and
+`GameLoadDescriptor::SetRandomStartPositions` S 005a9b10, whose two callers, the lobby room's
+`SetupGameDialog::SetupSession` S 004562d0 and `nMenu::Main::StartCampaignMap` S 005df2c0, both pass 0; the
+other starters of a game (free game, pending map, command line, continue) leave it at the reset value [known].
+So players get the map's start positions in map order. Below `Game_LoadWorldFromDescriptor` no direct call path
+reaches `LogicRandom_Next` except the unused shuffle and `NMap::AStar::BuildPath` S 00676d10 behind a harbor flag
+link of the placed start building, which is not a harbor [known for the direct call tree, inferred for the
+harbor branch]. What can draw before tick 0 is the map script, the `.lua` file of the map (`C01.lua` beside
+`C01.s2m` [inferred from the shipped files]) that `GameScript_LoadMapScript` S 005b1fe0 runs during the file load
+when it exists; then `GameScript_CallOnStarted` S 005b2220 (new game) and `GameScript_CallOnLoaded` S 005b2180 at
+the end of the load call its Lua globals `onStarted` / `onLoaded`, from which `logic.getRandom` or
+`logic.map_createDeposit` can draw [known]. The shipped free-game maps (`data\game\maps\Freegamemaps`) have no
+script file, so in a network match on them the generator is untouched at tick 0 [known from the files]; a user
+map with a script can draw there.
 
 Callers reduce the value with a plain unsigned modulo: `value % n` picks an index in `0..n−1`
 (S 00538f40, S 00676d10 `% 6`, the start position shuffle S 005abb60) [known]. Lua `getRandom(max)` S 005ad710
@@ -744,6 +782,30 @@ writer puts into the stream, and what it leaves out, is specified with the subsy
 caches (`docs/sim/streets-transport.md`), ships (`docs/sim/navy.md`), computer players
 (`docs/sim/ai-player.md`), players (`docs/sim/players-victory.md`).
 
+**Checksum writers against save writers (village, settlers)** [known]. The village and settler writers keep the
+field order of their save writers but do not hash the same fields:
+
+- village system: `StoreChecksum` S 00557d10 against `Store` S 00557cc0 leaves out the system byte `flagBC` and
+  the order system's `bEnabled` (`OrderSystem::WriteOrders` S 00562030 against `Store` S 00561f90); the building
+  list (count, then per building type id and owner index) and the remains (`Remains::StoreBody` S 005641c0 =
+  `Remains::Store` S 005640e0 without the tag) are the same;
+- building: `StoreForChecksum` S 0055c690 against `StoreSavegame` S 0055c470 hashes the **global unique id
+  counter** where the save writes the building's own id: it calls `LogicId_StoreGlobal` S 00538760 with the stream
+  only (0055c699), so a building's id is not hashed and the counter is hashed once per building. The depot leaves
+  out its byte `+0x08` and the two stocks' byte `+0x04` (`Depot::StoreUntagged` S 0055ae70, `Stock::StoreContents`
+  S 00539910 against `Stock::Store` S 00539850); the blocking leaves out `bActive` (S 00566f90 against
+  S 00566ea0); the sacrifice leaves out `sacrificeDefId` (S 00560c80 against S 00560c30); military, catapult and
+  the ordering component (home settlers only, S 00563c00) are written for every building type, the save writes
+  them by type. Position, ticker, hit points and projectile references are the same values untagged;
+- settler (`docs/sim/settlers-jobs.md`): the class parts are the class `Store` without the tag, except that the
+  worker leaves out `lastWorkTick` (S 0065cb00 against S 0065c800) and the soldier's fight state writes
+  `field04` before the fight reference and its cells and `leftFight` as plain integers (S 0065ba40 against
+  S 0065b8b0). The base part (S 00656b90 against `Settler::Store` S 00656a20) adds the type id, writes the package
+  reference before the movement, and leaves out the action timer, the base movies `leaveMap`, `leaveBuilding`,
+  `moveToShip` and, from the movement (S 006579e0 against S 006576d0), the whole `ai::movement::Movement`
+  S 00773010 (cell, fine position, interpolator, movers), `streetMode`, the route cells and `routeEndRequested`.
+  No settler position is hashed.
+
 **`NCore::CRCStream`** (vtable S 007e9ccc) implements the save-stream interface by hashing instead of writing
 [known, vtable read]:
 
@@ -814,7 +876,8 @@ packages were executed [known]:
 - exactly 5 net ticks after the base tick and still not in sync: `!NO SYNC START`, report logged, dump as above.
 
 No other action follows in this function: the match is not stopped and no state is transferred [known for
-S 00411990; whether a listener reacts further is [TODO]]. The in-sync flag starts as false at match start
+S 00411990; no listener reacts further either: the message sink only shows the notice as a letter and the
+observer list has no subscriber, §10 Q3]. The in-sync flag starts as false at match start
 S 0040b270, so the first agreement is a silent transition when it happens before net tick 5 [inferred].
 
 A separate, static check happens at join time: build version, build checksum (`NComm_GetBuildChecksum` S 0041f240,
@@ -847,7 +910,7 @@ callers named in the map]:
 | +0x04 | subsystems re-init begin (arg 0) / end (arg 1) | +0x70 / +0x74 | building remains added / destroyed |
 | +0x08 / +0x0c | building added (placed, transferred, loaded, type set) / removed | +0x78 / +0x7c | doodad added / destroyed |
 | +0x10 / +0x14 | building upgrade started / cancelled | +0x80 / +0x84 | ship added / destroyed |
-| +0x18 / +0x1c | flag added / removing | +0x88 / +0x8c | navy events [TODO] |
+| +0x18 / +0x1c | flag added / removing | +0x88 / +0x8c | harbour added (ctor, post-load) / destroyed (S 00531220 from `ai::navy::Harbor::ctorAtPos` S 005b5bc0, `PostLoad` S 005b5240; S 005312a0 from `Harbor::dtor` S 005b5530) |
 | +0x20 / +0x24 | settler added / removed | +0x90 / +0x94 | ship route added / removing |
 | +0x28 / +0x2c | soldier entered / left a fight | +0x98 / +0x9c | projectile launched or retargeted / destroyed |
 | +0x30 | strike or projectile impact (2 args) | +0xa0 / +0xa4 | sacrifice started / removed |
@@ -938,7 +1001,7 @@ After the subsystems, still inside the tick iteration but outside the simulation
 | # | Call | Notes |
 |---|---|---|
 | 21 | `nextTickTime += tickInterval` | |
-| 22 | render scene per-tick hook (`g_pScene` vtable S 007f8f2c +0x18 = `S2CG::Scene::SyncLogicTick` S 00680550) | Presentation: copies `nextTickTime` into the scene's game time and hands it to the render-side managers (map renderer, characters, carried items, animals, ships), passes the scene's float +0x50 to the swarm manager, stores the game time in a render singleton (+0x94), then re-applies the scene settings [known]. No call into a simulation subsystem at this level [inferred]; the managers themselves are not read. |
+| 22 | render scene per-tick hook (`g_pScene` vtable S 007f8f2c +0x18 = `S2CG::Scene::SyncLogicTick` S 00680550) | Presentation: copies `nextTickTime` into the scene's game time and hands it to the render-side managers (map renderer, characters, carried items, animals, ships), passes the scene's float +0x50 to the swarm manager, stores the game time in a render singleton (+0x94), then re-applies the scene settings [known]. Nothing the simulation reads is written below it [known, §10 Q10]. |
 | 23 | Lua `onLogicTick(tickCounter)` S 005b20d0 | Only if the second argument of `Update` is true (the frame loop passes true) and a map script is loaded (S 0087e964 non-zero); it can call simulation functions and `getRandom`, so it is **part of the deterministic tick**. |
 | 24 | optional tick listener, from the second tick of a frame on | Not used by the frame loop (NULL). |
 
@@ -1112,8 +1175,34 @@ without game script, quests and sacrifices into a text stream [known].
   made at the start of `nGame::System::HandleGameCommand` S 007845a0, in `CApplicationEx::Initialize` and in
   `Lobby::CLobby::Update` [known, callers of S 0057b9b0]. Float values
   that are part of the simulation state (they are hashed as raw 4 bytes) must therefore be reproduced with float32
-  arithmetic in the original operation order to stay checksum-compatible. Which subsystems hold float state is
-  outside this document [TODO per subsystem]. The tick timing floats are not hashed.
+  arithmetic in the original operation order to stay checksum-compatible. The tick timing floats are not hashed.
+  Hashed float state [known: every function of the image that calls stream slot +0x4c (untyped or typed
+  `WriteFloat`), matched against the writers reached from S 00784080, virtual `Store` calls resolved by the
+  member's class]; the only other raw write in the chain is the generator's 8 bytes (slot +0x44):
+
+  | Writer | Floats | Reached through |
+  |---|---|---|
+  | `NVillage::Construction::Store` S 0055e720 | `remainingA`, `remainingB` | `Building::StoreForChecksum` +0x44 |
+  | `NVillage::Catapult::Serialize` S 00567770 | `rotationStartStamp`, `lastFireStamp` | the same, +0xf4 |
+  | `NVillage::Military::Store` S 005603f0 | `defenceFraction` | the same, +0xe0 (direct call) |
+  | `ai::village::MilitaryOrderSlot::Store` S 00568880 | `loadWeight` | `NVillage::Military::Store` |
+  | `NPlayer::Military::Store` S 005c09d0 | `tierValues[3]`, `value1c` | `Player::StoreChecksum` +0x4c |
+  | `NPlayer::ArrangementObject::Store` S 005c2e20 | `weight`, `accum` | `Player::StoreChecksum` → `GoodArrangement` S 005c1050 → group S 005c0b80 → `ArrangementBase` S 005c2fa0 [inferred: element classes] |
+  | `NNet::Street::Store` S 00669090 | `avgTraffic` | `NNet::System::StoreForChecksum`, street lists |
+  | `NMovement::Interpolator::Save` S 00774a40 | `progress`, `carryOver`, `stepRate` | ships only: `Ship::StoreUntagged` → `NNavy::Movement::StoreUntagged` S 005b9500 → `NMovement::Base::Store` S 007729e0 |
+  | `NMovie::Construct::Store` S 0077ffd0, `NMovie::ShipConstruct::Store` S 0077f910 | `workPerStroke` | constructor settlers' build movies (`docs/sim/settlers-jobs.md`) |
+  | `NAI::CoinProduction` / `WeaponProduction::Store` S 00598560 / S 00598890 | `lastNeedTime` | AI player tree |
+  | `NAI::CatapultConstruction` / `SearchConstructionPlace::Store` S 00598cc0 / S 005a9270 | `bestScore` | AI player tree |
+  | `NAI::ExpansionTarget` / `ConstructionOrder::Store` S 005a0180 / S 005a1690 | `timestamp` | AI player tree |
+  | `NAI::Trigger::Store` S 005a7890; `NAI::AttackTarget::Store` S 005a9a20 | `startTime`, `value`; `time` | AI player tree |
+
+  The AI's checksum writer `NAI::System::StoreBody` S 00581b90 is its save body (`NAI::System::Store` S 00581ad0
+  without the section tag; per player the full `NAI::Player::Store` S 00583180), so every float the AI saves is
+  hashed [known for the bodies; that each AI class above sits in a player's tree is inferred from their saves].
+  Saved but not hashed: settler movement and the action timer (`NSettlers::Animation::Store` S 0065f0c0), ship
+  construction (`NNavy::Construction::Store` S 005ba4c0, left out by `Ship::StoreUntagged` S 005bb1a0),
+  animals and deposits (S 00541cc0, S 00542e10), `NLogic::ProductivityItem` S 00537110, messages
+  (S 005c0300) and the logic tick timing in `NLogic::System::Save` S 005275c0 [known].
 - **Float accumulator precision.** `accumulatedTime` and `nextTickTime` are float32 and grow by 0.1 per tick for
   the whole match; float32 spacing reaches 0.0078 at 65,536 s (about 18 h at speed 1). The tick *count* is unaffected
   across peers because of the gate, but local pacing gets coarser [inferred].
@@ -1121,7 +1210,13 @@ without game script, quests and sacrifices into a text stream [known].
   the tick counter is only detected once it leaks into a hashed subsystem [inferred].
 - **CRCStream string quirk.** A string contributes exactly 4 bytes from its buffer start; for strings shorter than 4
   characters this includes bytes after the terminator [known] S 0057d3d0. If a hashed object stores a short string,
-  peers could disagree on garbage bytes; whether any hashed object does is [TODO].
+  peers could disagree on garbage bytes. No hashed object writes a string [known]: the functions of the image
+  that call stream slot +0x48 (untyped or typed `WriteString`) are `NLogic::MapInfo::Store` S 00529db0,
+  `NLogic::Quest::Store` S 00536000, `nUser::MapState::Store` S 00579e80, `UserProfile::StoreSettings`
+  S 00579640, `GameScript_Store` S 005b0f30, `ai::player::Player::Store` S 005be3c0 (the save writer; the
+  checksum uses `StoreChecksum`, which leaves out the name), `NPlayer::Message::Store` S 005c0300 and the desync
+  dumps S 005aa540 / S 005aa690, and none of them is reached from S 00784080; no function in the hashed chains
+  calls the slot. The quirk does not reach the checksum of this build.
 - **Lua `onLogicTick`** runs inside the tick on every peer and may mutate the simulation; campaign scripts use it
   (`maps/campaignMaps/C02.lua`, `C10.lua`: `function onLogicTick(ticks)` → `quest_onLogicTick(ticks)`) [known].
 - **Unsigned modulo on the tick counter.** Phase tests cast the signed tick counter to unsigned or widen to 64 bits
@@ -1146,8 +1241,7 @@ without game script, quests and sacrifices into a text stream [known].
   listener and manager flag +0x4d can be dropped.
 - The hang test (`IsGameHanging`) is a presentation and input rule; keep "commands issued while the simulation
   is not ticking are dropped, not queued" only if the same feel is wanted.
-- `Stock::changeStamp` is a cache-invalidation counter; any dirty marker does the job unless a consumer compares
-  exact values; no reader was found through the typed field [inferred, §10].
+- `Stock::changeStamp` is written but never read (§10 Q8): it need not be reproduced.
 
 **Must be exact for compatibility**
 
@@ -1171,15 +1265,15 @@ without game script, quests and sacrifices into a text stream [known].
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | Answered (§3.2): on a LAN at speed 1 the net tick length is 1 to 2, not 4, so a net tick lasts about 0.1 s to 0.2 s; a command takes 240-310 ms (3 logic ticks) at length 1 and 440-540 ms (5-6 logic ticks) at length 2, which matches "two net ticks plus the rest of the current one" [live, 2026-10-14] | — |
-| 2 | What sets a user's level `q`, whether the local user has a record in the transport's user list (slot +0x44 returns the list size; the "< 2" branch forces net tick length 1), and what the TinCat API function at +0xb0 called from slot +0x84 does. Answered: the ping samples are milliseconds of a full round trip, `GetTickCount()` at the reply minus the `GetTickCount()` value the request carried (T 1000a2a0 `Send_Ping`, T 10009070 `Received_Ping`, callback slot `+0x3c` → S 0041d910 → S 0041d610), so their resolution is that of `GetTickCount` | static read of the writers of user list node +0x3c and of the code that adds user records; or observation of 0x3000d values against measured pings |
+| 2 | Answered (§3.2): the level `q` is the user's connection type (0 none, 1 modem, 2 ISDN, 3 DSL/cable, 4 LAN), from the host's profile for its own record and from each client's join request 0x30001 through `UIS_SetUserData` S 0041a720 (0 until then); the host has a record of its own (net id 0xEFFFFFCC, pushed by `TinCatNetwork::StartUp` S 0041e610), so "< 2" means no client is logged on; TinCat API +0xb0 is `TinCat_CTRL::Send_Ping` T 1000a2a0, the ping request whose round trips (`GetTickCount` milliseconds, T 10009070 → S 0041d910 → S 0041d610) are the samples | — |
 | 3 | Answered: nothing besides the notice, the log line and the optional dump happens on a desync. `AdvanceNetTick` S 00411990 stores the result of `VerifyLatest` in manager `+0x4c`, which nothing else reads, hands the translated `!DESYNC DETECTED` to the message sink (in a match the game screen, which shows it as a letter, S 005eb120; the observer list `+0x3e0` has no subscriber), logs the report and calls `NComm_WriteDesyncDump` S 0041f5e0 (a file only when the log level is above 1). No message is sent and the match goes on | static: S 00411990, S 00415a60, S 0040e3a0, S 005eb120, S 0041f5e0 |
-| 4 | After a host loss, can two surviving peers stall in different net ticks and still pass the rejoin check (their logic tick counters would then differ by up to `S − 1`), and are the discarded packages `N−2`, `N−1` the same on all of them? | Observation: kill the host in a three-client match and compare `tickCounter`, `netTick` and the first checksums after `0x3000f` on the two survivors. |
-| 5 | Does any object hashed by `ComputeChecksum` write a string through the CRC stream (4-byte quirk)? | Static read of the `Store`/`StoreUntagged` chains of the hashed subsystems for stream slot +0x48, per subsystem document. |
-| 6 | Do the village and settler checksum writers hash the same fields as their save writers (plate comments say "same order, untagged")? | Static read, per subsystem document. |
-| 7 | Which lobby or menu option sets `GameLoadDescriptor + 0x24` (start position shuffle), and does loading the map part of a file draw from the logic generator before the shuffle and before tick 0? | Static read of the code that fills the descriptor before `nGame::System::BuildWorld` and of `GameFile_LoadMap` S 005aa7b0 for `LogicRandom_Next` callers on the map-load path (`docs/sim/players-victory.md`, `docs/sim/map-resources.md`). |
-| 8 | Is `Stock::changeStamp` read anywhere? No access outside `NLogic::Stock` shows up through the typed field; a raw-offset read (stock +0x18) is not excluded. | Xrefs by offset on the users of `NLogic::Stock`. |
-| 9 | Can a cinematic (which blends the user game speed and sets `cinematicActive`, both local) run during a network match? | Static read of the callers of `nMenu::Cinematic::OnShow` S 005fbd30 (Lua quest functions) against the network mode; or a network match on a map whose script starts a cinematic. |
-| 10 | Do the render-side managers called from `S2CG::Scene::SyncLogicTick` S 00680550 write anything the simulation reads? | Static read of the five manager functions (render documentation). |
+| 4 | Answered (§3.2, Reconnect): no. The net tick is frozen after the stall, the rejoin event 0x3000e carries it, and the new host kicks a sender whose net tick differs from its own (`!COULD NOT RECONNECT`, S 004093a0, S 0040e560); the peers that stay stalled in the same net tick, have executed the same packages and the same logic ticks, and the discarded packages are never executed anywhere [known for the check, inferred for the consequence] | — |
+| 5 | Answered (§8, CRCStream string quirk): no hashed object writes a string; the eight writers of the image that call stream slot +0x48 (map info, quests, map state, user profile, game script, the player's save writer, messages, desync dumps) are not reached from `ComputeChecksum` S 00784080 | — |
+| 6 | Answered (§3.6, checksum writers against save writers): no. Same order, but the checksum leaves out fields (village `flagBC`, order system `bEnabled`, depot and stock bytes, blocking `bActive`, sacrifice id, worker `lastWorkTick`, the settler's whole base movement and position) and hashes the global id counter instead of a building's own id (S 0055c690 → S 00538760) | — |
+| 7 | Answered (§3.3): no option sets it; `SetRandomStartPositions` S 005a9b10 is called only by the lobby room's `SetupSession` S 004562d0 and `StartCampaignMap` S 005df2c0, both with 0, so the shuffle never runs. The C++ load path draws nothing from the logic generator; only a map script (`onStarted` / `onLoaded` and its top-level code) can draw before tick 0, and the shipped free-game maps have none | — |
+| 8 | Answered (§2.5): no reader. Only `NLogic::Stock` functions touch it (ctor, `AddOne`, `AddEntry`, `AddList`, `RemoveOne`, `Load`, `MoveAllTo`, `TransferList`, `TransferEntry`, `ExchangeCostForGood`); none of the 144 callers of a `Stock` function and no method of the classes that embed a stock (`NVillage::Depot` +0x0c / +0x28, `NVillage::Construction` +0x10, `ai::village::SoldierTraining` +0x30 / +0x4c) reads stock +0x18 [known for those functions, inferred beyond them] | — |
+| 9 | Answered (§3.1): nothing blocks it, but only Lua `menu.startCinematic` S 005dd3c0 opens the cinematic screen, its only shipped caller is the campaign helper `quests.lua`, and the free-game maps have no script, so no cinematic runs in a network match on a shipped map; on a user map with such a script the peers would diverge [inferred] | — |
+| 10 | Answered (§4.2, row 22): no. `SyncLogicTick` S 00680550 calls six managers (`CMapRenderer::SyncLogicTick` S 006882c0, `CCharacterMgr::UpdateLogicAll` S 006929e0, `ItemMgr::UpdateAllCarrierAttachments` S 0069c4e0, `AnimalMgr::UpdateLogic` S 0069ad10, `ShipMgr::UpdateShips` S 00697cd0, `SwarmMgr::SyncAndRemoveTimedOutSwarms` S 006998c0) and `ApplySceneSettings` S 0067f500. In their direct call trees, and in those of the figure classes' virtual `Update` functions that `CCharacter::UpdateLogic` S 006909f0 calls (vftables S 007fb984 .. S 007fbb0c), every simulation function reached is a reader (`HasMilitaryFlag`, `GetSettlerType`, `Unique::Equals`, `Soldier::IsPresentInBuilding`, `Carrier::GetStreetCached`, the `Worker` work-animation queries, `Production::GetProductionDuration`, the `SacrificeModifiers` getters); the globals written are CRT, cache, profile and render singletons; `g_LogicRandom` is not referenced; and no simulation function calls render code directly (`engine-core.md` §3.7) [known]. The remaining indirect calls of these trees are on render objects by their types [inferred] | — |
 | 11 | Answered (§3.2): in a paused offline game `IsGameHanging` is true, the build input is swallowed before any command reaches `QueueGameCommand`, and `GetHangReason` is never called, so no hang notice text is built [live, 2026-10-12] | — |
 
 ---

@@ -549,7 +549,12 @@ Carrier link changes (kind 0 only) [known]:
   empties its street and re-floods both end flags, while the slot-2 links that follow set `usable[0]` without
   re-flooding. If the street was the only goods connection, its end flags then carry different kind-0 ids
   although the street is usable, and goods are not routed over it until a later kind-0 recomputation starts
-  from a flag of either part [inferred from the three functions; not observed];
+  from a flag of either part [inferred from the three functions; not observed]. The kind-0 recomputations are
+  exactly [known, caller list of S 00667a30]: a slot unlink that empties a street (S 0053ca80 / S 0053cb40,
+  start and end flag), a first-slot link whose end flags differ (S 0053ca20), and `StreetLink_LinkFlags` /
+  `UnlinkFlags` of a type-3 street. Any of these on a street touching either part re-floods that part through
+  the swapped street and merges the ids again, so the gap lasts until the next carrier change (or type-3
+  street change) of that player in either part [inferred];
 - unlink (S 0053ca80, S 0053cb40): clear the slot; `usable[0]` = the other slot is valid; both end flags'
   `lastServedTicket = −1`; if the other slot is empty → `RecomputeFlagContinent` for the start flag and then for the
   end flag, kind 0 (two `Unique` draws); then, if requested by the caller, discard the package the carrier holds.
@@ -743,8 +748,14 @@ then books him into that building and deletes him; otherwise he dies. Consequenc
   in `PlaceFlag` S 00666900 and the street swap S 0077a2f0. He holds no package (discarded by `LeaveMap`), so
   the path search charges the street its plain length, not the ×3 of §3.6. The movie ends that way only when
   he is displaced from `mid`, found no package, and either his fine position is not the centre of his cell
-  (S 00657ea0) or `StartStreetMoveTo(mid)` S 00657f50 returns false; which situations produce that is not
-  established;
+  (S 00657ea0) or `StartStreetMoveTo(mid)` S 00657f50 returns false [known]. `StopAndIsCellCentered` first
+  halts any fine or rough move and then compares the fine position with the cell centre, so a carrier caught
+  between two cells fails it. The walk back is `MoveToWorkingPlace` (slot 3 S 007775a0 → `StartMove`
+  S 007780e0, a tail jump to `StartStreetMoveTo`, whose result is the movie's start result); it is false when
+  he is not on `mid` and `AdvanceStreetRoute` S 00657b80 starts nothing: a route end is requested, the
+  street stop distance equals his distance to `mid`, `PlanStreetRoute` leaves no next waypoint, or
+  `StartRoughMove` fails [known]. In which play situations a waiting carrier is off his cell centre or has no
+  street route to `mid` is not established [TODO, §10 Q1: live];
 - the helper that brought a good out of a building (below) goes home the same way.
 
 **Choosing a package** (`CarrierChoosePackageOnStreet` S 0064d8d0, `FindBestPackageToCarry` S 0064d7e0) [known]:
@@ -756,6 +767,21 @@ for it (`FindBestSwapPackageOnFlag`); the lowest score below 100 wins, the first
 
 `rank(good)` = the owner's `NPlayer::GoodPriorities` rank, 0 if the good is not in the list (S 005c2620); default
 ranks come from `gp_setTransportPriority` (0..18 in the shipped data); **a lower rank is carried first** [known].
+The rank is read only by `CarrierChoosePackageOnStreet`, `FindBestPackageToCarry`, `FindBestSwapPackageOnFlag`,
+`AddFlagFullWaitTick` S 006513b0 and the need-index sort S 006538f0 (caller list of S 005c2620); no package
+creator consults the list [known]. A player can therefore own packages of goods outside it [known]:
+`NVillage::System::ConquerBuilding` S 0055a890 moves both stocks of the old building into the new owner's
+replacement building, which keeps the old building type, with no good filter; its callers are the script
+functions `vi_changePlayerOfBuilding` S 005ae830 and `pl_changePlayer` (`TransferPlayerAssets` S 00529040 →
+`TransferAllBuildingsOfPlayer` S 0055aac0). Between players of different tribes the goods (which are
+tribe-specific ids except `wood`, `plank`, `corn`, `flour`, `water`, `weapons` and the sacrifice goods,
+`tribes.lua`) then leave that building as the new owner's packages through needs of its own type, the supplier
+search or the removal spill, at rank 0. A `0x20021` list that omits goods does the same for the omitted goods
+(the executor validates nothing, `game-commands.md`); the settings panel sends the whole list. Military
+capture (`Military_SoldierCaptureTargetBuilding` S 00571af0) calls `TransferBuildingOwnership` S 0055a210
+directly, whose replacement is built from owner, type and cell only, so it moves no stock [inferred]. The
+shipped campaign maps C01, C04 and C06 call `pl_changePlayer`; whether the two players' tribes differ there was
+not checked.
 
 `CarrierChoosePackageOnStreet`: if the carrier stands on one of the two end flags, first try that flag towards the
 other end; if that gives a package, take it. Otherwise `A = best(start→end)`, `B = best(end→start)`;
@@ -766,7 +792,10 @@ there is no candidate; choose B if `scoreB <= scoreA`, else A [known].
 the carrier's street path, else the movie fails to start.
 
 - *Walking* (step 0x16): each tick, if his cell is on the street and a flag of his player stands on the cell at
-  `SettlerMovement+0x38` ([inferred] the cell he is stepping to): if `ShouldKeepWalkingToFlag` → go on; else if
+  `SettlerMovement+0x38` (`rough.finalTarget`, the target cell of his current rough move, written by
+  `NMovement::Rough::StartMoveTo` S 00773c10, the only writer in the movement classes, set to (−1, −1) by the
+  constructor S 00773d80 and restored by `Rough::Load` S 00773b80 [known]; [inferred] the destination flag of
+  his walk, the package's next waypoint, not the next step cell): if `ShouldKeepWalkingToFlag` → go on; else if
   `Transport_CarrierTryPlacePackageOnFlag(flag)` fails he is held ([inferred] `SettlerMovement` stop distance 1,
   S 00657640) and the test repeats next tick (so `blockedCount` and `ticket` of §3.9 grow **every tick** in this
   phase); when it succeeds the hold is cleared. When the walk sub-movie finishes: if he is still held, the hold is
@@ -836,9 +865,21 @@ S 0055ed30 tests `IsFullForGood` per unit) and `SpillGoodsOntoFlag` attach only 
 stack accepts the package [inferred]. Two paths attach without a stack test: `CarrierBeginDropAtFlag` when it
 moves a package that is registered on a different flag, and `PutDownCarriedPackage` for a settler that is not of
 type Carrier (and for a carrier after an exchange, where the partner's place has just been freed) [known]; the
-stack-less case can only arise there [inferred]. Such a stack-less package is not
-found by the code that iterates the stacks (carrier choice and exchange, `NNet_FlagPackageStacks_IterNext`) but
-stays in the package list [inferred]; what becomes of it was not followed [TODO, §10].
+stack-less case can only arise there [inferred]. **Fate of a stack-less package** [known]: every
+code that finds packages *on a flag* walks the stacks (`NNet_FlagPackageStacks_IterNext` S 0066cdd0; callers
+`FindBestPackageToCarry` S 0064d7e0, `FindBestSwapPackageOnFlag` S 0064d2f0, the ship loaders `GatherCargo`
+S 005b8470, `LoadAtHarbor` S 005bd4e0 and `NavyHarbor_HasPendingCargoFor` S 005bb420, the flag destructor, a
+debug draw), so no carrier and no ship ever picks it up; it stays in the package list with `flagRef` and
+`placedOnFlag` set. The code that walks the package list does not test the stacks: as a free package it gets
+a return building from `PackageNeedSystem::Update` S 006506a0 (§3.12) and keeps it, since the assignment is
+dropped only without a next waypoint, which the 3-tick revalidation keeps setting; `FindNearestFreePackage`
+S 006502d0 may hand it to a need at another flag (§3.11), which then stays served without the good ever moving
+(`SettleIdlePackages` S 00651f10 releases a serving package only when it has no next waypoint). It leaves only
+without a carrier: stock +1 when its flag is the entrance flag of the nearest connected building (§3.12),
+delivery when it lies on its need's target flag, or a discard. The flag destructor S 0066a8d0 detaches only
+the packages of its stacks, and `RemoveBuilding` asks only whether the six stacks are empty, so the flag can
+be removed under it; the package then keeps the id and the cached pointer of the deleted flag (nothing in the
+transport code clears them).
 
 `TransportLink_AttachPackageToFlag` S 0053c980 / `DetachPackageFromFlag` S 0053c9d0 [known]: set / clear the
 package's `flagRef`, add to / remove from the stacks, `ticket = 0`, `blockedCount = 0`, flag
@@ -920,8 +961,10 @@ settler of type Worker who holds no package any more, and the type of the buildi
 Fishing, Hunting in `village-buildings.md` §2.1), `{good, count}` is asked from
 `SacrificePlayerTableRef::GetEntryWithModifiers(building, 0)` on `GameSystem.sacrifice+0x0c` (S 00661c50
 [known]: entry 0 of the building type's goods list, `BuildingProperty::GetGoods(0)`, a `{good, count}` pair;
-only when its good id is 0x17626a03 can the owner's sacrifice modifiers change the amount; [inferred] the
-entry is the building's product; the function is described in
+only when its good id is 0x17626a03 can the owner's sacrifice modifiers change the amount; entry 0 is
+product slot 0, `{goodId0, goodAmount0}` at `BuildingProperty+0x44`: `GetGoods` S 00552f30 returns
+`this + 0x44 + slot × 8`, and its writer `SetGoods` S 00552ef0 is called with slot 0 only by `bp_setGoods`
+S 0054d460 (slot 1 by `bp_setSecondGoods`) [known]; the function is described in
 `village-buildings.md` §3.7); for a valid good, `count` is added to the statistics and, if the owner's flag
 stands on his cell, `count − 1` further packages of that good are created in his hand one after another, each
 put on the flag with `PutDownCarriedPackage` if `Transport_CarrierTryPlacePackageOnFlag` succeeds on the first
@@ -1174,7 +1217,8 @@ the numbering is that of `logic-core.md` §4.2 [known]:
 Staggered work inside the carrier movies uses `(tickCounter + settler +0x10) % N` (unsigned) with N = 20 (idle
 look for work, only while the carrier stands on his working position; a displaced carrier looks every tick),
 10 (retry put-down), 200 (street swap; tested only on a tick that passed the % 10 test and whose put-down
-failed) [known] S 0077ac50, S 0077a2f0.
+failed) [known] S 0077ac50, S 0077a2f0. `settler +0x10` is `unique.idLo`, the low dword of the settler's id
+(`NSettlers::Settler.unique` at +0x08, `NLogic::Unique.idLo` at +0x08 of it) [known: typed layout].
 
 Per frame only (no simulation state): the street placement preview (`ai::game::StreetBuildMode`, which runs its own
 planner on a `StreetConstructorPoints` object that only records cells, S 00668a50), slope markers
@@ -1423,13 +1467,13 @@ disappears without being booked when there is no such building.
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Answered (§3.8, "Losing the job"): the street keeps the carrier in its slot, stays usable and orders nobody until the carrier object is destroyed. Open: which situations make `WaitForPackage` end without a package (displaced and off-centre, or the walk back to `mid` cannot start) | static: S 00656740, S 005657b0, S 00776d00, S 0053ca80 / S 0053cb40 (callers), S 00668e10. For the open part: a hook of S 00656740 logging caller, cell and fine position over a long run |
+| 1 | Answered (§3.8, "Losing the job"): the street keeps the carrier in its slot, stays usable and orders nobody until the carrier object is destroyed. The code conditions are known (§3.8: displaced and off the cell centre after the stop, or `AdvanceStreetRoute` S 00657b80 starts no walk back to `mid`). Open: in which play situations a waiting carrier meets them | a hook of S 00656740 logging caller, cell and fine position over a long run |
 | 2 | Answered (§3.7): yes; the street stays usable through slot 2, orders nobody, and the second carrier works without reading slot 1 | static: S 00668ce0, S 00668e10, S 0065b200 |
-| 3 | Fate of a package that was attached to a flag but fits on no stack (§3.9; reachable only through the two attach paths without a stack test: `CarrierBeginDropAtFlag` moving a package registered on another flag, and `PutDownCarriedPackage` for a settler that is not a Carrier) | static: follow such a package through `PackageNeedSystem::Update`, `NeedSystem::Update` and the flag destructor. A production worker at a full flag does not reach it: he keeps the product until a place is free [live, 2026-10-12] |
-| 4 | After a street swap of two second carriers on streets without first carrier the end flags keep different kind-0 ids (§3.5): does it happen in play, and how long is the street skipped by goods routing? | observe two neighbouring upgraded streets that both lost their first carrier, with a blocked flag between them |
-| 5 | Can a player own a package of a good that is not in his priority list (a ware outside his tribe's `tp_addGood` list, or after a `0x20021` list that omits goods)? Such a good has rank 0 and is carried first (§3.8, §6) | static: the package creators for captured buildings, chests and script goods (`village-buildings.md`, `military.md`); or observation |
-| 6 | Which entry of the building type's goods list is index 0, the second argument of `GetEntryWithModifiers` in the worker product rule (§3.9; the index goes to `BuildingProperty::GetGoods`, S 00661c50) | owner `village-buildings.md` §3.7: the writers of that list |
-| 7 | `SettlerMovement+0x38` (the cell tested while a loaded carrier walks, §3.8): the cell he is stepping to, as inferred? Settler `+0x10` (the stagger term of §4) is the low dword of the settler's `Unique` at `+0x08` [inferred from the type layout] | static read of the writers of `SettlerMovement+0x38` (`settlers-jobs.md` §2) |
+| 3 | Answered (§3.9, "Fate of a stack-less package"): no carrier or ship ever finds it (all flag-side searches walk the stacks, S 0066cdd0); it stays in the package list, can hold a return building or a need without moving, and leaves only by stock +1 at its own flag's building, delivery on its need's target flag or a discard; the flag destructor S 0066a8d0 does not see it. Reachable only through the two attach paths without a stack test; a production worker at a full flag does not reach it [live, 2026-10-12] | — |
+| 4 | After a street swap of two second carriers on streets without first carrier the end flags keep different kind-0 ids (§3.5). How long: answered (§3.5) as far as code goes, until the next kind-0 recomputation from a flag of either part (the only triggers are carrier slot changes and type-3 street links, caller list of S 00667a30). Open: does it happen in play | observe two neighbouring upgraded streets that both lost their first carrier, with a blocked flag between them |
+| 5 | Answered (§3.8, after `rank(good)`): yes. No package creator consults the priority list; `ConquerBuilding` S 0055a890 (script functions `vi_changePlayerOfBuilding`, `pl_changePlayer`) keeps the old building's stocks for a new owner of another tribe, and a forged `0x20021` may omit goods. Military capture moves no stock | — |
+| 6 | Answered (§3.9, "Extra units of a worker's product"): index 0 is product slot 0 (`bp_setGoods`, `BuildingProperty+0x44`); `GetGoods` S 00552f30 indexes `+0x44 + slot × 8`, written only by `SetGoods` S 00552ef0 from `bp_setGoods` (slot 0) and `bp_setSecondGoods` (slot 1) | — |
+| 7 | Answered (§3.8 GoToPackageTarget, §4): `SettlerMovement+0x38` is `rough.finalTarget`, the target cell of the current rough move (writer `Rough::StartMoveTo` S 00773c10; constructor and load besides), not the next step cell; settler `+0x10` is `unique.idLo` | — |
 
 ---
 

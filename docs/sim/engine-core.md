@@ -692,7 +692,7 @@ No rejection step anywhere: the modulo bias is part of the behaviour.
 | `g_LogicRandom` S 00889b08 | 0x5432ACE0 (static initialiser S 007c07d0) | **the simulation's generator**; [logic-core.md](logic-core.md) §3.3 |
 | local in `Game_DistributeChestsForNetworkMatch` S 00775dd0 | 0x5432ACE0, then `SetSeed` with a value derived from the match (`GameSeed`) | chest placement in network matches; [logic-core.md](logic-core.md) §3.5 |
 | locals in `FileCrypt_DeriveFileKey` S 006eeac0, `FileCrypt_XorScramble` S 006ee6b0 | from the file name CRC / the key | container key stream; `../asset-formats.md` §1 |
-| `ai::terrain::TerrainGenerator +0x0c` S 006b0e60 (member of `S2CG::CMapRenderer`, built by its constructor S 006890f0) | 0x5432ACE0 | noise terrain: drawn from only by `ApplyFaultLines` S 006b1dd0, which `Run` S 006b24f0 and `RunToBuffer` S 006b25a0 call in mode 1. `Run` writes heights through the map's height sink; its only caller is the virtual `CMapRenderer::RunTerrainGenerator` S 00688540, which like `RunTerrainGeneratorToBuffer` S 00688590 has no direct caller [known: caller lists] ([map-editor-devtools.md](map-editor-devtools.md)); [TODO] §10 |
+| `ai::terrain::TerrainGenerator +0x0c` S 006b0e60 (member of `S2CG::CMapRenderer`, built by its constructor S 006890f0) | 0x5432ACE0 | noise terrain: drawn from only by `ApplyFaultLines` S 006b1dd0, which `Run` S 006b24f0 and `RunToBuffer` S 006b25a0 call in mode 1. `Run` writes heights through the map's height sink; its only caller is the virtual `CMapRenderer::RunTerrainGenerator` S 00688540, which like `RunTerrainGeneratorToBuffer` S 00688590 is never called (§10 Q5) [known] ([map-editor-devtools.md](map-editor-devtools.md)) |
 | `ParticleEmitterParams +0x74` S 004f2d50 | 0x5432ACE0, then `SetSeed(randomSeed)` at the end of the constructor, `randomSeed` = the low 16 bits of the object's first dword as the decompile shows it; `Reseed(offset)` S 004f2c90 = `SetSeed(randomSeed + offset)` | particles |
 | heap object of `Lobby::CLobby::StartUp` S 004f8c90 (8 bytes, kept in the lobby context) | 0x5432ACE0 | 3D lobby |
 | static S 0088d7c8 (`CCharacterMgr::CreateCharacter` S 00695490) | 0x5432ACE0 | settler visuals |
@@ -711,7 +711,18 @@ No rejection step anywhere: the modulo bias is part of the behaviour.
 Every static instance is referenced only by its initialiser, its exit-time destructor and the functions named
 in its row [known: cross references of S 00889860, S 0088d47c, S 0088d4ec, S 0088e118, S 0088e120]. None of
 these functions belongs to a simulation namespace (`NLogic`, `NSettlers`, `NVillage`, ...): they are
-`ai::lobby`, `ai::render` and `S2CG` (scene graph) code [inferred from the names; the bodies were not read].
+`ai::lobby`, `ai::render` and `S2CG` (scene graph) code. None of them writes anything the simulation reads
+[known, with the [inferred] limit below]: their callers are render and lobby code only (`CMapRenderer::Update`
+S 006888f0, `MapObjLayer::SpawnLandscapeObject` S 00690240, `AnimGraph::CreateStateRandomizer` S 0050f070,
+`AnimModel::Update` S 0050ec80, `CharacterAnimation::UpdateLogic` S 006c6590, `AnimationSet::CreateRandomAnimPlayer`
+S 006cac90; the two `ExtendedMeshData` functions have no direct caller); in their whole direct call trees the
+only simulation function is the reader `NMap::Exploration::IsExplored` S 00542b10, no simulation global is
+written (the writes go to CRT, resource-cache, shader and screenshot singletons) and `g_LogicRandom` is not
+referenced. The other way round, no function of a simulation namespace calls into `S2CG`, `S2CE`, `ai::render`,
+`ai::anim` or `ai::lobby` code directly (the two hits, `ObserverList::Subscribe` S 00458860 and `Notify1`
+S 004760c0, are generic observer helpers filed under `ai::lobby`) [known: call graph of every function of
+those namespaces]. Not resolved one by one: the indirect calls of the render trees; their objects are render
+objects by their types [inferred].
 
 The C runtime's `rand` is a separate source [known: every function of the decompiled image that calls `srand`
 or `rand`]:
@@ -1180,8 +1191,8 @@ decoded saves and maps if original files are to be loadable.
 | # | Question | What would settle it |
 |---|---|---|
 | 3 | Answered (§3.6): the C++ runtime's locale objects restore the locale they found (`std::_Locinfo` S 006f1938 / S 006f17d9), so the file index and the name keys are lower-cased under "C" and keep an upper-case umlaut | static: the three callers of `_setlocale` S 006f9161 |
-| 4 | Do the users of the static generators S 00889860, S 0088d47c, S 0088d4ec, S 0088e118, S 0088e120 (§3.7) write anything the simulation reads? Their names say presentation only; the bodies were not read | static read of the functions named in the instance table |
-| 5 | Answered (§3.7): `S2CG::CMapRenderer::RunTerrainGenerator` S 00688540 is not called. It and `RunTerrainGeneratorToBuffer` S 00688590 have no direct caller, and a call through slot `+0x04` with five arguments occurs in four functions of the decompiled image, none of which holds a map renderer (S 004a5b30, S 00523670, S 00657b80, S 00676700). Generator-dependent heights do not reach the simulation [inferred: an untyped call is not excluded] | static: caller lists; search of the decompiled image |
+| 4 | Answered (§3.7): no. The users of the static generators S 00889860, S 0088d47c, S 0088d4ec, S 0088e118, S 0088e120 are called only from render and lobby code, reach the simulation only through the reader `NMap::Exploration::IsExplored` S 00542b10, write no simulation global and never touch `g_LogicRandom`; no simulation function calls render, animation or lobby code directly [known: call trees and caller lists; the render trees' indirect calls are on render objects, inferred from their types] | — |
+| 5 | Answered (§3.7): `S2CG::CMapRenderer::RunTerrainGenerator` S 00688540 and `RunTerrainGeneratorToBuffer` S 00688590 are never called [known]. Their only references are slots `+0x04` / `+0x08` of the `CMapRenderer` vftable S 007f9504 (a byte search of the image finds the two addresses nowhere else); that vftable is installed only by the constructor S 006890f0 and the destructor; the one renderer object lives in `g_pMapRenderer` S 0088cf64 (written only by `CreateInstance` S 00689450, whose return value `Scene::Init` S 006824c0 discards; read only by `GetInstance` S 00688200, `HasInstance` and `DestroyInstance`), none of the 140 call sites of `GetInstance` stores the result outside the stack in the instructions behind the call, and none of the 108 functions holding them makes any indirect call through `+0x04` or `+0x08`; the constructor hands `this` only to `SelectionMarker`, whose one indirect call goes to a render building. Generator-dependent heights do not reach the simulation | — |
 | 7 | Bodies of `PerspectiveFovLH`, `OrthoLH`, `LookAtLH`, `Slerp`, `Matrix44` inverse: do they equal the Direct3D reference formulas element for element? | static read of S 006e97e0, S 006e8e10, S 006e9b70, S 006e8830, S 006e9200 |
 | 11 | Answered (§3.6): `Str_Utf8ToAnsi` maps a character outside the ANSI code page to a best-fit letter where one exists (`Ő` → `O`, `ł` → `l`), else to `?` (`字`) [live, 2026-10-14] | — |
 

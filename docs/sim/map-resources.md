@@ -218,7 +218,7 @@ S 00532180, S 005321c0:
 | +0x44 | `growingStartSize` | `dp_setGrowingStartSize` | 0.1 | growth value after sowing |
 | +0x48 | `growingSpeed` | `dp_setGrowingSpeed` | 0.0009 | growth per tick |
 | +0x4c | `randomFinePosOffsetState` | `dp_setRandomFinePosOffsetState` | true | random display offset |
-| +0x50 | `elevationSize` | `dp_setElevationSize` | 1 | [TODO] consumer not read |
+| +0x50 | `elevationSize` | `dp_setElevationSize` | 1 | read by nothing [known: §10 #5] |
 | +0x54 | `blocking` | `dp_setBlocking` | false | sets grid bit 0x1 on the cell |
 | +0x58 | `undergroundPatterns` (vector of int) | `dp_addUndergroundPattern` | empty | pattern set when sown |
 | +0x68 | `doodadAfterDestruction` | `dp_setDoodadAfterDestruction` | -1 | doodad left by the last harvest |
@@ -373,8 +373,14 @@ generation, so the grid is never cleared.
 The parity is taken from the current row before each single step. The tables (dx at S 00880f28, dy at S 00880f68,
 8 ints per parity) carry two more entries, direction 6 = (0, +2) and 7 = (0, -2), for both parities [known, data].
 The tables are read by `StepDirection` only [known, xrefs]. The only calls that pass the constant 6 or 7 are in
-two map editor tools (S 006021d0, S 006033d0) [known for constant arguments in the cached decompile]; no
-gameplay function steps with them [inferred: callers that pass a variable direction were not all traced].
+two map editor tools (S 006021d0, S 006033d0); no gameplay function steps with 6 or 7 [known: all 114 callers of
+S 00675000 read]. The variable directions of the gameplay callers are 0..5 loop counters, ring iterators that
+reset their side counter above 5 (S 00600e90 and its inlined copies, S 0052db80 stops at 6), `GetHexDirectionTo`
+S 00675090 (angle in [0, 360) / 60 through the table S 007f8948 = 5, 0, 1, 2, 3, 4), `rand() % 6`, the A* scan
+directions (< 6), the door direction of `bp_setDoorOffsetDirection` (4 for every shipped building) and the two
+side directions of `SetElevationAlongStreet` S 00673370, which runs only for a street direction of 2..4 and so
+steps with 4, 5, 0 and 0, 1, 2. Only presentation and editor code (`nMenu::Debug::DrawEditorCellOverlay`
+S 006066d0, `nGame::Cursor::DrawStreetSlopeMarkers` S 00788f90) was not bounded this way.
 
 **Distance** `MapPos::HexDistance(a, b)` S 00675040:
 
@@ -610,8 +616,12 @@ recomputes the owner of every in-map cell of the spiral of radius `radius` aroun
 5. `NVillage::System::MarkBuildingsOutsideTerritoryNear(cell, radius + 4)` (`docs/sim/village-buildings.md` §3.14).
 
 All five steps are skipped while `MapModifier.bEnabled` (+0x00) is 0; the owner grid itself is recomputed in
-either case. The same byte gates `RefreshTerritoryAll` below [known] S 00673a50, S 00672eb0. [TODO] not
-established: who clears the byte (the constructor sets 1; find the byte writes at `MapModifier + 0`).
+either case. The same byte gates `RefreshTerritoryAll` below [known] S 00673a50, S 00672eb0. The constructor
+S 00673b50 sets it to 1; the only other writer is `NLogic::System::Reset` S 00526f80, which sets it to 0 before it
+resets the street planners and all subsystems (village, settlers, military, net, ...) and back to 1 before
+`NMap::System::Reset` [known: decompile of the 139 users of `GetMapModifier` / the callback manager getter and of
+all `MapModifier` methods; scan of every byte store through a pointer loaded from `+0x38`]. During a match the
+byte is therefore always 1; the five steps are skipped only for the buildings torn down by a reset.
 
 **Removing a source** `RemoveTerritorySource(cell, radius, owner)` S 00673b20 [known]: collect the remaining sources
 and recompute the same spiral, without notification; then the same five steps. The building being removed is
@@ -713,7 +723,8 @@ the product)`.
 
 **Regrowth** [known] S 005390e0: a resource spawn point adds 1 unit of its first resource id to every in-map cell
 of the spiral of its radius (`AddResourceAtCell`, so only cells that may hold it and are empty or of that type).
-The shipped `spawnpoints.lua` defines only animal spawn types (12 x `SpawnType_Animal`) [known, data].
+The shipped `spawnpoints.lua` defines only animal spawn types (12 x `SpawnType_Animal`), and every spawn point of
+the shipped maps uses one of them, so regrowth does not occur in shipped content [known, data: §10 #7].
 
 **Geologist** ("scholar" in the code) [known]:
 
@@ -1196,10 +1207,14 @@ subsystems, Lua, or the editor]. It is driven by:
 
 `NMap::CallbackManager` [known] S 00677ca0..00677ea0: the listeners are kept in a `std::set` of listener
 pointers (+0x08; `AddListener` S 00677f30 -> unique insert S 00531fa0, keys compared as unsigned), so every
-event walks them in ascending **address** order, which depends on the heap and is not reproducible. [TODO] not
-established: which objects register (S 00677f30 has no direct caller in the cached call graph; the vtable slot
-that holds it and its callers would settle whether a simulation object listens). Listener slots 0..4 in table
-order:
+event walks them in ascending **address** order, which depends on the heap. `AddListener` is slot 0 of the
+vftable S 007f8920 and is called through it from two places only: `nGame::System::BuildScene` S 007842e0 registers
+the scene (`S2CG::Scene`, `NMap::CallbackReceiver` base at +0x08), `nMenu::Game::OnEnter` S 005eed00 the minimap
+(`nMenu::MiniMap`, receiver base at +0x288); `ShutdownAndDestroyGameSystem` S 00781cb0 and `nMenu::Game::OnLeave`
+S 005eb030 remove them through slot 1 [known: the four callers of the getter S 00526f70; RTTI lists these two
+classes as the only ones deriving from `NMap::CallbackReceiver`]. No simulation object listens, so the
+heap-dependent order only changes the order in which presentation is updated [inferred: both are presentation
+classes]. Listener slots 0..4 in table order:
 
 | Event | Arguments | Raised when |
 |---|---|---|
@@ -1227,7 +1242,7 @@ destructor), doodad added (0x78), doodad destroyed (S 005310a0), spawn triggered
 | `scripts/properties/doodads.lua` | `dd_create`, `dd_setBlocking`, `dd_setLifeTime`, `dd_setDeleteByStreet`, `dd_setType`, `dd_setIndestructable` | §3.11 | sign lifetime 3000 |
 | `scripts/properties/signs.lua` | `si_addSignDoodadId(good, threshold, doodad)` | §3.8 | `(coal, 3, doodad_coalSignM)` |
 | `scripts/properties/spawnpoints.lua` | `sp_create`, `sp_addUniqueId`, `sp_setType` (`sp_setRange`, `sp_setRate` unused) | §3.8, §3.10 | `animalspawn`: deer, rabbit, elk |
-| `scripts/properties/Goods.lua` | `gp_enableDeposits` (GoodProperty +0x50), `gp_enableFields` (+0x51) | +0x50: building deposit search (`NVillage::Building::UpdateDepositSearch` S 0055bfb0, `docs/sim/village-buildings.md` §3.9) and AI code, through the getter S 005549d0; +0x51: no reader found (§10 #5) | `gp_enableDeposits(wood, 1)`, `gp_enableFields(coal, 1)` |
+| `scripts/properties/Goods.lua` | `gp_enableDeposits` (GoodProperty +0x50), `gp_enableFields` (+0x51) | +0x50: building deposit search (`NVillage::Building::UpdateDepositSearch` S 0055bfb0, `docs/sim/village-buildings.md` §3.9) and AI code, through the getter S 005549d0; +0x51: AI code only, through the folded getter `Generic_GetByte_51` S 0046b620 (§10 #5) | `gp_enableDeposits(wood, 1)`, `gp_enableFields(coal, 1)` |
 | `scripts/properties/config.lua` | `cfg_setFishingDistance`, `cfg_setMaxWaterStreetWaterDepth`, `cfg_setBulldozeTime`, `cfg_setSpawnPointUpdateTime` | §3.8, §3.2 | 1, 4000, 55, 1200 |
 | `settings/graphics.xml` | `<Map scaling="x h z">` | §2.1 | `1.5 0.001 1.2990375` |
 | map file | all grids, `minHeight`, deposits, animals, doodads | §7 | `docs/map-format.md` |
@@ -1375,9 +1390,9 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 2 | Answered (§3.10, step 6): an animal in state 4 at an aborted hunt stays in state 4 with a frozen counter and stands still, but stays huntable, so another hunter can take and kill it [live, 2026-10-12] | — |
 | 3 | Answered (§3.10, state 2): the idle counter after a walk is `(int)((tick/10 - timeStamp) * idleTimeFactor * 10)`, three times the walk's ticks with the shipped factor; the animal idles `counter + 1` ticks | disassembly S 0054231f..0054235e; live 2026-10-12 (400 arrivals) |
 | 4 | Answered (§3.10): yes. The exploration test of the hunter's search reads `Animal +0x38`, the movement's target cell (the cell of the last arrival while the animal is at rest); the roam search does not look at exploration, so such destinations occur | static: S 00542c40, S 005418e0, S 00772b00 |
-| 5 | [TODO] Whether anything reads `DepositProperty.elevationSize` (+0x50) or `GoodProperty + 0x51` (`gp_enableFields`). In the cached decompile the typed field `elevationSize` appears only in the constructor S 005553d0 and the setter S 0054e100, and `GoodProperty` has a setter for +0x51 (S 005549e0) but, unlike +0x50, no getter next to it; no one-line getter of a byte at +0x51 exists at all. Both look unused [inferred] | static: instruction search for untyped reads of +0x50 on a `DepositProperty*` and of +0x51 on a `GoodProperty*` |
-| 6 | [TODO] Whether any caller passes direction 6 or 7 to `MapPos::StepDirection` through a variable (the calls with a constant 6 or 7 are the two editor tools of §3.1) | static: the callers of S 00675000 whose direction argument is not a constant or a 0..5 loop counter |
-| 7 | Whether a shipped map contains resource spawn points although `spawnpoints.lua` defines none (it declares `SpawnType_Resource = 0` but gives it to no type) | scan the `Logic SpawnSystem` sections of all maps for property ids with kind 0 |
+| 5 | Answered (§2.5, §6): `DepositProperty.elevationSize` (+0x50) is read by nothing: a decompile of every function shows the field only in the constructor S 005553d0 and the folded setter S 00555a70 / S 0054e100, none of the 15 callers of the deposit property getters reads +0x50, and the only one-instruction getters of a dword at +0x50 belong to `Carrier` and `KMesh` [known]. `GoodProperty +0x51` (`fieldsEnabled`, set for the mined goods and fish in `Goods.lua`) is read through the folded byte getter `Generic_GetByte_51` S 0046b620, by AI code only [known]: `ProductionControl::IsGoodControllable` S 0058bad0 returns false for such a good, `DestructionSystem::CanDemolishBuilding` S 0058dae0 treats it like a deposit good, `GameQueryHelper::ScoreSite` S 00534830 skips the supplier-proximity score for it, `NeedsArrangement::InstantiateGroupNeed` S 005943c0 leaves it out of the group weight, and `Need` copies it into `bypassCellCap` (S 00597010, `PostLoad` S 00596f70). The other callers of S 0046b620 are lobby code on other classes | — |
+| 6 | Answered (§3.1): no. Every variable direction passed by simulation code to S 00675000 is bounded to 0..5 (loop counters, ring iterators, `GetHexDirectionTo`, `rand() % 6`, the shipped door direction 4, the street side directions of S 00673370); 6 and 7 occur only as constants in the two editor tools | — |
+| 7 | Answered (§3.8 regrowth): no. The `Logic SpawnSystem` sections of the 31 shipped maps that have one (11 campaign, 20 free game; `Presentation.s2m` and `X_MediterranDemo.s2m` have none) hold 226 spawn points, all with one of 10 of the 12 property ids of `spawnpoints.lua` (`a3b370d8`, `523db953`, `fca5c872` .. `fca5c879`), and all 12 are `SpawnType_Animal`; no map script calls `sp_create` [known, data]. Resource regrowth (`SpawnResource::Spawn` S 005390e0) never runs in a shipped map | — |
 
 ---
 

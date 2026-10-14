@@ -272,9 +272,23 @@ The buoy model is loaded with the 48-byte street layout [known] S 006e2350.
    `CharacterSettler::GetDefaultItemGoodId` S 006c72b0. A remake must give every good an item or skip the visual.
    In the install, 27 of the 100 `gp_setName` calls of `scripts/properties/Goods.lua` give a name without an
    `<Item>` among the 54 of `items.xml`, and every one of those goods has the type `WareGroup` or `EitherGroup`
-   (`Weapons`, `Food`, `ConstructionResources`, `Casern Good`, `Ship`, ...) [known, files]. [TODO] not
-   established: whether a group good can ever be a package's good or a site stock entry; read the writers of
-   the package good id (`docs/sim/streets-transport.md`).
+   (`Weapons`, `Food`, `ConstructionResources`, `Casern Good`, `Ship`, ...) [known, files]. With the shipped
+   data no group good becomes a package's good or a site stock entry [inferred from the code and the files].
+   Packages are created only by `PackageSystem::CreatePackage` S 0064fb10, through four callers [known]:
+   `CreateCarriedPackage` S 0064cce0 (from `Pickup` S 00777e00, `PutDownPackage` S 0077a8e0 and
+   `ConstructShip` S 0077d6c0), `CreatePackageAt` S 0064cd90 (site stock of an aborted construction),
+   `SpawnCarrierWithPackage` S 0064d020 (the good of a need) and `SpillGoodsOntoFlag` S 0064d9d0 (stock
+   contents). None tests the good type, but the goods reaching them are wares: needs are the recipe entries
+   of product slot 0, with an `EitherGroup` entry expanded to its members (`RequestAllInputs` S 00565a70;
+   the one `WareGroup` entry, `sheepAnimal` of `sheep`, belongs to `hunterScots`, which has
+   `bp_setIgnoreGoodCosts`), and every construction cost (`bp_addCost`, `bp_addFrameCost`) is a ware, which
+   is all a site stock receives. A worker carries a stored good out only if it is of type Ware
+   (`Depot::HasAnyWare` S 0055b120, `TakeOneWare`; `PickupProduct::Start` S 00777f80); otherwise he takes
+   product slot 0, and the buildings whose product slot 0 is a group good have modes that never carry a
+   product (sacrifice, barracks, catapult, sheep breeder, ship site without worker, the unplaceable
+   `construction*` types). The animal stack goods and the script goods of the shipped maps
+   (`vi_addGoodsToDepot`) are wares or soldiers. A changed data set (a group good in a cost list, as product of
+   a mode 1, 2, 3 or 7 building, or given by a script) would make such packages.
 2. On the first item of a type: load the mesh file with the 32-byte layout, compute its AABB, and take the
    texture named by the mesh's material parameter `DiffuseColor` of subset 0, looked up in the directory of the
    mesh file (the part of `mesh` up to and including the last backslash) [known] S 0069dbe0. A mesh without
@@ -1135,7 +1149,7 @@ A remake may therefore change any rule of this document without affecting synchr
 
 | # | Question | What settles it |
 |---|---|---|
-| 1 | Whether a group good (type `WareGroup` / `EitherGroup`; the only goods of the install whose name has no `<Item>`, §3.1) can be a package's good or a site stock entry; the creators index the type table with -1 then | writers of the package good id and of the site stock map (`docs/sim/streets-transport.md`) |
+| 1 | Answered (§3.1 item 1): not with the shipped data. The four package creators (callers of S 0064fb10) test no type, but they only receive wares: needs expand `EitherGroup` recipe entries (S 00565a70), construction costs are wares, a worker carries a stored good out only if it is a Ware (S 0055b120), and no building whose product slot 0 is a group good carries its product. Changed data could make such packages | — |
 | 2 | Answered as far as the code decides: a good that finds no slot is left in no stack, and `ApplySlotTransform` S 006ce970 copies 64 bytes from `pile - 0x1b4` into its matrix; the pile is its own heap block (S 0069c390), so the transform is arbitrary. The case needs `cfg_setFlagPackageLimit` of 7 or more: for a limit up to 6 the pile's `ceil(count / 6)` stacks per good never exceed the logic's `ceil(count / limit)` (shipped limit 2) | static: S 006cece0, S 006ce7a0, S 006ce970; `docs/sim/streets-transport.md` §2.4 |
 | 3 | What the build mode's `points0` holds, and therefore what the red preview tint tells the player (§3.6) | static read of `StreetBuildMode::RebuildPath` and the writers of `points0` |
 | 4 | Whether the settler blob is visible in the running game (statically every vertex is raised to 3.4e38, §3.9) | a screenshot at shadow level 1 to 3 |

@@ -330,7 +330,11 @@ Step ids seen across packages (same numbering everywhere): 1 leave from idle spo
 0x10 wait for free flag, 0x11 put down, 0x12 pick up product, 0x13 drop, 0x14 waiting at target,
 0x15 walk back to waiting spot, 0x16 move to position, 0x17 move away from deposit, 0x18 (per package:
 `LeaveMap` looks for a home, `ReturnHome` walks back to the working place, `WaitForShip` walks to the flag
-cell; its use in `ConstructShip` is **[TODO]** not established: read S 0077d6c0), 0x19 stray, 0x1c/0x1d/0x1e catapult rotate/shoot/rotate back, 0x20/0x21 leave building straight/sideways.
+cell; `ConstructShip` S 0077d6c0 starts it when `ShipConstruct` (10) ends: `MoveToPosition` back to cell
+`+0x28` of the shipyard's entrance flag (`building +0xa0`); at its end, remaining work on the ship
+(`NNavy::Construction::HasRemainingWork`) → decision step 7 (fetch the next good), none → message
+`!Ship constructed` (kind 6, at the ship's cell) and finished **[known]**), 0x19 stray, 0x1c/0x1d/0x1e catapult
+rotate/shoot/rotate back, 0x20/0x21 leave building straight/sideways.
 **[known]** (constants in S 00776bd0, S 00776eb0, S 0077c510, S 0077b880 and the other `Update` functions).
 
 ---
@@ -870,8 +874,10 @@ distance 1 and the walk goes on to the cell before the flag. The run therefore l
 walk as the flag was full, at most the whole walk; when the walk ends with the stop distance set the movie
 enters step 0x14 with its `% 10` schedule;
 `!flag blocked` came at the attempt that made the counter 180 (1,493 and 1,644 ticks after the first attempt);
-a worker tries every tick and gets the message every 180 ticks. No street carrier reached 360 in the session,
-so the return of the good is not observed.
+a worker tries every tick and gets the message every 180 ticks. No street carrier reached 360 in the session;
+the return of the good is read from the code (state 0x12 above; `IsFlagFullWaitExceeded` S 0077a0c0 tests
+`flagFullWaitTicks > 360` in step 0x14 only, so the good goes back once the 361st failed attempt has raised
+the counter above 360) **[known]**.
 
 The 360 limit exists only in the street loop: `IsFlagFullWaitExceeded` S 0077a0c0 has one caller,
 `Carrier::UpdateStreetTransport` S 0065b200. A carrier that is not yet on a street (`Carrier +0x1b8` set,
@@ -930,6 +936,13 @@ the carrier's cell is on its street, `ai::settlers::SettlerMovement::CancelRoute
      package is unlinked; `pkg +0x100` and `+0x104` are set to 0; a loaded partner's package is advanced and
      reset the same way and the partner's `GoToPackageTarget` is restarted; then this movie is restarted. Each
      carrier keeps the package it holds.
+
+  Effect (S 0077a2f0, S 0077a260): the restarted `GoToPackageTarget` targets the advanced waypoint, the far
+  end of `other`, which is now the carrier's street, and walks there with `StartStreetMoveTo` (3.8.5), whose
+  route planner passes flag cells without asking for room. The package thus crosses the full flag without
+  being put on it, and the free partner takes over the carrier's old street from its `WaitForPackage`.
+  **[known]** for the steps, **[inferred]** for the crossing (the planner was not re-read for this case). The
+  swap needs no rare state: an idle carrier on the next street of the package's route is enough.
 
 Package choice, flag capacity (`cfg FlagPackageLimit`) and routing belong to `NTransport` / `NNet`.
 
@@ -1453,18 +1466,18 @@ own fields and its sub-movies (each sub-movie through its virtual `Store`, slot 
 | `LeaveBuildingFromIdle` | 0077e490 | `MoveToFinePosition`, step |
 | `GoToWorkingPlace` | 00779e80 | `EnterBuilding`, `MoveToWorkingPlace`, step |
 | `GoToConstructionPlace` | 0077dda0 | `MoveToWorkingPlace`, step |
-| `GoMining` | 0077d130 | `LeaveBuilding`, `MoveToDeposit`, sub-movie at `+0x40`, `Working`, step |
+| `GoMining` | 0077d130 | `LeaveBuilding`, `MoveToDeposit`, `LookForDeposit` (`+0x40`), `Working`, step |
 | `GoAfforest` | 0077bb70 | `LookForEmptyPlace`, `LeaveBuilding`, `MoveToDeposit`, `Working`, step |
 | `GoFishing` | 0077cdc0 | `LookForFishing`, `LeaveBuilding`, `MoveToPosition`, `Working`, step |
-| `GoHunting` | 0077cac0 | `LeaveBuilding`, sub-movies at `+0x2c` and `+0x40`, `Working`, step |
+| `GoHunting` | 0077cac0 | `LeaveBuilding`, `MoveToAnimal` (`+0x2c`), `LookForAnimal` (`+0x40`), `Working`, step |
 | `GoDigging` | 0077af60 | dig cell (pair), `SearchScholarDiggingPosition`, `MoveToPosition`, `DigForResources`, `LeaveBuilding`, int `digsRemaining`, step |
 | `LookForFishing` | 0077f3b0 | target cell (pair) |
 | `MoveToDeposit`, `MoveToAnimal` | 00778560, 007786d0 | int state |
-| `BringGoodHome` | 0077c790 | `EnterBuilding`, sub-movie at `+0x18`, step |
-| `BringGoodToWorkingPlace` | 0077f150 | `ReturnToWorkingPlace`, sub-movie at `+0x30`, `PickupProduct`, step |
+| `BringGoodHome` | 0077c790 | `EnterBuilding`, `BringGoodToWorkingPlace` (`+0x18`), step |
+| `BringGoodToWorkingPlace` | 0077f150 | `ReturnToWorkingPlace`, `PutDownPackage` (`+0x30`), `PickupProduct`, step |
 | `ReturnToWorkingPlace` | 0077eee0 | `WaitForFreeFlag`, `MoveAwayFromDeposit`, `MoveOnMapToWorkingPlace`, step |
 | `ReturnHome` | 0077bf20 | `ReturnToWorkingPlace`, `EnterBuilding`, step |
-| `BringGoodOut` | 0077c3c0 | `EnterBuilding`, `LeaveBuilding`, sub-movies at `+0x2c` and `+0x34`, `PickupProduct`, step |
+| `BringGoodOut` | 0077c3c0 | `EnterBuilding`, `LeaveBuilding`, `WaitForFreeFlag` (`+0x2c`), `PutDownPackage` (`+0x34`), `PickupProduct`, step |
 | `IdleOutside`, `ReturnFromIdle` | 0077ae00, 0077d350 | `MoveToFinePosition`, step |
 | `Rest` | 0077b640 | int `restTicksLeft` |
 | `CatapultAttack` | 0077b7e0 | `RotateCatapult`, `ShootCatapult`, step |
@@ -1478,23 +1491,22 @@ own fields and its sub-movies (each sub-movie through its virtual `Store`, slot 
 | `ConstructShip` | 0077d5e0 | `BeNervous`, `LeaveBuilding`, `MoveToPosition`, `Drop`, `ShipConstruct`, step |
 | `ShipConstruct` | 0077f910 | int `strokesLeft`, float `workPerStroke` |
 | `LeaveBuilding` | 00776e30 | `LeaveBuildingFromIdle`, step |
-| `MoveToShip` | 00776900 | sub-movie at `+0x0c`, step |
+| `MoveToShip` | 00776900 | `MoveToStreetPosition` (`+0x0c`), step |
 | `WaitForShip` | 007771a0 | `MoveToPosition`, `ReturnToLogicGrid`, step |
 | `BeNervous` | 007773d0 | int state |
 | `LookForEmptyPlace` | 00777b50 | result cell (pair) |
 | `SearchScholarDiggingPosition` | 00778120 | result cell (pair) |
 | `PickupProduct` | 00778050 | `Pickup` |
 
-The sub-movies given by offset are the ones whose class the `Store` call does not name (by the `Update`
-sequences of 3.5.5: `GoMining +0x40` and `GoHunting +0x2c` / `+0x40` are the look-for / move-to steps,
-`BringGoodHome +0x18` is `BringGoodToWorkingPlace`, `BringGoodToWorkingPlace +0x30` and `BringGoodOut +0x2c` /
-`+0x34` are the wait-for-flag / put-down steps **[inferred]**).
+The sub-movies with an offset are the ones whose class the `Store` call does not name; their classes come from
+the package constructors (`GoMining` S 0077cf70, `GoHunting` S 0077c980, `BringGoodHome` S 0077c640,
+`BringGoodToWorkingPlace` S 0077f300, `BringGoodOut` S 0077c270, `MoveToShip` S 00776820). **[known]**
 
 These movies write and read nothing: slots 1 and 2 of their vftables are the empty function S 0064b9c0
-(no tag, no field): `MoveToHome`, `MoveToPosition`, `MoveToFinePosition`, `MoveToWorkingPlace`,
-`MoveToStreetPosition`, `ReturnToLogicGrid`, `Working`, `ProduceGood`, `WaitForFreeFlag`,
-`MoveAwayFromDeposit`, `MoveOnMapToWorkingPlace`, `DigForResources`, `SearchCatapultTarget`,
-`RotateCatapult`, `ShootCatapult` (and the `NMovie::Object` base). **[known]** (data references to
+(no tag, no field): `MoveToHome`, `MoveToPosition`, `MoveToFinePosition`, `MoveToWorkingPlace`, `LookForDeposit`,
+`LookForAnimal`, `MoveToStreetPosition`, `ReturnToLogicGrid`, `Working`, `ProduceGood`, `WaitForFreeFlag`,
+`MoveAwayFromDeposit`, `MoveOnMapToWorkingPlace`, `DigForResources`, `SearchCatapultTarget`, `RotateCatapult`,
+`ShootCatapult` (and the `NMovie::Object` base). **[known]** (data references to
 S 0064b9c0 at `vftable +4` and `+8` of each class.) Their progress lives in the settler's action timer, the
 movement object and the parent package's step, which are saved.
 
@@ -1560,10 +1572,14 @@ worker's `lastWorkTick`. **[known]**
   equality (`total - remaining == 14.0` for the skeleton). **[known]** None of these floats is written to the
   checksum stream (section 7: `Settler::StoreUntagged` leaves out the action timer and the base `Movement`);
   in the Worker, Carrier, Constructor and NPC parts the only float written is `Construct.workPerStroke` /
-  `ShipConstruct.workPerStroke` of a constructor. **[known]** **[TODO]** not established: whether the
-  Soldier part (`Soldier::StoreUntagged` S 00658c30: fight state, bow, projectiles) writes floats; read the
-  `Store` of those members. A float difference therefore shows in the compared data only once it has
-  changed a state, a step id, a reference or one of the stored cells. **[inferred]**
+  `ShipConstruct.workPerStroke` of a constructor. **[known]** The Soldier part (`Soldier::StoreUntagged`
+  S 00658c30, the untagged twin of `Soldier::Store` S 00658960) writes no float either **[known]**: its members
+  write ints and bytes only (movie steps through `NMovie::Package::Store` S 0077dee0, `Livepoints::Store`
+  S 0065da90, `Bow::Store` S 0065f170, `SoldierFightState::StoreUntagged` S 0065ba40, references and reference
+  lists; the `Fight` and `MoveToPosition` movies' `Store` is a no-op), and none of them is among the writers
+  of the float slot +0x4c listed in [`logic-core.md`](logic-core.md) section 8 (that list holds every caller
+  of the slot in the image). A float difference therefore shows in the compared data only once it has changed
+  a state, a step id, a reference or one of the stored cells. **[inferred]**
   A reimplementation that must stay in sync with original clients has to reproduce single-precision arithmetic
   in the same operation order (`1.0 / (dist / (slope * speed))`). **[known]** The x87 control word is set to
   24-bit (single) precision before every logic update (`_controlfp(0x20000, 0x30000)` in S 0057b9b0; call
@@ -1605,11 +1621,11 @@ worker's `lastWorkTick`. **[known]**
 | 1 | Answered (§3.5.2): a worker stays in state 0x24 only while the stock can supply; with one unit per production cycle it releases one settler on its first tick in 0x24, stays one more tick and goes to Rest (0x23), in the observed buildings every 390 ticks. A building with several units in stock was not seen [live, 2026-10-14] | — |
 | 2 | Answered (§3.8.1, movie timer): 17 or 18 ticks per flat cell (18 for the first cell of a walk), 21 / 22 at slope factor 0.8, 28 / 29 at 0.6; 4 ticks per pick-up or put-down phase | live 2026-10-12: hook on `Settler::Update` S 00656ec0 |
 | 3 | Answered (§3.10): yes, it re-centres and stays; the fall-through and the shared `Update` S 00777c50 decide it. Not observable with the shipped data: the three calls of `se_moveNPCTo` / `se_moveNPCToFine` (C05.lua, C06.lua) are commented out | static: S 0065ddf0, S 0065e010, vftable slots S 008345d4 and S 00834534 |
-| 4 | Street swap of two carriers at a full flag (3.6.2): does it occur in play and does it resolve the jam? | observation: two crossing streets with full flags, watch the carriers' street references every 200 ticks |
-| 5 | The return of a blocked street carrier's good after 360 attempts (§3.6.2) is not observed. Measured: attempts every 10th tick after an initial run, `!flag blocked` at the 180th attempt (about 150 to 165 s at speed 1); the limit does not apply to a carrier without a street (S 0065ad70) | observation: a street carrier at a flag that stays full for more than 3,600 ticks |
+| 4 | Answered (§3.6.2, effect of the street swap): it takes place whenever the carrier of the package's next street is idle (`Transport_IsCarrierFreeForStreetSwap`) or waits at a full flag the other way; the package is carried across the full flag without being put on it [inferred: the street route planner S 007735b0 was not re-read for this case]. How often this happens in a match does not change the rule | — |
+| 5 | Answered (§3.6.2, from the code: `IsFlagFullWaitExceeded` S 0077a0c0, state 0x12 of S 0065b200): after the 361st failed attempt the next step-0x14 check hands the good to the storehouse found by the mode-0 search (none found: the good is lost) and discards the package; an observation would only confirm it. Measured: attempts every 10th tick after an initial run, `!flag blocked` at the 180th attempt (about 150 to 165 s at speed 1); the limit does not apply to a carrier without a street (S 0065ad70) | — |
 | 6 | Answered (§2.9): direction 1 points to the screen's lower side, slightly left (about south-south-west) with the camera unrotated; it is not the lower right neighbour [live, 2026-10-14] | — |
-| 7 | Classes of the sub-movies that section 7 names only by offset (`GoMining +0x40`, `GoHunting +0x2c` / `+0x40`, `BringGoodHome +0x18`, `BringGoodToWorkingPlace +0x30`, `BringGoodOut +0x2c` / `+0x34`, `MoveToShip +0x0c`) | static: the constructor of each package (which sub-constructor runs at the offset) |
-| 8 | Floats in the soldier part of the checksum data (section 8) | static: the `Store` of the members written by `Soldier::StoreUntagged` S 00658c30 |
+| 7 | Answered (section 7, package constructors): `GoMining +0x40` `LookForDeposit`; `GoHunting +0x2c` `MoveToAnimal`, `+0x40` `LookForAnimal`; `BringGoodHome +0x18` `BringGoodToWorkingPlace`; `BringGoodToWorkingPlace +0x30` `PutDownPackage`; `BringGoodOut +0x2c` `WaitForFreeFlag`, `+0x34` `PutDownPackage`; `MoveToShip +0x0c` `MoveToStreetPosition` | — |
+| 8 | Answered (section 8): none. The members written by `Soldier::StoreUntagged` S 00658c30 write ints and bytes only; none of their `Store` functions calls the float slot +0x4c (logic-core.md section 8) | — |
 
 ---
 

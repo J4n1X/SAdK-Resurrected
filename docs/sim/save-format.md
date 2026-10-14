@@ -71,9 +71,26 @@ Conventions that hold across the code [known]:
   never stored; a `Reference*` member stores the target's `Unique` (S 00538db0) and its `Relink` resolves the
   pointer in `PostLoad` through the owning system's id lookup (S 00538620 flag, S 00539710 harbor, S 00539790 ship
   route, S 0053a480 ship, S 0053dc00 fight, S 0053dc80 deposit, S 0053dd00 package, S 0053ddb0 projectile,
-  S 0053e2f0 fight group, S 0053e7c0 order, S 0053a570 settler; one class `NLogic::Reference<Kind>` each). The
-  bodies of these eleven functions are [TODO] here (which container each one searches and what a failed lookup
-  leaves in the pointer: read each `Relink`).
+  S 0053e2f0 fight group, S 0053e7c0 order, S 0053a570 settler; one class `NLogic::Reference<Kind>` each). All
+  eleven classes (and `ReferenceSoldier`, which inherits the settler's `Relink`) share slot 1 `Store` S 00538db0
+  and slot 2 `Load` S 0059d3c0, which reads the `Unique` and sets the cached pointer (+0x18) to 0 [known: the
+  vftables S 007e7bbc .. S 007e7ec4]. `Relink` (slot 3) runs the lookup only when the id's high dword (+0x14) is
+  in 0..0x7fffffff and stores its result at +0x18; every lookup returns 0 when nothing matches, so a stale or
+  invalid id leaves a null pointer [known]. The containers [known]:
+
+  | Reference | Lookup | Container searched |
+  |---|---|---|
+  | Flag | `NNet::System::FindFlagByIdAnyPlayer` S 00665070 | the per-player `std::map` by unique (`flagById[p]`), players 0..7 in turn, first hit |
+  | Harbor | `HarborList::FindByUnique` S 005b5cb0 | `navy->harbors` vector, linear |
+  | Ship route | `ShipRouteList::FindByUnique` S 005b75a0 | `navy->shipRoutes` vector, linear |
+  | Ship | `NNavy::System::FindShipByUnique` S 005b3810 | the navy's ship vector, linear, comparing the `Unique` returned by ship slot 0 |
+  | Fight | `FightList::FindById` S 00573720 | `military->pFightList` vector, linear |
+  | Deposit | `NResources::System::GetResource` S 0053ebc0 | the resource system's `std::map` by unique |
+  | Package | S 00573720 (the same folded code) | the first vector of `transport->packageSystem`, linear |
+  | Projectile | `ProjectileList::FindById` S 00573de0 | `military->pProjectileList` vector, linear |
+  | Fight group | `FightGroupList::FindById` S 005742f0 | `military->pFightGroupList` vector, linear |
+  | Order | `OrderSystem::FindOrderByUnique` S 00562210 | `village->orderSystem` order vector, linear |
+  | Settler | `NSettlers::System::FindSettlerByUnique` S 006546b0 | six settler vectors in the order +0x04, +0x14, +0x24, +0x44, +0x34, +0x54 |
 - Many classes have a second writer, named `StoreUntagged`, `StoreForChecksum` or `StoreBody` in the map. It writes
   nearly the same fields without the section tag and without version logic and is called only for the lockstep
   checksum (§3.9). It never reaches a file.
@@ -258,9 +275,10 @@ running match) [known] S 005aa260: the same `GameFile_SaveMap` writes both.
   debug / editor screen, passes type 1 (a map export into `campaignMaps`, §3.1 step 8) [known] S 00609130.
   Type 10 (`.sav`) is only
   ever read, as a fallback [known] S 005aaed0, S 005dfef0, S 005aaa30. Which build wrote `.sav` files into the
-  save folder is [TODO]; the one `.sav` in the install (below) carries a `Game File Logic` tag of the current
-  version 6 next to an old `MapInfo` v9, so it comes from an earlier build of this game, not from another
-  product [inferred].
+  save folder, and whether they were containers, is [TODO]: this build holds no writer of type 10, so only
+  `.sav` files written by an old installation (or its executable) can settle it (§10 #5). The one `.sav` in the
+  install (below) carries a `Game File Logic` tag of the current version 6 next to an old `MapInfo` v9, so it
+  comes from an earlier build of this game, not from another product [inferred].
 - Type 101 (`.a2m`) is a campaign file that carries a logic part, i.e. a prepared scenario state
   [inferred] from S 005aaed0 and S 005ac770 (type 0x65 is treated as a started game: `onStarted` runs). The
   install holds no `.a2m` file [known] (file search of the `data` tree). It holds exactly one `.sav`:
@@ -416,8 +434,11 @@ player index, `NetStreet` record }; then 16 maps (8 players × 2), each: u32 cou
 count, inner count × { unique, i32 cost } } in ascending id order; then `Net StreetNetContinentIds` (S 0066d8e0):
 bool; u32 count; per entry { unique, u32 n, n × i32 continent id, cell }. Records: `docs/sim/streets-transport.md`.
 The 16 maps are the array at `NNet::System +0x1d0` (0x0c bytes each), written and read in index order
-player × 2 + k, k = 0, 1 (outer loop 8 players, inner loop 2) [known] S 00668050; what the two maps of a player
-are (the net kind) and how the costs are computed: `docs/sim/streets-transport.md`. The loader inserts with
+player × 2 + k, k = 0, 1 (outer loop 8 players, inner loop 2) [known] S 00668050. k is the net kind: map
+`player × 2 + 0` caches the costs over goods streets (kind 0), `player × 2 + 1` over all streets (kind 1, walking);
+both readers index the array as `flagNetworks + netKind + owner × 2` (`GetFlagPathCost` S 00667f30,
+`GetFlagNetworkValue` S 00664e70) [known]. How the costs are computed: `docs/sim/streets-transport.md`
+§2.7. The loader inserts with
 `map[key][inner key] = cost`, so duplicate keys in a file collapse to the last value [known] S 00668050.
 In the continent-id record the n ids are the members of a `set<int>` (ascending), and the cell is looked up in a
 second map by the same unique [known] S 0066d8e0; the loader rebuilds three containers from it: unique → id
@@ -432,8 +453,9 @@ system; need creation; locksmith; food arrangement; goods arrangement; productio
 continents; nine bools (expansion, coin production, needs, sacrifices, catapults, one unnamed profile flag, ship
 construction, foresting, attack allowed); the harbor map; forbidden harbor positions (cell vector); an int
 vector; bool enabled.
-The second layer (the records of each AI part) is [TODO] here: `docs/sim/ai-player.md` §7 describes the AI
-section; a byte layout of every AI section type of Appendix A is not written down (§10).
+The second layer (the records of each AI part) is in `docs/sim/ai-player.md` §7: the field list of every AI
+section type of Appendix A after its tag, in stream order, with the encodings of the shared value types, the
+version gates of each `Load` and the values of fields an old version does not carry [known there].
 
 **9. Statistics** [known] S 00537280: i32 count; per productivity entry { unique, item }; 8 player records.
 
@@ -862,7 +884,7 @@ reimplementation must rebuild or accept as lost:
 | Street planners, AI path analysers, the street-net path finder | restarted / recreated | [known] S 005273d0, S 005819a0, S 00668050 |
 | Player messages of type 8 (letters; also the type of the `!Autosave...` notice, §4) | written like every other message, but `NPlayer::Messages::Load` reads each one and does not put it back into the list | [known] S 005c1900, S 005c2520; `docs/sim/players-victory.md` §7 |
 | The frame timer | reset at the end of post-load (§3.6 step 17) | [known] S 005273d0 |
-| Game speed and pause | the speed is the float `UserProfile +0x24`: read by the speed-cycle command sender S 00782950 and Lua `getSpeed` S 005ad6f0, written by the lockstep command 0x20023 (S 00782a20: the command's integer as float, no range check; the sender produces `floor(speed) mod 3 + 1`, i.e. 1..3). Pause is speed 0: `nMenu::Game::SetPaused` S 005ea9b0 keeps the old speed in the game screen object, writes 0, and on unpause restores it (at least 1.0). It is a profile value, not part of the save: `StoreSettings` S 00579640 writes it to `settings.cfg` as it stands (0 if the profile is written while paused), but `LoadSettings` S 00579960 sets `+0x24` to 1.0 right after reading the stored float, so the stored value never takes effect. `nMenu::Game::SetupHud` S 005ed700 writes 1.0 inside its one top-level branch "UI not suppressed"; its only caller `nMenu::Game::OnEnter` S 005eed00 calls it unconditionally, before `BuildWorld` | [known] for each function; so every game entered with the HUD, a loaded one included, starts at speed 1.0 and unpaused in terms of speed [inferred]; a save written while paused (`TogglePause` S 005da400 had set `+0x24` to 0, tick 54,259) loaded with the factor at 1.0 and the ticks running on from 54,259 [live, 2026-10-14]; with the UI suppressed the speed stays what the last command or pause left [inferred] |
+| Game speed and pause | the speed is the float `UserProfile +0x24`: read by the speed-cycle command sender S 00782950 and Lua `getSpeed` S 005ad6f0, written by the lockstep command 0x20023 (S 00782a20: the command's integer as float, no range check; the sender produces `floor(speed) mod 3 + 1`, i.e. 1..3). Pause is speed 0: `nMenu::Game::SetPaused` S 005ea9b0 keeps the old speed in the game screen object, writes 0, and on unpause restores it (at least 1.0). It is a profile value, not part of the save: `StoreSettings` S 00579640 writes it to `settings.cfg` as it stands (0 if the profile is written while paused), but `LoadSettings` S 00579960 sets `+0x24` to 1.0 right after reading the stored float, so the stored value never takes effect. `nMenu::Game::SetupHud` S 005ed700 writes 1.0 inside its one top-level branch "UI not suppressed"; its only caller `nMenu::Game::OnEnter` S 005eed00 calls it unconditionally, before `BuildWorld` | [known] for each function; so every game entered with the HUD, a loaded one included, starts at speed 1.0 and unpaused in terms of speed [inferred]; a save written while paused (`TogglePause` S 005da400 had set `+0x24` to 0, tick 54,259) loaded with the factor at 1.0 and the ticks running on from 54,259 [live, 2026-10-14]. The "UI suppressed" byte (`nMenu::System +0xa4`) is written only by the constructor S 005db1e0 (0), so the 1.0 write of `SetupHud` runs for every game, network matches included [known: decompile of every function; scan of all stores at +0xa1..+0xa4 and of every `LEA` of +0xa4]. All writers of the speed: `LoadSettings` (1.0), `SetupHud` (1.0), `HandleSetGameSpeed` S 00782a20 (command 0x20023), pause (`TogglePause` S 005da400, `SetPaused`), the options panel (S 005e62f0 writes 0 while it is open, its destructor S 005e61b0 restores the kept value), `nMenu::Game::OnKeyDown` S 005ec340 (20.0, the float at S 007df110) and the cinematic (`Cinematic::Update` S 005fb3e0, `OnHide` S 005faee0) |
 | Camera position, selection, open windows, minimap state | not part of any `Store` reached from `GameFile_Save`; the camera is re-activated by `BuildWorld` | [inferred] from the call lists of S 005a9fa0 and S 005a9ec0 |
 | Network session: slots, GUIDs, GameID, GameSeed, net tick, queued commands, checksum log | belongs to the session | `docs/multiplayer-save.md` |
 | Commands issued but not yet executed | lost [inferred] | |
@@ -961,15 +983,15 @@ S 00668050 reads them verbatim in current versions).
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | [TODO] Byte layout of the second layer of the AI records (`AI Player` and the AI section types of Appendix A); which class owns which of the two `Ai Cell` tags | static: read each AI `Store` / `Load` pair below S 00583180 / S 00584320 and write the layouts into `docs/sim/ai-player.md` §7; needed to parse any original save past the street net |
+| 1 | Answered (§3.3 item 8, Appendix A): the layouts of all 73 AI section names of Appendix A are in `docs/sim/ai-player.md` §7 (field lists in stream order, value encodings, `Load` version gates, values of skipped fields). `Ai Cell` v2 is `NAI::Cell` (S 00594d80 / S 00596130), `Ai Cell` v1 is `NAI::Trigger` (S 005a7890 / S 005a78e0), each the only user of its tag object | — |
 | 2 | Answered (§8): a save/load cycle is checksum-neutral; a developed six-player game and the same game loaded from its save at tick 54,004 gave equal checksums on all 45 compared ticks [live, 2026-10-14] | — |
 | 3 | Pause and sacrifices: nothing of the pause is saved (it is game speed 0, §7) and running sacrifices are stored with their start ticks, so both saves are ordinary ones. Answered for the pause (§7): a save made during a pause loads unpaused at speed 1.0 and runs on from the saved tick [live, 2026-10-14]; the sacrifice save was not tried. Cinematic: a save can be written by `EmergencySave` S 005da7d0 (battery low) and, if a click gets through during the 1.0 s HUD fade, by an open save panel; it loads with the computer players and the chests switched off (`camera-input-cutscenes.md` §7) | open: the click during the fade (running game) |
 | 4 | Answered (autosave rows of the "when a save is written" table): the autosave fires while the game is paused and not during a cinematic. `Autosave::Update` S 0078b040 compares wall-clock seconds and has no pause test; `nGame::System::Update` S 00780d20 calls it every frame unless the UI is suppressed or `nGame::System +0x635` is set, and that byte is set by `BeginCinematic` S 00782b60 (called from `nMenu::Cinematic::OnShow`) and cleared by `EndCinematic` S 00782bb0. The interval keeps running during the cinematic, so an overdue autosave fires in the first frame after it | static: S 0078b040, S 00780d20, S 00782b60; live 2026-10-12 (`Update` runs once per frame) |
-| 5 | [TODO] Which build wrote `.sav` (type 10) files into the save folder, and whether those were containers | a `.sav` from an old installation; static: none (this build never writes type 10) |
-| 6 | [TODO] The bodies of the eleven `Reference*::Relink` functions (§2.1): the container searched and the pointer value after a failed lookup | static: read S 00538620 .. S 0053e7c0 |
-| 7 | `MapInfo` field meanings are in `docs/map-format.md` §4.2: `+0x48` who controls the slot (0 none, 1 computer, 2 local human, 3 remote human), `+0x68` tribe, `+0xc8` AI level and `+0x1c8` win condition are [known] from their setters and readers (S 004562d0, S 005abb60, S 005293e0, S 00529470, S 00535870); `+0x88` colour and `+0xa8` team are [inferred] from one reader each; `+0x1ec` is a network-game flag that no function tests. [TODO] `+0x1cc` and `+0x1f0`: only the write order and the version gates are established (§3.2, §3.5) | static: readers of `MapInfo + 0x1cc` and `+0x1f0` |
-| 8 | [TODO] The order of the two maps of a player among the 16 flag-network maps (which k is which net kind) | static: the users of `NNet::System +0x1d0`; owner document `docs/sim/streets-transport.md` |
-| 9 | [TODO] Whether a game entered with the UI suppressed (a network match) ever resets the speed float `UserProfile +0x24`, since `SetupHud` skips its write of 1.0 there (§7) | static: every writer of `UserProfile +0x24` (callers of the setter used in S 00782a20, S 005ea9b0, S 005ed700) |
+| 5 | [TODO] Which build wrote `.sav` (type 10) files into the save folder, and whether those were containers. This build cannot answer it: no caller of `GameFile_Save` passes type 10 (§2.6), it only reads `.sav` as a fallback (S 005aaed0, S 005dfef0, S 005aaa30) | a `.sav` written by an old installation (or that installation's executable); the code of this build holds no writer to read |
+| 6 | Answered (§2.1): each `Relink` looks the stored `Unique` up in its owner's container (table in §2.1) when the id's high dword is 0..0x7fffffff; the shared `Load` S 0059d3c0 has set the pointer to 0 and every lookup returns 0 on a miss, so a failed lookup leaves a null pointer | — |
+| 7 | `MapInfo` field meanings are in `docs/map-format.md` §4.2: `+0x48` who controls the slot (0 none, 1 computer, 2 local human, 3 remote human), `+0x68` tribe, `+0xc8` AI level and `+0x1c8` win condition are [known] from their setters and readers (S 004562d0, S 005abb60, S 005293e0, S 00529470, S 00535870); `+0x88` colour and `+0xa8` team are [inferred] from one reader each; `+0x1ec` is a network-game flag that no function tests. Answered: `+0x1cc` is the water preset index; its only reader is `S2CG::CMapRenderer::InitForMap` S 006883e0 (`WorldRenderer::SetWaterPreset`), and it is otherwise only cleared (constructor, `Reset`, `Load` below v4), loaded, stored and copied (S 00529a00, S 007849f0). `+0x1f0` is read only by "Continue" (`ContinueLastSavegame` S 005dfef0, refuses values ≥ 2, §3.5) and set to 1 by `MapInfo::Reset` S 0052b8d0 and `GameFile_Save` S 005aa260. Neither field reaches the simulation [known: decompile of every function] | — |
+| 8 | Answered (§3.3, `Net System`): map `player × 2 + k` holds the costs of net kind k (0 goods streets, 1 all streets); both readers index `flagNetworks + netKind + owner × 2` (S 00667f30, S 00664e70) | — |
+| 9 | Answered (§7, game speed row): the case does not occur. `nMenu::System +0xa4` ("UI suppressed") is only ever written 0 (constructor S 005db1e0), so `SetupHud` S 005ed700 writes 1.0 on entering every game, a network match included; the other writers of `UserProfile +0x24` are listed in §7 | — |
 
 ---
 
@@ -1174,5 +1196,7 @@ this document.
 `SceneSettings` 1, `UserMapState` 1, `UserMapStates` 0, `UserSettings` 2.
 
 Two names are used by two different tag objects: `Ai Cell` (versions 2 and 1) and `Movie Construct` (both 0).
-Which class owns which is in the AI and settler code [TODO for `Ai Cell`: the two initialisers are S 007c4390 (v2)
-and S 007c5d50 (v1)].
+`Ai Cell` v2 (tag object S 0088ab14, initialiser S 007c4390) belongs to `NAI::Cell` (`Store` S 00594d80, `Load`
+S 00596130); `Ai Cell` v1 (S 0088b198, initialiser S 007c5d50) belongs to `NAI::Trigger` (`Store` S 005a7890,
+`Load` S 005a78e0) [known: the only references to each tag object]. A reader tells them apart by position and by
+the version, not by the name. The two `Movie Construct` objects are in the settler code.

@@ -82,7 +82,7 @@ Fields this subsystem owns. The tick fields `+0x24..+0x4d` and the config block 
 | +0x18 | i32 | port of the host to rejoin | not reset |
 | +0x1c | i32 | **manager state** 0..4 (§3.4) | 0 |
 | +0x20 | bool | error latch: set when the transport's `Process` fails or by `Shutdown(true)`; while set, `BeginGameRunning` refuses | 0 |
-| +0x21 | bool | cleared with the latch; [TODO] not established: its use (no reader met in the functions of this document) | 0 |
+| +0x21 | bool | cleared with the latch and never read: only the constructor S 0040a530 and `ResetSession` S 0040a810 write it (0); no instruction of the functions in 0x408000..0x412fff, of the users of `g_NCommManager` or of the callers of `NComm_GetManager` S 00408290 reads it [known for those functions] | 0 |
 | +0x24 | f32 | time of the last ping / tick-length check | 0 |
 | +0x28 | i32 | number of connected human players = checksums expected per net tick | 0 |
 | +0x2c | i32 | net tick | -1 |
@@ -301,10 +301,10 @@ wrappers [known]:
   the event is handled locally as well.
 - `DispatchEventLocal(ev)` S 0040fd50: `HandleEvent`; if that returns false, the game listener's slot `+4`.
 
-[TODO] not established: how TinCat routes a client's message addressed to `0xEFFFFFDD` or to another client's net
-id (delivered by the host to the other clients, or only to the host). Chat (0x30006, 0x30007) is the only traffic
-that depends on it. Settled by reading the send path of `tincat3.dll` (API slots `+0x98`, `+0x9c`) or by a capture
-with three players.
+TinCat routes a client's message addressed to `0xEFFFFFDD` through the host to every other client and the host;
+one addressed to another client's net id goes to that client through the host (§10 Q1: `KRNL_SendMessage`
+T 10003cc0, `KRNL_RouteCustomData` T 10005140) [known]. Chat (0x30006, 0x30007) is the only traffic that depends
+on it.
 
 A message 1000 is trusted as it is: the receiver takes the sender net id and slot from the event body, not from
 the TinCat source of the message [known: `cb_Received_Data` passes only data and size on]. Only message 1001 is
@@ -388,8 +388,9 @@ GameInformation broadcast a role 2 host updates its LAN broadcast record (`BC_Up
 server's game entry (`ServerList::UpdateGameServer`) (S 004090e0) [known]. "LAN" for roles 1 and 2 is
 [inferred] from that and from the `BC_*` (broadcast discovery, port `broadcastPort`) functions.
 
-[TODO] not established: the LAN discovery exchange (`BC_Start` S 0041aa90, `BC_Update` S 0041adb0,
-`ai::network::BCGameInfo::Serialize` S 00419330). Not needed for a lobby match; a static read settles it.
+The LAN discovery exchange (`BC_Start` S 0041aa90, `BC_Update` S 0041adb0, `ai::network::BCGameInfo::Serialize`
+S 00419330) is specified in `docs/sim/lan-and-transport.md` §3.2 and §3.3; it is not reached in this build
+(`BC_Start` has no caller) and is not needed for a lobby match.
 
 `StartUpNetwork` requires manager state 0. It loads `network.ini`, creates and starts the transport (failure: the
 transport is destroyed, state stays 0), sets state 1, net tick length and ticks per net tick to 1 (role 0) or 4
@@ -892,7 +893,7 @@ S 00427cf0, `OnAck` S 00427f10]. Summary as a protocol:
 5. In manager state 3 or 4 with reconnect state ≠ 0: the reconnect state machine (§3.9).
 6. Not in state 3, reconnect state 0: every `pingFrequencyGame` (state 4) or `pingFrequencyMenu` (other states)
    seconds: transport slot `+0x84` (TinCat API slot `+0xb0`, to all users on a host with users, else to the host
-   on a connected client; [inferred] the ping request), and on a host in state 4 the net tick length adaptation
+   on a connected client: `TinCat_CTRL::Send_Ping` T 1000a2a0, the ping request [known]), and on a host in state 4 the net tick length adaptation
    (`docs/sim/logic-core.md` §3.2).
 
 **Per logic tick**, from `NLogic::System::Update`: `AdvanceNetTick(logicTick)` after the tick counter increment
@@ -1102,9 +1103,9 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
    other one `cb_ReconnectTo` S 00425aa0 with that entry's address and port. The lobby server takes no part:
    the messages are peer to peer, and the restart as host (`Reconnector_RestartAsServer_DoAction` S 0040b700)
    only restarts the transport and re-arms the session; it registers no game server [known].
-3. Whether two surviving peers can stall in different net ticks at a host loss and still pass the 0x3000e check
-   (net tick equality), which would leave them out of step by one net tick of commands. Reasoning over
-   S 004088b0 with the message timing, or a live test (also listed in `docs/sim/logic-core.md` §10).
+3. Answered (`docs/sim/logic-core.md` §3.2, Reconnect; its §10 Q4): two surviving peers that stalled in different
+   net ticks cannot both stay. The net tick does not move after the stall, `ReconnectAndRejoin` S 004093a0 sends
+   it in 0x3000e, and the new host kicks a sender whose net tick differs from its own (S 0040e560) [known].
 4. Whether any virtual call is made through the vftable pointer of a GUID received from the wire (a peer of a
    different build, or one that writes another value there, would crash the receiver). Seen so far [known]: the
    vftable S 007d42b4 has two slots, `Serialize` S 004085e0 (`+0`) and `Deserialize` S 00408530 (`+4`); neither
@@ -1113,8 +1114,8 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
    calls on a `NetGUID` object (the copy and compare helpers of slots, events and the left-players list).
 5. Meaning of the TinCat values set in `TinCatNetwork::StartUp` (value slots `+0x70` = 1, `+0x28` = 500, `+0x30`
    = 500; API slot `+0x30` = 500) and of the two calls in `CloseSession`. `tincat3.dll` read.
-6. The LAN discovery exchange (`BC_*`, `BCGameInfo`). Static read; not reached in this build (roles 1 and 2 are
-   never started, §3.3).
+6. Answered (`docs/sim/lan-and-transport.md` §3.2, §3.3): the LAN discovery exchange (`BC_*`, `BCGameInfo`) is
+   specified there; not reached in this build (roles 1 and 2 are never started, §3.3).
 7. Whether the transient checksum-count mismatch around a leave is visible to the player. Observation in a
    running three-player match. Answered (§3.10): a clean leave of a non-host yields two 0x2002B commands on
    the host, one from the lockstep 0x3000b and one from the disconnect.

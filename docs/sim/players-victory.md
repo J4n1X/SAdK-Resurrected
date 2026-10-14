@@ -326,8 +326,13 @@ Runs once when a world is built from a map of a "new game" type (0, 1, 2, 100, 0
    `k = LogicRandom_Next() % remaining`, append position k to the result and erase it from the source keeping
    the order of the rest `[known]`. The setter of `desc+0x24` (S 005a9b10) has two callers, the lobby
    `SetupSession` S 004562d0 and `nMenu::Main::StartCampaignMap` S 005df2c0, and both pass 0; `Reset` writes 0
-   `[known]`. So the shuffle is never enabled `[inferred]` (a write to the field that bypasses the setter is not
-   excluded).
+   `[known]`. So the shuffle is never enabled `[known]`: there are two descriptors, the menu's (constructed in
+   `nMenu::Game::ctor` S 005ee5d0) and `nGame::System +0x3b0` (constructed in S 00783190), and besides the
+   setter and `Reset` the field is written only by `GameLoadDescriptor::Assign` S 00784cd0, which copies the
+   menu's descriptor into the system's (sole caller `BuildWorld` S 00784d40). None of the functions that use a
+   descriptor (the setter callers, `App_CmdLine_StartNewMap` S 00401350, `FreeGamePanel::SetMap` S 005e8410, the
+   combo handler S 005e8200, `nMenu::Game::OnEnter` / `OnLeave`, S 005abb60, S 005ac770) stores to `+0x24`
+   of it.
 4. Slot setup source: map types 0, 3, 100, 0x67 first copy the descriptor's setup into the world's `MapInfo`
    (`MapInfo::CopySetupFrom`); map types 1 and 0x65 read the setup stored in the map itself; all other
    types read the descriptor `[known]`. Through the caller S 005ac770 only the types 0, 1, 2, 100 and 0x66 reach
@@ -377,10 +382,12 @@ Every machine must have the same game seed and the same active players for the c
 system itself is described in `docs/sim/logic-core.md` §2.7. `total` is a multiple of the number of active
 players, so the loop ends after whole rounds `[inferred]`. The value at chest `+0x28` is the chest's id towards
 the referee: when a chest of kind 0 (`chest+0x1c == 0`) is opened, `Referee_OnChestOpened_SendClaimChest`
-S 00782a60 sends it as `ChestID` of the referee message ClaimChest (0xDAC) `[known]`. `[TODO]` not established:
-what happens when the map has more start positions than chest positions per player allow (`total == 0`: no
-chest is placed, by the loop condition) or no start position at all (the division; read the disassembly of
-S 00775dd0 for a guard).
+S 00782a60 sends it as `ChestID` of the referee message ClaimChest (0xDAC) `[known]`. Edge cases `[known]`
+(disassembly of S 00775dd0): when the map has fewer chest positions than start positions the quotient is 0, so
+`total == 0` and the loop is skipped (`JBE` at S 00775ebc): no chest is placed. There is no guard against a map
+without start positions: the divisor is used unchecked (`DIV ECX` at S 00775e5f), so such a map raises the
+processor's integer division fault inside this function. The function does not test `total` inside a round
+either; that is harmless because `total` is a multiple of the active players.
 
 After this, `MapInfo.winCondition = desc+0x244` for the new-game types and type 0x65 (S 005ac770) `[known]`.
 
@@ -393,10 +400,12 @@ After this, `MapInfo.winCondition = desc+0x244` for the new-game types and type 
 
 The function has a second caller: `NVillage::Building::ctor_Place` S 0055d980 calls it for a depot territory
 building that is placed while `NLogic::Edit::GetBatchEditing()` is true (`docs/sim/village-buildings.md` §3.2)
-`[known]`. `[TODO]` not established: whether batch editing is on while `Game_CreatePlayersFromDescriptor`
-places the start buildings; if it were, both calls would run and the lists would be added twice (the callers
-of `Edit::SetBatchEditing` S 00538a60, a virtual call through `GameSystem+0x38`, would settle it; the one
-found in the cache is the editor tool handler S 00604dd0).
+`[known]`. Batch editing is off while `Game_CreatePlayersFromDescriptor` places the start buildings, so only
+the call above adds the lists, once `[known]`: `Edit::SetBatchEditing` S 00538a60 is slot 0 of the `NLogic::Edit`
+vtable S 007e7c28, whose only reference is the constructor S 00538c70 (which starts the flag at 0); every
+slot-0 call on the object fetched through the `GameSystem+0x38` getter S 00695ea0 lies in the editor tool
+handler `nMenu::Debug::HandleToolClick` S 00604dd0 (S 00604ff0 with 1, S 0060501f with 0, S 00605548 with 1),
+and no code reads `GameSystem+0x38` inline to make that call.
 
 | `Player.state` | Human (kind != 1) gets the bonus list | Computer (kind 1) gets the bonus list |
 |---|---|---|
@@ -584,9 +593,16 @@ side is on the remote machine, i.e. which avatar each client then puts into `Fin
 
 - **Lockstep command 0x2002B "player left game"** — `nGame::System::HandleCommand_2002B(playerIndex)` S 00782910:
   finds that player's castle with the same search as §3.6.1 and removes it
-  (`NVillage::System::RemoveBuilding(building, spill = true)`); no castle → nothing `[known]`. The player is
-  then eliminated by the next victory tick through the normal rule `[inferred]`. The command is executed on every
-  machine at the same tick. It is created only by the NComm manager, in three places `[known]`:
+  (`NVillage::System::RemoveBuilding(building, spill = true)`); no castle → nothing `[known]`. The command is
+  executed on every machine at the same tick, at the start of that logic tick before any subsystem update
+  (`docs/sim/game-commands.md`), and `RemoveBuilding` takes the castle out of the category lists at once
+  (§3.6.1). So the victory tick at the end of the same logic tick eliminates the player through the normal
+  rule: step 2 sets `state = 1` and, on every machine where that player is a remote human (`kind == 3`, network
+  mode not 0) and the local player is not out, posts the `!DEFEAT` letter; step 3 recomputes mode 1's
+  `enemiesWithoutHQ` for the others, and step 5 writes the new quest-0 text, or declares the winner in step 4
+  when no enemy castle is left `[inferred]` (chain of the `[known]` steps of §3.6). This matches the remaining
+  player's `FinishGame` 1.8 s after a give-up `[live, 2026-10-12]`. The command 0x2002B is created only by the
+  NComm manager, in three places `[known]`:
   - `NComm_Manager::HandleEvent` S 0040e560, session event 0x3000B "user left": if this machine is the host and
     the network mode (`+0x3c8`) is 1..4 (`NComm_Manager_IsRole1to4` S 004083e0), it creates 0x2002B with the
     leaver's player index and appends it to the outgoing tick package (run at once when the manager's `nMode`
@@ -690,7 +706,7 @@ A computer player never stays at a tool stock of 0: its `LockSmith` adds a free 
 |---|---|---|---|
 | 0 | building types | `menu.lockBuilding` / `unlockBuilding` | building placement check, build menu |
 | 1 | sacrifices (locked) | `menu.lockSacrifice` / `unlockSacrifice` | sacrifice start / order checks |
-| 2 | sacrifices made available | `menu.addSacrifice` | none through `IsLocked` |
+| 2 | sacrifices made available | `menu.addSacrifice` | none through `IsLocked`; the sacrifice selection panel walks the keys |
 | 3 | job types (queried with soldier types) | `menu.lockJob` / `unlockJob` | soldier training and upgrade |
 
 `IsLocked` has seven callers `[known]`: category 0 from `Village_CheckBuildingPlacement` S 005576e0 and the
@@ -701,8 +717,15 @@ the byte that `menu.addSacrifice` (S 005dac60) sets is written and never tested 
 visible effects are a refresh of the info-box tab with key 8 when that is the open one, and, only when its
 third argument is true, the `!New Sacrifice available` message (type 4, arg = the sacrifice's name) `[known]`.
 The map subscript S 005bf670 has four callers; only the setter S 005bfeb0 addresses the lock maps, the other
-three use maps of other objects `[known]`. `[TODO]` not established: a reader of map 2 through another tree
-function (a search for accesses to `Player +0x7c` would settle it).
+three use maps of other objects `[known]`. Map 2 has one reader, and it is UI `[known]`: the sacrifice selection
+panel `nMenu::InfoBoxSacrificeSelect::Update` S 00637340 walks the tree directly (`Player +0x7c`, head `+0x80`,
+S 0063745d) and offers every key after the map's list (`docs/sim/quests-sacrifices-stats.md` §3.2.1). Besides
+that, the lock maps are addressed only as `Player + 0x64 + 12·c` (`IsLocked`, `Unlock`, `SetLockFlag`; no
+other instruction computes that address); the only caller passing `c = 2` is `menu.addSacrifice` (to
+`SetLockFlag`), the callers of `Unlock` pass 0, 1 and 3, and the only other code on the four maps is
+`ai::player::Player::ClearLockMaps` S 005be9e0 (from `Player::Reset`) and the destructor. No simulation code
+reads map 2: an id added there changes only what a human player is offered, and `CheckCanOrder` does not test
+the offer.
 
 The lock maps are neither saved nor in the checksum (§7, §8). The shipped campaign scripts set their locks again
 in the script callback `onLoaded` (e.g. `maps/campaignMaps/C01.lua`: `onLoaded` calls its `lockBuildings()`,
@@ -891,7 +914,7 @@ constructed player table, victory conditions and statistics.
 | `state[i] == 0` filter | sacrifice target chooser S 00627210 | players already out are not offered as targets `[known]` |
 | Referee `FinishGame` 0xDC0 | §3.7 | lobby / referee server |
 | Map completed in the user profile | §3.7 | campaign and map list |
-| Statistics series | `PlayerStatistics::GetLatestValue`, `GetGoodHistory`, `Statistics::GetPlayerStatistics` S 005370e0 | statistics screens, scripts, AI: `NAI::ProductionControl::IsStockBelowLimit` S 0058b9e0 reads `regionSize` (limit = `regionSize * 60 / 9216 + 40`) `[known]`; three more AI functions fetch the record (S 0058d370, S 00598950, S 00599d60), fields read there `[TODO]` not established (read those three) |
+| Statistics series | `PlayerStatistics::GetLatestValue`, `GetGoodHistory`, `Statistics::GetPlayerStatistics` S 005370e0 | statistics screens, scripts, AI: `NAI::ProductionControl::IsStockBelowLimit` S 0058b9e0 reads `regionSize` (limit = `regionSize * 60 / 9216 + 40`) `[known]`; the three other AI functions that fetch the record, `NAI::NeedCreation::Update` S 0058d370, `NAI::WeaponProduction::Update` S 00598950 and `NAI::MilitarySettings::Update` S 00599d60, also read only `regionSize` (`+0xa4`, `FILD` right after each `GetPlayerStatistics` call: S 0058d844, S 00598b70, S 00599dc7) `[known]`. No AI function reads a sampled series, so for the computer players only `regionSize` has to be exact at every tick |
 
 ---
 
@@ -954,9 +977,10 @@ the stored index, not by the loop position. The neutral player is rebuilt afterw
 5. `GoodArrangement` — `"Good Arrangement"` v4: u8 initialized, count, count × group
    (`"Player GoodArrangementGroup"` v0: u8 initialized, `"Player ArrangementBase"` v0 {count, entries as
    `"Player ArrangementObject"` v0 {float weight, float accumulator, i32 building type id}}, i32 group id). The
-   entry's `used` byte (`+0x10`) is not stored (S 005c2e20) `[known]`; `[TODO]` not established: its value
-   after a load (the temporary entry of `ArrangementBase::Load` S 005c3930; read its disassembly). A section
-   version below 4 discards the loaded data and rebuilds the defaults.
+   entry's `used` byte (`+0x10`) is not stored (S 005c2e20) `[known]`; after a load it is 0 for every entry
+   `[known]`: `ArrangementBase::Load` S 005c3930 fills a temporary entry with weight 0, accumulator 0, type -1
+   and `used = 0` (S 005c39a6), reads the three stored fields into it and appends a copy of the whole 0x14 bytes
+   (`push_back` S 005c3800). A section version below 4 discards the loaded data and rebuilds the defaults.
 6. `Military` — `"Player Military"` v2: 3 × float (the tier values), 8 × u8 (version >= 1), float `+0x1c`
    (version >= 2) (S 005c09d0 / S 005c0a40)
 7. `Messages` — `"Messages"` v0: u32 count, count × `"Message"` v2 {float timeRemaining, cell position, string
@@ -1038,9 +1062,10 @@ tick after the load, `stateTime` of both players = that tick]`.
 - **Not synchronised but simulation-relevant.** `VictoryConditions.state` feeds back only into UI and local
   messages; the referee message makes a mismatch visible. The coin counter and series 0 decide victory and are
   not in the checksum: a divergence there produces different winners without a checksum alarm `[inferred]`.
-  The statistics also feed the computer players: `NAI::ProductionControl::IsStockBelowLimit` S 0058b9e0 reads
-  `regionSize` `[known]`, and the AI state is in the checksum (`NAI::System::StoreBody`, S 00784080), so the
-  600-tick territory sample must be reproduced on the same ticks.
+  The statistics also feed the computer players: `NAI::ProductionControl::IsStockBelowLimit` S 0058b9e0 and the
+  three functions S 0058d370, S 00598950, S 00599d60 read `regionSize` and no other statistics field (§5)
+  `[known]`, and the AI state is in the checksum (`NAI::System::StoreBody`, S 00784080), so the 600-tick
+  territory sample must be reproduced on the same ticks.
 - **`kind` differs per machine** (2 on the owner's machine, 3 elsewhere) and must not influence synchronised
   state. In the code it selects only presentation (§3.13) and, for kind 1, rules that are the same everywhere
   (§3.4) `[inferred]`: of the 26 functions that call `ai::player::PlayerTable::FindLocalPlayer`, the three victory functions
@@ -1051,7 +1076,8 @@ tick after the load, `stateTime` of both players = that tick]`.
   differ between machines. A message existing or not decides only "refresh or add" in §3.9, and messages are
   not checksummed. Keep messages out of synchronised state.
 - **Random generator.** The only use in this subsystem is the start-position shuffle (§3.4 step 3), one
-  `LogicRandom_Next()` per position, before any player exists. The chest placement of a network match (§3.4)
+  `LogicRandom_Next()` per position, before any player exists; the shipped game never enables it (§3.4), so
+  this subsystem draws nothing from the logic generator. The chest placement of a network match (§3.4)
   uses its own generator seeded with the NComm game seed, one draw per chest, and leaves the logic generator
   untouched. Team and player-index randomisation for the room
   uses C `rand()` on the host and is distributed as data (`docs/NCOMM_GAME_PROTOCOL.md`).
@@ -1110,17 +1136,17 @@ to ticks.
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | `[TODO]` After a player's last castle is removed in a network match, do the remaining machines show the `!DEFEAT` letter and does the victory quest of mode 1 advance on the next tick? (§3.6.1, §3.8) | game observation with two clients: one leaves through the menu; watch the other's messages and quest 0 |
+| 1 | Answered from the code (§3.8): 0x2002B runs at the start of a logic tick and the victory tick of the same logic tick eliminates the player; the remaining machines post `!DEFEAT` (the leaver is `kind == 3` there) and mode 1's quest 0 advances in that tick, not the next one | — |
 | 2 | Answered (§3.8): leaving an offline match through the menu makes no `HandleCommand_2002B` call, so no castle is removed `[live, 2026-10-12]` | — |
 | 3 | Answered for a referee that answers at once (§3.8): three `GiveUpGame` within 5 ms, each answered `[live, 2026-10-12]`. Open: no latch exists in the sending path (§3.8), so the count depends on when the requester stops being updated (whether the main-screen activation in the result callbacks S 006005c0 / S 00600690 does that, and what happens if the referee never answers) | static read of `AppState_ActivateMainScreen` and of the dialog update loop of `nMenu::System`; or a capture of the referee connection while giving up |
 | 4 | Answered: with start resources "high" the mines of a human player work without food (`village-buildings.md` §3.8) | static: S 005be330 and its three callers in `NVillage::Production`; `Player.state` set in S 005bea90 |
 | 5 | Answered (§2.2): the component order of the colour table at S 0087ead8 is red, green, blue, alpha, and the values in a running match are those of `menu.cfg` `[live, 2026-10-12]` | — |
-| 6 | `[TODO]` A reader of lock map 2 ("sacrifices made available") that does not go through `IsLocked` (§3.10) | cross-references to the map subscript S 005bf670 with `Player +0x7c` |
-| 7 | `[TODO]` Whether any code writes `GameLoadDescriptor +0x24` (start-position shuffle) without the setter S 005a9b10 (§3.4). The free-game combo handler S 005e8200 does not (it calls the setters of `+0x20`, `+0x28` and `+0x244` only) | search for writes to the descriptor at `+0x24` in the free-game panel's start function |
+| 6 | Answered (§3.10): the only reader of lock map 2 outside `IsLocked` is the sacrifice selection panel S 00637340, which walks the tree to build the offer (UI); no simulation code reads it. It is written only by `menu.addSacrifice` (`SetLockFlag(2, id)`) and emptied by `ClearLockMaps` S 005be9e0 and the destructor | — |
+| 7 | Answered (§3.4): no code writes `GameLoadDescriptor +0x24` except the setter (both callers pass 0), `Reset` and the copy `Assign` S 00784cd0; the start-position shuffle never runs | — |
 | 8 | Answered (§7): after loading a save in which a side had already won, the win is declared again in the first tick and the victory dialog shows again; no victory state is stored. Open: the second `FinishGame` in a lobby match (same code path, not observed online) | static: S 00535d70, S 005357c0, S 005275c0; live 2026-10-12 |
 | 9 | `[TODO]` What the report, victory and defeat screens display (§5) | static read of `nMenu::GameEnded` and the three screen classes; presentation only |
-| 10 | `[TODO]` Which statistics fields the AI functions S 0058d370, S 00598950 and S 00599d60 read (§5, §8); they decide which series must be sample-exact for the computer players | static read of the three functions |
-| 11 | `[TODO]` The value of a distribution entry's `used` byte after a load, which is not stored (§7) | disassembly of `ArrangementBase::Load` S 005c3930 |
+| 10 | Answered (§5): the three AI functions read only `PlayerStatistics.regionSize` (`+0xa4`); no AI function reads a sampled series | — |
+| 11 | Answered (§7): the `used` byte is 0 for every entry after a load (`ArrangementBase::Load` S 005c3930 appends a temporary entry with `used = 0`) | — |
 
 ---
 

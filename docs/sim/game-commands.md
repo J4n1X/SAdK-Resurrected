@@ -263,8 +263,10 @@ Constants and counters [known unless tagged]:
   level is slot +0x60 S 004198e0, the smallest value of a per-user field (list node +0x3c), starting from 3:
   it is never above 3, so with this transport one of the three multipliers always applies [known]. The samples
   are milliseconds of a full round trip (`GetTickCount()` at the reply minus the value the request carried;
-  `docs/sim/logic-core.md` §10 Q2) [known]. [TODO] not established: what sets the per-user level (the writers
-  of the level field); the offline transport's slots were not read.
+  `docs/sim/logic-core.md` §10 Q2) [known]. The per-user level is the user's connection type (0 none, 1 modem,
+  2 ISDN, 3 DSL/cable, 4 LAN): the host's own record carries the host's, a client's record starts at 0 and gets
+  the value of the client's join request 0x30001 through `UIS_SetUserData` S 0041a720 (`docs/sim/logic-core.md`
+  §3.2) [known]. The offline transport's slots were not read.
 
 `NLogic::System::Update` S 00527070 calls `NComm_Manager::AdvanceNetTick(logicTick)` S 00411990 as the **first step
 of every logic tick**, before any subsystem is updated. There:
@@ -332,8 +334,10 @@ stops simulating and after 2 s counts as hanging.
   `CanAdvanceTick` (`T ≥ startTick + 1`, `+ 2`) open again as at a match start, so the first two boundaries after
   a reconnect run without packages.
 - How the reconnect state returns to 0 and what the host does with slots that do not come back belongs to the
-  session layer (`docs/NCOMM_LAYER.md`); [TODO] not established here: whether every machine clears its lists at
-  the same `T` (static read of the reconnect state machine in S 00410f70).
+  session layer (`docs/NCOMM_LAYER.md`). Every machine that stays in the match clears its lists at the same `T`:
+  each clears at its own `T`, which no longer moves (no logic tick in states 2 and above), the rejoining client
+  sends that `T` in event 0x3000e, and the new host kicks it with `!COULD NOT RECONNECT` when it differs from the
+  host's own `T` [known] S 004093a0, S 0040e560 (`docs/sim/logic-core.md` §3.2, Reconnect).
 
 Execution of one event (S 00410530): `NComm_Manager::HandleEvent` S 0040e560 first; it consumes the session events
 (`0x30001`..`0x30012`) and returns false for everything else, which then goes to the registered sink,
@@ -562,7 +566,12 @@ are under attack!` unconditionally [known]. `NMilitary::Attack::DispatchAttacker
 village list as the minimum above (vector at village system +0x3c) in list order and, for every building of
 the attacker, sends `(int)(GetAvailableAttackers(target, building) × fraction + 0.5)` soldiers (truncated; the
 0.5 is the double at S 007d4a90) when that is above 0, by sea or overland (`Military_ShouldAttackBySea`)
-[known]. The fraction therefore acts per source building, not on the total. How
+[known]. The fraction therefore acts per source building, not on the total. A forged `0x2000D` against an own
+or allied building does find attackers when the target is on the same landmass: `Military_GetAttackReachFactor`
+S 00575320 returns the overland distance falloff without any owner test when both cells have the same continent
+id, and `Military_IsTargetReachable` S 00575cb0 accepts overland when the cached walking path between the two
+entrance cells is shorter than twice their hex distance; `Player::IsEnemyOf` is tested only on the sea branch of
+both (other landmass, or a falloff of 0), so only an attack across water needs an enemy target [known]. How
 the soldiers of one building are chosen, the exception for depot-type buildings, and what a fight with an empty
 side does are in `docs/sim/military.md` §3.5 and §3.6. The computer players call the same `StartAttack` with a
 fraction of their own (`docs/sim/ai-player.md`).
@@ -686,10 +695,16 @@ research-started callback). The executor only tests "running at this building" (
 `Start` has no test of its own, so a research of the same player running at *another* building is overwritten
 without its cancel callback [inferred from the two bodies]. The link (S 0053be10) is written on both sides: the
 building's research reference (+0x12c: id and pointer of the research) and the research's building reference
-(+0x18) [known]. Only the new building is touched, so the building of an overwritten research keeps its
-reference to the research object while the research now names the new building [inferred]; "running at this
-building" compares the research's stored building id with the asked building (S 0065fb80), so the old building
-no longer counts as researching [known]. The sacrifice
+(+0x18) [known]. Only the new building is touched: `Reference_SetTarget` S 0053a540 just overwrites id and
+pointer, so the building of an overwritten research keeps its reference (+0x12c) to the research object while
+the research now names the new building [known]. "Running at this building" compares the research's stored
+building id with the asked building (S 0065fb80), so the old building no longer counts as researching [known].
+The stale reference has one effect: when the old building is destroyed, `NVillage::Building::dtor` S 0055ce70
+finds its reference set and calls `Building_UnlinkSacrificeResearch` S 0053be30 on that research, which clears
+the research's building reference and its running byte (`SacrificeResearch::ClearBuilding` S 0065fa60), so the
+research running at the new building stops, without the cancel callback [known]. Cancel, reset and completion
+unlink only the building the research names (callers S 0065fbd0, S 0065fa80, S 0065fde0) [known]. The reference
+is also saved and hashed (`StoreSavegame` S 0055c470, `StoreForChecksum` S 0055c690). The sacrifice
 id is not validated (not that it needs research, nor that it is not yet researched) [known].
 
 **`0x20028` GE_Sacrifice_AbortResearch** — `EventInt64`: building id. Sender: action 21. Executor S 007827a0: if
@@ -936,8 +951,13 @@ net ticks; 6 session slots; 8 street planners.
   writes a section `PlayerArrangementBase`, the entry count, then slot 1 of every entry (stride 0x14), and
   `ArrangementObject::Store` S 005c2e20 writes a section `PlayerArrangementObject`, the float +0x04 (weight),
   the float +0x08 and the int +0x0c (building type id) [known for the two bodies; inferred that they are the
-  slot-1 functions the group and the list call: neither has a direct caller]. [TODO] not established: the
-  meaning of the entry float +0x08 (static read of `ArrangementBase::PickNext` S 005c30c0).
+  slot-1 functions the group and the list call: neither has a direct caller]. The entry float +0x08 is the
+  entry's credit for a weighted round robin, `ArrangementBase::PickNext` S 005c30c0 [known]: every call first
+  adds each entry's weight (+0x04) to its credit, then picks, in list order, the entry whose byte +0x10 is 0 and
+  whose credit is strictly greater than every earlier one (start value −1.0, so the first of equal credits wins),
+  sets that entry's credit to 0 and returns its building type id (+0x0c); when every entry has byte +0x10 set,
+  the first entry is picked and its credit zeroed. Because the credit is saved, the distribution continues after
+  a load where it stopped.
 - The 8 street planners are not stored: `NLogic::System::Save` S 005275c0 writes the map info, the id counter,
   the running flag, three timing floats and the tick counter, and no subsystem `Store` takes a planner
   [known for S 005275c0; `docs/sim/save-format.md` lists the sections]. On load,
@@ -1040,12 +1060,12 @@ net ticks; 6 session slots; 8 street planners.
 | Question | Settled by |
 |---|---|
 | Answered (§3.4, `0x20023`): the speed button is shown and usable in a network match; nothing hides `btSpeed` and the click test has no net-mode condition | static: S 005efea0, S 005ed700, `menuingame.xml` |
-| What sets the per-user quality level in the net tick adaptation (§3.2). Answered: the latency samples are milliseconds of a full round trip (`logic-core.md` §10 Q2) | `TinCatNetwork::UIS_AddPingSample` S 0041d610 only stores the value its caller passes (newest first, at most 2 per user); static read of `cb_Ping_Received` S 0041d910 and of the writers of the level field |
-| Do all machines clear their package lists at the same net tick in a reconnect (§3.2) | static read of the reconnect state machine in S 00410f70; or observe: issue commands just before a host loss and compare the worlds after the rejoin |
-| Does a forged `0x2000D` against an own or allied target find attackers. `GetAvailableAttackers` S 00575dc0 has no owner or diplomacy test of its own [known]: it returns 0 only when the source building cannot provide attackers, is bound to another fight, has a reach factor of 0 or below, has no available soldier, or the target is not reachable | static read of `Military_GetAttackReachFactor` and `Military_IsTargetReachable`, the two callees that could still exclude such a target (`docs/sim/military.md` §3.5) |
-| Meaning of the second float (+0x08) of a distribution entry (§7) | static read of `ArrangementBase::PickNext` S 005c30c0 |
+| Answered (§3.2): the per-user level is the user's connection type (0 none, 1 modem, 2 ISDN, 3 DSL/cable, 4 LAN), the host's own for its record, each client's from its join request 0x30001 through `UIS_SetUserData` S 0041a720; the latency samples are milliseconds of a full round trip (`logic-core.md` §10 Q2) | — |
+| Answered (§3.2): yes for every machine that stays; each clears at its own frozen `T`, and the new host kicks a rejoining client whose 0x3000e carries another `T` (S 004093a0, S 0040e560) | — |
+| Answered (§3.4, `0x2000D`): yes on the same landmass. `Military_GetAttackReachFactor` S 00575320 and `Military_IsTargetReachable` S 00575cb0 test `Player::IsEnemyOf` only on their sea branch; overland they need only the same continent id, a falloff above 0 and a walking path shorter than twice the hex distance | — |
+| Answered (§7): entry +0x08 is the credit of a weighted round robin; `ArrangementBase::PickNext` S 005c30c0 adds every weight to its credit, picks the first entry with the largest credit among those whose byte +0x10 is 0, and zeroes its credit | — |
 | Answered (§7): an unfinished street in a save is gone after the load, with no stub at the start flag [live, 2026-10-12] | — |
-| Is the old building's research reference (+0x12c) cleared when `0x20027` moves the research (§3.4) | cannot be produced with the UI of this build; static read of the readers of building +0x12c |
+| Answered (§3.4, `0x20027`): no; the old building keeps it, and destroying that building later stops the moved research through `Building::dtor` S 0055ce70 → `Building_UnlinkSacrificeResearch` S 0053be30, without the cancel callback | — |
 | Answered (`village-buildings.md` §3.5): the building is removed in the tick in which the countdown is decremented to 0, by the test that follows `Building::Update` in the same loop iteration; the two messages are not posted at all unless the countdown started at 0 | static: S 0055a640, S 005609b0 |
 
 ## 11. Function reference

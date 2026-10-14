@@ -72,8 +72,8 @@ S 0054eb50, S 0054e9b0; defaults from the constructor S 00554da0]:
 | +0x00 | `soldierId[kind 0..1][level 0..4]`: map tribe → soldier good id | empty | `mi_setSoldierId` |
 | +0x78 | `health[kind][level]`: map tribe → `gp_setHealth` of that good (cached when the id is set) | empty | derived |
 | +0xf0 | `maxLevel[kind]`: map tribe → highest level defined | empty | derived |
-| +0x108 | int | 20 | [TODO] no reader found |
-| +0x10c | byte | 0 | [TODO] no reader found |
+| +0x108 | int | 20 | never read, no setter: only the ctor writes it [known] (§10 Q3) |
+| +0x10c | byte | 0 | never read: set to 1 at the start of `Properties_RegisterLuaLibrary` S 00550e40 (S 00553f00), to 0 by `Properties_Db_ClearAll` (S 00553f10) [known] (§10 Q3) |
 | +0x110 | `regenerationRate` | not set by the ctor [known] | `mi_setRegenerationRate(100)` |
 | +0x114 | `waitForTacticTime` | 100 | `mi_setWaitForTacticTime(10)` |
 | +0x118 | `actionsInFightDelayTime` | 300 | `mi_setActionsInFightDelayTime(300)` |
@@ -173,7 +173,7 @@ is in the production functions, §3.4).
 | Offset | Name | Meaning |
 |---|---|---|
 | +0x00 | owner | the soldier |
-| +0x04 | int | -1 in the constructor (S 0065bbc0), saved; [TODO] no other access found, meaning open |
+| +0x04 | int | -1 in the constructor (S 0065bbc0); written only by `Load` S 0065bcc0, read only by `Store` / `StoreUntagged` S 0065b8b0 / S 0065ba40: always -1, no effect but its bytes in the save and checksum streams [known] (§10 Q3) |
 | +0x08 | attackers | references to the soldiers whose opponent is this soldier |
 | +0x20 | defendedBuilding | set while linked as defender of the target ("list 44") |
 | +0x40 | retarget | bool: drop the current opponent at the next decision |
@@ -237,8 +237,9 @@ the uses in S 00572fa0 and S 0055e080].
 **Catapult** (`NVillage::Catapult`, `Building+0xf4`) [known] S 00567640: +8 target cell, +0x10 aim cell (-1 =
 none), +0x18 f32 last fire stamp (copy of the f32 at `GameSystem+0x78` when fired, S 005678b0), +0x1c f32
 rotation start stamp (0 in the constructor; copy of the same f32 whenever a rotation starts and the pending
-direction is set, S 00567750; saved; [TODO] no reader found), +0x20 current direction 0..5 (initial 1), +0x24
-pending direction (initial 8), +0x28 projectile reference, +0x48 `targetSeed` (counts attacks, initial 0).
+direction is set, S 00567750; read only by `Serialize` S 00567770, so it has no effect on play [known]
+(§10 Q3)), +0x20 current direction 0..5 (initial 1), +0x24 pending direction (initial 8), +0x28 projectile
+reference, +0x48 `targetSeed` (counts attacks, initial 0).
 
 **Path-length cache** of `NMilitary::Attack` [known] S 00575b70: two static maps `key → path length` with a
 time stamp each; one is saved (§7). Key = `(fromIndex - 1) * 0x10000 + (toIndex - 1)`, cell index =
@@ -522,9 +523,12 @@ training calls above are reached only from the production cycle that a worker's 
 S 00565f80, each behind the `casern` test) [known]. A building can supply a soldier order only when its
 output stock holds a soldier good of the tribe and the wanted kind (`SettlerSpawn::CanSupplyGood` S 005643c0:
 no cost exchange for soldier goods) [known]. So a castle stores soldiers and hands them out as a depot but does
-not train or promote by this cycle [inferred]. [TODO] not established: whether anything else starts a
-production cycle on a building without a worker; reading the two callers of S 005657c0
-(`NMovie::ProduceGood::Start` S 00777460, `NMovie::GoAfforest::Start` S 0077bcb0) would settle it.
+not train or promote by this cycle [inferred]. Nothing else starts the cycle [known]: `StartProductionCycle`
+S 005657c0 has exactly two callers, `NMovie::ProduceGood::Start` S 00777460 and `NMovie::GoAfforest::Start`
+S 0077bcb0, both steps of a worker's movie that take the building from the worker's workplace reference
+(settler +0x120); `VillageSoldierTraining_StartNext` S 00566920 is called only from S 005657c0, and
+`VillageSoldierTraining_Finish` S 00566990 only from `OnProductionFinished` S 00565f80, whose only caller is
+`NMovie::ProduceGood::Update` S 00777430. A building without a worker therefore never trains or promotes.
 
 ### 3.5 Attack: start, dispatch, defence
 
@@ -561,6 +565,47 @@ re-read for this document; the statements there hold. Additions and corrections:
    `n = trunc(GetAvailableAttackers * fraction + 0.5)`; if `n > 0` send by sea or overland
    (`Military_ShouldAttackBySea`).
 4. Message `!You are under attack!` to the defender, at the target.
+
+`g_bSeaAttackDispatch` S 0088a4cc is 1 only around the attacker dispatch of step 3 (its only writes are in
+S 00576500); it is passed to every harbour lookup below and lets a ship with an active mission count as ready
+(`../navy-and-military.md` §5.1) [known].
+
+**Soldiers one building can send** (`GetAvailableAttackers(target, building, persistentCache)` S 00575dc0)
+[known]:
+
+1. 0 unless `CanProvideAttackers` S 0055fc60; 0 if the building is bound to a fight (`Military` fight
+   reference valid) and is not the target itself.
+2. `reach = Military_GetAttackReachFactor(building, target)` S 00575320; `reach <= 0` gives 0.
+3. `n` = number of soldiers with `IsAvailableInBuilding`, counted as a float; result `trunc(n * reach)`.
+4. A result above 0 is returned only if the building is the target or
+   `Military_IsTargetReachable(target, building, persistentCache, allowSea = 1)`; else 0.
+
+`falloff(a, b)` S 00574fe0 with `d = hexDistance(a, b)`: `d >= 24` gives 0, else `min(36 - d, 24) / 24` (1.0
+up to 12 cells) [known]. "Landmass" below is the continent id of the cell (`NMap::Continents`).
+
+`reach(building, target)` S 00575320 [known]:
+- same landmass: `f = falloff(building, target)`; if `f == 0` the sea branch is tried, else `f` is the result;
+- other landmass, or `f == 0`: the sea branch gives `falloff(building, H2)` when the target's owner is an enemy
+  of the building's owner (`Player::IsEnemyOf` S 005be280), `Military_IsHarborWithinBuildingRange` S 00574f70
+  holds (a harbour **H1** of the target's owner on the target's landmass, ready for the attacker, closer than
+  `territoryRange(target) + 1` to the target) and `FindOwnHarborConnectedToTargetHarbor` S 005b65d0 finds the
+  attacker's harbour **H2** on the building's landmass with an exit route to H1, nearest to the building and
+  closer than 25 cells; otherwise 0. The distance from H1 to the target does not count.
+
+`IsTargetReachable(target, building, persistentCache, allowSea)` S 00575cb0 [known]: `D` = hex distance of the
+two buildings; `E(x)` = the neighbour of building cell `x` in direction 1. True if
+`cachedPathLength(E(target), E(building)) < 2 * D`; else, with `allowSea`, true when the enemy test, the H1
+test and the H2 lookup above succeed and H2 is closer than **24** cells to the building; else false.
+`cachedPathLength(from, to, persistent)` S 00575b70 [known]: one of two static maps (`persistent` selects the
+saved one) keyed `(index(from) - 1) * 0x10000 + (index(to) - 1)`, `index = y * mapWidth + x`; a map is emptied
+when `tick > stamp + 111` and the stamp set to the tick; a miss runs the map A* (`NMap::AStar::FindPath`, mode
+0) and stores its step count, or 0x7fffffff when it finds no path.
+
+`ShouldAttackBySea(building, target)` S 00576250 [known]: with `D` as above, false (overland) when
+`cachedPathLength(E(target), E(building), persistent) < 2 * D` and `reach(building, target) <=
+falloff(building, target)`; true otherwise. On one landmass with `d < 24` the two values are equal, so a
+building with a short enough walk goes on foot; by sea when the walk is too long, or when `d >= 24` and the
+sea branch gives a factor above 0 [inferred from the two formulas].
 
 **Choosing the soldiers of one building** (`AttackConnector::AssignBestSoldiers` S 005751e0) [known]: iterate
 the levels of the building's kind from the **highest down**; at each level repeatedly take the available soldier
@@ -1418,11 +1463,11 @@ of §2.3 are hashed with the player (`players-victory.md`).
 |---|---|---|
 | 1 | Answered for the garrison (§3.2): an occupied building whose wanted size is 0 is emptied and goes on existing; with the default sliders the guard hut keeps no soldier, the guard tower and the fortress one [live, 2026-10-12]. Open: whether the emptied building's border stays, and the capacities that separate 0 from 1 | observation in the game: a far guard house (capacity 2..4) with default sliders; watch the border; read the capacities |
 | 2 | Answered (§3.3): `Soldier::IsPairedSettlerTypeEqualSoldierType` (settler type compared with soldier kind) is always false with the shipped data, so `ReplaceSoldiers` S 00560110 never skips a wounded soldier because of it and `ExchangeWrongKindSoldiers` S 00560190 never reaches its unlink call [inferred]; 31,676 calls in play all returned 0 [live, 2026-10-12] | static: S 00658df0, S 006587e0, S 00656500; `Jobs.lua` |
-| 3 | Meaning of `MilitaryConfig+0x108/+0x10c`, `SoldierFightState+4`, `Catapult+0x1c`: [TODO] not established, no reader found in the functions read | field xrefs / data-flow in Ghidra over the whole binary |
+| 3 | Answered (§2.2, §2.6, §2.7): none of the four is read by the simulation. `MilitaryConfig+0x108` is written only by the ctor (20); `+0x10c` only by S 00553f00 (1, from `Properties_RegisterLuaLibrary`) and S 00553f10 (0, from `Properties_Db_ClearAll`); a whole-binary scan of `[reg+0x108/+0x10c]` after a load of `PropertiesDb+0x5c` finds no access, while it finds every known reader of +0x110..+0x11c. `SoldierFightState+4` is -1 from the ctor, written by `Load`, read only by `Store` / `StoreUntagged` (no access through `Soldier+0x234` or `Soldier+0x230`). `Catapult+0x1c` is read only by `Serialize` S 00567770 (all `NVillage::Catapult` and movie methods scanned, plus every `[reg+0x1c]` after a load of `Building+0xf4`) [known] | — |
 | 4 | Answered (§3.2): index -1 in `Soldiers::GetSoldierObject` ends the process (exit code 0xC000000D), and play can reach it: all present soldiers bound to an attack during its 10-tick start countdown, wanted size below the garrison, an allocation pass in that window. Not observed in the running game | static: S 00574a00, S 00566220, S 00658f90, S 005751e0, S 006594a0 (state 0xc), S 006f26de; observation: lower the garrison slider, then at once attack with all soldiers of that building |
 | 5 | What `Player+0x18` holds, the argument of `!Castle was destroyed!` (§5) | the `Player` layout / its constructor |
-| 6 | `Military_IsTargetReachable`, `Military_ShouldAttackBySea` and the reach factor are specified in `../navy-and-military.md` §2..§3 and were not re-derived for this document beyond the falloff 12 / 24, the cache key and the 111-tick flush | static read of S 00575dc0 and its callees against that document |
-| 7 | `ai::military::MilitaryBuildingRanking` and the computer player's use of attack watch and fight history | belongs to `ai-player.md` |
+| 6 | Answered (§3.5, after Start): `GetAvailableAttackers` S 00575dc0, the reach factor S 00575320, the falloff S 00574fe0, `Military_IsTargetReachable` S 00575cb0, the path cache S 00575b70, `Military_ShouldAttackBySea` S 00576250 and the harbour lookups S 00574f70 / S 005b65d0 / S 005b5f50 re-read; they agree with `../navy-and-military.md` §3, with two precisions: the H2 limit is 25 cells in the reach factor and 24 in the reachability test, and a cache is emptied when the tick exceeds its stamp + 111 | — |
+| 7 | Answered: specified in `ai-player.md` (`MilitaryBuildingRanking` §3.8 step 5, the fight history in the attack fraction §3.12, attack watches §3.13). The military side only creates and deletes the watch: `Fight::SetTargetBuilding` S 00570760 is the only caller of the add S 0053be90, `Fight::dtor` S 00571790 the only caller of the remove S 0053bed0, and the watch's defence fraction is overwritten by `StartAttack` (§3.5 step 2) [known] | — |
 | 8 | Answered (§3.5.1 state 0xf, §3.6.2 rule 2): yes. A waiting soldier unbinds in the first tick in which the opposing list has no soldier with `leftFight == 0` and the defender list has had a member; the building is captured by an attacker already in the fight (0x29 → 0xd). With no attacker outside nobody captures [inferred]. In play the attack dialog does not let the player send more soldiers than can fight at once, so the case does not arise from the dialog [live, maintainer, 2026-10-12] | static: S 006594a0 case 0xf, S 005711c0, S 00571140, S 00570980 |
 
 ## 11. Function reference
