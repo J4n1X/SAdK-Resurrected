@@ -79,6 +79,11 @@ table is a `std::map<int, T>` keyed by the record id, ordered by **signed** 32-b
 data] and match the live counts quoted in [../data-loading.md](../data-loading.md) for buildings, goods, tribes,
 animals, AI profiles and sacrifices.
 
+Each of the thirteen record tables is a 12-byte MSVC `std::map` member (head node at +4 and element count at +8
+of the member): `buildingMap`, `depositMap`, `goodMap`, `patternMap`, `remainsMap`, `doodadMap`, `animalMap`,
+`soundMap`, `aiMap`, `harbourMap`, `tribeMap`, `sacrificeMap`, `spMap`. The sign table at +0x4c is the 16-byte
+member `signDoodads` (`ai::properties::SignDoodadTable`: a map plus the byte flag) [known] S 00549dd0.
+
 Four flags are set to 1 by `Properties_RegisterLuaLibrary` before the bindings are registered:
 `GameConfig+0x3c`, the sign table's byte (`PropertiesDb+0x58`), `MilitaryConfig+0x10c`, `ShipConfig+0x00`
 [known]. `Properties_Db_ClearAll` S 005494a0 clears all four: `GameConfig+0x3c` (S 00555810),
@@ -233,7 +238,7 @@ stone, set in code).
 | +0xa0 | `bowRange` | i32, cells | `gp_setBowRange` | 6 | ranged soldiers |
 | +0xa4 | `aiNeedsCosts` | bool | `gp_setAINoNeedForCosts(good)` clears it | true | when false the AI does not plan the inputs of this good (5 goods: stone variants and similar). The binding takes no value |
 | +0xa8 | `hitTimes` | vector&lt;i32&gt;, ticks | `gp_addHitTime` | empty | moments within the strike at which the hit lands (`HasHitTimeInRange` S 00554ae0: `prev < t <= cur`). `good_soldierSword0` has two (4 and 15) |
-| +0xb8 | `projectileType` | i32 | `gp_setProjectileType` | -1 | `SettlerBow::Shoot` S 0065f270 |
+| +0xb8 | `projectileType` | i32 | `gp_setProjectileType` | -1 | `ai::settlers::Bow::Shoot` S 0065f270 |
 | +0xbc | `miningGood` | good id | `gp_setMiningGood` | -1 | the tribe-neutral resource this tribe good stands for (`stoneScots` → `stone`, `fishBav` → `fish`). Names the map resource a mine or fisher searches, and translates map initial goods between tribes (§3.7) |
 
 Soldier ranks in the shipped data [known: `Jobs.lua`], four of the fifteen as examples:
@@ -668,7 +673,7 @@ gemstones, salt → four signs each at thresholds 1, 3, 6, 1000 (S, M, L, X).
   [known]: scan the list in order; if an entry with the same good id exists (and that id is not -1) add the
   amount to it; otherwise append. So a good appears at most once and the list keeps first-appearance order;
   entries with good id -1 never merge, each call appends another one.
-- `bp_addCost` / `bp_addFrameCost` go through `Properties_BuildingProperty_AddCostAt` S 00552e90 (slot 1 /
+- `bp_addCost` / `bp_addFrameCost` go through `ai::properties::BuildingProperty::AddCostAt` S 00552e90 (slot 1 /
   slot 0), which calls the same `GoodAmountList_AddAmount` on the list at `+0x58 + slot*0x10`, so building costs
   merge in the same way [known].
 - `tp_addGood`, `tp_addJob`, `tp_addBuilding`, `tp_addAllowedSacrifice`, `dp_addTreeType`,
@@ -725,7 +730,7 @@ call and then serves all non-zero kinds [known]. With only kinds 0 and 1 this is
   2. if `expandGroup` and an entry's good has `type == 3` (EitherGroup): stop walking this list, continue with
      that group's `costs` with `expandGroup = false` (one level only), and return its result. Entries after the
      group in the original list are **not** examined.
-- **Members of a group for a tribe**: `PropertyGroupIter::Init` S 007767c0 / `PropertyGroupIter_Next` S 00776690 walks
+- **Members of a group for a tribe**: `PropertyGroupIter::Init` S 007767c0 / `ai::properties::PropertyGroupIter::Next` S 00776690 walks
   `TribeProperty.goods` in order and yields each good that has a positive amount in the group good's `costs`
   [known]. The group's own list order does not matter; the tribe's `tp_addGood` order does. Used by production
   (`StartProductionCycle`, `RequestAllInputs`) and the AI cells.
@@ -838,7 +843,7 @@ eight tables to neutral and then, for every player in index order and every runn
 list order, offers the sacrifice to all eight tables (S 00661ec0); it runs after every start, removal and load
 of a sacrifice [known: callers]. A table accepts a sacrifice only when the sacrifice's **target player** equals
 the table's player (`ApplySacrifice` S 00663630) [known]. The target player is fixed when the sacrifice starts
-(`VillageSacrifice_Start` S 005615e0): for `target == 0` (`Target_Owner`) it is the owner, for `target == 1`
+(`ai::village::VillageSacrifice::Start` S 005615e0): for `target == 0` (`Target_Owner`) it is the owner, for `target == 1`
 (`Target_Enemies`) it is the one player chosen with the order [known]. So a sacrifice changes exactly one
 table: the owner's with own effects, or one enemy's with hostile effects.
 
@@ -875,7 +880,7 @@ plain float-to-integer conversion:
 | 6 `ArcherHitChance` | `effective` | S 006633d0 (`NMovie::Fight::Start`, bow soldiers only) | threshold' = threshold − trunc(`effective[6]` × 100) + 100, applied to the striker's miss threshold of [military.md](military.md) §3.7 |
 | 7 `MinerNeedNoFood` | `flags` | S 00663430 (`Production::StartProductionCycle`, `CanStartProduction`) | tested as `flags[7] != 1` for building types with `size == 8` and working mode 6 (mines); together with the player-state test of [players-victory.md](players-victory.md) it decides whether the mine's inputs are requested ([village-buildings.md](village-buildings.md)) |
 | 9 `ShipSpeed` | `effective` | S 006632d0 (`NNavy::Movement::GetSpeed`) | ship speed = `ShipConfig.speed[tribe]` × `effective[9]` |
-| 10 `PeaceTime` | `flags` | S 00663440 (`NVillage::Military::GetAttackTargetState`, `NMilitary::Fight::Update`, `Military_GetAttackAvailability`) | tested as `flags[10] > 0`; the consequences are in [military.md](military.md) |
+| 10 `PeaceTime` | `flags` | S 00663440 (`NVillage::Military::GetAttackTargetState`, `NMilitary::Fight::Update`, `NMilitary::Attack::GetAttackAvailability`) | tested as `flags[10] > 0`; the consequences are in [military.md](military.md) |
 | 11 `BuildingArmor` | `effective` | S 006633f0 (`NVillage::Building::OnCatapultHit` S 0055e080) | damage = trunc(v / `effective[11]`), where v is the integer at `+0xd0` of the projectile object passed to `OnCatapultHit`; the result is compared with the building's hit points and passed to `Hitpoints::ApplyDamage` [known: call site S 0055e1be; the wrapper S 00661bd0 selects the table of the building's owner]. Projectile `+0xd0` is written by `MilitaryProjectile::SetSourceCatapult` S 00572de0 with the `catapultDamage` (`BuildingProperty+0xdc`) of the firing catapult's building type, and by `SetSourceSoldier` S 00572d90 with the soldier's strike value [known] |
 | 12 `CornDoubleProduction` | `flags` | S 00663450 via S 00661c50 (`Production::DeliverProducts`, `NMovie::PutDownPackage::Update`) | when the building's product slot holds the good with id `17626a03` (`corn`; the id is a constant in the code) and `flags[12] > 0`, the slot's amount is doubled. `egyptCorn` has another id and is not doubled by this test |
 | 13 `WorkerPause` | `effective` | S 00663410 (`NMovie::Rest::Start`) | rest ticks = trunc(`restTime` × `effective[13]`) |
@@ -884,7 +889,7 @@ plain float-to-integer conversion:
 Because own effects of types 7, 10 and 12 store the constant 1, the `arg1` of those effects in the data (for
 example 400 on `CornDoubleProduction`) has no influence [known: S 006630b0].
 
-One-shot actions, `Sacrifice_UpdateTimedEffects` S 00660960, every tick of a running sacrifice [known]:
+One-shot actions, `ai::logic::Sacrifice::UpdateTimedEffects` S 00660960, every tick of a running sacrifice [known]:
 `progress = (now - startTick) / duration` (floats); effect `i` fires once, the first time `threshold <=
 progress`, and is then marked in a per-sacrifice bit vector. `threshold` is the truncated fifth argument, so in
 the data it is 0 (fires on the first update) or 1 (fires when the duration has elapsed). `Sacrifice::ApplyEffect`
@@ -913,7 +918,7 @@ owner, effect `(1001, rewardGood, rewardCount, 1)` [known: `sacrifices_goodExcha
 
 ### 3.10 Sign lookup
 
-`Props_SignDoodadMap_GetDoodadId(good, amount)` S 00556d70 → S 00556cb0 [known]: in the good's list (sorted by
+`ai::properties::SignDoodadTable::GetDoodadId(good, amount)` S 00556d70 → S 00556cb0 [known]: in the good's list (sorted by
 threshold) return the doodad of the last entry with `threshold <= amount`; -1 if `amount` is below the first
 threshold. A good without a list is a fatal lookup (no end check). With the shipped thresholds: amount 1..2 →
 S sign, 3..5 → M, 6..999 → L, ≥ 1000 → X. Caller `NMovie::GoDigging::PlaceResourceSignAndNotify` S 0077b2f0.
@@ -959,7 +964,9 @@ by `PropertiesDb::RunPropertyScript` S 0054f8d0, whose only caller is `CApplicat
 [inferred] nothing else writes records: no function of the properties code has "update" or "tick" in its name,
 and the record setters with a name of their own are called only from the `LuaProps_*` bindings; the
 one-instruction setters the linker shares between classes (e.g. `Generic_SetByte40`, `Generic_SetDword_50`) also
-have callers outside the bindings, and the object type at those call sites was not checked.
+have callers outside the bindings, and the object type at those call sites was not checked. No write was seen in
+play: the hashes of all 565 pointer-table records and of the three config blocks were equal before and after a
+save load plus some hundred ticks of play [live, 2026-10-14].
 
 **Load order** matters because bindings dereference records and read other records' values at call time (§3.1,
 §3.2, §3.3). `data.lua` runs, in this order [known: data]:
@@ -993,7 +1000,7 @@ later ones.
   (`GameQuery::CanPlaceBuildingTypeAt`, `Village_CheckBuildingPlacement`), `NVillage::Building` ctors,
   `Construction`, `Upgrade`, `Bulldozing`, `Remains`, the AI planners, `NNavy::Expedition`,
   `NPlayer::GoodArrangement`, the build menu; goods — `NLogic::Stock`, `NVillage::Depot`, `OrderSystem`,
-  `SettlerSpawn`, soldier training, the AI need system, `Player_Update`; tribes — `ai::player::Player::Init` /
+  `SettlerSpawn`, soldier training, the AI need system, `ai::player::Player::Update`; tribes — `ai::player::Player::Init` /
   `Load`, `MapInfo`; patterns — `MapModifier::SetCellPattern`, `MapCellUpdater`, `Continents`; sacrifices —
   `VillageSacrifice`, `ai::logic::Sacrifice`, `SacrificeResearch`, the AI sacrifice manager, the map-script
   function `pl_sendOrderSacrificeMessage`.
@@ -1126,7 +1133,7 @@ Registered but never called by the shipped scripts [known: data against the bind
 | 2 | Meaning of `GameConfig+0x4c` (default 4), and confirmation that `GameConfig.bulldozeTime`, `GoodProperty.value`, `GoodProperty.plantable`, `MilitaryConfig+0x108` and the four registration flags have no reader | static: field cross-references on the typed structs; the statements in §2 rest on searches of the function cache and of the instruction listing |
 | 3 | A reader of `TribeProperty.sacrifices` (+0x50), and whether anything besides `MapInfo::Load` fills `MapInfo+0x204` (a map made in the editor: `Reset` leaves the list empty, §7) | static: cross-references of the vector at `TribeProperty+0x50`; writers of `MapInfo+0x204` in the map editor's code (the map subscript S 0052b7c0 has no other caller on a `MapInfo`) |
 | 4 | Which worker search would select a deposit whose good is a settler good (`tent` → `good_helper`) | static: the deposit search of `NMovie::Working` / the woodcutter job in [map-resources.md](map-resources.md); or place a `tent` on a test map and watch it |
-| 5 | Values after a reload between matches. The game itself never reloads (filled in `Initialize`, emptied in `Shutdown`; no script outside `scripts/properties/` calls a binding). For a mod's reload: `ClearAll` S 005494a0 empties all record tables and the sign table; the three config blocks are kept, and every binding on them assigns (`cfg_set*`, `sh_set*`, `mi_set*`), so the values come out the same [inferred]; record addresses change, and the static soldier good lists (§3.3) are not rebuilt. Not excluded: a writer of a record field outside the bindings | with the test mod: compare the bytes of a few records and of the three config blocks before and after ([../data-loading.md](../data-loading.md) §1) |
+| 5 | Answered (§4): the game itself never reloads (filled in `Initialize`, emptied in `Shutdown`; no script outside `scripts/properties/` calls a binding), and play does not write into a record: the hashes of all 565 pointer-table records (buildings 104, deposits 53, goods 176, patterns 114, animals 12, AI 6, harbours 8, tribes 3, sacrifices 77, spawn types 12) and of the three config blocks were equal before and after a save load plus some hundred ticks of play [live, 2026-10-14]. For a mod's reload: `ClearAll` S 005494a0 empties all record tables and the sign table; the three config blocks are kept, and every binding on them assigns (`cfg_set*`, `sh_set*`, `mi_set*`), so the values come out the same [inferred]; record addresses change, and the static soldier good lists (§3.3) are not rebuilt | — |
 
 ---
 
@@ -1137,7 +1144,7 @@ Registered but never called by the shipped scripts [known: data against the bind
 | S 0054a140 | `NProperties::StaticAccess::EnsureInstance` | returns the singleton, creating it on first use |
 | S 00549dd0 | `Properties_Db_ctor` | builds the empty tables and the three config blocks |
 | S 005494a0 | `Properties_Db_ClearAll` | empties every table, clears the flags |
-| S 00555810, S 00553f10, S 00661ab0, S 00556f20 | `Generic_SetFlag3C_False`, `Generic_SetFlag10C_False`, `Generic_ClearByte0`, `Generic_TreeClear_04` | the four flag clears of `ClearAll` (the last also empties the sign table) |
+| S 00555810, S 00553f10, S 00661ab0, S 00556f20 | `ai::properties::GameConfig::SetFlag3C_False`, `ai::properties::MilitaryConfig::SetFlag10C_False`, `Generic_ClearByte0`, `ai::properties::SignDoodadTable::Clear` | the four flag clears of `ClearAll` (the last also empties the sign table) |
 | S 00550e40 | `Properties_RegisterLuaLibrary` | sets the flags, registers the 243 bindings of `properties` |
 | S 0054f8d0 | `PropertiesDb::RunPropertyScript` | runs `[data]\scripts\properties\<name>.lua` |
 | S 005455b0 | `Str_ParseHexUInt32` | id parser of every `*_create` |
@@ -1165,7 +1172,7 @@ Registered but never called by the shipped scripts [known: data against the bind
 | S 00554ae0 | `GoodProperty::HasHitTimeInRange` | strike timing |
 | S 00552aa0 | `GoodAmountList_AddAmount` | merging append for {good, amount} lists |
 | S 00552d20 | `GoodIdList_FindGoodByMiningGood` | tribe good for a neutral resource |
-| S 007767c0, S 00776690 | `PropertyGroupIter::Init`, `PropertyGroupIter_Next` | members of a group good for a tribe |
+| S 007767c0, S 00776690 | `PropertyGroupIter::Init`, `ai::properties::PropertyGroupIter::Next` | members of a group good for a tribe |
 | S 00556300 | `TribeProperty::ctor` | tribe defaults |
 | S 00556400 | `TribeProperty::AddSacrifice` | `tp_addSacrifice` backend |
 | S 00556020, S 00556060 | `TribeProperty::SecondCarrierCostsContainGood`, `GetSecondCarrierFirstCostGoodId` | second-carrier helpers |
@@ -1179,19 +1186,19 @@ Registered but never called by the shipped scripts [known: data against the bind
 | S 00555780 | `Properties_GameConfig_ctor` | game config defaults |
 | S 005553d0, S 00547430, S 00532480 | `DepositProperty::ctor`, `TreeTypesContains`, `CountChainStages` | deposits |
 | S 005477e0, S 0077bb30 | `PropertiesDb::PickRandomDepositForPattern`, `Afforest_PickRandomDepositForCell` | random tree type for a cell |
-| S 00555c00, S 00555970, S 005558a0 | `Properties_PatternProperty_ctor`, `…DoodadProperty_ctor`, `…RemainsProperty_ctor` | defaults |
+| S 00555c00, S 00555970, S 005558a0 | `ai::properties::PatternProperty::ctor`, `DoodadProperty::ctor`, `RemainsProperty::ctor` | defaults |
 | S 00555190, S 00554f50, S 00554fe0, S 00555070 | `AnimalProperty::ctor`, `HasStackGood`, `GetStackGoodCount`, `GetStackGood` | animals |
-| S 005574f0, S 00556d70, S 00556cb0 | `Props_SignDoodadMap_Add`, `…GetDoodadId`, `Props_SignDoodadList_LookupByAmount` | sign table |
+| S 005574f0, S 00556d70, S 00556cb0 | `ai::properties::SignDoodadTable::Add`, `GetDoodadId`, `Props_SignDoodadList_LookupByAmount` | sign table |
 | S 005567e0, S 005568d0, S 00556540, S 005565e0 | `SacrificeProperty::ctor`, `AddEffect`, `HasEffectType`, `GetGiveGoodsEffectGoodId` | sacrifices |
 | S 0054f520 | `LuaProps_sf_addCost` | cost entry plus registration in the sacrifice good's group |
 | S 00663560, S 006630b0, S 006631e0 | `SacrificeModifiers::ApplyEffectList`, `ApplyOwnEffect`, `ApplyHostileEffect` | modifier effects (reader of the effect list) |
 | S 00662fb0, S 00661ec0, S 00663630 | `SacrificePlayerTable::RecomputeModifiers`, `SacrificePlayerData::ApplySacrificesToAllPlayers`, `SacrificeModifiers::ApplySacrifice` | reset of the eight tables and re-application of every running sacrifice to its target |
-| S 006634f0, S 00663530 | `SacrificeModifiers_Init`, `Slot_InitFloatDefaults` | neutral values of a table |
+| S 006634f0, S 00663530 | `ai::logic::SacrificeModifiers::Init`, `Slot_InitFloatDefaults` | neutral values of a table |
 | S 00663310, S 00663370, S 00663610, S 006632b0, S 00663390, S 006633b0, S 006633d0, S 00663430, S 006632d0, S 00663440, S 006633f0, S 00663450, S 00663410, S 006634d0 | readers of the modifier table | effect types 1 to 14 in the order of §3.9; types 1 and 8 share the first, type 3 has two (S 00663610, S 006632b0) |
 | S 00661bd0, S 00572de0 | `SacrificeModifierQuery::ScaleCatapultDamage`, `MilitaryProjectile::SetSourceCatapult` | owner-table wrapper of the `BuildingArmor` reader; copies `catapultDamage` into the projectile |
 | S 0052b8d0 | `NLogic::MapInfo::Reset` | default state of a map description; leaves the sacrifice list empty (§7) |
-| S 005615e0 | `VillageSacrifice_Start` | fixes the target player of a starting sacrifice |
-| S 00660960, S 00660500 | `Sacrifice_UpdateTimedEffects`, `Sacrifice::ApplyEffect` | one-shot effects |
+| S 005615e0 | `ai::village::VillageSacrifice::Start` | fixes the target player of a starting sacrifice |
+| S 00660960, S 00660500 | `ai::logic::Sacrifice::UpdateTimedEffects`, `Sacrifice::ApplyEffect` | one-shot effects |
 | S 00555e80, S 00555d60 | `AiProperty::ctor`, `GetFavoriteSacrificeWeight` | AI profiles |
 | S 00581c40, S 005b2660 | `NAI::System::ActivatePlayer`, `GameScript_Lua_ai_enable` | pass the profile key to `NAI::Player::Activate` |
 | S 00675610 | `ConstructionMap_ComputeCellFlags` | cell side of the size mask |
@@ -1199,5 +1206,5 @@ Registered but never called by the shipped scripts [known: data against the bind
 | S 00554900 | `HarbourProperty::ctor` | harbour defaults |
 | S 00555a80 | `SoundProperty::ctor` | sound defaults |
 | S 00556950, S 00556a20, S 00556ae0, S 00556bb0 | `StaticAccess::GetNth…` | n-th pattern / building / deposit / doodad in table order |
-| S 00556910 .. S 00556940 | `Generic_GetIndirect04_30` / `_08` / `_14` / `_48` | record counts of the same four tables |
+| S 00556910 .. S 00556940 | `NProperties::StaticAccess::GetIndirect04_30` / `_08` / `_14` / `_48` | record counts of the same four tables |
 | S 0054a4d0 .. S 00550df0 | `LuaProps_*` | the bindings; one per key, listed in [../lua-surface.md](../lua-surface.md) §3.3 |

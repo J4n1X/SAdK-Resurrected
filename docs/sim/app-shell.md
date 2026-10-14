@@ -173,7 +173,7 @@ Fields, defaults from `UserProfile_ResetSettingsDefaults` S 00579c00 [known]:
 | +0x31 | bool | smart cursor (mirrored to global S 0087b808 on load) | true | yes |
 | +0x32 | bool | stored only: set by the defaults, read and written by the two settings functions; no other function that obtains the profile touches it [inferred: the decompiled users of `UserProfile_GetInstance` S 00578da0 and of S 0088a594]. [TODO] not established: its original meaning | true | yes |
 | +0x33 | bool | free camera | false | yes |
-| +0x34 | bool | last state of the `!Autosave...` check box of the quit requester (`nMenu::Requester`; the box exists only when the requester is opened on the in-game screen, S 005ffef0): a click toggles the box and stores its new state here through `UserProfile::SetSetting34` S 00579830 [known] S 006009b0. Write-only: the box is created unmarked every time and the confirmed action reads the box, not the profile (`Requester::ExecuteConfirmed` S 006008b0: autosave before leaving when the box is marked) [known]; no function reads `+0x34` back [inferred, as for `+0x32`] | true | yes |
+| +0x34 | bool | last state of the `!Autosave...` check box of the quit requester (`nMenu::Requester`; the box exists only when the requester is opened on the in-game screen, S 005ffef0): a click toggles the box and stores its new state here through `UserProfile::SetAutosaveOnLeave` S 00579830 [known] S 006009b0. Write-only: the box is created unmarked every time and the confirmed action reads the box, not the profile (`Requester::ExecuteConfirmed` S 006008b0: autosave before leaving when the box is marked) [known]; no function reads `+0x34` back [inferred, as for `+0x32`] | true | yes |
 | +0x38 | i32 | stored only [inferred, as for `+0x32`]; first of the counted values of the file (§3.9). [TODO] not established: its original meaning | 0 | yes |
 | +0x3c | i32 | campaign difficulty last chosen, 0..3 | 2 | yes |
 | +0x40 | std::string | player name used in an offline session (`NComm_GetLocalPlayerName` S 0041f4e0; an empty name becomes `"default"`) | empty | yes |
@@ -310,7 +310,7 @@ Runs once. The order is binding where later steps read what earlier steps create
    `data.cfg` (§3.9); reading `settings.cfg` sets the volumes of the sound system, which is why sound comes first.
 10. **Lobby profile**: `LobbyProfile::Init(profileName)` S 00465dd0 stores the profile name, the resolved path of
     `LobbySettings.ini` and `<My Documents>\SAdK\lobby\<profileName>.ini`.
-11. Unless `-nolobby`: create and initialise the `LobbyManager`, create the lobby action and the `CLobby` object
+11. Unless `-nolobby`: create and initialise the `LobbyComm::System`, create the lobby action and the `CLobby` object
     (`+0x88`).
 12. **Engine layer** `InitEngineLayer` S 00405590: create the `url2tex` instance and the graphic device;
     enumerate display modes and log them at level 3 (`Found %d possible resolutions:`); create the resource
@@ -864,7 +864,7 @@ Back in `WinMain`: close the instance mutex, return.
 10. `SoundSystem::Update(frame seconds)`.
 11. Device-lost check.
 12. If the 3D world is not shown behind the screen (`System +0xb5 == 0`) or no `CLobby` exists:
-    1. if a lobby manager exists, `LobbyManager::StatePump_Tick`;
+    1. if a lobby manager exists, `LobbyComm::System::StatePump_Tick`;
     2. unless (the game system exists and its byte +0x6c is set) or minimised or in a size-move: if the device
        is in the lost state try to restore it, else `App_RenderWorldFrame(frameDelta, accumulatedTime)` with the
        two values of the logic system (0 when none exists);
@@ -1007,9 +1007,10 @@ read by `S2CE::CGraphicDevice::Init` S 004da2a0 with `GetPrivateProfileIntA` [kn
 | `useMeshCache` | 1 | 1 | use the converted-mesh cache in `<Local AppData>\SAdK` |
 | `hardwareCursor` | 1 | 0 | not read when the device runs in an external window |
 
-The examined install is a working copy; its values may differ from the retail defaults. Whether the byte order
-mark in front of `[Engine]` hides the section from the Win32 reader (then the code defaults apply) is open:
-`formats-inventory.md` §3.10 and its open question on `engine.ini`.
+The examined install is a working copy; its values may differ from the retail defaults. Its file starts with a
+UTF-8 byte order mark directly before its only section `[Engine]`, which hides the section from the Win32 reader:
+every key takes the code default (so the "Install" column has no effect), and edits to the file have no effect until it is saved without the mark [live, 2026-10-14;
+`formats-inventory.md` §3.10]. A remake's reader should strip the mark.
 
 **`[data]\settings\engine.xml`** (encrypted), attributes of the root `Engine`, read in the same function
 [known]: `pureDevice` (bool), `specialDepthMap` (bool), `lowresDepthMap` (bool), `mixedDevice` (bool; not in

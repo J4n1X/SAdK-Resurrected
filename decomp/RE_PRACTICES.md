@@ -8,13 +8,13 @@ All of it runs **through the Ghidra MCP** (HARNESS §1). Scripting *inside* Ghid
 MCP is fine; standalone RE/memory/patch scripts are not.
 
 > ## ⚠️ Which binary — work on `sadk_noav.exe`
-> The **active RE target is `sadk_noav.exe`** (the DRM-free unpacked "Gold" build, RTTI intact).
-> `SADK.exe` is a **different build** — different code addresses *and* different struct layouts
-> (e.g. `LobbyManager::SetState` is `0x462540` in `sadk_noav.exe` vs `0x462700` in `SADK.exe`;
-> `VillageServerConnection` is 584 vs 600 bytes). Do not mix them up: apply renames/types/structs to
-> **`sadk_noav.exe`**, and always pass the `program="sadk_noav.exe"` parameter on MCP calls (both
-> programs are open in the backend). `SADK.exe` is kept only as a cross-reference; addresses in the
-> older docs/`SOURCEMAP.md` are from that dump-base build and must be re-derived against `sadk_noav.exe`.
+> The **active RE target is `sadk_noav.exe`** (the DRM-free unpacked build, RTTI intact; byte-identical
+> to the game's `SADK.exe` on disk, image base `0x400000`). Apply renames/types/structs to
+> **`sadk_noav.exe`**, and always pass the `program="sadk_noav.exe"` parameter on MCP calls.
+> `docs/SOURCEMAP.md` and `docs/types.md` give `sadk_noav.exe` addresses. An address that does not fit
+> comes from the earlier dump-base program, whose code and vtable addresses differ (e.g.
+> `LobbyComm::System::SetState` is `0x462540` in `sadk_noav.exe` and `0x462700` there; the village
+> vtable is `0x7db8d4` here and `0x7dc8d4` there): re-derive it against `sadk_noav.exe`.
 
 ---
 
@@ -85,9 +85,11 @@ caveat in `MEMORY.md`). These are the indirections that have historically caused
 - **Property reader vtable slots** — `+0x30` ReadString, `+0x18` ReadMemBlock(dst,0x20),
   `+0x20` wide slot. These drive every body-parse; mis-typing a slot desyncs the parse.
 - **`LobbyComm` comm-layer creation** (single comm layer, magic 0x26B6) and the
-  `LobbyManager` state pump / `SetState` — the connection objects are polymorphic.
-- **Connection vtables** (from `RENAME_LIST.md`): UserComm `0x7dded8`, GameServer
-  `0x7dfafc`, Village `0x7dc8e0`. Bind these as typed vftable structs.
+  `LobbyComm::System` state pump / `SetState` (the object `g_pLobbyManager` points at; called
+  LobbyManager in older notes) — the connection objects are polymorphic.
+- **Connection vtables** (`sadk_noav.exe`): UserComm `0x7dcecc`, GameServer `0x7deaf0`, Village
+  `0x7db8d4`, Referee `0x7dc1b0`. They are bound as typed vftable structs
+  (`/LobbyComm/<Class>_vftable`).
 
 ## Class hygiene — make a class look like one uniform C++ class
 
@@ -105,6 +107,13 @@ the RTTI class (`LobbyComm::X`), the struct living in the **matching category**
 function parented to that one class namespace. Then the decompiler shows
 `void __thiscall LobbyComm::X::Method(X *this, ...)` and sibling calls resolve by name.
 
+**Methods that run on a secondary base pointer.** A method that is a slot of a secondary vtable
+receives `ECX = object + N` (for example the `IGameServerObserver` callbacks of `LobbyComm::ServerList`,
+`N = 8`). Type its `this` as an offset pointer into the class, `Class * __((offset(N))) this` (tag
+`FACE_THIS`); the decompiler then shows the class's own field names at their real offsets. Do not build
+a separate mirror struct of the class shifted by `N`, and do not type such a `this` as the plain class:
+the field sweep would then measure every field `N` bytes too low.
+
 ### Rules (read before running the script)
 
 1. **RTTI is the source of the canonical name.** Confirm it via the type-descriptor
@@ -112,8 +121,8 @@ function parented to that one class namespace. Then the decompiler shows
    the class is `LobbyComm::UserCommConnection`). Use that exact namespace.
 2. **No RTTI descriptor?** You do **not** have a proven namespace. Either (a) derive one
    from hard structural evidence — e.g. a base class whose methods are called by several
-   known `Ns::*` subclasses belongs in `Ns` (that's how `LobbyComm::LobbyBaseConnection`
-   was placed) — and **mark it inferred, not `[PROVEN]`** in the checkin/`MEMORY.md`; or
+   known `Ns::*` subclasses belongs in `Ns` — and **mark it inferred, not `[PROVEN]`** in the
+   checkin/`MEMORY.md`; or
    (b) **defer it** and flag the open question. Never invent a namespace from a guess.
 3. **Same simple name ≠ duplicate.** `NMap::AStar` vs `NNavy::AStar`, the 16 `*::System`,
    `Logger` (`.?AVLogger@@`, real engine logger) vs `LobbyComm::Logger` (different

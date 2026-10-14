@@ -65,11 +65,11 @@ every lobby object.
 |---|---|---|---|
 | 0 | `GetPose` S 00520a80 | `GetTransform` S 00523610 | writes position (3 floats) + quaternion (4 floats) |
 | 1 | `DebugDraw` S 00522270 | same | wireframe of every shape of `actor` |
-| 2 | S 005210c0 | same | `actor` slot 0x118 with (vec3, 0, 1): [inferred] add a force; no caller found |
+| 2 | S 005210c0 | same | `actor` slot 0x118 with (vec3, 0, 1): [inferred] add a force; no caller found; not called while walking, standing, sitting down at and leaving a minigame table [live, 2026-10-14] |
 | 3 | no-op (S 00472360) | `Move(displacement, activeGroups)` S 00523670 | controller move |
 | 4 | no-op (S 0064b9c0) | `SetOrientation(quat)` S 005236c0 | stores the quaternion only |
 | 5 | S 00520b30 | same | `SetRaycastEnabled(bool)`: shape slot 0x14 with (0x40, `!enable`) on every shape |
-| 6 | `SetPose(pos + quat)` S 00521100 | `SetPosition(pos)` S 00523430 | actor slot 0x14 / controller slot 8 |
+| 6 | `SetPose(pos + quat)` S 00521100 | `SetPosition(pos)` S 00523430 | actor slot 0x14 / controller slot 8; the character's S 00523430 is not called while walking, standing, sitting down at and leaving a minigame table [live, 2026-10-14] |
 | 7, 8 | return 0 / return 0 (S 0072db80) | return 0 / returns `this` (S 00519aa0) | no caller found [inferred] |
 | 9 | deleting destructor S 00520eb0 | deleting destructor S 00523410 | static: `scene` slot 0x1c with the actor ([inferred] `releaseActor`); character: releases the controller (§3.3), then the same base step |
 
@@ -263,7 +263,7 @@ spawn transform and the `LobbyContext`:
 | Slope limit | **cos(π/3) = 0.5**: slopes up to 60° are walkable [inferred meaning] | double `0x3ff0c15240000000` = 1.0471976 at S 007e7760 → `__CIcos` |
 | Skin width | **0.02** | float `0x3ca3d70a` at S 007e1d98 |
 | Step offset | **1.0** (obstacles up to one unit are stepped onto) | `FLD1` → `desc.stepOffset` |
-| Hit report | global `NxUserControllerHitReport` S 0087cebc | vtable S 007e763c: slots 0 and 1 (the two callbacks) are `__purecall` S 006f371b, slot 2 the deleting destructor |
+| Hit report | global `g_LobbyControllerHitReport` S 0087cebc, in `desc + 0x38` (S 005235a7) | a `Lobby::ControllerHitReport` (RTTI `.?AVControllerHitReport@Lobby@@`, type descriptor S 0087ce94), initialised statically in the image with vtable S 007e7754: slots 0 (`onShapeHit`) and 1 (`onControllerHit`) are the shared `return 0` S 005c82b0, i.e. `NX_ACTION_NONE`; slot 2 the deleting destructor S 005232a0. The `atexit` destructor S 007ce930 (registered by S 007c01c0) stores the base vtable S 007e763c (`NxUserControllerHitReport`, both callbacks `__purecall`) at process exit [known; vtable S 007e7754 read in the running game, live 2026-10-14] |
 | Other description fields | +0x08, +0x3c, +0x40 = 0 | [inferred] SDK defaults of `NxControllerDesc`; names not established |
 | Shape group | 31, set on every shape of the controller's actor | S 005235de, S 00520af0 |
 
@@ -276,8 +276,39 @@ Operations:
   `y − height × 0.5 − radius` = y − 1.0 (the feet), then the stored quaternion. [known]
 - `SetOrientation(quat)` S 005236c0: stores the quaternion; the capsule does not rotate. [known]
 - `SetPosition(pos)` S 00523430: `controller->setPosition(pos)` without the +1.0 offset; no caller found in the
-  decompile cache. [inferred] The avatar's position after creation changes only through `Move`.
+  decompile cache, and not called while walking, standing, sitting down at and leaving a minigame table [live,
+  2026-10-14]. [inferred] The avatar's position after creation changes only through `Move`; jumping and
+  reset-position were not exercised live.
 - Destructor S 00523390: `controllerManager->releaseController(controller)` (slot 0xc).
+
+**Inside `NxCharacter.dll`** [known] (addresses `N`: the DLL's image base 0x10000000; it shares that base with
+`tincat3.dll`, so at run time it is loaded elsewhere [inferred: `tincat3.dll` keeps its static addresses]):
+
+- `createController` N 1000d240 builds a box (`desc + 0xc` = 0) or capsule (1) controller. `Controller_ctor`
+  N 1000d350 copies the description: position `+0x10` (three doubles), up axis `+0x28`, slope limit `+0x2c`, skin
+  width `+0x30`, step offset `+0x34`, **hit report `+0x38` → controller `+0x20`**, `+0x3c`, `+0x40`; a slope
+  limit other than 0 switches slope handling on.
+- `Controller_Move` N 1000ba70 gathers the other controllers' volumes, then `SweepTest_MoveCharacter`
+  N 1000a630 sweeps three times: **up** (the up part of the displacement, plus the step offset when there is
+  sideways motion), **sideways**, **down** (the down part, minus the step offset when there is sideways motion).
+  The returned collision flags are 1 sideways, 2 up, 4 down.
+- Each sweep (`SweepTest_DoSweepTest` N 10006fe0) collects the static and dynamic shapes in `activeGroups`
+  that do not have collision disabled and are not triggers (`FindTouchedGeometry` N 1000cda0; sphere, box,
+  capsule, convex, mesh and height field shapes) and sweeps the capsule against them. For the up sweep the hit
+  callbacks are off; before the sideways sweep `MoveCharacter` switches them on (`SweepTest + 0xc4` = 1) and
+  leaves them on for the down sweep. A hit on another controller's volume calls `Controller_ControllerHitCallback`
+  N 1000c220 (report slot 1, `onControllerHit`); a hit on a scene shape calls `Controller_ShapeHitCallback`
+  N 1000cc30 (report slot 0, `onShapeHit`). Both call only when the report pointer is not null.
+- Slopes: when the down sweep touched a triangle and the displacement points down, the triangle's normal is
+  computed; an up component above 0 and below the slope limit (0.5 here) marks the triangle as too steep, and
+  `Controller_Move` repeats the move from the start position with the steep-slope handling on. So "walkable up
+  to 60°" holds as read (§10 #10).
+
+The game's report answers both callbacks with `NX_ACTION_NONE` and does nothing else. Only the own avatar has a
+controller, so `onControllerHit` does not occur. `onShapeHit` runs on every step: every step moves the avatar
+0.5 down (§3.4), and a capsule standing on a collision shape hits it in the down sweep. [live, 2026-10-14]
+standing still in the village: `Controller_ShapeHitCallback` N 1000cc30 ran on 60 of 60 moves, `__purecall` never,
+and `SweepTest_MoveCharacter` returned the collision flags 4 (down) on 48 of 48 moves.
 
 ### 3.4 Avatar movement, falling and jumping
 
@@ -298,8 +329,9 @@ Resulting rules:
 - **Speed**: 0.5 units per step = about **6.0 units/s** walking, 1.0 per step = about **12.0 units/s**
   running. [inferred from the 83 ms step]
 - **Falling**: there is no velocity and no acceleration. An unsupported avatar sinks a constant 0.5 units per
-  step, about **6.0 units/s**. On the ground the downward part is absorbed by the collision. The scene gravity
-  of −9.8 does not act on the controller. [known for the constant; inferred for the gravity]
+  step, about **6.0 units/s**. On the ground the downward part is absorbed by the controller's down sweep, which
+  reports a downward collision every step [live, 2026-10-14] (§3.3). The scene gravity of −9.8 does not act on
+  the controller. [known for the constant; inferred for the gravity]
 - **Slopes and steps**: left to the controller: step offset 1.0, slope limit 60° (§3.3).
 - **Jumping**: Space sets a latch (`CLocalController + 0x3b`) that is sent with the position report
   (S 0051ace0) and cleared after a report that went out; no upward displacement exists. [known] S 0051a93c
@@ -639,7 +671,7 @@ client has collision-checked; other clients display them without any collision.
 | Capsule radius, height, skin, step offset, slope limit | 0.5, 1.0, 0.02, 1.0, cos 60° | code S 005234c0 |
 | Scene gravity, default material | (0, −9.8, 0); 0.5 / 0.5 / 0.5 | code S 00500410 |
 | `Lobby/CameraCollisionDistance` | 0.1 (range 0..2) | tweakable S 0087cbd0, registered in S 0051a450 |
-| `Lobby/Show PhysicDBG`, `Lobby/Show GfxObjStd PhysicDBG` | off | debug tweakables S 005084b0, S 005191c0: wireframe of the actors |
+| `Lobby/Show PhysicDBG`, `Lobby/Show GfxObjStd PhysicDBG` | off | debug tweakables S 005084b0, S 005191c0: wireframe of the actors. Function-local statics, created once per process (guard bytes S 008896cc, S 00889300) [known]; set to 1 through the CVar server ([map-editor-devtools.md](map-editor-devtools.md) §3.13), they draw red wireframes on the collision meshes of buildings, walls and the stall and a yellow box around the avatar [live, 2026-10-14] |
 | Web texture size | 1024 × 512 | code S 00504650, S 004427a0 |
 | Hall of Fame visible rectangle | 768 × 512 | code S 00442230 |
 
@@ -756,16 +788,16 @@ Presentation and front end only.
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | When `NxCharacter.dll` 2.7 calls the hit report: both callbacks of the client's report object are `__purecall`, so a call would abort the process | static: `NxCharacter.dll` (calls through the report pointer); live: walk into a wall with a breakpoint on S 006f371b |
+| 1 | Answered (§3.3): the hit report is a `Lobby::ControllerHitReport` whose callbacks return `NX_ACTION_NONE`; `onShapeHit` runs on every step while the avatar stands on the ground, and the controller reports a downward collision each step [live, 2026-10-14] | — |
 | 2 | PhysX method names behind the slots used (scene 0x14c, 0x1cc, 0x1d4, 0xe0, 0xe4; shape 0x08, 0x14, 0x5c; actor 0x118; controller manager 0x14) | static: export tables and vtables of `PhysXCore.dll` / `NxCharacter.dll` 2.7.0, or the 2.7.0 SDK headers |
 | 3 | What a mesh entry holds when its file or its mesh name does not exist (the four classes on the missing `testhaus.kex`), and so what `CreateTriangleMeshActor` cooks for it | static: `S2CE::CMesh::Load` and its callee for a missing file |
-| 4 | Whether an entry loaded as a render mesh (`LoadMesh` type 0 or 2) keeps the CPU vertex and index arrays that `GetMeshGeometry` hands to the cooking (§3.2: render meshes as collision meshes) | static: `S2CE::CMesh::Load`, `LobbyGfx_MeshEntry_CreateBuffers`; live: `Lobby/Show GfxObjStd PhysicDBG` on a fence |
+| 4 | Whether an entry loaded as a render mesh (`LoadMesh` type 0 or 2) keeps the CPU vertex and index arrays that `GetMeshGeometry` hands to the cooking (§3.2: render meshes as collision meshes) | static: `S2CE::CMesh::Load`, `LobbyGfx_MeshEntry_CreateBuffers`; live: `Lobby/Show GfxObjStd PhysicDBG` on a fence (the switch works through the CVar server, §6.1 [live, 2026-10-14]; which meshes the wireframe covers is not yet judged) |
 | 5 | Whether the avatar can leave the terrain. Data (§6.2): the `collision` mesh encloses the origin only when slopes above about 48° stop the avatar; with slopes up to 60° walkable there is a way to the ±125 border, where nothing stops the constant sinking | live: walk in +y (file axes) at x ≈ 18 from the spawn area; the same walk answers #10 |
-| 6 | Meaning of mesh flags value 3 and the resulting solid side of the triangles | static: `NxMeshFlags` of the 2.7.0 headers; live: debug wireframe via `Lobby/Show GfxObjStd PhysicDBG` |
+| 6 | Meaning of mesh flags value 3 and the resulting solid side of the triangles | static: `NxMeshFlags` of the 2.7.0 headers; live: debug wireframe via `Lobby/Show GfxObjStd PhysicDBG` (drawn, §6.1 [live, 2026-10-14]; the solid side is not yet judged) |
 | 7 | The MSHTML member behind each slot of `RenderToTexture` (§3.9 names them by IDL order; the interface ids are read) | static: the `mshtml.h` vtable order of `IHTMLElement2`, `IHTMLBodyElement`, `IHTMLStyle` |
 | 8 | Whether the lower-cased scene types `fence01`..`fence06`, `fence08` and `cart` find the classes `Fence01`.., `Cart` (§6.2): if they do, seven more render meshes and the cart's `collision` mesh collide | static: `LobbyObjConfig::FindEntry` S 004ffa80 and `LoadFromFile` S 004ffe70 (case handling of the class name) |
 | 9 | Texture content between creation and the first DocumentComplete | live: watch a board while the page loads |
-| 10 | Whether the slope limit acts as "walkable up to 60°" in NxCharacter 2.7 with these values | live: walk up the steepest terrain; static: `NxCharacter.dll` |
+| 10 | Answered (§3.3): a triangle touched in the down sweep whose normal has an up component below the slope limit 0.5 is too steep, so slopes up to 60° are walkable (N 1000a630). Live, only as part of #1 and #5: whether the avatar meets such triangles at all | — |
 
 ## 11. Function reference
 
@@ -788,6 +820,14 @@ Presentation and front end only.
 | S 00523670 | `CPhysicObjCharacter::Move` | controller move |
 | S 00523610 | `CPhysicObjCharacter::GetTransform` | feet position + orientation |
 | S 00523430 / S 005236c0 | `CPhysicObjCharacter::SetPosition` / `SetOrientation` | teleport / store orientation |
+| N 1000d240 | `CharacterControllerManager_createController` | box or capsule controller from the description |
+| N 1000d350 / N 10001e60 | `Controller_ctor` / `CapsuleController_ctor` | copies the description (hit report → `+0x20`) / capsule actor |
+| N 1000ba70 | `Controller_Move` | other controllers' volumes, `MoveCharacter`, steep-slope repeat |
+| N 1000a630 | `SweepTest_MoveCharacter` | up, sideways and down sweeps; callbacks on from the sideways sweep |
+| N 10006fe0 | `SweepTest_DoSweepTest` | one sweep with collide-and-slide; calls the hit callbacks |
+| N 1000cda0 | `FindTouchedGeometry` | shapes in `activeGroups` overlapping the swept box |
+| N 10005360 | `SweptVolume_SweepTouchedGeometry` | per-geometry sweep table N 1001e170 |
+| N 1000cc30 / N 1000c220 | `Controller_ShapeHitCallback` / `Controller_ControllerHitCallback` | report slot 0 / slot 1 when the pointer is set |
 | S 0051a1a0 | `Lobby::CLocalController::ctor` | collision mask, creates the character |
 | S 0051a350 | `CLocalController::Update` | controller slot 1: pose from `GetTransform` to the graphics object, animation flags |
 | S 0051ace0 | `CLocalController::ProcessInputAndSendLocation` | controller slot 2: collision mask, movement, position report |

@@ -97,16 +97,21 @@ Plain text: `[LobbyServer] Host/Port`, HallOfFame URLs. No screen-flow data.
    dialog. The `visible`/`enabled` attributes are static initial values for individual widgets,
    not screen-level gating.
 
-3. **The lobby is a numeric state machine inside `LobbyManager` (`CLobby.cpp`/`LobbyClient.cpp`),**
-   reverse-engineered in `SOURCEMAP.md`:
+3. **The lobby is a numeric state machine inside `LobbyComm::System`** (the object `g_pLobbyManager`
+   points at, source file `LobbyManager.cpp`; called LobbyManager in older notes; enum
+   `LobbyManagerState`), documented in `SOURCEMAP.md` (addresses of `sadk_noav.exe`):
    - state 1→7 = login progression (→ LoggedIn / lobby reached, character-select shown)
-   - **state 8 = EnteringVillage** — set only after `CreateVillageServerConnection` (`0x463750`)
-     opens a *new* TinCat socket to the selected village server (orphan block @`0x47043c`)
+   - **state 8 = EnteringVillage** — set by `VillageServerConnection::OnUserCommLoggedIn` (`0x4704e0`,
+     store at `0x47063e`) after `LobbyComm::System::CreateVillageServerConnection` (`0x463850`) has
+     prepared the connection to the selected village server and the UserComm login has succeeded
    - **state 9 = VillageEntered** — set only when that village server sends village-protocol
-     message **1000** → `VillageServerConnection::HandleEnterWorld` (`0x46f470`) parses the
-     property bag (`Worldname`, `ServerPerm`, chat channels) → **client loads the 3D world**
+     message **1000** → `VillageServerConnection::HandleEnterWorld` (`0x46f670`) reads
+     `Worldname`, `ServerPerm` and the chat channels → **client loads the 3D world**
    - state 11 = VillageLeft
-   The "Suche Server" button itself ungreys only when `IsListReady && HasServerSelected`.
+   The enter button of the character-select screen (`LobbyMenu::AvatarScreen::Update`, `0x439f30`) is
+   enabled only when a character is selected (`CharacterManager::HasSelectedCharacter`, `0x472270`) and
+   the server list holds a joinable village server for the client's protocol version
+   (`ServerList::HasJoinableServerForProtocol`, `0x468560`).
 
 ---
 
@@ -157,7 +162,7 @@ inert layout that the C++ instantiates on demand.
    live **`VillageServerConnection`** (host/join sessions are created against the village server —
    `LobbyMenu::SetupGameDialog::SetupSession`, `CreateVillageServerConnection`). With no village
    connection (which is exactly the parked state), the list is empty and Join/Create are no-ops.
-3. The transition AvatarScreen → worldScreen is driven purely by `LobbyManager::SetState(…)` in
+3. The transition AvatarScreen → worldScreen is driven purely by `LobbyComm::System::SetState(…)` in
    compiled code, reacting to the network handshake (msg 1000 / `HandleEnterWorld`). There is no
    data hook to advance it. The server browser / host / join is *downstream* of world entry.
 

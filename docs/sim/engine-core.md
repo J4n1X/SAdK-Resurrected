@@ -96,13 +96,13 @@ Virtual table (64 slots read; offsets are those the code calls through) [known: 
 | 31 | +0x7c | `WriteUInt16` | 62 / 63 | +0xf8 / +0xfc | `Write` / `ReadFloat4` |
 
 **Use in the client.** The vftable is referenced from exactly two functions: the destructor and
-`LobbyManager::DispatchInboundToConnection` S 00462760 [known: cross references of S 007da874]. That function
+`LobbyComm::System::DispatchInboundToConnection` S 00462760 [known: cross references of S 007da874]. That function
 builds a read-only `BitStream` on the stack over each inbound payload of the village, game-slot and referee
 connections (`data`, `sizeBytes = len`, `ownsBuffer = 0`, `bitPos = 0`, `readLimitBits = len * 8`,
 `writeLimitBits = 0`, `writable = 0`) and hands it to the connection's slot `+0x24`. The referee and village
 receivers pass it on as a `ByteBuffer` to `LobbyMessage::InitFromWire` S 0048fa50, which takes only `data` and
 `size` [known] S 0047b090, S 00470a90, S 0048fa50. The game-slot connection (`LobbyComm::GameServerConnection`,
-`LobbyManager +0x544`, vftable S 007deaf0) has an empty function in that slot (S 00472360, a bare `RET 8`), so
+`LobbyComm::System +0x544`, vftable S 007deaf0) has an empty function in that slot (S 00472360, a bare `RET 8`), so
 its payloads are dropped unread [known: vftable contents]. A connection id that matches none of the three is
 dropped without a log line [known] S 00462760. **No field of any message is decoded through a `BitStream`
 method; the field codec is the `LobbyMessage` bit packer (§2.3, §3.2).** With the vftable referenced from
@@ -604,8 +604,10 @@ Conversion helpers [known] S 00487530, S 00487620:
 
 - `Str_AnsiToUtf8(in)`: `MultiByteToWideChar(CP_ACP)` then `WideCharToMultiByte(CP_UTF8 = 65001)`.
 - `Str_Utf8ToAnsi(in)`: `MultiByteToWideChar(CP_UTF8)` then `WideCharToMultiByte(CP_ACP)`, default flags: a
-  character the ANSI code page lacks becomes the system default character (`?`) or a best-fit one [inferred
-  from the Win32 defaults; no flag or default-character argument is passed].
+  character the ANSI code page lacks becomes a best-fit letter where Windows has one, else the default
+  character `?` [known: no flag or default-character argument is passed]. In the running game the trader label
+  "Hinnerk Őł字" sent as UTF-8 shows as "Hinnerk Ol?" (`Ő` → `O`, `ł` → `l`, `字` → `?`), and the `ä` of
+  "Händler" (in Windows-1252) is unchanged [live, 2026-10-14].
 - Both pass the string as a C string (length −1): text after an embedded zero byte is dropped.
 
 Consequence: two peers with different ANSI code pages see each other's lobby names correctly (UTF-8 in
@@ -697,14 +699,14 @@ No rejection step anywhere: the modulo bias is part of the behaviour.
 | `S2CG::SwarmMgr` S 0069ab00 | **the object's own address** | swarms (visual); differs per run |
 | static S 0088d9a0 (`S2CG::Projectile` ctor S 006a3720) | 0x7D6 | projectile visuals |
 | static S 0088da38 (`S2CG::Building::InitFirePoints` S 006ac510) | 0x5432ACE0 | fire effect positions |
-| static S 0088deb4 (`CharacterMovement_RandomizeInitialFacing` S 006c53f0) | 0x7C0 | initial facing of figures |
+| static S 0088deb4 (`ai::render::CharacterMovement::RandomizeInitialFacing` S 006c53f0) | 0x7C0 | initial facing of figures |
 | `ai::gfx::StreetRenderer` S 006c4290 | 0x5432ACE0 | street decoration |
 | static S 0088decc (`S2CG::Animal::UpdateLogic` S 006ce2c0) | 0x5432ACE0 | animal visuals |
 | static S 00889860 | 0x5432ACE0 (S 007c01a0) | lobby animation graph random node: `AnimRandomNode_Shuffle` S 0051e810, `ai::lobby::AnimRandomNodeState::Init` / `Update` S 0051e9c0 / S 0051ea30 |
 | static S 0088d47c | 0x400 (S 007caaf0) | landscape resource particles: `S2CG::CLandscape::SpawnRandomResourceParticle` S 0068ac10, `CollectResourceParticleCandidates` S 0068b220 |
 | static S 0088d4ec | 0x5432ACE0 (S 007cab10) | map object instances: `ai::render::MapObjLayer::AddInstance` S 0068dd40, `AddSingleMeshInstance` S 0068f120 |
 | static S 0088e118 | 0x5432ACE0 (S 007cb190); `S2CG::ExtendedMeshData::BuildInstancedVertices` S 006dd8e0 re-seeds it per instance with `SetSeed(object address + instance index)`, so the scatter differs per run | instanced mesh scatter; also stepped by `S2CG::ExtendedMeshData::Load` S 006dddc0 |
-| static S 0088e120 | 0x5432ACE0 (S 007cb1b0) | random animation player: `RandomAnimPlayer_Shuffle` S 006ddea0 and its constructor and update (S 006ddf79, S 006de000 are the referencing instructions) |
+| static S 0088e120 | 0x5432ACE0 (S 007cb1b0) | random animation player: `ai::anim::RandomAnimPlayer::Shuffle` S 006ddea0 and its constructor and update (S 006ddf79, S 006de000 are the referencing instructions) |
 
 Every static instance is referenced only by its initialiser, its exit-time destructor and the functions named
 in its row [known: cross references of S 00889860, S 0088d47c, S 0088d4ec, S 0088e118, S 0088e120]. None of
@@ -874,7 +876,7 @@ Which clock drives what [known for the callers named]:
     ([app-shell.md](app-shell.md) §3.12).
   - The NComm instance [known] S 007be6f0 (static initialiser), S 0040a530: built with path `logger.log`,
     `indentDepth` 0, `indentStep` 4, `maxFileSize` −1 (the size check never deletes), `levelMask` 0xFFFFFFFF,
-    box characters off. `NComm_Manager_ctor` sets the path to `<log directory>\comm.log` (the directory of
+    box characters off. `NComm_Manager::ctor` sets the path to `<log directory>\comm.log` (the directory of
     `NComm::ConnectionSettings`, which `CApplicationEx::Initialize` S 004075d0 copies from the application's
     log path), calls `Open(true)` (truncate) and then sets the mask from `g_LogLevel` S 00882690: 0 → mask 0
     (nothing is written after the banner); 1 → mask `& ~0x16`; 2 → mask `& ~0x12`; 3 → 0xFFFFFFFF; any other
@@ -1125,17 +1127,18 @@ Parts that are presentation or front end only, and why:
 
 ## 9. Notes for a Godot reimplementation
 
-Maps onto an engine feature:
+The remake's simulation is written in C# (Godot .NET) as a plain library without Godot nodes; presentation, UI
+and tools use Godot. Maps onto a platform feature:
 
-- byte streams → `StreamPeerBuffer` / `FileAccess` with `big_endian = false`; write the 4-byte bool, the
+- byte streams → `BinaryReader` / `BinaryWriter` (little-endian, as the original); write the 4-byte bool, the
   `u32`-length string (raw bytes, no terminator) and the 12-byte section tag by hand;
-- CRC-32 → any standard implementation (e.g. a 256-entry table; Godot has no built-in CRC-32 for arbitrary
-  buffers in GDScript, so ship one); MD5 → `HashingContext`;
-- strings → Godot `String` (Unicode). Decode Windows-1252 at the converter; encode back to 8-bit only where an
+- CRC-32 → `System.IO.Hashing.Crc32` or a 256-entry table; MD5 → `System.Security.Cryptography.MD5`;
+- strings → `string` (Unicode). Decode Windows-1252 at the converter; encode back to 8-bit only where an
   original format or peer needs it;
 - UUID → 16 random bytes kept in the stored order; the original uses `UuidCreate`;
-- containers → `Array`, `Dictionary`, `PackedInt32Array`. A `Dictionary` keeps insertion order, **not** key
-  order: where the original iterates a `std::map`, sort the keys or use a sorted array;
+- containers → `List<T>`, arrays, `SortedDictionary` / `SortedList`. The enumeration order of a
+  `Dictionary<TKey, TValue>` is not defined (in practice insertion order until the first removal): simulation
+  code must not iterate one. Where the original iterates a `std::map`, use a sorted container;
 - vectors, quaternions, transforms → `Vector3`, `Quaternion`, `Transform3D` for presentation. The originals
   are left-handed, row-vector, single precision; convert at the asset boundary
   ([rendering.md](rendering.md), [animation-models.md](animation-models.md));
@@ -1146,16 +1149,18 @@ Maps onto an engine feature:
 
 Must be reproduced exactly:
 
-- the generator of §3.7 as 32-bit unsigned integer arithmetic (in GDScript mask every intermediate with
-  `0xFFFFFFFF`; or compute `state * 16807 % 0x7FFFFFFF` in 64-bit integers, which is equal);
+- the generator of §3.7 as 32-bit unsigned integer arithmetic (`uint` in C#; or compute
+  `state * 16807 % 0x7FFFFFFF` in 64-bit integers, which is equal);
 - `SetSeed` including its table, for the chest generator and the container key stream;
 - the stream encodings of [save-format.md](save-format.md) §2.2 and the section tag of §3.4;
 - the `CRCStream` rules, if checksums are to be compared with original peers or dumps;
 - the `LobbyMessage` bit packing of §3.2, UTF-8 strings with an 8-bit length, if the remake talks to a lobby
   server that serves original clients;
-- single-precision float behaviour wherever a simulation rule uses floats: Godot's `float` is 64-bit in
-  scripts, so such rules need explicit rounding to 32 bits after every operation, or a native module
-  ([logic-core.md](logic-core.md) §9).
+- single-precision float behaviour wherever a simulation rule uses floats: C# `float` is IEEE single precision
+  with round-to-nearest, which matches the x87 control word of §3.8 except where the x87 keeps its wider
+  exponent range (overflow, underflow, denormals). Not through GDScript, whose `float` is always 64-bit.
+  `Math` / `MathF` functions such as `Sin`, `Cos`, `Atan2` and `Pow` depend on the platform's math library
+  (`Sqrt` is correctly rounded and safe): the simulation calls its own implementations ([logic-core.md](logic-core.md) §9).
 
 Should not be reproduced: the unchecked buffers (`ReadString` into 0x800 or 260 bytes, `MemoryStream::Write`
 on a fixed buffer, `ReadBits` past the end, `WriteBytes` / `ReadBytes` without limits, the faulting container
@@ -1178,7 +1183,7 @@ decoded saves and maps if original files are to be loadable.
 | 4 | Do the users of the static generators S 00889860, S 0088d47c, S 0088d4ec, S 0088e118, S 0088e120 (§3.7) write anything the simulation reads? Their names say presentation only; the bodies were not read | static read of the functions named in the instance table |
 | 5 | Answered (§3.7): `S2CG::CMapRenderer::RunTerrainGenerator` S 00688540 is not called. It and `RunTerrainGeneratorToBuffer` S 00688590 have no direct caller, and a call through slot `+0x04` with five arguments occurs in four functions of the decompiled image, none of which holds a map renderer (S 004a5b30, S 00523670, S 00657b80, S 00676700). Generator-dependent heights do not reach the simulation [inferred: an untyped call is not excluded] | static: caller lists; search of the decompiled image |
 | 7 | Bodies of `PerspectiveFovLH`, `OrthoLH`, `LookAtLH`, `Slerp`, `Matrix44` inverse: do they equal the Direct3D reference formulas element for element? | static read of S 006e97e0, S 006e8e10, S 006e9b70, S 006e8830, S 006e9200 |
-| 11 | `Str_Utf8ToAnsi` with characters outside the ANSI code page: best-fit or `?` on the target systems | observation in the running game with a lobby name outside Windows-1252 |
+| 11 | Answered (§3.6): `Str_Utf8ToAnsi` maps a character outside the ANSI code page to a best-fit letter where one exists (`Ő` → `O`, `ł` → `l`), else to `?` (`字`) [live, 2026-10-14] | — |
 
 ---
 
@@ -1187,7 +1192,7 @@ decoded saves and maps if original files are to be loadable.
 | Address | Name | Role |
 |---|---|---|
 | 0048f150 / 0057d460 / 00462630 / 0057d450 | `NCore::ByteBuffer::ctor` / `dtor` / `AssignShared` / `GetDataAt` | owned or borrowed byte buffer |
-| 00462760 | `LobbyManager::DispatchInboundToConnection` | the only place a `BitStream` is built (the vftable's only other reference is the destructor) |
+| 00462760 | `LobbyComm::System::DispatchInboundToConnection` | the only place a `BitStream` is built (the vftable's only other reference is the destructor) |
 | 0057df40 / 0057da40 | `Bits_WriteUInt8` / `Bits_ReadUInt8` | bit primitive, 8-bit |
 | 0057e0b0 / 0057db70 | `Bits_WriteUInt16` / `Bits_ReadUInt16` | bit primitive, 16-bit |
 | 0057e220 / 0057dcb0 | `Bits_WriteUInt32` / `Bits_ReadUInt32` | bit primitive, 32-bit |
@@ -1227,7 +1232,7 @@ decoded saves and maps if original files are to be loadable.
 | 00510f60 / 00511080 | `MemoryWriteBuffer::ctor` / `storeBuffer` | PhysX write buffer |
 | 00757ac0 / 00757b80 | `NXU::MemoryReadBuffer::ctor` / `readBuffer` | PhysX read buffer |
 | 005816e0 | `ai::logging::LogCategory::ctor` | section tag object: name, version, name CRC |
-| 00663dd0 | `NCore::IStoreable::ctor` | store interface |
+| 00663dd0 | `NCore::IStoreable::dtor` | base destructor of the store interface |
 | 00780c00 / 00780c20 / 00780c60 / 00780c80 | `NCore::Unique::ctor` / `ctor_FromId` / `AssignNewId` / `Equals` | message ids; `ctor_FromId` is reached only for `Message` sections older than version 2 |
 | 005c0390 / 005c2520 / 005c1890 / 005c1ad0 | `NPlayer::Message::Load`, `NPlayer::Messages::Load` / `FindById` / `RemoveById` | how message ids are loaded and looked up (§7) |
 | 00780cb0 / 00780ce0 | `NCore::Unique::Serialize` / `Deserialize` | tag `uniqueId` + 64-bit id |
@@ -1265,7 +1270,7 @@ decoded saves and maps if original files are to be loadable.
 | 00403ac0 | `CApplicationEx::ParseCommandLine` | the only writer of `g_LogLevel` |
 | 00417e20 / 00418250 / 00418b10 / 00418c40 | `Logger::Open` / `LogMessage` / `EnterSection` / `LeaveSection` | NComm log |
 | 004165b0 / 004176a0 / 00418600 | `Logger::RotateIfTooLarge` / `FormatLinePrefix` / `LogHexDump` | size check (deletes the file), line prefix, hex dump |
-| 007be6f0 / 0040a530 | static initialiser of the NComm `Logger` / `NComm_Manager_ctor` | defaults; `comm.log` path, open, level mask |
+| 007be6f0 / 0040a530 | static initialiser of the NComm `Logger` / `NComm_Manager::ctor` | defaults; `comm.log` path, open, level mask |
 | 0040a410 | `ai::ncomm::LogScope::ctor` | scoped log section (level 4) |
 | 005c3b40 | `Debug_PrintfToDebugger` | `OutputDebugStringA` |
 | 00496070 / 004966d0 / 004963a0 / 00496b80 | `Localization::GetText` / `LoadTextFile` / `SetText` / `LoadAllTextFiles` | text lookup |

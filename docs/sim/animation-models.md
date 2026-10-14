@@ -86,7 +86,7 @@ install 189 files hold one skeleton and 1,450 none. **[known]** (data)
 
 | Offset | Field | Meaning |
 |---|---|---|
-| `+0x04` / `+0x20` | `name`, `name2` | strings |
+| `+0x04` / `+0x20` | `name`, `exportName` | strings of the `KScene::NBaseObject` base: the object's own name and the name of the exported asset (one value per file, `docs/asset-formats.md` §2) |
 | `+0x44` | `numVertices` | |
 | `+0x48` | `numStreams` | |
 | `+0x4c` | `numIndices` | 3 per triangle |
@@ -115,10 +115,11 @@ Stream types as the engine consumes them (`CMesh::FillVertices` S 0076c030) **[k
 A stream whose usage is missing from the target vertex declaration is dropped. Types 8..11 do not occur and have no
 case. Bone indices (type 13) index the mesh's own `boneNames` list, not the skeleton (§3.6). **[known]**
 
-`KMaterialDesc` (0x4c bytes, vftable S 0082c14c): `+0x04` name, `+0x20` second string, `+0x3c` `u32 startIndex`,
+`KMaterialDesc` (0x4c bytes, vftable S 0082c14c): `+0x04` name, `+0x20` `exportName`, `+0x3c` `u32 startIndex`,
 `+0x40` `u32 triangleCount`, `+0x44` texture count, `+0x48` array of string pairs `{usage, textureFile}` (0x38
 each). **[known]** (S 007303a0). Virtuals (vtable dump): `+0x00` name, `+0x10` `startIndex`, `+0x14`
-`triangleCount`, `+0x18` texture count, `+0x1c` usage string of texture `i`, `+0x20` file name of texture `i`.
+`triangleCount`, `+0x18` texture count, `+0x1c` usage string of texture `i` (`GetTextureUsage` S 00730340),
+`+0x20` file name of texture `i` (`GetTextureFile` S 00730370).
 **[known]** These are the fields `a` and `b` of `asset-formats.md`: the subset builder copies virtual `+0x10` into
 the subset's first index and `+0x14` into its primitive count, and skips a material whose `+0x14` is 0
 (`Mesh_AppendSubsetsFromKMesh` S 0076d010). **[known]** The data agree: in 5,279 of 5,332 meshes the `b` values
@@ -139,7 +140,7 @@ one → that one; neither → identity; then translation = position when bit 0 i
 
 ### 2.6 `KSkeleton` (vftable S 0082bf28)
 
-`+0x04` name, `+0x20` name2, `+0x44` `boneCount`, `+0x48` bone array (0x28 each: `+0x00` name string, `+0x1c`
+`+0x04` name, `+0x20` `exportName`, `+0x44` `boneCount`, `+0x48` bone array (0x28 each: `+0x00` name string, `+0x1c`
 `i32 parentIndex` (-1 = root), `+0x20` pointer to the bone's 4x4 matrix, `+0x24` pointer to its `KBoneKey`),
 `+0x4c` the `KBoneKey` block, `+0x50` the matrix block, `+0x54` `std::map<string,int>` name → index. **[known]**
 (S 0072d290). Virtuals (vtable dump): `+0x00` name, `+0x10` bone count, `+0x14` name of a bone, `+0x18` bind
@@ -166,7 +167,7 @@ skinned mesh references at most 46 bone names. **[known]** (data)
 
 | Offset | Field | Meaning |
 |---|---|---|
-| `+0x04` / `+0x20` | `name`, `name2` | `name` is matched against the skeleton's name (§3.7) |
+| `+0x04` / `+0x20` | `name`, `exportName` | `name` is matched against the skeleton's name (§3.7) |
 | `+0x3c` | `length` (f32) | seconds |
 | `+0x40` | `trackCount` | |
 | `+0x44` | `keyCount` | the same for every track |
@@ -912,7 +913,7 @@ S 006910e0) **[known]**:
   look. The lookup is `u = saturate(G * light) * (15 / atlasWidth)`, `v = R * (256 / atlasHeight)`, plus the
   palette's atlas offset and half a texel (`COLOR_INDEX_SCALE`, `TEXTURE_ATLAS_OFFSET`).
 - `rgb = lerp(playerColor * G * light * 2, paletteColour, A)`, then `+ specular * B`; output alpha = A.
-- `playerColor` (`PLAYER_COLOR`) is the owning player's colour entry (`Player_GetColorEntry` S 005be2c0 of
+- `playerColor` (`PLAYER_COLOR`) is the owning player's colour entry (`ai::player::Player::GetColorEntry` S 005be2c0 of
   `settler +0x28`).
 
 The palette of a settler is built when its character is created (`CCharacterMgr::CreateCharacter` S 00695490):
@@ -1349,7 +1350,7 @@ palettes' random source.
 | 11 | The values written to the ship shader's `PLAYER_COLOR_WEIGHT`. | Static: the user of the parameter handle resolved in `ShipMgr::ctor` S 006985e0. |
 | 12 | Do the `<PFX name link>` and `<Sacrifice name>` children of `<Building>` (§6.4) belong to this subsystem's loader or to another one? | Static: string references to `PFX` and `Sacrifice`. |
 | 13 | How a `.psd` / `.bmp` texture name in a material resolves to a shipped file. | Static read of the mesh managers' `AcquireTexture` / `GetOrLoadTexture`. |
-| 14 | `<Production scale>` reaches `AnimResMgr::LoadAnimation` as a float **[inferred]**: the third parameter is a float pushed raw by other callers (disassembly of S 006de030), the same function passes the bit pattern of 1.0 for the door animations, and S 006d3880 calls no float-to-int helper. | Confirm with the disassembly of the call in S 006d3880. |
+| 14 | `<Production scale>` reaches `AnimResMgr::LoadAnimation` S 004de400 as its `float unitScale` argument, the unit scale at +0x30 of the engine's 0x34-byte load parameter block **[inferred]**: S 006d3880 reads the attribute with a float getter into the production record and passes that field; the third parameter is a float pushed raw by other callers (disassembly of S 006de030), the same function passes the bit pattern of 1.0 for the door animations, and S 006d3880 calls no float-to-int helper. | Confirm with the disassembly of the call in S 006d3880. |
 
 ---
 

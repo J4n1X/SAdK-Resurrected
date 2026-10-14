@@ -28,10 +28,11 @@ change what the server sends, and need the maintainer's explicit go-ahead first 
 - [x] **Own whisper echo.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Whisper to a player whose name the client has not resolved yet.
   Observe: whether the own line appears in the chat.
   Settles: `docs/types.md` §1.5, `+0x54` (the echo is dropped when the target's name is not cached).
-- [ ] **LobbyManager list `+0x34`.** Log in, enter the village, play a match, log out.
+- [x] **LobbyManager list `+0x34`.** Log in, enter the village, play a match, log out.
   Observe: hook `ObserverList_NotifyAll` S 00464300 and S 0045f620; log calls whose list pointer equals
   `g_pLobbyManager + 0x34`.
   Settles: types.md §1.2, `+0x34` (never fired; purpose `[TODO]`).
+  **Result, live 2026-10-14:** hooks on `ObserverList_NotifyAll` S 00464300 and S 0045f620 (list pointer compared with `LM+0x34` and the village connection's `+0x50`, `+0x5c`, `+0x110`, `+0x14c`) and on `OnWorldLeft` S 005037a0, through a login, a village entry and exit, a hosted room and the lost lobby connection of a server restart: no call. The total number of notifications in that window was not counted, so this rests on the hooks being active, not on a measured rate.
 - [ ] **LobbyMessage `+0x38`.** One outgoing message (`SendPing` S 0046c150) and one incoming
   (`HandleMessage` S 00470a90).
   Observe: read watch on `msg+0x38`.
@@ -90,15 +91,17 @@ change what the server sends, and need the maintainer's explicit go-ahead first 
   Settles: message-catalog 0xE24 and V30; the sell-price difference of the server.
   **Result, live 2026-10-12:** at the shop that lists it, the client computed 75 for item 23 (`GetShopSellPriceByItemId`; the stock's Sell value, 150 // 2) and the server credited 67 (x 0.9 on top). The server now credits the stock's Sell value for a listed item, else base price x SellMod (`lobby/sadk_lobby/economy.py`, effective at the next server restart). Not observed: an item sold at a shop that does not list it.
 
-- [ ] **Cannot-sell box.** **Needs permission** (a changed stock entry). Send a stock entry with Sell 0 and
+- [x] **Cannot-sell box.** **Needs permission** (a changed stock entry). Send a stock entry with Sell 0 and
   try to sell that item.
   Observe: which box appears (`!LOBBY_TRADER_NOT_WANTS_ITEM` expected).
   Settles: message-catalog 0xE24 (price 0 branch).
-- [ ] **Unknown item id.** **Needs permission** (server sends an id outside 1..36; may crash the client).
+  **Result, live 2026-10-14:** with sell price 0 for every item of Hinnerk's stock, selling a backpack item opened the box `!LOBBY_TRADER_NOT_WANTS_ITEM` ("Der Händler ist an diesem Gegenstand nicht interessiert", maintainer).
+- [x] **Unknown item id.** **Needs permission** (server sends an id outside 1..36; may crash the client).
   (a) 3102 with `itmid` 999 in an active slot: is anything attached, does the client survive.
   (b) an id > 36 in a backpack slot, open a shop, hover that slot.
   Settles: message-catalog V23 (whether the checked-iterator path in S 0046d6d0 ends the process; how an
   unknown id renders on an avatar).
+  **Result, live 2026-10-14, part (b):** item id 99 sent in backpack slot 0 (3102): the client drew an empty slot, hovering it showed nothing and the process kept running through moving items and opening the shop (maintainer). Once a hover text appeared on another slot that looked empty; not reproduced. Part (a) is settled by reading (see the fourth reading pass).
 - [ ] **ItemsClient.txt tokens 3 and 4.** Stack, split, equip and sell items.
   Observe: read watches on `ItemInfo+0x3c` and `+0x44` of one item.
   Settles: village doc §4.3 (meaning of tokens 3 and 4 `[TODO]`).
@@ -128,15 +131,17 @@ change what the server sends, and need the maintainer's explicit go-ahead first 
 - [x] **Random teams.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Start a match with a slot whose team is unset.
   Observe: slot `+0x3f` on the host's own session and on a joiner after StartLoading.
   Settles: NCOMM doc, team note (whether the host's session receives the random values `[TODO]`).
-- [ ] **Which seed a client uses.** Start a two-player match.
+- [x] **Which seed a client uses.** Start a two-player match.
   Observe: on each client, session `+0x22f` at the `GetGameSeed` call S 00775e1f and the values passed to
   `LogicChest_SetContentKind` S 00539200.
   Settles: `docs/MATCH_START.md`, Open item 2 (does the host's payload replace a client's seed before its
   chest pass).
-- [ ] **Different seeds.** **Needs permission** (the server sends each client another GameSeed). Repeat the
+  **Result, live 2026-10-14:** with the same GameSeed 0x5EED1234 to both clients the four chests (`LogicChest +0x28`) held identical values on host and joiner (found by value in the joiner's memory, all four in objects of vtable S 007e7ae4). With different seeds (next entry) the joiner's values differ from the host's: each client seeds its chest pass with its own GameSeed from 0xDB8; the host's payload does not replace it before the chest pass. The simulation generator S 00889b08 kept its constant seed 0x5432ACE0.
+- [x] **Different seeds.** **Needs permission** (the server sends each client another GameSeed). Repeat the
   entry above, then open a chest.
   Observe: chest `+0x28` values on both sides; `ChecksumLog::VerifyLatest` S 00415a60 for a mismatch.
   Settles: MATCH_START Open item 2 and message-catalog H17 (desync or only different chest contents).
+  **Result, live 2026-10-14:** the server sent 0x5EED1294 to the host and 0x5EED1295 to the joiner. Same four chest cells on both, different contents ((9,50) 509535036 / 509551843, (89,50) 1738049463 / 2020524712, (57,58) 1324758147 / 799924573, (44,43) 99724533 / 1084668191). The match ran without desync: all 476 `ChecksumLog::VerifyLatest` S 00415a60 results on the joiner were 1. When the host's territory held (57,58) for 3,000 ticks, both clients sent `ClaimChest` (0xDAC) at once, each with its own chest id and both naming the opener 100000 as actor; the stub took them for two chests and rewarded both. The chest at (44,43) opened 23 s earlier with the same pattern; the game's own notice said gold for both players (maintainer). So different seeds give different chest ids, not a desync; the server has to send every client the same seed.
 
 ## In match
 
@@ -151,8 +156,9 @@ change what the server sends, and need the maintainer's explicit go-ahead first 
   read 100356 with the host's gold (`AvatarProxy +0xd0`) at 100357, and `settingsCrc` (`+0x237`) changed with the map and
   the wager. Not settled: whether the dialog stops at the host's own gold (static: its maximum is that value); the
   maintainer's impression was "unlimited", with a balance of about 100,000.
-- [ ] **Team of a seat.** A team cannot be chosen while the host is alone in the room (maintainer, 2026-10-12), so the
+- [x] **Team of a seat.** A team cannot be chosen while the host is alone in the room (maintainer, 2026-10-12), so the
   random-team check needs a second player.
+  **Result, 2026-10-14:** every seat is in a team by default (maintainer); with two players in the room no seat was without one.
 - [x] **A wagered match, one player gives up.** Live 2026-10-12, match 100, wager 357: player 100000 gave up (`GiveUpGame`,
   re-sent three times within 5 ms and answered each time); 1.8 s later the remaining player's game sent `FinishGame`
   naming itself (100001), so a give-up in a two-player match makes the other player's game declare victory; the server
@@ -175,13 +181,14 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 
 ### Main menu and settings
 
-- [ ] **Ini files behind a byte order mark.** Start the game with the install's `network.ini` and `engine.ini`
+- [x] **Ini files behind a byte order mark.** Start the game with the install's `network.ini` and `engine.ini`
   as they are; then switch `useMeshCache` in `engine.ini` and start again.
   Observe: the `network.ini` block at manager `+0x360` (`g_NCommManager` S 00885754): `gamePort` 5478 = the file
   was read, 5479 = fallback because the mark hides the first section. For `engine.ini`: whether `.mshraw` files
   appear or stop appearing with the switch.
   Settles: `network-session.md` §6 and §10 Q8; `lan-and-transport.md` §10 (effective `gamePort`);
   `formats-inventory.md` §10 Q9.
+  **Result, live 2026-10-14:** `GetPrivateProfileIntA`, called in the game process on two test files: duplicate `[Basics]` sections without a mark → the first section wins (5478); a mark directly before `[Basics]` → the section is not found (fallback). So in the install's `network.ini` (mark, `[Basics] gamePort = 5478`, later a second `[Basics] gamePort=5479`) the first section is hidden and the effective 5479 comes from the second section or the code fallback (also 5479). The install's `engine.ini` starts with the mark directly before its only section `[Engine]`: every `[Engine]` key takes the code default, and editing the file changes nothing until it is saved without the mark.
 - [x] **Closed row on a taken start position.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Set up a free game in which a closed row's number equals the
   start position chosen by another row; start it.
   Observe: which player stands on that position and whether one is missing (expected: the later row's write
@@ -213,9 +220,10 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Observe (screenshots): last partial tile squeezed or cropped; caret colour; a stale glyph where a break
   candidate overflows the line.
   Settles: `ui-toolkit.md` §10 Q4, Q5 (§3.1).
-- [ ] **Loop of the main theme.** Listen to `maintheme.ogg` across its loop point.
+- [x] **Loop of the main theme.** Listen to `maintheme.ogg` across its loop point.
   Observe: the music restarts (normal loop) or plays backwards (`FSOUND_LOOP_BIDI` taken literally).
   Settles: `audio.md` §3.1 (line on `FSOUND_LOOP_BIDI`), §10 Q4.
+  **Result, live 2026-10-14:** the theme loops cleanly (maintainer).
 
 ### A free game alone
 
@@ -251,11 +259,22 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Observe: idle ticks after a walk in `Animal::Update` S 005420c0 (short idle after long walks as read); whether
   the hunter ignores an animal on explored ground whose walk target is unexplored.
   Settles: `map-resources.md` §3.10, §10 Q3, Q4.
-- [ ] **Door direction and levelling.** Place a farm on uneven ground and watch the builder and the door.
+- [x] **Door direction and levelling.** Place a farm on uneven ground and watch the builder and the door.
   Observe: which screen direction the door step (direction 4, `DoorOffsetNorthWest`) is, whether direction 1 is
   the lower right neighbour, and whether the builder plays a levelling phase (expected: levelling is
   instantaneous, `cfg_setBulldozeTime` unused).
   Settles: `village-buildings.md` §10 Q2, Q3; `settlers-jobs.md` §10 Q6.
+  **Result, live 2026-10-14, door half:** a `farmBav` (`0xCEA2D303`) placed at anchor (62, 88) (`HandlePlaceBuilding`
+  S 00781980; the building's `+0x20` reads (62, 88)), so its entrance flag is the direction-1 neighbour (62, 87) as
+  read. Maintainer, from this farm and from play: the entrance of every building is centred on its bottom side and
+  faces about south-south-west on screen with the camera unrotated. So grid direction 1 points to the screen's
+  lower side, slightly left; it is not the lower-right neighbour, and neither the compass labels of map-format §5.1
+  nor the data names (`DoorOffsetNorthWest` = 4) describe screen directions.
+  **Levelling half, live 2026-10-14:** the builder went straight to building and the ground was level at once
+  (maintainer: no builder ever levels first in this game). A hardware read watchpoint on `GameConfig +0x14`
+  (`bulldozeTime`, value 55) saw no read in 45 s of play with 8 new construction sites; a later window was invalid
+  (a second watchpoint on a hot field was still set) and the watchpoint teardown ended the process. So levelling is
+  instantaneous and no reader of `+0x14` turned up; a static field-xref search would make "never read" `[known]`.
 
 #### Settlers and transport
 
@@ -263,10 +282,11 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Observe: hook `Settler::Update` S 00656ec0 for that settler: updates per second (10 at the 0.1 s tick),
   updates per cell (about 17.2 with the carry-over, so 17 and 18 mixed), and the 4-tick pick-up phases.
   Settles: `settlers-jobs.md` §3 (movement), §10 Q2; `game-commands.md` (logic tick interval 0.1 s).
-- [ ] **Settler release in state 0x24.** Supply a casern or an oxen breeder continuously.
+- [x] **Settler release in state 0x24.** Supply a casern or an oxen breeder continuously.
   Observe: the worker's state in S 0065d7f0 (stays 0x24 until the supply ends) and the settlers released per 10
   ticks.
   Settles: `settlers-jobs.md` §10 Q1.
+  **Result, live 2026-10-14:** developed save, ticks 55,291 to 56,810, hook on S 0065d7f0 (runs for every worker each tick) filtered on state `+0x54` = 0x24: 8 workers entered 0x24. Two released one settler (`SpawnSettlerOfGood` from S 0065d52b) on their first tick in 0x24, stayed one more tick and went to Rest (0x23): every 390 ticks, four times each. The other six spent one tick in 0x24 without a release and went to Rest. So a worker stays in 0x24 only while the stock can supply; with one unit per production cycle that is one release, then rest. A building with several units in stock was not seen.
 - [ ] **Blocked flag.** Block a flag so that a loaded carrier cannot put his good down.
   Observe: hook S 006513b0 (the attempt counter `pkg +0x104`): attempts per tick, `!flag blocked` at every 180th
   attempt, the good's return to a storehouse after 360; the real time of both.
@@ -356,11 +376,15 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 
 #### Sacrifices, quests and scripts
 
-- [ ] **Floating-point control word in the scripts.** **Needs permission** (calls the runtime's
+- [x] **Floating-point control word in the scripts.** *(narrowed by reading, 2026-10-14: Direct3D 9 is
+  created with `FPU_PRESERVE`; `tincat3.dll` and `NxCharacter.dll` restore every word they load,
+  `PhysXLoader.dll` loads none; left: FMOD (packed, so only a live read settles it), D3DX and the PhysX core,
+  `lua-runtime.md` §8.)* **Needs permission** (calls the runtime's
   `_controlfp(0, 0)` from the hooks; it only reads). Start a new game.
   Observe: the control word in a hook of S 0054f8d0 (property scripts) and of S 005b2220 (`onStarted`):
   the value `Fpu_SetDefaultControlWord` S 0057b9b0 sets, or another one.
   Settles: `lua-runtime.md` §8, §10 Q1.
+  **Result, live 2026-10-14:** `_controlfp(0, 0)` S 006fa4ab on the main thread: `0xA001F` (all exceptions masked, 24-bit precision, round to nearest) at the entry of `onLoaded` S 005b2180 and at the entry and exit of `BuildWorld` S 00784d40, which also calls `onStarted`. Scripts of a world build run at single precision. The property scripts at start-up were not read (they run before an attach).
 - [x] **Good exchange output.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`, fourth pass)* Run a good exchange sacrifice and watch the building.
   Observe: by which carriers the output stock leaves and when the building's state 0 ends.
   Settles: `quests-sacrifices-stats.md` §10 Q4.
@@ -446,23 +470,30 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Settles: `rendering.md` §6.6, §10 Q11, Q17.
 - [ ] **Reference screenshots.** Take: a shore at shader level 2; settlers at shadow levels 1 to 3; the sky; one
   walking settler from close up.
-  Observe: the look of shallow water; a blob shadow under settlers (none expected); sun and moon (never drawn
-  expected); the settler's facing and face winding for comparison with a converted model.
+  Observe: the look of shallow water; a blob shadow under settlers (none expected); the settler's facing and face
+  winding for comparison with a converted model. Sun and moon need no look: their quads are built, but no code
+  reads the pass that would draw them (`SkyRenderer.hSunPass`; settled by reading, 2026-10-13).
   Settles: `rendering.md` §10 Q15; `world-objects-rendering.md` §3.9, §10 Q4, Q6; `animation-models.md` §10
   Q1, Q2.
 
 #### Saving and loading
 
-- [ ] **Save and load are checksum-neutral.** Free game without input: save at tick N and let it run 50 ticks;
+- [x] **Save and load are checksum-neutral.** Free game without input: save at tick N and let it run 50 ticks;
   load the save and let it run the same 50 ticks.
   Observe: hook `nGame::System::ComputeChecksum` S 00784080 and log tick and checksum in both runs: equal =
   neutral.
   Settles: `save-format.md` §8, §10 Q2.
+  **Result, live 2026-10-14:** developed six-player save, offline. `GameFile_Save(110, "cksumtest")` at the end of tick 54,004, then `nGame::System::ComputeChecksum` S 00784080 called after every single-tick logic update; the save loaded through `nMenu::System::SetPendingMapPath` S 005da880 (the load panel's path); the first tick after the load was 54,005. 45 ticks recorded in both runs (54,010 to 54,054; the first five of the first run fell into catch-up frames): all 45 checksums equal. Save and load are checksum-neutral over this window.
 - [ ] **Saves in special states.** Save during a cutscene, during a pause and during a sacrifice animation;
   load each.
   Observe: whether the save dialog opens at all while the cinematic screen is up; the first ticks after each
   load.
   Settles: `save-format.md` §10 Q3; `camera-input-cutscenes.md` §7, §10 Q5.
+  **Result, live 2026-10-14, pause half:** offline, `nMenu::System::TogglePause` S 005da400 set the speed factor
+  (`UserProfile +0x24`) to 0 and the tick stood at 54,259; `GameFile_Save(110, "pausetest")` in that state, then the
+  save loaded: after the world build the factor read 1.0 and the ticks ran on from 54,259 (54,262, then 31 ticks in
+  3 s). A save made during a pause does not come back paused. Cutscene and sacrifice halves still open (the free
+  game used has neither).
 - [x] **Autosave during a pause.** *(pause half settled; cinematic half open, results of 2026-10-12 at the end of this file)* Set the interval to 5 minutes, pause for longer; repeat across a cinematic.
   Observe: hook `nGame::Autosave::Update` S 0078b040; the `!Autosave...` message and the file time of
   `Autosave.aav` (fires while paused, not during a cinematic, as read).
@@ -478,48 +509,65 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 - [x] **Save after a win.** *(settled, results of 2026-10-12 at the end of this file)* Win, save, load that save.
   Observe: whether the victory screen appears again (and, online, a second `FinishGame` in the server log).
   Settles: `players-victory.md` §7, §10 Q8.
-- [ ] **Property values after a reload.** Play two free games in one program run.
+- [x] **Property values after a reload.** *(narrowed by reading, 2026-10-12: the shipped game never reloads the
+  property tables, so a reload only exists with the `propreload` mod; what is left for the shipped game is whether
+  play writes into a record, which would carry over into the next game of the same program run.)* Play two free
+  games in one program run.
   Observe: read a few good, building and settler records in each game and compare the values, not only the
   record counts.
   Settles: `properties-data.md` §10 Q5.
+  **Result, live 2026-10-14:** FNV hashes of all 565 pointer-table records (buildings 104, deposits 53, goods 176, patterns 114, animals 12, AI 6, harbours 8, tribes 3, sacrifices 77, spawn types 12) and the three config blocks, before and after a save load plus some hundred ticks of play: all equal. No write into a record was seen.
 
 ### The lobby village alone
 
-- [ ] **Lists that never fire.** Log in, enter the village, leave it, host a game, lose the connection.
+- [x] **Lists that never fire.** Log in, enter the village, leave it, host a game, lose the connection.
   Observe: hook the subscriber S 005037a0 (`VSC+0x110`) and `ObserverList_NotifyAll` S 00464300 for the lists
   `VSC+0x50`, `+0x5c`, `+0x110`, `+0x14c`: any call names the firing code. Do it with the `LM+0x34` entry above.
   Settles: `lobby-client-state.md` §10 Q5; `lobby-world-client.md` §10 Q16.
+  **Result, live 2026-10-14:** hooks on `ObserverList_NotifyAll` S 00464300 and S 0045f620 (list pointer compared with `LM+0x34` and the village connection's `+0x50`, `+0x5c`, `+0x110`, `+0x14c`) and on `OnWorldLeft` S 005037a0, through a login, a village entry and exit, a hosted room and the lost lobby connection of a server restart: no call. The total number of notifications in that window was not counted, so this rests on the hooks being active, not on a measured rate.
 - [x] **Shop result and inventory lists.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Buy and sell one item.
   Observe: in the handlers S 00470990 and S 00470a10 read the subscriber count of `VSC+0x134` and `+0x140`, and
   of `VSC+0xd4` on the inventory change: 0 = the client shows nothing on a result.
   Settles: `lobby-client-state.md` §10 Q3; `lobby-screens.md` §10 Q4.
-- [ ] **Controller hit report.** Walk into a wall and into a fence. May end the process.
-  Observe: hook `__purecall` S 006f371b: a call (the process aborts) = the library calls the report.
+- [x] **Controller hit report.** *(narrowed by reading `NxCharacter.dll`, 2026-10-14: the library calls
+  `onShapeHit` on every contact in the sideways and down sweeps, and the game's report is the abstract class, so
+  a call aborts; yet standing in the village does not abort and the avatar keeps its height.)* Stand in the
+  village, then walk; observing only, no crash expected from the hooks.
+  Observe: hook `CPhysicObjCharacter::Move` S 00523670 and read the collision flags the controller writes back
+  (into `Move`'s `displacement` stack slot; 1 sideways, 2 up, 4 down); hook N 1000cc30 and N 1000c220 at the
+  load address of `NxCharacter.dll` (it does not load at its image base). Flags 0 while standing = the avatar
+  touches no collision shape.
   Settles: `lobby-extras.md` §3.3, §10 Q1.
+  **Result, live 2026-10-14:** standing in the village: `Controller_ShapeHitCallback` N 1000cc30 (at the DLL's load address 0x01240000) ran on 60 of 60 moves, `onControllerHit` never, `__purecall` never; `SweepTest_MoveCharacter` returned the collision flags 4 (down) on 48 of 48 moves. The report object in the running game has vtable S 007e7754 (`Lobby::ControllerHitReport`, both callbacks the shared `return 0` S 005c82b0 = `NX_ACTION_NONE`), statically initialised in the image; the abstract vtable S 007e763c is only stored by its `atexit` destructor S 007ce930. The reading of 2026-10-14 that took the object for the abstract class was wrong.
 - [ ] **Limits of the walkable area.** Walk along the inner walls, to the map edge and up the steepest slope.
   Observe: the avatar's position: whether it passes ±125 or sinks below the meshes; the steepest slope it climbs
   (60 degrees as read).
-  Settles: `lobby-extras.md` §6.2, §10 Q5, Q10.
-- [ ] **What starts observing.** Walk up to a minigame table that others could use, and sit down.
+  Settles: `lobby-extras.md` §6.2, §10 Q5 (Q10 is answered by reading, 2026-10-14).
+- [x] **What starts observing.** Walk up to a minigame table that others could use, and sit down.
   Observe: hook `SetObserving` S 005238e0: any call with its caller.
   Settles: `minigames-client.md` §3.6, §11 Q1.
-- [ ] **Top-up maximum.** Sit at a Dice table with a known amount of gold and open the stake dialog.
+  **Result, live 2026-10-14:** walking in the village, sitting down at a dice table (twice), playing rounds and standing up: `SetObserving` S 005238e0 was not called once.
+- [x] **Top-up maximum.** Sit at a Dice table with a known amount of gold and open the stake dialog.
   Observe: hook `OpenSetStackDialog` S 00461470: maximum = avatar money - seat `accnt`; 0 with the server's
   present `accnt` (the whole balance).
   Settles: `minigames-client.md` §10 row 1.
-- [ ] **Meaning of `accnt`.** **Needs permission** (the server sends other `accnt` values). Repeat the entry
+  **Result, live 2026-10-14:** with the server sending the account balance as `accnt`, the dice table's "Konto" top-up offered 0; with `accnt` = 0 the client read 0 for the seat (`GetLocalSeatAccnt` S 00471930) and `MinigameDialog::OpenSetStackDialog` S 00461470 offered the avatar's funnies (`AvatarProxy +0xd4` = 103,181 on a play-money table), and topping up worked (maintainer). Available = avatar money − `accnt`, as read.
+- [x] **Meaning of `accnt`.** **Needs permission** (the server sends other `accnt` values). Repeat the entry
   above with `accnt` = 0 and = the buy-in.
   Observe: the dialog's maximum each time.
   Settles: `minigames-client.md` §11 Q2.
-- [ ] **Failed "enter village".** **Needs permission** (the server offers no joinable village). Press the enter
+  **Result, live 2026-10-14:** see Top-up maximum: the client uses `accnt` only as the amount of the avatar's money not to offer again at the table. The stub takes a stake off the wallet when the player sits down, so it now sends 0 for Dice, Poker and Pawn Chess (`lobby/sadk_lobby/minigames.py` `_seat_accnt`). What the original server sent stays unknown.
+- [x] **Failed "enter village".** **Needs permission** (the server offers no joinable village). Press the enter
   button on the avatar screen.
   Observe: after `!COULDNOT_CONNECT_TO_VILLAGE` the buttons stay disabled (`+0x218` = 0) and the player is
   stuck, or not.
   Settles: `lobby-screens.md` §3.6, §10 Q1.
-- [ ] **Name outside Windows-1252.** **Needs permission** (the server sends an NPC or player name with such a
+  **Result, live 2026-10-14:** the server sent the village entry without its data block, so the Enter button stayed on "Suche Server…" and could not be pressed; the click handler `AvatarScreen::OnStartGameClicked_EnterVillage` S 0043abc0 was then called on the main thread. It took the failure branch: `+0x218` (buttons enabled) read 1 before and after, the buttons were re-enabled for the view mode, and a message box opened with the title `!ERROR` ("FEHLER") and the text of `!COULDNOT_CONNECT_TO_VILLAGE`, which the shipped `language\de\lobby_ui.txt` translates as "Willkommen im Dorf" (a wrong translation; screenshot). The player is not stuck: the screen stays usable (leaving it worked). The Enter button keeps waiting for a valid village entry.
+- [x] **Name outside Windows-1252.** **Needs permission** (the server sends an NPC or player name with such a
   character).
   Observe: the label: a best-fit letter or `?` (`Str_Utf8ToAnsi` S 00487620).
   Settles: `engine-core.md` §10 Q11.
+  **Result, live 2026-10-14:** the server sent the trader's label as UTF-8 "Hinnerk Őł字"; the client showed "Hinnerk Ol?" (screenshot): `Ő` → `O` and `ł` → `l` by best-fit mapping, `字` → `?`. The `ä` of the other trader ("Händler", in Windows-1252) is unchanged.
 - [x] **Extra mouse button as forward key.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`, fourth pass)* Press the first extra mouse button, also while the chat box has
   focus.
   Observe: the avatar walks forward in both cases (virtual key 5 in S 004295c0).
@@ -536,10 +584,11 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 - [ ] **First map of a new game.** Create a game and do not touch the map.
   Observe: the map shown (`MP_2P_fata_morgana` if the file system's first match is alphabetical).
   Settles: `match-setup-room.md` §10 Q2.
-- [ ] **Game server connection.** Host a game; later join one.
+- [x] **Game server connection.** Host a game; later join one.
   Observe: hook `GameServerConnection::Initialize` S 0048eda0 and `OnLoggedIn` S 0048edf0: no call = the object
   is never bound to a transport.
   Settles: `lobby-client-state.md` §10 Q1.
+  **Result, live 2026-10-14:** hosting a room and leaving it (after a login and a village visit): neither `GameServerConnection::Initialize` S 0048eda0 nor `OnLoggedIn` S 0048edf0 was called. Joining a room was not part of the run.
 - [x] **AI seat beyond the map's positions.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Host a six-player map with computer players on high start
   positions, switch to a two-player map and start.
   Observe: the seats' start positions before the start and what the match does with a seat that has no position.
@@ -558,18 +607,21 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Observe: read watches on driver `+0x60` and `+0x68`, a hook on T 10006cf0: no hit = `usrRemove`,
   `usrLogoffTimeout` and `drvRemoveTime` are unused.
   Settles: `lan-and-transport.md` §6.2, §10.
-- [ ] **Nagle on the host's sockets.** **Needs permission** (calls `getsockopt` inside the game). Host with one
+  **Result, live 2026-10-14, partial:** one join and one leave in a two-player room were run, but the getter T 10006cf0 (`drvRemoveTime`) is too short for a Frida hook, and read watchpoints on driver `+0x60` / `+0x68` are not used (they stall the game). Left to the static reading: no caller of the getter and no reader of the two fields in the decompiled library.
+- [x] **Nagle on the host's sockets.** **Needs permission** (calls `getsockopt` inside the game). Host with one
   joiner.
   Observe: `TCP_NODELAY` of the host's accepted socket: off as read (driver `+0xb8` = 0), or on.
   Settles: `lan-and-transport.md` §3.4, §10.
+  **Result, live 2026-10-14:** two-player room, host = main PC: both sockets the host accepted (a join and a rejoin, `accept` called from T 10032996) read `TCP_NODELAY` = 0 by `getsockopt`, and no `setsockopt(IPPROTO_TCP, TCP_NODELAY)` call was made. Nagle stays on for the host's connections, as read.
 
 ### A network match with two players
 
-- [ ] **Net tick length and input delay.** Play a match at speed 1; give one build order at a noted time.
+- [x] **Net tick length and input delay.** Play a match at speed 1; give one build order at a noted time.
   Observe: hook `AdvanceNetTick` S 00411990 and read manager `+0x2c` (net tick), `+0x38` (length, 4 expected),
   `+0x34`, `+0x40` (sub-tick) with wall time: 0.4 s per net tick; the order runs 0.8 s to 1.2 s later; every
   0x3000d event with its value.
   Settles: `logic-core.md` §3.2, §10 Q1.
+  **Result, live 2026-10-14:** two-player match over the LAN, speed 1, hooks on the host: the net tick (`+0x2c`) advanced every 98-104 ms and the length `+0x38` read 1, switching between 1 and 2 during the match (not the expected 4). Commands, timed from `QueueGameCommand` S 00408b10 to `HandleGameCommand`: 240-310 ms (3 logic ticks) at length 1, 440-540 ms (5-6 logic ticks) at length 2; road and building orders alike.
 - [x] **Unit of the ping samples.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`)* Same match.
   Observe: hook `UIS_AddPingSample` S 0041d610: the stored values against the measured ping between the PCs
   (milliseconds as read), and the 0x3000d values that follow.
@@ -599,23 +651,27 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   Observe: hook `ClaimChestResultReceived` S 0047a160 and `ObserverList_NotifyAll` S 00464300 for the lists
   `RefereeServerConnection +0x38` / `+0x44`: subscribers and any message or sound on the HUD.
   Settles: `quests-sacrifices-stats.md` §10 Q3.
-- [ ] **Re-entry after a match.** Finish a match and return to the village.
+- [x] **Re-entry after a match.** Finish a match and return to the village.
   Observe: the order of the character list (message 60 in the server log) and `ProcessModeTransition`
   S 004f5950: the list is back before `SelectCharacter(LM+0x54c)` runs, or the re-entry fails.
   Settles: `lobby-client-state.md` §3.17, §10 Q6.
-- [ ] **Walking in the village, seen by another client.** One player walks a measured stretch, the other
+  **Result, live 2026-10-14:** after the first two-player match, on the main PC: lobby state 11 (Village Left), `ProcessModeTransition` S 004f5950 from mode 1 to 3, and `SelectCharacter(100000)` S 00472200 8 ms later inside that transition; the village was entered again. The order against the character list (message 60) was not compared.
+- [x] **Walking in the village, seen by another client.** One player walks a measured stretch, the other
   watches.
   Observe: speed, the rate of position reports in the server log, and how the remote avatar is smoothed.
   Settles: `lobby-world-client.md` §3.4, §3.5, §10 Q13.
-- [ ] **Poker: "back in" during the own turn.** Two players at a poker table; one sits out and comes back while
+  **Result, live 2026-10-14:** walker = second PC: the avatar's position after each physics step (`CPhysicObjCharacter::GetTransform` S 00523610) moved 0.49-0.5 units per step, one step every 83 ms, i.e. 6.15-6.3 units/s in straight runs of 1-4 s (walking, not running), with height changes below 0.01 per step on the square. `SendAvatarLocation` S 0046ca40 ran about 10 times per second while walking (434 calls in the walk window), about once per step; it sends message 2000 only when its `sendToServer` argument is set, on every 4th call (S 0051ace0), so about 3 reports per second. The watcher on the main PC saw the remote avatar move smoothly and stop at the right spot (maintainer).
+- [x] **Poker: "back in" during the own turn.** Two players at a poker table; one sits out and comes back while
   it is his turn.
   Observe: hook `SendSitOut` S 00489340: the player has no buttons for the rest of that turn and is timed out.
   Settles: `minigames-client.md` §10 row 6.
-- [ ] **Pawn Chess: king placement, check, pending capture.** Two players: place the kings on rows other than
+  **Result, live 2026-10-14:** two players; the second PC sat out and came back during its own turn four times (`SendSitOut` S 00489340 with 1, then 0 about 0.25 s later). The stub answers a sit-out during the player's turn at once by acting for it: a check when that is possible, otherwise a fold (server log "checks / folds (timeout / sitting out)"), and a player sitting out when a hand is dealt is not dealt in (maintainer). So the turn was over before "back in" arrived, and the client case of the entry (back in during the own turn with the state unchanged) cannot arise with this stub; it stays open for a server that leaves the turn running.
+- [x] **Pawn Chess: king placement, check, pending capture.** Two players: place the kings on rows other than
   0; give check; let the server time a player out with a pawn picked.
   Observe: the piece shown during seat 1's placement; which king moves the client lets the player click in
   check; hook `SendCapture` S 00489fd0 and whether the board stays dead after the timeout.
   Settles: `minigames-client.md` §10 rows 9, 11; §11 Q7.
+  **Result, live 2026-10-14:** placement: the only piece offered is the king, and it can only be put on the home row; while placement runs the client draws it on one of the far fields of the board, not where it was put, until the pawns are placed when the phase ends (maintainer). Check: any legal move that ends the check was accepted, king or pawn. Timeout: the stub has no input timeout for Pawn Chess, so the pending-capture case cannot arise; open for a server with a timeout.
 
 ### Three or more players
 
@@ -635,18 +691,19 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 - [x] **Open the Debug dialog.** *(settled by reading, 2026-10-12: `docs/live-checks/2026-10-12_read-from-code.md`, fourth pass)* **Needs permission** (calls the dialog-open function on `nMenu::System +0x14`).
   Observe: the dialog appears (`nMenu::Debug::OnShow` S 0060a340) and its widgets, cursor and tools respond.
   Settles: `map-editor-devtools.md` §10 Q1, Q2.
-- [ ] **Editor at work.** **Needs permission** (follows the entry above). Use the terrain and Buildings tools
+- [ ] **Editor at work.** *(the dialog opens, live 2026-10-12, see the end of this file; tools and save still open)* **Needs permission** (follows the entry above). Use the terrain and Buildings tools
   and save a map.
   Observe: a read watch on `Scene +0x710`; hooks on `TerrainGenerator::Run` S 006b24f0 and
   `CMapRenderer::RunTerrainGenerator` S 00688540 (a call = generator-dependent heights reach the simulation);
   `SetBatchEditing` S 00538a60; whether the file lands in `campaignMaps`.
   Settles: `map-editor-devtools.md` §10 Q2, Q3; `engine-core.md` §10 Q5; `navy.md` §10 Q1.
-- [ ] **CVar server and lobby debug switches.** **Needs permission** (the patched executable of
+- [x] **CVar server and lobby debug switches.** **Needs permission** (the patched executable of
   `docs/BINARY_PATCHES.md`; the gate byte S 0088ca50). Connect with `tools/cvar_client.py` and set
   `Lobby/Show GfxObjStd PhysicDBG`.
   Observe: the server answers; the wireframe on a fence and on the terrain (which render meshes collide, the
   solid side of the triangles).
   Settles: `map-editor-devtools.md` §10 Q7; `lobby-extras.md` §10 Q4, Q6.
+  **Result, live 2026-10-14:** made reachable without the patched executable: `CVarRemoteServer::ctor` S 0067e690 called in the running game (`operator new` S 006f2524, 0x760 bytes, port 1234) opened its listen socket (`netstat`: `0.0.0.0:1234 LISTENING`) and was reached from the LAN; its pointer was written into the holder `g_pCVarServer` S 0088ca58, so tweaks created afterwards register (the `Lobby` and `CharSelection` groups, 16 tweaks). The four lobby debug switches are function-local statics created once per process (guard S 008896cc, S 00889300); this run had created them before the server existed, so their `RemoteCVarEntry` objects (pointer at `CVar +0x38`) were registered by calling `RegisterVar` S 0067c760. `tools/cvar_client.py` connected (`APP$DefaultApp`); `CHANGE$Lobby$Show GfxObjStd PhysicDBG$1` and `CHANGE$Lobby$Show PhysicDBG$1` drew red wireframes on the collision meshes of buildings, walls and the stall and a yellow box around the avatar (screenshot). The client's `set` command splits at spaces, so names with spaces need `raw CHANGE$...`. Before a port is open the LAN probe times out (the firewall drops it), which is not the 2026-10-07 "refused"; why the patched executable did not start the server is not established. Not yet judged: which meshes collide and the solid side of the triangles.
 - [ ] **Dormant LAN path.** **Needs permission** (calls `StartUpNetwork(2)` S 0040a9a0 and `BC_Start`
   S 0041aa90 on one PC, role 1 on a second).
   Observe: whether the role 1 client finds and joins the role 2 host.
@@ -714,6 +771,15 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
 - `formats-inventory.md` Q12: the `.lep` body (the map editor's own binary, not in the install).
 - `audio.md` Q11: whether Godot's WAV loader takes the install's ADPCM and float files (a test in Godot).
 
+## From the gap closure of 2026-10-13
+
+- [x] **Lobby physics object, slots 2, 6 and 8.** Enter the village; walk, jump, sit at a minigame table, use
+  reset-position.
+  Observe: hooks on S 005210c0 and S 00523430 with the return address.
+  Settles: `Lobby::IPhysicObj` slots 2, 6 and 8 have no caller in the binary (`mapping/work/gaps_20261013/audit_B.md`,
+  board #5776); a hit names the caller and so the slot.
+  **Result, live 2026-10-14:** walking, standing and sitting down at and leaving a minigame table: neither S 005210c0 nor S 00523430 was called. Jumping and reset-position were not exercised in that window.
+
 ## Results of the free-game session of 2026-10-12 (offline, one player, debugger attached)
 
 - [x] **Start values of a new world.** The tick counter read -1 when the world appeared and the simulation's random
@@ -732,8 +798,9 @@ observation. Already covered by entries above and not repeated: `lobby-client-st
   `docs/sim/save-format.md` and logic-core (generator state and tick counter are in a save; game speed is not).
 - [x] **Idle values of the network session in the village.** net tick -1, sub-tick -1, `+0x34` = 4, `+0x38` = 4,
   `+0x3c` = 1. Settles logic-core, the manager's initial values.
-- [ ] **A command in an offline game runs at once.** Not checked: the session placed a building and a road, but no
+- [x] **A command in an offline game runs at once.** Not checked: the session placed a building and a road, but no
   hook recorded when the command ran.
+  **Result, live 2026-10-14:** `SendCreateFlag` S 00780e10 for cell (0, 0) at tick 55,267: inside that call `QueueGameCommand` S 00408b10 → `IsGameHanging` = 0 → `DispatchEventLocal` S 0040fd50 → `HandleGameCommand` (0x20004, tick 55,267) → `HandleCreateFlag`, all before the send returned; the cell was refused, so no flag. Offline a command runs inside the sender's call, in the same tick.
 
 ### 2026-10-12, free game, elimination in mode 1 (live)
 
@@ -1180,3 +1247,85 @@ Fourth pass of the reading, second half:
   of `SetGameSettings`), Editor at work, Flag with more than 36 goods (needs `cfg_setFlagPackageLimit` >= 7,
   shipped 2). Still live: Controller hit report (needs `NxCharacter.dll` in the Ghidra project), CVar server
   (check `netstat -ano | findstr :1234` on the game PC first), Dormant LAN path.
+
+### 2026-10-12, the map editor dialog opened in the running game (live)
+
+The game was started on the game PC, the last save loaded with `nMenu::Main::ContinueLastSavegame(main)`
+S 005dfef0 (called by the debugger on the main thread after `HandleButtonClicks` S 005e27c0), which gave an
+offline match (net mode 0, victory mode 1). Then `nMenu::Game::ToggleScreen(game, 1)` S 005ea960 was called on
+the main thread (one-shot inside `nGame::Autosave::Update` S 0078b040).
+
+- `[PROVEN]` The `Debug` dialog opens and runs: `nMenu::Debug::Update` S 00609130 ran once per frame afterwards
+  (1,593 calls read), `toolMode` (+0x65c0) = 6, `panelShown` (+0x65c4) = 1, combo selection (+0x1c98) = 6,
+  list selection (+0x659c) = -1, `Scene +0x710` = 0 — the state `OnShow` S 0060a340 leaves. The logic kept
+  ticking. No exception was recorded while it was open and untouched.
+- Maintainer on screen: a debug menu for placing objects appeared.
+- Maintainer: pressing "Karte laden" (`!Load Map`) ended the game. `[TODO]` cause not read: the button calls
+  `nGame_File_load(1, name, true)` S 005ab180 with the text of the name edit, which starts as the map name of
+  the running world and is looked up as `campaignMaps\\<name>.s2m`; whether a missing file is what ends the
+  process is not established.
+- Still open: the tools (left / right button on the map), `!Save Map`, Enter to hide the panel, the `editor`
+  Lua library, and what `Scene +0x710` gates.
+- `[PROVEN]` Third run of the same day, crash log of the game (`crashlog.txt`): `EXCEPTION_ACCESS_VIOLATION` at
+  S 00674F20, inside `Stl_VectorMapPos_EraseValue` S 00674ed0 (callers: `NLogic::MapInfo::RemoveStartPosition`
+  S 005294d0 and `NAI::Player::AllowHarborPosition` S 005824c0). The function searches the vector for the
+  position and then shifts the following entries down without testing "not found": when the position is not in
+  the vector the shift loop starts at `end + 8` and runs until it leaves mapped memory. In the editor this is
+  the right mouse button of the **Start Positions** tool on a cell that is not a start position. The same
+  defect is reachable from a map script through `logic.ai_allowHarborPosition` with a position that was never
+  forbidden.
+- `[PROVEN]` In that run the Buildings tool was used with left and right button and list entries 3 and 35
+  without a fault (`HandleToolClick` S 00604dd0 hooked).
+- Fourth run of the same day (maintainer at the controls, hooks on `HandleToolClick` S 00604dd0):
+  - `[PROVEN]` the Elevations tool ran with both buttons (17,549 tool calls in all, no fault), and the "Tools"
+    mode with list entry 2 (`Infomap`) was clicked twice without a fault.
+  - The two unreachable branches of `HandleToolClick` were wired to the middle mouse button by a debugger hook
+    after `nMenu::Debug::Update` S 00609130 (button 3 = smoothing brush in mode 5, button 2 = pick in modes 2,
+    3, 4, 8): `[PROVEN]` button 3 ran 3,202 times in mode 5 without a fault. Maintainer: it works ("impressive
+    stuff").
+  - Maintainer: pressing Enter blanks the whole screen. That is the Enter toggle of `map-editor-devtools.md`
+    §3.1 step 6.2, which calls `Hide` on the game screen's face (`Debug +0xc00`) and on the dialog's face: the
+    game screen's face evidently carries the world view as well, not only the HUD. `[TODO]` whether a second
+    Enter restores it.
+  - **Debug icons shown.** The debugger called vftable slot 9 (`SetVisible(true)`, `+0x24`) on the five icons
+    (`nMenu::Game +0xb338`, `+0xb730`, `+0xbb28`, `+0xc480`, `+0xc878`; all vftable S 007e26ec) and on the HUD
+    root (`+0x968`), on the main thread: `[PROVEN]` the visible byte (`+0x14d`) of all five went from 0 to 1.
+    Maintainer: they appear in the top right of the screen; clicking each does nothing. Agrees with the
+    reading: nothing reads a click from them.
+
+### 2026-10-12, why the editor's `!Save Map` writes no file (read and live)
+
+- `[PROVEN]` `NCore::FileStreamCrypt::Close` S 007805d0 (write mode) passes the stream's path through
+  `ai::file::FileScanHolder::ResolvePath` S 006e3fd0 and opens the result with
+  `CreateFileA(GENERIC_WRITE, CREATE_ALWAYS)`. For a path without `:` that does not end in a separator the
+  resolver calls `ai::file::FileScan::ResolvePath` S 006ef8a0, which looks the lower-cased **file name** up in
+  the index of files found by the directory scan at start-up (`dirIndex`) and returns the real relative path
+  only for a file that exists; for an unknown name it returns the empty string. `CreateFileA("")` fails and
+  `Close` reports nothing.
+- `[PROVEN]` live, resolver called on the main thread: `[data]\maps\campaignMaps\edtest.s2m` →
+  `data\game\maps\campaignmaps\edtest.s2m` when an empty file of that name existed before the game started;
+  `...\nosuchmap.s2m` → `""`; `...\C01.s2m` → `data\game\maps\campaignmaps\c01.s2m`.
+- `[PROVEN]` live: with the empty placeholder `data\game\maps\campaignMaps\edtest.s2m` created before start-up,
+  `GameFile_Save(1, "edtest")` S 005aa260 (the call of the editor's save button) wrote 530,513 bytes into it;
+  the tick counter went from 12,346 to -1 (`GameFile_ResetWorldForMapExport`). Without the placeholder the
+  same call wrote no file anywhere (two runs, one by the maintainer's click).
+- Consequences: the editor can save only under the name of a `.s2m` that already exists in the scanned data
+  folders (a shipped map is overwritten); a new name needs an empty file of that name in
+  `data\game\maps\campaignMaps\` before the game starts. `!Load Map` with a name that has no file passes the
+  empty path to `File_ReadAndDecrypt` — the likely cause of the crash on `!Load Map` `[inferred]`.
+- The save removes buildings, streets, settlers, ships and the per-player exploration grids from the running
+  world, which is why the map is black afterwards (maintainer's observation).
+
+### 2026-10-12, the editor's camera scale and the "baby blue" view (live, screenshots)
+
+- `[PROVEN]` The camera object is embedded at `nGame::System +0x2d0` (vftable S 00835294). Its float `+0x2c`
+  reads 70.0 in a match and 180.0 while the editor dialog is shown (`OnShow` S 0060a340 writes it, `OnHide`
+  S 00602000 restores 70.0); `+0x1c` (`zoomMax`) read 6.0 and the current zoom 5.
+- `[PROVEN]` With the editor open at zoom 5 the whole world view is one light blue colour (screenshot): the
+  same colour distant terrain fades into with the editor closed. Writing 70.0 back to `+0x2c` with the editor
+  still open brought the world back at once (screenshot), with the editor's overlay of one number per cell.
+  So the 180.0 moves the camera 2.5 times further out, and at a zoom step beyond the game's own maximum of 4
+  (this install's 6 comes from outside the game) the whole view lies in the distance haze. In the earlier runs
+  of the day the view was zoomed in further and stayed visible.
+- The map of that match was `edtest`, the file the editor's save had written an hour earlier: a map exported
+  by the editor starts as a new free game.

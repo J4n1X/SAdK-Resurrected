@@ -272,7 +272,25 @@ defined in encrypted `avatar_items.xml`, `bodyparts.xml`, `color_slots.xml`. **[
 
 Notes:
 - `GameServerData(170)` must use the real-client-compatible format (per `msgdefs.ini`), **not**
-  emulator assumptions. The decoder uses `CreatePropertySet(0xAA)` (see SOURCEMAP §3b). [PROVEN]
+  emulator assumptions. [PROVEN]
+- The internet-lobby decoder of `170` is the `0xAA` case of `CommLayer::HandlerLobby::HandleMessage`
+  (tincat3 `0x10023cc0`), the receive handler of the client's main lobby connection. It reads the 23
+  fields by name from the message's property set into a 0x5c-byte descriptor and routes it by the
+  request type of the message's `ticket_id` [known]:
+  - `ticket_id` 0 or a `171 RegObserverServerList` ticket: a server id the `GameServerManager` does not
+    know yet goes to `AddKnownServerAndNotify` (`0x10020790`, listener slot `+0x0c`), a known one to
+    `NotifyServerUpdated` (`0x100207d0`, listener slot `+0x10`). The ticket stays allocated.
+  - a `166 RequestServers` ticket: `QueueServerListEntry` (`0x10020990`), then the ticket is released.
+    A second `170` or the closing `42 Result` on that ticket is therefore dropped.
+  - a `167 RequestMachineGameServers` ticket: `MachineManager::OnGameServerData` (`0x10028470`).
+  - a `189 AssignServer` ticket (ticket category `0x108`): `GameServerManager::OnGameServerAssigned` (`0x10021520`); the first
+    `170` consumes the ticket.
+
+  The listener is the game's `LobbyComm::ServerList` (its `IGameServerObserver` part, vtable
+  `0x7daf8c`): `GameServerAdded` (`0x469610`) forwards to `AddOrUpdateDescriptor` (`0x46a440`), which
+  files the descriptor as a village server (`server_subtype` 2) or a hosted game (`server_subtype` 1).
+  The two functions of SOURCEMAP §3b that call `CreatePropertySet(0xAA)` (`ConnectionBC::OnTinCatEvent`,
+  `ConnectionLANLobby::OnTinCatEvent`) are the LAN discovery sinks, not this path.
 - **ServerDataBlock match-key**: a `170` descriptor is JOINABLE when its `room_id` equals the selected
   village `room_id` (`g_dwSelectedVillageRoomId`, live = 1000), plus the `running`/`locked` flag pair.
   The room/validity values come from the `data` blob path, **not** from the `170` scalar wire fields. [PROVEN]

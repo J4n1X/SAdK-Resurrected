@@ -48,6 +48,7 @@ The complete checklist is in §6.6, and the failure modes ranked by likelihood a
 6. Harbors in depth
 7. Cross-section consistency rules
 8. Validation and open questions
+9. The old layout (prototype maps)
 
 Appendix A: section-header table (name, version, CRC32, length).
 
@@ -68,10 +69,10 @@ Appendix A: section-header table (name, version, CRC32, length).
 
 A map file contains **no** buildings, settlers, flags, streets, players, AI data, quests or
 triggers. Those exist only in the savegame logic part. A tag scan of all 22 samples finds none of
-their section headers. `[known]` (`GameFile_Save` 005aa260 calls `FUN_005aa150`, which clears
+their section headers. `[known]` (`GameFile_Save` 005aa260 calls `GameFile_ResetWorldForMapExport`, which clears
 the street net, settlers, ships and village state before `GameFile_SaveMap`.) The HQ and starting
 goods of each player are created at game start from MapInfo (§4.2). `[inferred]`
-(`FUN_005abb60` call list: `PlayerTable_CreatePlayer` 005be100, `NVillage::System::PlaceBuilding`
+(`Game_CreatePlayersFromDescriptor` call list: `ai::player::PlayerTable::CreatePlayer` 005be100, `NVillage::System::PlaceBuilding`
 0055a090.)
 
 ### 1.2 Encryption container (decryption is out of scope)
@@ -95,7 +96,7 @@ The samples were decrypted with AdKEd. For completeness, the on-disk container
 
 ### 1.3 How the game finds and loads a map
 
-Map type → directory and extension (`MapPath_GetFileExtension` 0052c1b0, `MapPath_BuildDirectory`
+Map type → directory and extension (`MapPath_GetFileExtension` 0052c1b0, `ai::game::MapPath::BuildDirectory`
 0052c320, `MapPath_GetDataSubdir` 0052c100) `[known]`:
 
 | Type | Ext | Directory |
@@ -177,17 +178,17 @@ Every `stream->BeginSection(&g_LogCategory_X)` writes 12 bytes taken from the su
 
 | Record | Bytes | Layout | Writer / reader |
 |---|---|---|---|
-| **Cell** (`PatternCursor`) | 20 | hdr(v0,"PatternCursor") + i32 x + i32 y | `PatternCursor_Serialize` 00675190 / `_Deserialize` 006751d0 |
+| **Cell** (`PatternCursor`) | 20 | hdr(v0,"PatternCursor") + i32 x + i32 y | `ai::map::MapPos::Store` 00675190 / `Load` 006751d0 |
 | **Fine position** (`ElevationCursor`) | 20 | hdr(v0,"ElevationCursor") + i32 fx + i32 fy (vertex grid coordinates, §5.2) | — |
 | **Unique** (object id or reference) | 20 | hdr(v0,"logic UniqueId") + i64 (low dword first) | `NLogic::Unique::Store` 005386e0 |
 | **UUID** | 32 | hdr(v0,"Core UUID") + bool32 valid + 16 raw bytes | `NCore::UUID::Serialize` 0057ce20 |
-| **GoodAmount** | 8 | i32 goodId + i32 amount | `GoodAmount_Store` 00552c40 |
+| **GoodAmount** | 8 | i32 goodId + i32 amount | `Generic_StoreIntPair` 00552c40 |
 | **vector\<Cell\>** | 4 + 20n | u32 n + n × Cell | `Stl_VectorPair8_Store` 00529630 / `_Load` 0052a850 |
-| **Rect** | 16 | i32 x0, y0, x1, y1 (inclusive) | `Rect_Serialize` 006765a0 |
+| **Rect** | 16 | i32 x0, y0, x1, y1 (inclusive) | `ai::map::MapRect::Store` 006765a0 |
 
 **Unique validity** `[known]`: a reference is valid iff its **high dword** is in [0, 0x7fffffff]
-(`ReferenceHarbor::Relink` 00539710, `NavyHarbor_FindExitForRoute` 005b4e80,
-`GameQuery_IsFreeHarborExitAt` 0052dbb0). **"None" must be written as `ff ff ff ff ff ff ff ff`.**
+(`ReferenceHarbor::Relink` 00539710, `ai::navy::Harbor::FindExitForRoute` 005b4e80,
+`ai::game::GameQuery::IsFreeHarborExitAt` 0052dbb0). **"None" must be written as `ff ff ff ff ff ff ff ff`.**
 Writing `ffffffff 00000000` produces a *valid* reference to id 0xffffffff.
 
 ### 2.4 Property ids `[known]`
@@ -202,7 +203,7 @@ ids, not CRC32s of names. Some ids are created outside their "home" file (goods 
 sacrifices in `sacrifices_goodExchange.lua`). With all of `properties/*.lua` loaded, every id in
 every sample resolves.
 
-**Unknown property ids crash the loader** for harbors (`Properties_GetHarbourProperty` 00547720,
+**Unknown property ids crash the loader** for harbors (`ai::properties::PropertiesDb::GetHarbourProperty` 00547720,
 `[known]`), spawns (`LogicSpawn_CreateFromProperty` 0052c990 returns NULL, `[inferred]`) and
 deposits/animals (no null check after `Generic_MapIntLookup_*`, `[inferred]`).
 
@@ -236,7 +237,7 @@ sections; the game does **not** recompute it at load, so the editor must compute
 | 12 | `DoodadsSystem` (v0) | 0x18af0b–0x21bc27 | 593180 | `NDoodads::System::Store` 00543bf0 / `Load` 00544ef0 | stored | `[known]` |
 | 13 | `Logic Ambients` (v0) | 0x21bc27–0x21bcfb | 212 | `NLogic::Ambients::Store` 00536600 / `Load` 00536fd0 | stored | `[known]` |
 | 14 | `Navy System` (v3) | 0x21bcfb–0x21df1f | 8740 | `NNavy::System::Store` 005b35d0 / `Load` 005b4650 | stored (**harbors live here**) | `[known]` |
-| 15 | `Logic SpawnSystem` (v0) | 0x21df1f–0x21e1d3 | 692 | `LogicSpawnSystem_Save` 0052cb70 / `_Load` 0052cf90 | stored; only read if §0 version > 0 | `[known]` |
+| 15 | `Logic SpawnSystem` (v0) | 0x21df1f–0x21e1d3 | 692 | `ai::logic::LogicSpawnSystem::Save` 0052cb70 / `Load` 0052cf90 | stored; only read if §0 version > 0 | `[known]` |
 | — | slack | 0x21e1d3–0x21e200 | 45 | — | zero bytes, unused buffer capacity | `[known]` |
 
 Sections 4–10 are sub-sections of MapSystem; their order is fixed by `Store`/`Load`: Elevations
@@ -287,17 +288,17 @@ is the offset in the in-memory `NLogic/MapInfo` (0x210 bytes).
 | ship_ahoi | Struct | Type | Name | ship_ahoi value | Meaning | Tag |
 |---|---|---|---|---|---|---|
 | 0x00c | — | hdr(15,"MapInfo") | header | | v15; `Store` writes v7 only on a `+0x1f4 != 0` branch never seen in maps (`.info` cache) `[inferred]` | `[known]` |
-| 0x018 | +0x04 | vector\<Cell\> | startPositions | 6: (42,76) (27,55) (41,34) (68,34) (81,55) (68,76) | Player start cells; the HQ is placed here at game start (`FUN_005abb60`) | `[known]` encoding, `[inferred]` meaning |
+| 0x018 | +0x04 | vector\<Cell\> | startPositions | 6: (42,76) (27,55) (41,34) (68,34) (81,55) (68,76) | Player start cells; the HQ is placed here at game start (`Game_CreatePlayersFromDescriptor`) | `[known]` encoding, `[inferred]` meaning |
 | 0x094 | +0x24 | string | mapName | "MP_6P_ship_ahoi" | Scene name and sidecar base name (`.bin`, `.lua`). Keep = file base name. | `[known]` |
-| 0x0a7 | +0x40 | i32 | width | 110 | = MapSystem W (`GameFile_Save` 005aa260 via `GameDesc_SetPair_40` 00529400) | `[known]` |
+| 0x0a7 | +0x40 | i32 | width | 110 | = MapSystem W (`GameFile_Save` 005aa260 via `NLogic::MapInfo::SetMapSize` 00529400) | `[known]` |
 | 0x0ab | +0x44 | i32 | height | 110 | = MapSystem H | `[known]` |
-| 0x0af | +0x48 | 8 × i32 | slotKind[8] | 2,1,1,1,1,1,0,0 | 0 closed, 1 computer, 2 human (`StartFreeGame` 005e7350, `FreeGamePanel::HasDuplicateColor` 005e69d0, `CountDistinctTeams` 005e75e0). Every sample: exactly one 2, in slot 0. Non-zero count = start-position count in 21/22 samples (sp03_the_sun: 4 occupied, 2 starts). | `[inferred]` |
+| 0x0af | +0x48 | 8 × i32 | playerController[8] | 2,1,1,1,1,1,0,0 | Who controls the slot: 0 none, 1 computer, 2 local human, 3 remote human (`SetupGameDialog::SetupSession` 004562d0, `StartFreeGame` 005e7350; `Game_CreatePlayersFromDescriptor` 005abb60 passes it to `PlayerTable::CreatePlayer` as the player's kind). Every sample: exactly one 2, in slot 0. Non-zero count = start-position count in 21/22 samples (sp03_the_sun: 4 occupied, 2 starts). | `[known]` |
 | 0x0cf | +0x68,+0x88,+0xa8,+0xc8 | 8 × {4 × i32}, **interleaved per slot** | per slot i: tribe, colour, team, aiLevel | (0xb0d378a3,0,−1,0), (0xb0d378a3,3,−1,2)… slots 6–7: (−1,6/7,−1,0) | tribe = tribe property id (−1 none); colour index; team (−1 none); AI difficulty 0..2 (`PlayerRow_Refresh` 005e7830) | `[known]` encoding, `[inferred]` meanings |
-| 0x14f | +0x1c8 | i32 | victoryMode | 0 | 1 conquest, 2/3 threshold, 5 quest (`VictoryCond_Update` 00535d70) | `[inferred]` |
+| 0x14f | +0x1c8 | i32 | winCondition | 0 | 0 endless, 1 destroy all enemies, 2 conquer (team territory share above 74 %), 3 coin (team sum of the coin counters above 99), 5 decided by the map script's quests (set at run time by the Lua binding `victory_setupQuests` 005af7e0); 4 is never written. Readers `VictoryConditions::IsVictoryReached` 00535870, `VictoryCond_Update` 00535d70. A new game overwrites the stored value with the one chosen at set-up (`Game_LoadWorldFromDescriptor` 005ac770); rules in `docs/sim/players-victory.md` §2.4 | `[known]` |
 | 0x153 | +0x1cc | i32 | unknown (water render preset?) | 0 | Read by `S2CG::CMapRenderer::InitForMap` 006883e0 → SetWaterPreset. 1 on 10 samples, no clear pattern. | `[guess]` meaning |
 | 0x157 | +0x1d0 | i32 | mapType | 0 | Overwritten on load with the type the file was found under (`GameFile_LoadMapInfo` 005aaa30). All samples 0. | `[inferred]` |
 | 0x15b | +0x1d4 | UUID (32) | mapGuid | valid=1, 66f14596a250dc4084c70bd8a0ba480f | Map identity for the lobby. Store generates a new one if invalid. **Give each distinct map its own UUID.** | `[known]` encoding, `[inferred]` use |
-| 0x17b | +0x1ec | bool32 | unknown | 0 | Set by `SetupGameDialog::SetupSession` | `[guess]` |
+| 0x17b | +0x1ec | bool32 | networkGame | 0 | `SetupGameDialog::SetupSession` 004562d0 stores whether the NComm manager is in a network mode; copied with the setup, saved and loaded; no function tests it | `[inferred]` |
 | 0x17f | +0xe8 (stride 0x1c) | 8 × string | playerName[8] | "COMPUTER" ×8 | Player names | `[known]` encoding |
 | 0x1df | +0x1f0 | i32 | unknown | 1 | `Reset` 0052b8d0 sets 1 | `[guess]` |
 | 0x1e3 | +0x14 | vector\<Cell\> | chestPositions | 12 cells | Chest candidate cells (`Game_DistributeChestsForNetworkMatch` 00775dd0) | `[known]` encoding, `[inferred]` meaning |
@@ -390,7 +391,7 @@ The bit table is in §5.4. Loaded verbatim; nothing on the load path recomputes 
 
 - ship_ahoi: 9081 empty cells, amount 7 on 3013 cells, 1000 on 6. `[known]`
 - Type 0x4012e5a3 is the only one allowed on water, and only next to a shore cell
-  (`MapModifier_CanHoldResourceAtCell` 00674210). Fish `[guess]`.
+  (`ai::map::MapModifier::CanHoldResourceAtCell` 00674210). Fish `[guess]`.
 - The bit-deriving functions reset a cell to {0, −1} whenever bit 0x4, 0x10, 0x200 or 0x20000
   changes. `[known]`
 
@@ -437,15 +438,20 @@ hdr(6,"resources")
 bool32 +0x44                      = 1
 u32 depositCount ; depositCount × { i32 depositPropertyId ; Deposit }
 u32 animalCount  ; animalCount  × { i32 animalPropertyId  ; Animal  }
-[v3..v4 only: unknown (32 bytes)]
-i32 +0x5c                         = 0 in all samples, meaning unknown
-i32 +0x60                         = 0 in all samples, meaning unknown
-i32 +0x08                         = 100 in all samples, meaning unknown   (v > 5 only)
+[v3..v4 only: 32 bytes, read and discarded by the loader]
+i32 +0x5c  roamTurn               = 0 in all samples   (v > 3 only)
+i32 +0x60  roamSearchesThisTick   = 0 in all samples   (v > 3 only)
+i32 +0x08  mapTreeType            = 100 in all samples (v > 5 only)
 ```
 
+`mapTreeType` is the map's tree set: 100 `mapTreeType_Bavarian`, 101 `mapTreeType_Egyptain` (spelling of the
+game data), 102 `mapTreeType_Scot` (`deposits.lua` lines 1-3). A forester plants only deposit types whose
+`dp_addTreeType` list contains it (`Afforest_PickRandomDepositForCell` 0077bb30). The constructor stores 100 and
+`Load` is the only other writer `[known]`. `roamTurn` and `roamSearchesThisTick` schedule the animals' roam
+searches (`Animal::Update` 005420c0; `docs/sim/map-resources.md` §3.10) `[inferred]`.
+
 ship_ahoi: 1130 deposits (12 types), 140 animals. MP_3P_Spiral and MP_5P_pentagon are v4 (the
-32-byte block, no +0x08, Animal v2). The destination field of the v > 5 int is `[inferred]`
-(decompile artefact).
+32-byte block, no +0x08, Animal v2).
 
 **Deposit record** — 108 bytes including the property id (`NResources::Deposit::Store` 00542e10 /
 `Load` 00542e80). Checked on all 18,655 deposits. `[known]`
@@ -532,7 +538,7 @@ List membership (`NDoodads::System::AddDoodadAtFinePos` 00544e00, property defau
   records are 60 bytes and list-0/2 records 56 bytes. List 1 is empty in all 22 samples. All
   95,543 sample doodads sit in the list their property dictates. `[known]`
 - The cell is not stored (v1); it is recomputed from finePos by
-  `ElevationCursor_ToNearestPatternCursor` 00675500 (fallback `cy = fy/4`, `cx = (fx − 2·(cy&1))/4`;
+  `ai::map::FinePos::ToNearestPatternCursor` 00675500 (fallback `cy = fy/4`, `cx = (fx − 2·(cy&1))/4`;
   reproduces 208/208 blocking-doodad cells in ship_ahoi). `[known]`
 - `Load` does **not** re-mark 0x400 for list-2 doodads; the bit must be in GridStatesMap. `[known]`
 
@@ -546,7 +552,7 @@ count × { i32 type ; Cell cell }          24 bytes each, no per-element header
 `NLogic::Ambient::Store` 00536460. ship_ahoi: 8 entries, e.g. type 0x623437d3 at (41,72) (bytes at
 0x21bc3b). All 167 ambient types in the samples are `ambient_*` sound ids from `sounds.lua`
 (`sn_create`). Meaning "ambient sound emitter" is `[inferred]`; the consumer was not traced past
-`Ambients::NotifyObserverAll` 005366f0.
+`Ambients::PostLoad` 005366f0.
 
 ### 4.15 Navy System (v3) — ship_ahoi 0x21bcfb
 
@@ -572,15 +578,15 @@ count × { i32 spawnPropertyId ; hdr(0,"Logic Spawn") ; Unique spawnId ; Cell ce
   `== 1` → `SpawnAnimal` (00538f40); other kinds → NULL and a crash on load `[inferred]`.
 - These are **respawn points, not player start positions** (start positions are MapInfo +0x04).
 - `Spawn::PlaceAt` 00538e10 sets bit 0x400; `Load` does not. The bit must be stored. `[known]`
-- Spawns are found by position (`LogicSpawnSystem_FindSpawnAt` 0052ca70); their Unique ids are not
+- Spawns are found by position (`ai::logic::LogicSpawnSystem::FindSpawnAt` 0052ca70); their Unique ids are not
   evidently cross-checked. `[inferred]`
 
 ### 4.17 The `.bin` sidecar (unencrypted, optional) `[known]` layout, `[inferred]` names
 
 Reader: `GameFile_FinishLoad` 005aa1b0 → `S2CG::CEnviromentMgr::LoadMapEnvData` 00685580 →
-`MapEnvData_LoadBin` 006aea80 (`S2CG::EnvData::Load` 006ae220, `S2CG::EnvSphere::Load` 006ae290).
+`ai::render::MapEnvData::LoadBin` 006aea80 (`S2CG::EnvData::Load` 006ae220, `S2CG::EnvSphere::Load` 006ae290).
 Path from MapInfo+0x24 (`Env_BuildMapEnvDataPath` 006852b0). If missing, the
-`local_enviroment.xml` defaults stay (`MapEnvData_ctor` 006aee30). **No effect on gameplay or
+`local_enviroment.xml` defaults stay (`ai::render::MapEnvData::ctor` 006aee30). **No effect on gameplay or
 harbors.** Size = 64 + 64·sphereCount.
 
 | Off | Type | Field | ship_ahoi | oases |
@@ -606,7 +612,7 @@ unknown.
 - W×H cells, linear index **`y·W + x`** (row-major) in every per-cell array
   (`Patterns::GetCellPtr` 00676270 and others).
 - Hex grid, **odd rows shifted half a cell right** ("odd-r"). Neighbours via
-  `MapPos_StepDirection` 00675000, parity tables at 00880f28 (dx) and 00880f68 (dy), read from
+  `ai::map::MapPos::StepDirection` 00675000, parity tables at 00880f28 (dx) and 00880f68 (dy), read from
   memory:
 
 | dir | even row (dx,dy) | odd row (dx,dy) | name |
@@ -624,13 +630,13 @@ Verified: the shore-bit and continent recomputations use exactly dirs 0..5 and m
 all 615 ship-route path steps are single steps under this table.
 
 - Hex rings/spirals: one step in dir 4, then dirs 0..5 with r steps each
-  (`CliffMarker_CountCliffEdgeCellsInRadius2` 0067bbd0, `FloodFillContinent` 00678d70).
+  (`ai::map::CliffMarker::CountCliffEdgeCellsInRadius2` 0067bbd0, `FloodFillContinent` 00678d70).
 - **Exception: harbor exit/dock offsets are plain `(x+dx, y+dy)` without parity correction** (§6.3).
 
 ### 5.2 Elevation vertex grid `[known]`
 
 - (4W+1) × (4H+1) vertices, index `vy·(4W+1) + vx`.
-- **Cell (x,y) samples its height at vertex (4x + 2·(y&1), 4y).** (`FUN_0067b390`,
+- **Cell (x,y) samples its height at vertex (4x + 2·(y&1), 4y).** (`ai::map::MapCellUpdater::RefreshBit2FromElevation`,
   `Elevations::GetSlopeClassBetween` 00676200; verified by the water-bit recomputation.)
 - `ElevationCursor` fine positions (deposits, doodads) use the same vertex coordinates.
 
@@ -647,24 +653,24 @@ cost and the cliff bit.
 
 | Bit | Mask | Meaning | Rule / setter | In maps | Tag |
 |---|---|---|---|---|---|
-| 0 | 0x1 | blocked | Pattern blocked (+0x3c), `FUN_0067b2c0`; plus cells of deposits whose property+0x54 ≠ 0 (`Deposit::ctor` 00542f80 → `MapModifier_SetGridBit0` 00673cf0). Recomputed ✓ for the pattern part (`patverify.py`). | yes | `[known]` pattern part, `[inferred]` object part |
-| 1 | 0x2 | street | `MapModifier_SetStreetGridBit` 00674090 | always 0 | `[known]` |
-| 2 | 0x4 | **water** | sample-vertex height **< minHeight** (`FUN_0067b390`). Recomputed ✓ (`verify.py`). | yes | `[known]` |
-| 3 | 0x8 | **shore** | non-water cell with ≥ 1 water neighbour among dirs 0..5, in bounds (`FUN_0067b150`). Recomputed ✓. | yes | `[known]` |
-| 4 | 0x10 | mining ground | pattern forMining (`FUN_0067b740`). Recomputed ✓. | yes | `[known]` |
-| 5 | 0x20 | territory border | `MapCellUpdater_RefreshTerritoryBorderBits` 0067b910 | always 0 | `[inferred]` |
+| 0 | 0x1 | blocked | Pattern blocked (+0x3c), `ai::map::MapCellUpdater::RefreshBit0FromPattern`; plus cells of deposits whose property+0x54 ≠ 0 (`Deposit::ctor` 00542f80 → `ai::map::MapModifier::SetGridBit0` 00673cf0). Recomputed ✓ for the pattern part (`patverify.py`). | yes | `[known]` pattern part, `[inferred]` object part |
+| 1 | 0x2 | street | `ai::map::MapModifier::SetStreetGridBit` 00674090 | always 0 | `[known]` |
+| 2 | 0x4 | **water** | sample-vertex height **< minHeight** (`ai::map::MapCellUpdater::RefreshBit2FromElevation`). Recomputed ✓ (`verify.py`). | yes | `[known]` |
+| 3 | 0x8 | **shore** | non-water cell with ≥ 1 water neighbour among dirs 0..5, in bounds (`ai::map::MapCellUpdater::RefreshBit3RingAroundBit2`). Recomputed ✓. | yes | `[known]` |
+| 4 | 0x10 | mining ground | pattern forMining (`ai::map::MapCellUpdater::RefreshBit4FromPattern`). Recomputed ✓. | yes | `[known]` |
+| 5 | 0x20 | territory border | `ai::map::MapCellUpdater::RefreshTerritoryBorderBits` 0067b910 | always 0 | `[inferred]` |
 | 6 | 0x40 | cliff cut | algorithm §5.7 (`CliffMarker_RebuildAll` 0067be80). Recomputed ✓ (`cliff.py`). | yes | `[known]` |
-| 7 | 0x80 | deposit | set of 0x80 cells **==** set of deposit cells (`MapModifier_SetGridBit7` 00673d40) | yes | `[known]` |
-| 8 | 0x100 | building footprint | `MapModifier_SetGridBit8` 00673da0 | always 0 | `[inferred]` |
-| 9 | 0x200 | **buildable** | forBuilding && !forMining && !blocked (`FUN_0067b820`). Recomputed ✓. | yes | `[known]` |
-| 10 | 0x400 | logic object | set **==** spawn cells ∪ list-2 doodad cells (`MapModifier_SetGridBit10` 00673e00); excludes the cell from every continent | yes | `[known]` |
-| 11 | 0x800 | **dock** | set **==** all stored docking-position cells (`MapModifier_SetDockingBit` 00673e60) | yes | `[known]` |
+| 7 | 0x80 | deposit | set of 0x80 cells **==** set of deposit cells (`ai::map::MapModifier::SetGridBit7` 00673d40) | yes | `[known]` |
+| 8 | 0x100 | building footprint | `ai::map::MapModifier::SetGridBit8` 00673da0 | always 0 | `[inferred]` |
+| 9 | 0x200 | **buildable** | forBuilding && !forMining && !blocked (`ai::map::MapCellUpdater::RefreshBit9FromPattern`). Recomputed ✓. | yes | `[known]` |
+| 10 | 0x400 | logic object | set **==** spawn cells ∪ list-2 doodad cells (`ai::map::MapModifier::SetGridBit10` 00673e00); excludes the cell from every continent | yes | `[known]` |
+| 11 | 0x800 | **dock** | set **==** all stored docking-position cells (`ai::map::MapModifier::SetDockingBit` 00673e60) | yes | `[known]` |
 | 12 | 0x1000 | unknown | never set in any sample | no | — |
-| 13 | 0x2000 | **harbor** | set **==** all stored harbor cells (`MapModifier_SetHarborBit` 00673ec0) | yes | `[known]` |
-| 14 | 0x4000 | **harbor exit** | set **==** all stored exit cells (`MapModifier_SetHarborExitBit` 00673f20) | yes | `[known]` |
-| 15 | 0x8000 | **ship route** | set **==** union of all route path cells (`MapModifier_SetShipRouteBit` 00673f80) | yes | `[known]` |
-| 16 | 0x10000 | moving-ship tile | `MapModifier_SetShipTileBit` 00673fe0 | always 0 | `[inferred]` |
-| 17 | 0x20000 | **ship ground** | forShip && !forBuilding && !blocked (`FUN_0067b650`), i.e. pattern 0xdecade01. Recomputed ✓. | harbor maps only | `[known]` |
+| 13 | 0x2000 | **harbor** | set **==** all stored harbor cells (`ai::map::MapModifier::SetHarborBit` 00673ec0) | yes | `[known]` |
+| 14 | 0x4000 | **harbor exit** | set **==** all stored exit cells (`ai::map::MapModifier::SetHarborExitBit` 00673f20) | yes | `[known]` |
+| 15 | 0x8000 | **ship route** | set **==** union of all route path cells (`ai::map::MapModifier::SetShipRouteBit` 00673f80) | yes | `[known]` |
+| 16 | 0x10000 | moving-ship tile | `ai::map::MapModifier::SetShipTileBit` 00673fe0 | always 0 | `[inferred]` |
+| 17 | 0x20000 | **ship ground** | forShip && !forBuilding && !blocked (`ai::map::MapCellUpdater::RefreshBit17FromPattern`), i.e. pattern 0xdecade01. Recomputed ✓. | harbor maps only | `[known]` |
 
 ship_ahoi bit counts: b0 555, b2 5532, b3 1010, b4 2385, b6 443, b7 1130, b9 3626, b10 220, b11 52,
 b13 12, b14 26, b15 142, b17 34. `[known]`
@@ -674,10 +680,10 @@ Key consumers `[known]` (each for that function's reading):
 | Function | Test |
 |---|---|
 | `Map_IsCellWalkable` 0052df20 | none of 0x1, 0x4, 0x40, 0x100, 0x400 |
-| `GameQuery_IsFreeWaterCell` 0052e360 | 0x4 set and 0x400 clear |
+| `ai::game::GameQuery::IsFreeWaterCell` 0052e360 | 0x4 set and 0x400 clear |
 | `Map_HasShoreAndFreeWaterNeighbour` 0052e610 | a neighbour with 0x8 and a neighbour with 0x4 without 0x10000 |
-| `GameQuery_IsBuildingFootprintFree` 0052f460 | 0x200 on every footprint cell, or **0x20000 when construction flags == 0x10** (ship buildings) |
-| `GameQuery_IsOwnedCellFree` 0052f3d0 | none of 0x1, 0x80, 0x100 |
+| `ai::game::GameQuery::IsBuildingFootprintFree` 0052f460 | 0x200 on every footprint cell, or **0x20000 when construction flags == 0x10** (ship buildings) |
+| `ai::game::GameQuery::IsOwnedCellFree` 0052f3d0 | none of 0x1, 0x80, 0x100 |
 | `NNavy::AStar::GetStepCost` 005bba90 | see §6.4 |
 
 ### 5.5 Nothing is recomputed at load `[known]`
@@ -686,13 +692,13 @@ Key consumers `[known]` (each for that function's reading):
   007f890c slot 3) is an empty `ret` (`Stub_EmptyVoid_5657b0`).
 - `GameFile_FinishLoad` 005aa1b0 → `MapUpdateBatch_End` 005321c0 only flushes dirty rects marked
   during load; nothing is marked (`MapUpdateBatch_Begin` 00532180 resets them). `[inferred]`
-- The bit derivers (`MapModifier_RefreshWaterAndCliffsAll` 00672f30,
+- The bit derivers (`ai::map::MapModifier::RefreshWaterAndCliffsAll` 00672f30,
   `MapModifier_RefreshPatternBitsAll` 00673050, `NMap::Continents::Rebuild` 00679430) are reached
-  only from the built-in editor/debug tools (`FUN_00602000`, `nMenu::Debug::Update` 00609130,
+  only from the built-in editor/debug tools (`nMenu::Debug::OnHide`, `nMenu::Debug::Update` 00609130,
   `nMenu::Debug::HandleToolClick` 00604dd0), Lua doodad edits, or per-cell edits.
 - Entity and navy loaders (deposits, list-2 doodads, spawns, harbors, exits, docks, routes) do not
   set their grid bits.
-- Rebuilt at load, so **not stored**: construction map (`ConstructionMap_Init` 00675cc0), object
+- Rebuilt at load, so **not stored**: construction map (`ai::map::ConstructionMap::Init` 00675cc0), object
   layers (`NMap_ObjectLayers_Init` 00672d10), A\* grids, AI low-res grids. `[known]` for the Init
   calls, `[inferred]` that they are filled later.
 
@@ -718,7 +724,7 @@ stale cells, §8).
 
 ### 5.7 Cliff-bit algorithm `[known]`
 
-`CliffMarker_ResolveRect` 0067bdf0 over the whole map, **x outer, y inner**. Reproduced exactly
+`ai::map::CliffMarker::ResolveRect` 0067bdf0 over the whole map, **x outer, y inner**. Reproduced exactly
 (`cliff.py`).
 
 1. Clear bit 0x40 everywhere.
@@ -740,10 +746,10 @@ stale cells, §8).
 | Fact | Evidence |
 |---|---|
 | A harbor in a map is **not a building**. It is a *harbor place*: a record in `Navy System` → `Navy Harbors`. No sample contains a `VillageBuilding`, and `buildings.lua` defines no harbor building. | tag scan; `hb_buildings.lua` |
-| The harbor becomes active when a player places a **flag exactly on the harbor cell**: `Logic_PlaceFlag` 00538cd0 → `NavyHarborList_FindAtPos` 005b5d20 (exact x,y match) → `NavyHarbor_AttachBuilding` 005b49f0. | code |
+| The harbor becomes active when a player places a **flag exactly on the harbor cell**: `Logic_PlaceFlag` 00538cd0 → `ai::navy::HarborList::FindAtPos` 005b5d20 (exact x,y match) → `ai::navy::Harbor::AttachFlag` 005b49f0. | code |
 | The visible harbor model `z_harbor_00` is spawned from the Navy record at PostLoad (`S2CG::Scene::OnHarborCreated` 00682ec0 via `NotifyNavy_Slot88`). A correct record is what makes the harbor visible. | code |
-| **Ship routes are stored in the map, never computed by the game.** The only creator is the built-in editor tool (`DebugShipRouteTool_*` 0078d7c0..0078d960 → `NavyShipRouteList_Create` 005b7990). | code |
-| **Nothing about harbors is recomputed at load**: no exits, no grid bits, no validation (`NNavy::System::Load` 005b4650 uses default ctors; `NavyHarbor_CreateExits` is not called). | code |
+| **Ship routes are stored in the map, never computed by the game.** The only creator is the built-in editor tool (`DebugShipRouteTool_*` 0078d7c0..0078d960 → `ai::navy::ShipRouteList::Create` 005b7990). | code |
+| **Nothing about harbors is recomputed at load**: no exits, no grid bits, no validation (`NNavy::System::Load` 005b4650 uses default ctors; `ai::navy::Harbor::CreateExits` is not called). | code |
 | Ships are built only at the shipyard, which needs **ship ground** (pattern 0xdecade01 → bit 0x20000) (§6.6). | code + data |
 
 Harbors in the samples `[known]`: 9 of 22 maps, 62 harbors, 135 exits, 270 docks, 34 routes, 649
@@ -774,26 +780,26 @@ NavySystem                              NNavy::System::Store 005b35d0 / Load 005
   ShipRouteList
   HarborList                            (routes come BEFORE harbors)
 
-ShipRouteList                           NavyShipRouteList_Store 005b7610 / Load 005b7a10
+ShipRouteList                           ai::navy::ShipRouteList::Store 005b7610 / Load 005b7a10
   hdr(0,"Navy ShipRoutes")
   bool32 loaded                         = 1
   u32    count ; count × Route
 
-Route                                   NavyShipRoute_Store 005b6de0 / Load 005b7530
+Route                                   ai::navy::NavyShipRoute::Store 005b6de0 / Load 005b7530
   hdr(1,"navy ShipRoute")               MUST be v1: v0 does not read street+path -> stream desync
   Unique routeId
   Unique harborA                        harbor owning the exit == path[0]
   Unique harborB                        harbor owning the exit == path[last]
-  hdr(0,"Logic ReferncesShip") ; u32 0  (sic; ReferencesShip_Store 007757f0; runtime refs, empty)
+  hdr(0,"Logic ReferncesShip") ; u32 0  (sic; ai::logic::ReferencesShip::Store 007757f0; runtime refs, empty)
   Unique street                         NONE
   u32    pathLen ; pathLen × Cell
 
-HarborList                              NavyHarborList_Store 005b6430 / Load 005b6830
+HarborList                              ai::navy::HarborList::Store 005b6430 / Load 005b6830
   hdr(0,"Navy Harbors")
   bool32 loaded                         = 1
   u32    count ; count × { u32 harbourPropertyId ; Harbor }
 
-Harbor                                  NavyHarbor_Store 005b5170 / Load 005b59d0
+Harbor                                  ai::navy::Harbor::Store 005b5170 / Load 005b59d0
   hdr(2,"navy harbor")                  MUST be v2 (v<2: extra ReferencesShip list; v0: no flag ref)
   Unique harborId
   i32    player                         = -1
@@ -801,14 +807,14 @@ Harbor                                  NavyHarbor_Store 005b5170 / Load 005b59d
   u32    exitCount ; exitCount × Exit   in direction order
   Unique flag                           NONE
 
-Exit ("Ship Route Position")            NavyHarborExit_Store 005bc290 / Load 005bc700
+Exit ("Ship Route Position")            ai::navy::HarborExit::Store 005bc290 / Load 005bc700
   hdr(0,"Ship Route Position")
   u32    dockCount                      = 2
   dockCount × Dock
   Unique route                          the route whose path starts/ends here, else NONE
   Cell   exitCell
 
-Dock                                    NavyDockingPosition_Serialize 005bc830 / Deserialize 005bc860
+Dock                                    NNavy::DockingPosition::Serialize 005bc830 / Deserialize 005bc860
   hdr(0,"Navy Docking Position")
   Unique ship                           NONE
   Cell   dockCell
@@ -863,7 +869,7 @@ Source: `scripts/properties/harbors.lua` (decrypted: `mapping/work/mapdoc/scratc
 `hp_setWaterStreetPosition(id, dir, dx, dy)` sets the exit offset (+0x20 + dir·8);
 `hp_setShipPosition(id, dir, k, dx, dy)` sets dock offset k (+0x40) (setters 0054b120 / 0054b1a0).
 The **property id is the harbor's facing**; there is no orientation field. Any other id crashes
-(`Properties_GetHarbourProperty` 00547720).
+(`ai::properties::PropertiesDb::GetHarbourProperty` 00547720).
 
 | id (u32 in file) | name | dir → exit offset ; dock offsets |
 |---|---|---|
@@ -877,14 +883,14 @@ The **property id is the harbor's facing**; there is no orientation field. Any o
 | 0x8f84b743 | west | 0→(−3,0);(−3,−1),(−3,1) · 1→(−5,0);(−5,−1),(−5,1) |
 
 - **Offsets are applied as plain `(x+dx, y+dy)`, with no hex row-parity correction**
-  (`NavyHarbor_CreateExits` 005b5850: `harbor.pos + ftol(offset)`). 135/135 stored exits and 270/270
+  (`ai::navy::Harbor::CreateExits` 005b5850: `harbor.pos + ftol(offset)`). 135/135 stored exits and 270/270
   docks equal `harborCell + offset` exactly. `[known]`
 - A direction with offset (0,0) is skipped; up to 4 directions; the data uses 2 or 3. `[known]`
 
 ### 6.4 Placement and validity rules
 
-**Harbor cell** (`GameQuery_CanPlaceHarborAt` 0052eda0, the built-in editor's check; and
-`GameQuery_CanPlaceFlagAt` 0052f8a0, the in-game flag check):
+**Harbor cell** (`ai::game::GameQuery::CanPlaceHarborAt` 0052eda0, the built-in editor's check; and
+`ai::game::GameQuery::CanPlaceFlagAt` 0052f8a0, the in-game flag check):
 
 | # | Rule | Source | Shipped data | Tag |
 |---|---|---|---|---|
@@ -893,23 +899,23 @@ The **property id is the harbor's facing**; there is no orientation field. Any o
 | H3 | **Buildable ground 0x200 is NOT required** | 0052eda0 never tests it | 12/62 harbor cells lack it (seaground, sand, rock 0x2010, ship ground 0x22008) | `[known]` |
 | H4 | No other harbor cell within hex distance 1 (flag ring check `NMap::GridStates::AnyRingCellHasMask` 0052e780). The editor check intends this too, but its loop indexes the centre cell (bug). | 0052f8a0, 0052eda0 | 62/62; min harbor distance 3 | `[known]` |
 | H5 | Harbor cell has a **land continent id ≥ 0** (its island) | `Navy_AreContinentsConnectedForPlayer` 0052eba0 | 62/62 | `[known]` |
-| H6 | At least one direction passes the exit test E1 | 0052eda0 → `GameQuery_IsHarborOrientationValid` 0052e8f0 | — | `[known]` |
-| H7 | For the flag in play: cell owned by the player and free (`GameQuery_IsOwnedCellFree` 0052f3d0: no 0x1/0x80/0x100), no flag within radius 1, no 0x2000 on the 6 ring cells | 0052f8a0 | — | `[known]` |
+| H6 | At least one direction passes the exit test E1 | 0052eda0 → `ai::game::GameQuery::IsHarborOrientationValid` 0052e8f0 | — | `[known]` |
+| H7 | For the flag in play: cell owned by the player and free (`ai::game::GameQuery::IsOwnedCellFree` 0052f3d0: no 0x1/0x80/0x100), no flag within radius 1, no 0x2000 on the 6 ring cells | 0052f8a0 | — | `[known]` |
 
-**Exit and docks** (`GameQuery_IsHarborOrientationValid` 0052e8f0 at placement;
-`NavyHarborExit_IsValid` 005bbf40 when keeping):
+**Exit and docks** (`ai::game::GameQuery::IsHarborOrientationValid` 0052e8f0 at placement;
+`ai::navy::HarborExit::IsValid` 005bbf40 when keeping):
 
 | # | Rule | Shipped data | Tag |
 |---|---|---|---|
 | E1 | Exit offset non-zero; exit and both docks in the map | 135/135 | `[known]` |
-| E2 | Exit and both docks are **free water** (0x4 set, 0x400 clear; `GameQuery_IsFreeWaterCell` 0052e360) | 132/135 (3 stale, §6.7) | `[known]` |
+| E2 | Exit and both docks are **free water** (0x4 set, 0x400 clear; `ai::game::GameQuery::IsFreeWaterCell` 0052e360) | 132/135 (3 stale, §6.7) | `[known]` |
 | E3 | Both docks have the **same continent id as the exit** | 132/135 | `[known]` |
 | E4 | Exit cell has no 0x4000 / 0x8000 from another harbor or route (the editor re-test reads the exit twice instead of the docks: bug) | — | `[known]` |
 | E5 | Exits stored in direction order; **the stored exit list is authoritative** and never re-derived. Any valid subset may be stored. ring_of_brodgar's two "sw" harbors store dirs 0–1 though dir 2 is valid. | — | `[known]` that only the stored list is used |
 
-**Routes** (creation: `DebugShipRouteTool_Begin` 0078d7c0, `AddPoint` 0078d960, finish via
-`Navy_CheckHarborExitPair` 0052d920; linking: `NavyHarbor_AttachRouteToExit` 005b54a0,
-`NavyShipRoute_AttachHarbor` 005b6a50):
+**Routes** (creation: `ai::editor::DebugShipRouteTool::Begin` 0078d7c0, `AddPoint` 0078d960, finish via
+`ai::game::GameQuery::CheckHarborExitPair` 0052d920; linking: `ai::navy::Harbor::AttachRouteToExit` 005b54a0,
+`ai::navy::NavyShipRoute::AttachHarbor` 005b6a50):
 
 | # | Rule | Shipped data | Tag |
 |---|---|---|---|
@@ -928,14 +934,14 @@ The **property id is the harbor's facing**; there is no orientation field. Any o
 
 | Stage | Function | Effect |
 |---|---|---|
-| Load | `NNavy::System::Load` 005b4650, `NavyHarbor_Load` 005b59d0, `NavyHarborExit` Load 005bc700 | Default ctors (`NavyHarbor_ctor` 005b57c0, `NavyHarborExit_ctor` 005bc580, `DockingPosition::ctor` 005bca00, `NavyShipRoute_ctor` 005b7120). No grid writes, no `CreateExits`, no validation. |
-| Grid bits | Only creation ctors/dtors call `SetHarborBit`, `SetHarborExitBit`, `SetDockingBit`, `SetShipRouteBit` (via `NavyShipRoute_MarkPathCells` 005b6b30) | Bits 0x2000/0x4000/0x800/0x8000 come **only** from the stored GridStatesMap. |
-| PostLoad | `NNavy::System::PostLoad` 005b3a90 | Rebuilds ship A\*; per route (`FUN_005b6af0`) relinks harborA/B/street by Unique (`ReferenceHarbor::Relink` 00539710 → `NavyHarborList_FindByUnique` 005b5cb0; unknown → NULL); per harbor (`FUN_005b5240`) relinks exit→route (`NavyHarborExit_ResolveReferences` 005bc340) and fires the harbor callback (model `z_harbor_00`). |
-| Flag on harbor | `Logic_PlaceFlag` 00538cd0 → `NavyHarbor_AttachBuilding` 005b49f0 | Sets player; calls `NavyShipRoute_UpdateSeaStreet` 005b71d0 for each exit with a valid route ref. |
-| Sea street | `NavyShipRoute_UpdateSeaStreet` 005b71d0 | Type-3 street harborA cell → A's exit for the route → B's exit → harborB cell, once both harbors belong to the same player and a route entry exists (created on ship assignment, `NavyShipRoute_AddMovementRef` 005b73a0). Exit found by `NavyHarbor_FindExitForRoute` 005b4e80 (route Unique match; **no match returns a static empty exit, not NULL**). Street A\* needs 0x2000 on harbor and 0x4000 on exit (`GameQuery_IsHarborExitTransition` 0052e3c0, `AStarStreet::PrepareSearch` 00776260). |
+| Load | `NNavy::System::Load` 005b4650, `ai::navy::Harbor::Load` 005b59d0, `NavyHarborExit` Load 005bc700 | Default ctors (`ai::navy::Harbor::ctor` 005b57c0, `ai::navy::HarborExit::ctor` 005bc580, `DockingPosition::ctor` 005bca00, `ai::navy::NavyShipRoute::ctor` 005b7120). No grid writes, no `CreateExits`, no validation. |
+| Grid bits | Only creation ctors/dtors call `SetHarborBit`, `SetHarborExitBit`, `SetDockingBit`, `SetShipRouteBit` (via `ai::navy::NavyShipRoute::MarkPathCells` 005b6b30) | Bits 0x2000/0x4000/0x800/0x8000 come **only** from the stored GridStatesMap. |
+| PostLoad | `NNavy::System::PostLoad` 005b3a90 | Rebuilds ship A\*; per route (`ai::navy::NavyShipRoute::PostLoad`) relinks harborA/B/street by Unique (`ReferenceHarbor::Relink` 00539710 → `ai::navy::HarborList::FindByUnique` 005b5cb0; unknown → NULL); per harbor (`ai::navy::Harbor::PostLoad`) relinks exit→route (`NavyHarborExit_ResolveReferences` 005bc340) and fires the harbor callback (model `z_harbor_00`). |
+| Flag on harbor | `Logic_PlaceFlag` 00538cd0 → `ai::navy::Harbor::AttachFlag` 005b49f0 | Sets player; calls `ai::navy::NavyShipRoute::UpdateSeaStreet` 005b71d0 for each exit with a valid route ref. |
+| Sea street | `ai::navy::NavyShipRoute::UpdateSeaStreet` 005b71d0 | Type-3 street harborA cell → A's exit for the route → B's exit → harborB cell, once both harbors belong to the same player and a route entry exists (created on ship assignment, `ai::navy::NavyShipRoute::AddMovementRef` 005b73a0). Exit found by `ai::navy::Harbor::FindExitForRoute` 005b4e80 (route Unique match; **no match returns a static empty exit, not NULL**). Street A\* needs 0x2000 on harbor and 0x4000 on exit (`ai::game::GameQuery::IsHarborExitTransition` 0052e3c0, `AStarStreet::PrepareSearch` 00776260). |
 | Reachability | `Navy_AreContinentsConnectedForPlayer` 0052eba0 | Walks the player's harbors whose **harbor-cell continent** is A or B; for each exit with a valid route that has a street, takes the opposite harbor's harbor-cell continent. |
 | Ship A\* | `NNavy::AStar::CanTraverse` 005bbbe0, `GetStepCost` 005bba90 | Same continent id and free water; cost −1 if not free water, 12 on 0x800 or on 0x4000&0x8000, 2 near land/0x400/0x800/map edge, else 1. Ship-route A\* (005bb9d0) also forbids 0x8000. |
-| Shipyard | `GameQuery_IsBuildingFootprintFree` 0052f460; `NSettlers::Constructor::UpdateShipConstruction` 0065e770 → `NNavy::System::FindShipPlacement` 005b4370 → `ShipPlacementSearch_IsGoal` 005bbd10 | Shipyard (`SizeShip` = 16 = 0x10 in config.lua) needs 0x20000 on every footprint cell. When a ship is finished, a cell with **shore 0x8** on the building's continent within radius property+0x78 next to coast water is required, else "!No Place for Ship found!" and the shipyard is removed. (+0x78 = `bp_setWorkingRadius` is `[inferred]`.) |
+| Shipyard | `ai::game::GameQuery::IsBuildingFootprintFree` 0052f460; `NSettlers::Constructor::UpdateShipConstruction` 0065e770 → `NNavy::System::FindShipPlacement` 005b4370 → `ai::navy::ShipPlacementSearch::IsGoal` 005bbd10 | Shipyard (`SizeShip` = 16 = 0x10 in config.lua) needs 0x20000 on every footprint cell. When a ship is finished, a cell with **shore 0x8** on the building's continent within radius property+0x78 next to coast water is required, else "!No Place for Ship found!" and the shipyard is removed. (+0x78 = `bp_setWorkingRadius` is `[inferred]`.) |
 
 Not stored, runtime only: sea streets, ships, harbor owner, flag link, ship refs. In maps: route
 `street` NONE, harbor `flag` NONE, `player` −1, ships 0, all `ship` refs NONE, empty
@@ -1056,7 +1062,7 @@ Nothing below is checked or repaired by the loader; every rule is the editor's j
   version branches exactly as the loaders do: `NResources::System::Load` 00540fd0 v4–v6,
   `Deposit::Load` 00542e80 v0–v1, `Animal::Load` 00541d50 v0–v3, `NResources::Movement::Load`
   00543750 v0–v1, `PathBase::Load` 00772e40 v0 / active, `Continent::Load` 00677450 v0–v4,
-  `Object::Load` 00545260 v0–v1, `NavyHarbor_Load` 005b59d0 v0–v2, `NavyShipRoute_Load` 005b7530
+  `Object::Load` 00545260 v0–v1, `ai::navy::Harbor::Load` 005b59d0 v0–v2, `ai::navy::NavyShipRoute::Load` 005b7530
   v0–v1, Game File Map v0.
 - Fails loudly on: wrong header, unsupported version, string ≥ 0x800, impossible count, unknown or
   unsizable property id (checked against the decrypted Lua tables in `mapping/work/mapdoc/scratch/prall/`,
@@ -1089,23 +1095,149 @@ document). `[known]`
 
 | # | Question | Status |
 |---|---|---|
-| Q1 | Does the loader verify the container's plaintext CRC32 / size (`FileCrypt_PackAndEncrypt` 006ee8e0, key hash)? | not examined |
+| Q1 | Does the loader verify the container's plaintext CRC32 / size (`FileCrypt_PackAndEncrypt` 006ee8e0, key hash)? | yes: `NBase::gDecryptData` 006e6660 checks FourCC, key CRC, size and data CRC, and crashes on a mismatch (§9.3) |
 | Q2 | `NNavy::Ship` record layout (`Ship::Load` 005bb0f0) | unknown; maps always have 0 ships |
 | Q3 | Element layout of a non-empty `Logic ReferncesShip` list (probably a 20-byte Unique `[guess]`) | always empty in maps |
-| Q4 | Meanings of MapInfo +0x1cc (water preset?), +0x1ec, +0x1f0; confirmation of +0x48/+0x68/+0x88/+0xa8/+0xc8/+0x1c8 meanings | `[inferred]`/`[guess]` |
-| Q5 | `resources` tail ints +0x5c, +0x60, +0x08 (=100) and the v4 32-byte block | unknown (12 / 32 bytes) |
+| Q4 | Meanings of MapInfo +0x1cc (water preset?) and +0x1f0. +0x48 (who controls the slot), +0x68 (tribe), +0xc8 (AI level) and +0x1c8 (win condition) are settled by their setters and readers (§4.2); +0x88 (colour) and +0xa8 (team) rest on one reader each; +0x1ec is a network-game flag that nothing tests | `[inferred]`/`[guess]` for the open ones |
+| Q5 | Contents of the 32-byte block of `resources` v3..v4 (the loader reads and discards it). The tail ints are answered in §4.12: +0x5c `roamTurn`, +0x60 `roamSearchesThisTick`, +0x08 `mapTreeType` | unknown (32 bytes) |
 | Q6 | Animal `counter` (+220) | unknown (4 bytes) |
 | Q7 | Class behind `NMap::System+0x28` ("Map Exploration") | unresolved |
 | Q8 | The 4 zero slack bytes and non-0x80 alignment of Spiral/Pentagon | unexplained |
 | Q9 | Legacy layouts not sized by the parser: Map Continents v0, MapInfo < 15, ElevationMap v0 | not needed for writing |
 | Q10 | In-game effect of stale exits/docks/path cells (§6.7) and of a route whose endpoints do not resolve | not observed live |
 | Q11 | Effect of non-NONE street/flag/ship refs in a map (NULL resolve vs crash) | not tested |
-| Q12 | `MilitaryGatheringPositions_Compute` 00576fb0 dereferences `NavyHarborList_FindNearestInWaterBody` without a NULL check; a map with an unreachable island lacking a harbor is a crash candidate | `[inferred]` |
+| Q12 | `MilitaryGatheringPositions_Compute` 00576fb0 dereferences `ai::navy::HarborList::FindNearestInWaterBody` without a NULL check; a map with an unreachable island lacking a harbor is a crash candidate | `[inferred]` |
 | Q13 | Shipyard search radius = property+0x78 = `bp_setWorkingRadius` | `[inferred]` |
 | Q14 | Reader of `cfg_setMaxWaterStreetWaterDepth(4000)` (GameConfig +0x40); might constrain sea routes by depth | not found |
 | Q15 | GridStates bit 0x1000 | never set; unknown |
 | Q16 | Whether campaign `.s2m` files contain only the map part | no decrypted campaign sample |
 | Q17 | AI-only harbor data (`NAI::Player::AddHarbor`, `ai_forbidHarborPosition`) | out of scope |
+
+---
+
+## 9. The old layout (prototype maps)
+
+Two maps of the install are in a layout older than everything above: `data\game\map\Presentation.s2m`
+(170×170, 3,758,950 bytes decrypted, with `Presentation.lua`) and `data\game\map\X_MediterranDemo.s2m`
+(80×80, 803,376 bytes). No menu reads that folder. `tools/s2m_upgrade.py` converts them; its walker reads both
+files from byte 0 to the last byte with the grammar below. `[known]`
+
+### 9.1 Layout `[known]` (sample bytes; loader branches read in code)
+
+| # | Section (version in the old files) | Difference from the current layout | Current loader |
+|---|---|---|---|
+| — | `Game File Map` | **absent**: the file starts with the MapInfo header | `GameFile_LoadMap` 005aa7b0 and `GameFile_LoadMapInfoCached` 005aa030 read this header first, unconditionally |
+| 1 | `MapInfo` (v1) | hdr, vector\<Cell\> startPositions, string mapName, 8 × i32 slotKind, i32 `+0x1c8`. No size, no per-slot setup, no UUID, no names, no goods. The 8 slotKind values are uninitialised memory in both files (Presentation: `0x005374c8, 0x245, 0x005374c8, 0x01000b05, −1, −1, 0, 0x5206`). X_MediterranDemo stores the name as a full path (`Z:\S2C\Development\Data\map\X_MediterranDemo.s2m`). | `MapInfo::Load` 0052bd40 reads v1 as written |
+| 2 | `LogicSystem` (v5) | hdr, i64 uidCounter, bool32 running, **i32 legacy value** (v1..v5 only; 19145 in Presentation), 3 × f32, then a **`TriggerSystem` section** (§9.2). No tickCounter (v ≥ 7). | `NLogic::System::Load` 00527d60 reads v5, but the `TriggerSystem` body only as {bool32, i32} |
+| 3–8 | `MapSystem` v0, `ElevationMap` v1, `PatternMap` v0, `GridStatesMap` v0, `Map Resources` v0, `Map Territory` v0 | none | — |
+| 9 | `Map Exploration` (v0) | cells written as bool32 instead of i32: same size, 24 + 32·W·H | `Exploration::Load` 00677b30, v < 1 branch |
+| 10 | `Map Continents` (v0), `Map Continent` (v3) | no trailing landCellCount; each continent carries the legacy vector\<Cell\> (empty in both files) before the neighbour list | `Continents::Load` 006791b0 discards a v0 section and calls `RecomputeAll` 00679120 + `RecountLandCells` 00678010; `Continent::Load` 00677450 |
+| 11 | `resources` (v1) | no tail ints (`+0x5c`, `+0x60`, `+0x08`) | `NResources::System::Load` 00540fd0 |
+| | `deposit` (v0) | 100-byte record: no depletedTicks, no ttlWithoutOwner | `Deposit::Load` 00542e80 (ctor defaults 0 / −1) |
+| | `Resources Animal` (v2) | no trailing `+0xb0` u32 | `Animal::Load` 00541d50 |
+| | `Navy Movement` (v1 in Presentation, v0 in X_MediterranDemo) | v0: no registeredCell | `NResources::Movement::Load` 00543750 |
+| | `Movement Path Base` (v0) | the path body (vector\<Cell\>, bool32 valid, u32 index, bool32 newPath) is always present, also when pathActive = 0 | `PathBase::Load` 00772e40 |
+| 12 | `DoodadsSystem` (v0), `DoodadsObject` (v0) | 80-byte record: after finePos a Cell and an i32 lifetime, both unconditional | `Object::Load` 00545260 |
+| 13 | `Logic Ambients` (v0) | none | — |
+| 14 | `Navy System` | **absent**: the file ends after Logic Ambients, with no slack | `GameFile_LoadMap` calls `NNavy::System::Load` 005b4650 unconditionally |
+| 15 | `Logic SpawnSystem` | absent | read only when `Game File Map` is v ≥ 1 |
+
+Presentation contains 1190 deposits (18 ids), 24 animals (2 ids, several with an active 3-cell path, state 2),
+1799 doodads, 81 ambients, 257 continents, one start position (45,130); uidCounter 9226, highest id 8941. Its
+GridStatesMap follows the current bit meanings: bit 0x4 equals the water recomputation of §5.4 on all 28,900
+cells and the 0x80 set equals the deposit cells. `[known]`
+
+### 9.2 TriggerSystem
+
+```
+hdr(0,"TriggerSystem")            crc32 0xb2498514
+bool32                            = 1
+u32 count                         0 in X_MediterranDemo, 1 in Presentation
+count × TriggerObject
+```
+
+The shipped game has no trigger system; `NLogic::System::Load` 00527d60 builds the `TriggerSystem` category on
+the stack, reads the header, one bool and one i32, and drops them. A file with count > 0 therefore
+desynchronises at the first record. `[known]`
+
+The one record of Presentation (0x94–0xee, 90 bytes). The header name is `[known]` (CRC32 0xd3a93f73, 13
+characters = "TriggerObject"); no code reads the record, so the field meanings are `[inferred]` from the
+bytes:
+
+| Off | Bytes | Reading |
+|---|---|---|
+| 0x94 | `01000000 733fa9d3 0d000000` | hdr(1,"TriggerObject") |
+| 0xa0 | `01000000` | unknown (4 bytes) |
+| 0xa4 | Unique 9219 | trigger id |
+| 0xb8 | `01000000` | unknown (4 bytes) |
+| 0xbc | Cell (43,114) | position |
+| 0xd0 | `00000000 00000000` | unknown (8 bytes) |
+| 0xd8 | string "FogOfWar_A" | name; `Presentation.lua` tests it in `onTriggerIsActive(name)` |
+| 0xe6 | `00000000`, f32 0.182 (`365e3a3e`) | unknown (8 bytes) |
+
+`onTriggerIsActive` and `triggers.removeTrigger` do not occur as strings in the shipped executable. `[known]`
+
+### 9.3 What stops the shipped game `[known]`
+
+- **No `Game File Map` header.** The loader consumes the MapInfo header as that header; `MapInfo::Load` then
+  takes `01000000 00000000 a2fe4954` as its own header, reads the vector count from the wrong place and
+  reaches the string read with a garbage length. `FileStreamCrypt`'s string reader (007808d0) copies into a
+  0x800-byte stack buffer: access violation inside `_memcpy` (006f3bfa) writing past the top of the stack,
+  reported by Windows as 0xc0000409 at SADK.exe+0x2f3bfa. Live: backtrace `MapInfo::Load` → 007808d0 →
+  `MemoryStream::Read` → `_memcpy`.
+- **`-map Presentation` always opens the install's file.** A relative path is resolved by file name through
+  the start-up file index, ignoring the directory (`FileScanHolder::ResolvePath` 006e3fd0, used by
+  `Fs_FileExists` 0057d060 and `gReadFileData` 006e6d40). `[data]\maps\freeGameMaps\Presentation.s2m`
+  therefore exists and is `data\game\map\Presentation.s2m`. `GameFile_LoadImpl` 005aaed0 never reaches its
+  user-folder fallback, whatever lies in `<MyDocuments>\SAdK\maps\`. **A converted copy needs another file
+  name.**
+- TriggerSystem with a record (§9.2), and the missing `Navy System` section.
+- **Two deposit ids of Presentation are not created by the shipped `deposits.lua`:** `0x7e24ce73` at
+  (157,18) and `0x7e29ce73` at (158,19), one deposit each. `Deposit::ctor_ForLoad` 00543210 takes the property
+  from `PropertiesDb::GetOrInsertDepositProperty` 0054a100, which inserts a null pointer for an unknown id.
+  The effect of loading them was not tested (`[inferred]`: null property dereference). Every other pattern,
+  deposit, animal, doodad and ambient id of both maps exists in the shipped scripts.
+- The container is mandatory: `NBase::gDecryptData` 006e6660 writes to address 0 on a wrong FourCC, key CRC,
+  size or data CRC. A plain file is not accepted, and the plaintext CRC32 of §1.2 is checked.
+
+### 9.4 Conversion (`tools/s2m_upgrade.py`)
+
+| Step | Change | Tag |
+|---|---|---|
+| 1 | hdr(1,"Game File Map") in front | `[known]` |
+| 2 | MapInfo rewritten as **v9**: startPositions kept; mapName = output file base name; W, H from MapSystem; slot 0 human (kind 2) with tribe `0xb0d378a3`, further slots computer up to the number of start positions, others closed with tribe −1; colour = slot index, team −1, AI 0; `+0x1c8` kept, `+0x1cc` 0, `+0x1d0` selectable; UUID = MD5 of the input file; `+0x1ec` 0; names "COMPUTER"; `+0x1f0` 1. v9 ends there: the loader fills goods and sacrifices itself (v ≤ 13 `ResetInitialGoodsFromTribes`, v ≤ 12 `ResetSacrificesFromTribes`, v ≤ 14 `NormalizeInitialGoodsForTribes`). The `.info` cache the game wrote from the converted file is a v15 MapInfo with 3 tribes of goods and sacrifices. | `[known]` |
+| 3 | LogicSystem rewritten as v8: uidCounter, running and the three floats kept, tickCounter `0xffffffff`; legacy value and TriggerSystem (with its record) dropped | `[known]` |
+| 4 | MapSystem … Logic Ambients copied byte for byte (old versions, read by the branches of §9.1) | `[known]` |
+| 5 | Empty Navy System (60 bytes, §6.2) and empty Logic SpawnSystem (hdr, bool32 1, u32 0) appended | `[known]` |
+| 6 | Optional `--map-id old=new`: another property id in object records. For Presentation: `7e24ce73` and `7e29ce73` → `7e99ce73` (tree_01). A substitution; what the two ids were is not known. | — |
+| 7 | "sadk" container (literal-only LZSS, `tools/sadk_crypt.py`) | `[known]` |
+
+**MapInfo `+0x1d0` and the map script.** `GameFile_LoadMap` 005aa7b0 builds the `.lua` path from the type
+*stored in the file* (unless it is 10/110 or the requested type is 1). With 0, the script of a map in the user
+folder is looked up as `[data]\maps\freeGameMaps\<name>.lua` and not found; with 3 it is
+`<MyDocuments>\SAdK\maps\<name>.lua`. Live: stored 3 → `GameScript_LoadMapScript` received
+`C:\Users\…\Documents\SAdK\maps\Presentation_upgraded.lua`. After the load,
+`Game_LoadWorldFromDescriptor` 005ac770 overwrites `+0x1d0` with the requested type. `[known]`
+
+**A user map is started as type 0.** `Game_LoadWorldFromDescriptor` creates players and calls `onStarted` only
+for the types of `MapType_IsDataDirS2mMap` (0, 1, 2, 100, 102). A descriptor with type 3 loads the map and
+stops there: no players, tick counter stays `0xffffffff`. The user folder is reached through the fallback in
+`GameFile_LoadImpl`. `[known]` (live, both cases)
+
+### 9.5 Result in the shipped game `[known]` (live, 2026-10-12)
+
+Converted Presentation as `<MyDocuments>\SAdK\maps\Presentation_upgraded.s2m`, started with
+`-map Presentation_upgraded`:
+
+- Load order as in §3.1; `Continents::Load` → `RecomputeAll`; the tick counter advances (460 → 489 in 2.9 s).
+- `onStarted` runs: `menu.clearResources`, `menu.addResource` (1000 wood), `menu.createBuilding` (woodcutter,
+  `NVillage::System::PlaceBuilding` returns a building), `menu.createStreet` (`StreetPlanner::BuildStreet`),
+  `menu.createBuilding` (sawmill). Headquarters, both buildings and the street are on screen.
+- At tick 100 `onLogicTick` calls `menu.openBookDialog(text)` (`LuaMenu_OpenBookDialog` 005dd5e0): access
+  violation at 004b7d75 in `nUi::TextBlock::SyncLayoutRect` 004b7c50, write to null + 8 (the TextBlock has no
+  layout). Why the book's text block has no layout in a free game: `[TODO]`. The shipped scripts call it only
+  from `scripts/mapTools/quests.lua`.
+- The trigger "FogOfWar_A" no longer exists, so `onTriggerIsActive` is never called.
 
 ---
 

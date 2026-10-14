@@ -26,8 +26,8 @@ Related documents: [NCOMM_LAYER.md](NCOMM_LAYER.md), [NCOMM_GAME_PROTOCOL.md](NC
 |---|---|---|---|
 | 2.1 | App shell and main loop | Window, start-up, one-thread frame loop | `CApplicationEx` |
 | 2.2 | tincat3 middleware | TCP framing, threads, property sets, CommLayer managers | T `PROGFLOW_NET`, `NETDRV_*`, `KRNL_*`, `CommLayer::*`, `TinCatProperties::*` |
-| 2.3 | Lobby protocol | Lobby, UC/chat, village and referee connections on top of CommLayer | `LobbyComm::*`, `LobbyManager` |
-| 2.4 | Lobby UI and state machine | Login dialogs, screens, server browser, hosting dialog, mini-games | `LobbyMenu::*`, `LobbyManager` FSM |
+| 2.3 | Lobby protocol | Lobby, UC/chat, village and referee connections on top of CommLayer | `LobbyComm::*`; root object `LobbyComm::System` (`g_pLobbyManager`; called LobbyManager in older notes) |
+| 2.4 | Lobby UI and state machine | Login dialogs, screens, server browser, hosting dialog, mini-games | `LobbyMenu::*`, the `LobbyComm::System` state machine (`LobbyManagerState`) |
 | 2.5 | Village / character | 3D lobby world, avatars, NPCs, shop, world connection | `Lobby::CLobby`, `LobbyComm::VillageServerConnection`, `CharacterManager` |
 | 2.6 | In-match network (NComm) | Pre-game room and lockstep peer-to-peer match transport | `NComm_Manager`, `NComm::TinCatNetwork` |
 | 2.7 | Game simulation | The RTS: settlers, economy, military, navy, AI | `NLogic`, `NSettlers`, `NVillage`, `NMilitary`, `NNavy`, `NAI`, `nGame::System` |
@@ -47,24 +47,24 @@ strongest evidence for the whole stage.
  [App shell]  WinMain S 00407cf0
    │  CApplicationEx::Initialize S 004075d0
    │    ├─ engine layer (D3D9 device, UI, sound)      S 00405590
-   │    ├─ LobbyManager + LobbyComm + CLobby (3D)      (skipped with -nolobby)
+   │    ├─ LobbyComm::System + LobbyComm + CLobby (3D) (skipped with -nolobby)
    │    └─ NComm manager created (idle, state 0)
    ▼
  Frame loop: CApplicationEx::FrameTick S 00401bd0  ── one thread, every frame:
    │    FrameTick_Menu S 00401780 / FrameTick_InGame S 004018e0
    │    → LuaScriptHost::UpdateThreads, NComm_Manager::Process_MainLoop,
-   │      CLobby::Update, LobbyManager::StatePump_Tick S 00464ee0, sound, present
+   │      CLobby::Update, LobbyComm::System::StatePump_Tick S 00464ee0, sound, present
    ▼
  ┌─ [Lobby protocol / tincat3] ── lobby connection (:7070) ─────────────────────── [PROVEN]
  │  188 CheckVersion → 201/202 ECDH P-521 → 204 AuthenticateUser (Twofish-CTR)
- │  → 207 SessionKey (HandlerLobby T 10023cc0)          LobbyManager state 1→3
+ │  → 207 SessionKey (HandlerLobby T 10023cc0)          LobbyComm::System state 1→3
  │  StatePump: 3→4 version check → 5 → 6 load global data (MotD, character,
  │  buddy and ignore lists; opens UC/chat :7071 with token 211/212/213 → 153) → 7
  └────────────────────────────────────────────────────────────────────────────────
    ▼
  ┌─ [Lobby UI] avatar select → AvatarScreen::OnStartGameClicked_EnterVillage S 0043abc0
  │  → CLobby::RequestEnterVillage S 004f5070 → CLobbyClient::EnterVillage S 00503f50
- │  → LobbyManager::CreateVillageServerConnection S 00463850          state 8
+ │  → LobbyComm::System::CreateVillageServerConnection S 00463850          state 8
  └────────────────────────────────────────────────────────────────────────────────
    ▼
  ┌─ [Village] world connection (:5479, HandlerGS T 10023460) ───────────────────── [PROVEN]
@@ -109,7 +109,7 @@ socket stays open, and nothing is logged.
 | `CApplicationEx::InitEngineLayer` | S 00405590 | Display modes, `url2tex`, graphics device init S 004da2a0, UI cursor [inferred] |
 | `CApplicationEx::FrameTick` | S 00401bd0 | Calls `FrameTick_InGame` when the lobby mode is 0/1 or there is no lobby, otherwise `FrameTick_Menu`. Then runs `CLobby::ProcessModeTransition`. Returning false ends the loop [inferred] |
 | `FrameTick_Menu` | S 00401780 | Timer, UI XML hot reload, Lua threads, NComm pump, `CLobby::Update`, sound, device-lost check, cursor clip [known from decompile] |
-| `FrameTick_InGame` | S 004018e0 | Input, `nMenu::System` update, NComm pump, Lua threads, `NLogic::System::Update`, the `LobbyManager::StatePump_Tick` pump while the world is not active, `App_RenderWorldFrame` S 00401260 [inferred] |
+| `FrameTick_InGame` | S 004018e0 | Input, `nMenu::System` update, NComm pump, Lua threads, `NLogic::System::Update`, the `LobbyComm::System::StatePump_Tick` pump while the world is not active, `App_RenderWorldFrame` S 00401260 [inferred] |
 | `CApplicationEx::Shutdown` | S 00401cb0 | [inferred] |
 
 **Threads.** All game logic, UI, rendering, lobby and NComm work runs on the main thread inside `FrameTick`
@@ -137,7 +137,7 @@ names are much more reliable than the exe's [known].
 | Modules | `TinCatModules::CellManager`, `TinCatModules::Reconnector`, `LoadBalance` | Cell broadcast, host migration and reconnect, load balancing [inferred] |
 
 **Loop and threads.** Socket I/O runs on the driver threads. Everything above the driver runs when the exe
-calls the API's Process from its frame loop: `LobbyManager::StatePump_Tick` ticks the CommLayer
+calls the API's Process from its frame loop: `LobbyComm::System::StatePump_Tick` ticks the CommLayer
 (`pCommLayer` vtbl+0x54), and `NComm::TinCatNetwork::Process` S 00419e10 ticks the match API instance
 [inferred]. Handler failures are logged and never close the connection [known].
 
@@ -152,8 +152,8 @@ use the one comm layer with payload magic `0x26B6` [PROVEN].
 
 | Item | Address | Notes |
 |---|---|---|
-| `LobbyManager` (`LobbyComm::System`) ctor | S 00463fd0 | Owns the comm layer (+0x4c), server list (+0x54), UC connection (+0x3d8), referee connection (+0x490), village connection (+0x540), game-slot connection (+0x544) and state (+0x57c) [known] |
-| `LobbyManager::DispatchInboundToConnection` | S 00462760 | Finds the owning connection for a connection id, wraps the data in an `NCore::BitStream` and calls `conn->vtbl[0x24]` [inferred] |
+| `LobbyComm::System` ctor (the object `g_pLobbyManager` points at; 0x5a8 bytes, vtable S 007dacb0) | S 00463fd0 | Owns the comm layer (+0x4c), server list (+0x54), `serverMessages` (+0x100), `characterManager` (+0x140), `postOffice` (+0x2f8), `properties` (+0x3bc), UC connection (+0x3d8), referee connection (+0x490), village connection (+0x540), game-server connection (+0x544) and state (+0x57c) [known]. It is the `CommLayer::IConnectionCallback` that tincat3's ConnectionManager holds at its +0x08 [known] |
+| `LobbyComm::System::DispatchInboundToConnection` | S 00462760 | Finds the owning connection for a connection id, wraps the data in an `NCore::BitStream` and calls `conn->vtbl[0x24]` [inferred] |
 | `LobbyComm::BaseConnection` | S 0048de70.. | Shared login/logout/disconnect observers for the sub-connections [known] |
 | `LobbyComm::UserCommConnection` | S 0047f160.. | Chat and whisper connection, `OnReceivedData` S 0047f6e0 [known] |
 | `LobbyComm::VillageServerConnection::HandleMessage` | S 00470a90 | Switch on the 12-bit LobbyMessage id for world messages (§2.5) [known] |
@@ -169,13 +169,13 @@ scalars and u32-length strings. Village and referee messages are LobbyMessages i
 
 ### 2.4 Lobby UI and state machine
 
-**State machine.** `LobbyManager+0x57c`, enum `LobbyManagerState`, set by `LobbyManager::SetState` S 00462540
-(state 12 latches) and driven every frame by `LobbyManager::StatePump_Tick` S 00464ee0 [known]:
+**State machine.** `LobbyComm::System+0x57c`, enum `LobbyManagerState`, set by `LobbyComm::System::SetState` S 00462540
+(state 12 latches) and driven every frame by `LobbyComm::System::StatePump_Tick` S 00464ee0 [known]:
 
 | Value | Name | Entered by |
 |---|---|---|
-| 0 / 1 / 2 | Init / Disconnected / Authorizing | start-up, `LobbyManager::Login` S 004630e0 |
-| 3 | Authorized | `LobbyManager::OnLoggedIn` S 00463a10 |
+| 0 / 1 / 2 | Init / Disconnected / Authorizing | start-up, `LobbyComm::System::Login` S 004630e0 |
+| 3 | Authorized | `LobbyComm::System::OnLoggedIn` S 00463a10 |
 | 4 / 5 | CheckingVersion / VersionChecked | pump sends the version PropertyGet, `OnVersionChecked_State4to5` S 00464e70 |
 | 6 / 7 | LoadingGlobalData / GlobalDataLoaded | pump: server-list observation, MotD, opens UC/chat, character/buddy/ignore lists, PostOffice |
 | 8 / 9 | EnteringVillage / VillageEntered | village entry; 9 is set by `HandleEnterWorld` S 0046f670 |
@@ -193,7 +193,7 @@ Dialogs include `LoginDialog`, `CreateAccountDialog`, `SelectAvatarDialog`, `Sel
 and the mini-game dialogs [known by RTTI names]. Screen vtables: [LOBBY_SCREEN_VTABLES.md](LOBBY_SCREEN_VTABLES.md).
 
 **Talks to.** The UI subscribes to the observer lists on the LobbyComm connections (for example
-`WorldScreen::OnRefereeRegisterGameResult` S 00431800) and calls into `LobbyManager` and `CLobby`. It renders
+`WorldScreen::OnRefereeRegisterGameResult` S 00431800) and calls into `LobbyComm::System` and `CLobby`. It renders
 through the 3D lobby's `UIRenderer` and `nUi` widgets [inferred].
 
 ### 2.5 Village / character
@@ -230,10 +230,11 @@ The match transport is separate from the lobby protocol. Its full reference is
 | `NComm::TinCatNetwork` | `Process` S 00419e10, `cb_Received_Data` S 0041d720 | TinCat module type `0x27d9`, subtypes 1000..1003 [inferred] |
 | `NComm_Event_CreateFromStream` | S 00420540 | Event factory keyed on the class wire signature [known] |
 
-**State.** `EManagerState` (`mgr+0x1c`) defines None 0, NetworkStarted 1 and Connected 2 [known]. The game
-code also tests states 3 and 4: `nGame::System::Update` broadcasts StartGame "in state 3 when all slots are
-loaded", and `NLogic::System::Update` ticks only in state 4 [inferred]. The enum does not name those
-values yet ([TODO]).
+**State.** `EManagerState` (`mgr+0x1c`): None 0, NetworkStarted 1, Connected (session started) 2,
+GameStarting 3, GameRunning 4. `nGame::System::Update` broadcasts StartGame in state 3 when all slots are
+loaded, and `NLogic::System::Update` ticks only in state 4 [inferred]. The network mode (`mgr+0x3c8`,
+`StartUpNetwork` S 0040a9a0): 0 offline (DummyNetwork), 1 LAN client, 2 LAN host, 3 Internet client,
+4 Internet host; no shipped caller passes 1 or 2 [inferred].
 
 ### 2.7 Game simulation
 
@@ -252,7 +253,7 @@ RTS code tagged under other names.
 | Sound | `ai::audio::SoundManager` (`Update` S 005c68b0, FMOD) | [inferred] |
 
 **Loop.** `FrameTick_InGame` calls `NLogic::System::Update`, which runs as many fixed ticks as
-`NComm_Manager_CanAdvanceTick` allows. Each tick updates all subsystems and calls `AdvanceNetTick`. Player
+`NComm_Manager::CanAdvanceTick` S 004088b0 allows. Each tick updates all subsystems and calls `AdvanceNetTick`. Player
 input becomes command events that travel through NComm and run on every peer in the same tick [inferred]. The
 `GameSeed` from the referee does not seed this simulation: it seeds only the chest contents of a network
 match (`Game_DistributeChestsForNetworkMatch` S 00775dd0), and the simulation has its own global generator
@@ -312,7 +313,7 @@ references], so PhysX appears to drive avatar movement and collision in the 3D l
 | `NCore::BitStream`, `NCore::DumpStream`, `NCore::CRCStream` | — | Serialisation primitives for saves, events and LobbyMessages [inferred] |
 | `NCore::FileStream` / `NCore::FileStreamCrypt` | S 0057d140 / S 007807f0 | Plain and encrypted file streams (saves) [inferred] |
 | `NBase::gDecryptData` | S 006e6660 | Decrypts a `sadk` container: FCC check, per-file key from the file name, key CRC, descramble + unpack, data CRC. A mismatch forces a crash [known] |
-| `FileCrypt_DecryptAndUnpack` / `FileCrypt_PackAndEncrypt` | S 006ee9d0 / S 006ee8e0 | The unpack codec (S 007624a0) is not identified [TODO] |
+| `FileCrypt_DecryptAndUnpack` / `FileCrypt_PackAndEncrypt` | S 006ee9d0 / S 006ee8e0 | Descramble and unpack / pack and scramble. The unpack codec is LZSS (`Lzss_DecompressToVector` S 007624a0, `Lzss_Decode` S 007630a0; parameters in [asset-formats.md](asset-formats.md) §1) [inferred] |
 | `GameFile_*` | `GameFile_LoadMap` S 005aa7b0, `GameFile_LoadImpl` S 005aaed0, `GameFile_Save` S 005aa260, `GameFile_SaveMap` S 005a9fa0, `GameFile_LoadMapInfo` S 005aaa30 | Map and save files, map-info caches by GUID, desync dumps [inferred] |
 | `DirectoryWatcher` | S 00581200 | Watches data directories for hot reload [inferred] |
 
@@ -448,7 +449,7 @@ has been found [TODO].
 **Dormant LAN multiplayer.** NComm modes 1 and 2 have no caller. tincat3 still has LAN discovery (mode
 1 = server, 2 = client), `ConnectionLANLobby` (LAN hosting with a password flag), the `S2TNG_BC` broadcast
 callbacks, and the `nMenu::NetInfo` per-slot session panel. No LAN layout XML ships, so this is unreachable from
-the shipped UI [inferred]. The mode table is pending on board #595.
+the shipped UI [inferred]. The mode table is in §2.6.
 
 **Lobby billboards.** `ad0..ad2.tga` are live web pages from `http://www.funatics.de/sadk/forwarding{1,2,3}.html`
 rendered into 1024×512 textures through an IE control (`url2tex`). Because they are plain http, a hosts
@@ -474,14 +475,10 @@ difference [guess until measured]. The map-format reference is
 
 ## 6. Open points
 
-- The meaning of NComm manager states 3 and 4. The game code tests them, but `EManagerState` only names
-  0..2 (§2.6).
-- The `StartUpNetwork` mode table for modes 1 and 2 (board #595).
 - What sets the CVar-server gate byte `0088ca50`.
-- The unpack codec behind `FileCrypt_DecryptAndUnpack` (S 007624a0).
+- Answered: the unpack codec behind `FileCrypt_DecryptAndUnpack` is LZSS (`Lzss_DecompressToVector` S 007624a0,
+  `Lzss_Decode` S 007630a0); every encrypted file of the reference install decodes with it
+  ([asset-formats.md](asset-formats.md) §1).
 - The lobby connection completes its login on 207 SessionKey in the binary (T 10023cc0). Only the UC path
   completes on 153. This should be confirmed against a capture.
-- In the static model, which client event arms the referee login during a real match start.
-  `WorldScreen::OnVillageConnectionLoggedOut` S 004316c0 arms it, but the village `LoggedOut` reachability was
-  questioned in [MATCH_START.md](MATCH_START.md). The stub's push-after-153 path works live.
-- The 1,579 vtable-owner findings (the `NComm_Session_*` and `NComm_Slot_*` accessors are already fixed).
+

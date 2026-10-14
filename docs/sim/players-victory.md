@@ -73,11 +73,11 @@ The table always has exactly 8 slots; every loop over players is `for i in 0..7`
 | +0xac | i32[8][2] | reachedPos | cell (x,y) of the first border contact with player j; (-1,-1) = none | `[known]` S 005be230 |
 | +0xec | i32 | state | **start-resources / difficulty level** 0..3 of the match (same value for every player), §3.4 | `[known]` S 005abb60 passes `desc+0x20`; name `state` is a misnomer |
 
-`Player_Construct` S 005bfed0 sets index -1, colour 0, kind 0, name "?", state 2, inactive, and allocates all
+`ai::player::Player::ctor` S 005bfed0 sets index -1, colour 0, kind 0, name "?", state 2, inactive, and allocates all
 sub-objects once for the lifetime of the table `[known]`. The table is a member of `NLogic::System`, which is
 constructed for every match (§4), so every match starts with newly constructed players `[known]`.
 
-`g_PlayerColors` S 0087ead8: 8 entries of four floats, read by `Player_GetColorEntry` S 005be2c0 as
+`g_PlayerColors` S 0087ead8: 8 entries of four floats, read by `ai::player::Player::GetColorEntry` S 005be2c0 as
 `table + colorIndex * 0x10`. Bytes in the image, entries 0..7 `[known]`: (0,0,1,1), (1,0,0,1), (0,1,0,1),
 (1,1,0,1), (1,1,1,1), (0,0,0,1), (1,0,1,1), (0.5,0.5,0.5,1) — as red, green, blue, alpha `[inferred]`: blue, red,
 green, yellow, white, black, magenta, grey. These image values are only the state before start-up: the Lua
@@ -114,7 +114,8 @@ grey, purple, teal `[inferred]` names. So the colours in a running game are the 
 
 ### 2.4 Match settings
 
-**Victory mode** — `NLogic::MapInfo +0x1c8` (i32), the value every rule reads `[known]` S 00535870:
+**Victory mode** — `NLogic::MapInfo.winCondition` (+0x1c8, i32, enum `EWinCondition`), the value every rule reads
+`[known]` S 00535870:
 
 | Value | Name (UI key) | Rule |
 |---|---|---|
@@ -127,7 +128,9 @@ grey, purple, teal `[inferred]` names. So the colours in a running game are the 
 Values 0..3 `[known]`: the free-game combo box lists exactly these four strings in this order
 (`data/game/ui/layout/menufreegame.xml`, element `WinCondition`, `string0..string3`) and its selected index is
 stored unchanged (S 005e8200). Value 5 `[known]`: written only by the Lua binding `logic.victory_setupQuests`
-(S 005af7e0; called from `data/game/scripts/mapTools/quests.lua`). Value 4 is used nowhere `[inferred]`.
+(S 005af7e0; called from `data/game/scripts/mapTools/quests.lua`). Value 4 is used nowhere `[inferred]`. The
+value is simulation state: it is stored in `MapInfo` with a save and read by the victory rules; neither set-up
+dialog can choose 5.
 
 **The three MapSettings digits** — bytes `NComm::EventGameInformation +0x225/+0x226/+0x227`, sent to the referee
 as three ASCII digits `'0'+value` (`GetSettingsDigitString` S 004145f0):
@@ -292,15 +295,15 @@ Arguments: index, name, kind, tribeId, team, state. In order `[known]`:
 2. `pStock` marked initialised; `buildingCounts` emptied.
 3. `updatePhase = playerIndex * 2`.
 4. `team` stored.
-5. Relation flags cleared (`Player_ClearRelationFlags` S 005be230): `spotted[j] = reached[j] = 0`,
+5. Relation flags cleared (`ai::player::Player::ClearRelationFlags` S 005be230): `spotted[j] = reached[j] = 0`,
    `reachedPos[j] = (-1,-1)` for all j; then, if `index != -1`, `spotted[index] = reached[index] = 1`.
 6. `pMobileStock` marked initialised; `state` stored; `bActive = 1`.
 7. `tribeId` stored and `pTribeProperty` resolved.
 8. `GoodPriorities::InitFromGoodTable`, `GoodArrangement::InitFromTribe` (§2.6).
 
-`Init` does not clear `lockMaps`, `Military`, `Messages` or `ShipNames`; those are cleared by `Player_Reset`
+`Init` does not clear `lockMaps`, `Military`, `Messages` or `ShipNames`; those are cleared by `ai::player::Player::Reset`
 S 005bea50 (priorities, arrangement, messages, both stocks, lock maps, `bActive = 0`) when the table is emptied.
-`Player_Reset` does not reset `Military` or `ShipNames` `[known]`. A later match in the same process does not
+`ai::player::Player::Reset` does not reset `Military` or `ShipNames` `[known]`. A later match in the same process does not
 inherit them: the whole `NLogic::System`, and with it the player table and these sub-objects, is destroyed when
 a match is left and constructed again for the next one (§4) `[known]`. Within one `NLogic::System` (a save
 loaded over a running world) `Military` and `ShipNames` are overwritten by the loaded values (§7).
@@ -315,7 +318,7 @@ Runs once when a world is built from a map of a "new game" type (0, 1, 2, 100, 0
    (`buildings.lua`: `bp_setDepot(castle,1)`, `bp_setCasern(castle,true)`, `bp_setTerritoryBuilding(castle,true)`),
    and every tribe lists `castle` (`tribes.lua`: `tp_addBuilding(<tribe>, castle)`) `[known]`. The order of that
    search is described in `docs/sim/properties-data.md`.
-2. `PlayerTable_RemoveAllPlayers` (notifies the "player removed" observers, then `Player_Reset`).
+2. `ai::player::PlayerTable::RemoveAllPlayers` (notifies the "player removed" observers, then `ai::player::Player::Reset`).
 3. Order the start positions. If `desc+0x24 == 0`: keep the map order. Otherwise shuffle: while positions remain,
    `k = LogicRandom_Next() % remaining`, append position k to the result and erase it from the source keeping
    the order of the rest `[known]`. The setter of `desc+0x24` (S 005a9b10) has two callers, the lobby
@@ -330,7 +333,7 @@ Runs once when a world is built from a map of a "new game" type (0, 1, 2, 100, 0
    `kind != 0`: `PlayerTable::CreatePlayer(i, name, kind, tribe, team, state = desc+0x20)` (which calls `Init`
    and notifies the "player created" observers, S 005be100), then `colorIndex = colour`. **A slot beyond the
    number of start positions is never created** `[known]`.
-6. `PlayerTable_RevealAllies` S 005bdf70: for every ordered pair of distinct active players (a, b) with
+6. `ai::player::PlayerTable::RevealAllies` S 005bdf70: for every ordered pair of distinct active players (a, b) with
    `!IsEnemyOf(a, b)`: `a.spotted[b] = 1` `[known]`.
 7. For `i` in the same range, if slot i is active:
    - kind 1 (computer): `NAI::System::ActivatePlayer(player, startPos, level)` with level = computer level + 1
@@ -376,13 +379,13 @@ what happens when the map has more start positions than chest positions per play
 chest is placed, by the loop condition) or no start position at all (the division; read the disassembly of
 S 00775dd0 for a guard).
 
-After this, `MapInfo.victoryMode = desc+0x244` for the new-game types and type 0x65 (S 005ac770) `[known]`.
+After this, `MapInfo.winCondition = desc+0x244` for the new-game types and type 0x65 (S 005ac770) `[known]`.
 
 **Starting stock** — `NVillage::Depot::AddInitialStock` S 0055b020 `[known]`:
 
 1. add the map's list for the owner's tribe (`MapInfo::GetInitialGoods`, `MapInfo +0x1f8`; the list is
    normalised per tribe when the map is loaded, `docs/sim/properties-data.md`);
-2. if `Player_IsStateDefault(owner)` (S 005be350) also add the tribe's bonus list (`TribeProperty.bonusResources`,
+2. if `ai::player::Player::IsStateDefault(owner)` (S 005be350) also add the tribe's bonus list (`TribeProperty.bonusResources`,
    Lua `tp_addBonusResources`).
 
 The function has a second caller: `NVillage::Building::ctor_Place` S 0055d980 calls it for a depot territory
@@ -410,7 +413,7 @@ stored in the map, not from the descriptor (step 4), so of the descriptor only t
 the players; map type 0x65 is not a new-game type (S 0052c270) and does not run the player creation at all
 `[inferred]`.
 
-The second reader of `Player.state`, `Player_IsStateNotDefault` S 005be330 (computer: `state != 3`; others:
+The second reader of `Player.state`, `ai::player::Player::IsStateNotDefault` S 005be330 (computer: `state != 3`; others:
 `state != 0`), is consulted by the production code for mines — building types with `BuildingProperty.size`
 (`+0x3c`) == 8 (`SizeMine`) and `workingMode` (`+0x80`) == 6 (`Producing`) `[known]` S 00565a70, S 00565bd0,
 S 005657c0; constants per `buildings.lua`. With the predicate false a mine files no input requests and does
@@ -441,7 +444,7 @@ S 00635c50 `[known]`.
 ### 3.6 Victory tick: `VictoryCond_Update` S 00535d70
 
 Runs once per logic tick, last of all subsystems (§4). `mode = MapInfo.victoryMode`,
-`local = PlayerTable_FindLocalPlayer().index`. Steps in order `[known]`:
+`local = ai::player::PlayerTable::FindLocalPlayer().index`. Steps in order `[known]`:
 
 1. **Victory quest.** If `mode != 5` and `tickCounter == 0`: `Quests::SetQuest(slot 0, "!VictoryCond_<mode>")`
    (S 0053a8b0) — the quest list shows the win condition as quest 0. The counter is -1 in a newly constructed
@@ -453,7 +456,7 @@ Runs once per logic tick, last of all subsystems (§4). `mode = MapInfo.victoryM
    `IsVictoryReached(i)` (§3.6.3). If found, `DeclareWinner(i)` (§3.7). At most one `DeclareWinner` per tick.
 5. **Local outcome.**
    - `mode == 5`: only if `won[local] == 0` and `state[local] == 0`: if every main quest is finished
-     (`GameQuery_AreAllMainQuestsFinished` S 0052da20: all quest slots of kind 0 have the finished flag; a map
+     (`ai::game::GameQuery::AreAllMainQuestsFinished` S 0052da20: all quest slots of kind 0 have the finished flag; a map
      with no main quest counts as finished) → `DeclareWinner(local)`, then clear the "changed" flag of every
      quest slot whose kind is not 2, and return. Else if any main quest has the failed flag
      (S 0052da60) → `state[local] = 3`.
@@ -613,7 +616,7 @@ In order `[known]`:
 - There is no rule that hands a leaver's or loser's assets to anyone. The only asset transfer is the script
   binding in §3.12 `[inferred]`.
 
-### 3.9 Per-tick player update: `Player_Update` S 005bf8a0
+### 3.9 Per-tick player update: `ai::player::Player::Update` S 005bf8a0
 
 Called for every active slot, in slot order, at the start of each logic tick (§4) `[known]`:
 
@@ -782,7 +785,7 @@ Lua readers: `logic.pl_getMilitaryStrength` (latest of series 4), `logic.pl_getR
 
 ### 3.13 Local player
 
-`PlayerTable_FindLocalPlayer` S 005bdda0 returns the first active slot with `kind == 2`; if there is none it
+`ai::player::PlayerTable::FindLocalPlayer` S 005bdda0 returns the first active slot with `kind == 2`; if there is none it
 returns slot 0 `[known]`. Because `kind` differs per machine, anything derived from it (the notices in §3.6.1,
 the quest flags in §3.6 step 5, the profile write in §3.7) is local presentation and must stay out of the
 synchronised state.
@@ -797,7 +800,7 @@ editing (`edit->GetBatchEditing()`):
 
 1. `tickCounter += 1`; report the tick to NComm.
 2. Street planners (8).
-3. **`PlayerTable_UpdateAll`** → `Player_Update` for active slots 0..7.
+3. **`ai::player::PlayerTable::UpdateAll`** → `ai::player::Player::Update` for active slots 0..7.
 4. Village and road net (both inside one map-update batch), then settlers, transport, resources, doodads,
    military, navy.
 5. **`Statistics::Update`** (if initialised).
@@ -810,7 +813,7 @@ accumulator: frame seconds × the user profile's float `+0x24` × the system's s
 5.0 is replaced by one tick interval `[known]` S 00527070. A tick runs for each interval the accumulator has
 passed, as long as the NComm manager allows the advance; see `docs/subsystems.md`.
 
-Rates: `Player_Update` every tick with a 22-tick stagger; statistics sampling on ticks `600k .. 600k+4`; victory
+Rates: `ai::player::Player::Update` every tick with a 22-tick stagger; statistics sampling on ticks `600k .. 600k+4`; victory
 evaluation every tick.
 
 Per frame only (not simulation): the statistics listeners, message expiry
@@ -1016,7 +1019,7 @@ tick after the load, `stateTime` of both players = that tick]`.
   600-tick territory sample must be reproduced on the same ticks.
 - **`kind` differs per machine** (2 on the owner's machine, 3 elsewhere) and must not influence synchronised
   state. In the code it selects only presentation (§3.13) and, for kind 1, rules that are the same everywhere
-  (§3.4) `[inferred]`: of the 26 functions that call `PlayerTable_FindLocalPlayer`, the three victory functions
+  (§3.4) `[inferred]`: of the 26 functions that call `ai::player::PlayerTable::FindLocalPlayer`, the three victory functions
   were read; the others are, by name, UI, camera, cursor, music, renderer, quest and script functions plus
   `MapModifier_InitAfterMapLoad` S 00673000 and `NSettlers::System::PickRandomCinematicTarget` S 006556a0,
   whose use of the local player was not read.
@@ -1087,7 +1090,7 @@ to ticks.
 | 2 | `[TODO]` In an offline match (network mode 0) nothing creates command 0x2002B (§3.8); confirm that leaving through the menu simply ends the match with no castle removed | game observation; or a hook on S 00782910 while leaving an offline match |
 | 3 | `[TODO]` How many `GiveUpGame` (0xDD4) messages a give-up sends: no latch exists in the sending path (§3.8), so the count depends on when the requester stops being updated (whether the main-screen activation in the result callbacks S 006005c0 / S 00600690 does that, and what happens if the referee never answers) | static read of `AppState_ActivateMainScreen` and of the dialog update loop of `nMenu::System`; or a capture of the referee connection while giving up |
 | 4 | Answered: with start resources "high" the mines of a human player work without food (`village-buildings.md` §3.8) | static: S 005be330 and its three callers in `NVillage::Production`; `Player.state` set in S 005bea90 |
-| 5 | `[TODO]` Is the component order of the colour table at S 0087ead8 red, green, blue, alpha? (§2.2) | a consumer of `Player_GetColorEntry` S 005be2c0 that hands the four floats to a named colour setter; or game observation of the eight player colours |
+| 5 | `[TODO]` Is the component order of the colour table at S 0087ead8 red, green, blue, alpha? (§2.2) | a consumer of `ai::player::Player::GetColorEntry` S 005be2c0 that hands the four floats to a named colour setter; or game observation of the eight player colours |
 | 6 | `[TODO]` A reader of lock map 2 ("sacrifices made available") that does not go through `IsLocked` (§3.10) | cross-references to the map subscript S 005bf670 with `Player +0x7c` |
 | 7 | `[TODO]` Whether any code writes `GameLoadDescriptor +0x24` (start-position shuffle) without the setter S 005a9b10 (§3.4). The free-game combo handler S 005e8200 does not (it calls the setters of `+0x20`, `+0x28` and `+0x244` only) | search for writes to the descriptor at `+0x24` in the free-game panel's start function |
 | 8 | Answered (§7): after loading a save in which a side had already won, the win is declared again in the first tick and the victory dialog shows again; no victory state is stored. Open: the second `FinishGame` in a lobby match (same code path, not observed online) | static: S 00535d70, S 005357c0, S 005275c0; live 2026-10-12 |
@@ -1101,25 +1104,25 @@ to ticks.
 
 | Address | Name | Role |
 |---|---|---|
-| 005bdc70 | `PlayerTable_ctor` | 8 slots + neutral entry |
+| 005bdc70 | `ai::player::PlayerTable::ctor` | 8 slots + neutral entry |
 | 005bdd50 | `PlayerTable::GetEntry` | slot by index |
-| 005bdda0 | `PlayerTable_FindLocalPlayer` | first active kind-2 slot, else slot 0 |
-| 005bddd0 | `PlayerTable_UpdateAll` | per-tick update of active slots |
+| 005bdda0 | `ai::player::PlayerTable::FindLocalPlayer` | first active kind-2 slot, else slot 0 |
+| 005bddd0 | `ai::player::PlayerTable::UpdateAll` | per-tick update of active slots |
 | 005bdf30 | `PlayerTable::HasEnemyOf` | any active enemy |
-| 005bdf70 | `PlayerTable_RevealAllies` | allies start as spotted |
+| 005bdf70 | `ai::player::PlayerTable::RevealAllies` | allies start as spotted |
 | 005be010 | `PlayerTable::InitNeutralPlayer` | neutral entry |
 | 005be100 | `PlayerTable::CreatePlayer` | `Init` + "created" notification |
-| 005be150 | `PlayerTable_RemoveAllPlayers` | "removed" notification + reset |
+| 005be150 | `ai::player::PlayerTable::RemoveAllPlayers` | "removed" notification + reset |
 | 005bde00 / 005be1b0 | `PlayerTable::Store` / `Load` | save |
 | 005bde70 | `PlayerTable::StoreChecksum` | lockstep checksum |
-| 005bfed0 | `Player_Construct` | allocate sub-objects, defaults |
+| 005bfed0 | `ai::player::Player::ctor` | allocate sub-objects, defaults |
 | 005bea90 | `Player::Init` | activate a slot |
-| 005bea50 | `Player_Reset` | deactivate a slot |
+| 005bea50 | `ai::player::Player::Reset` | deactivate a slot |
 | 005be280 | `Player::IsEnemyOf` | hostility predicate |
-| 005be230 | `Player_ClearRelationFlags` | spotted / reached reset |
+| 005be230 | `ai::player::Player::ClearRelationFlags` | spotted / reached reset |
 | 005be2d0 | `Player::SetPlayerSpotted` | `spotted[j] = 1` |
-| 005be330 / 005be350 | `Player_IsStateNotDefault` / `Player_IsStateDefault` | start-resources predicates |
-| 005bf8a0 | `Player_Update` | caches and warnings |
+| 005be330 / 005be350 | `ai::player::Player::IsStateNotDefault` / `ai::player::Player::IsStateDefault` | start-resources predicates |
+| 005bf8a0 | `ai::player::Player::Update` | caches and warnings |
 | 005be2f0 | `Player::RecountStocks` | refill both stock caches |
 | 005be970 / 005bf040 / 005bfeb0 | `Player::IsLocked` / `Unlock` / `SetLockFlag` | lock maps |
 | 005be3c0 / 005be500 / 005be6e0 | `Player::Store` / `Load` / `StoreChecksum` | save and checksum |
@@ -1138,7 +1141,7 @@ to ticks.
 | 00535870 | `VictoryConditions::IsVictoryReached` | win test per mode |
 | 00535990 | `VictoryConditions::DeclareWinner` | winners, losers, referee, profile |
 | 0053a8b0 / 0053a9d0 | `VictoryCond_ActivateQuest` / `VictoryCond_UpdateQuestText` | victory quest |
-| 0052da20 / 0052da60 | `GameQuery_AreAllMainQuestsFinished` / `GameQuery_IsAnyMainQuestFailed` | scenario mode |
+| 0052da20 / 0052da60 | `ai::game::GameQuery::AreAllMainQuestsFinished` / `ai::game::GameQuery::IsAnyMainQuestFailed` | scenario mode |
 | 005af7e0 | Lua `logic.victory_setupQuests` | victory mode 5 |
 | 00782910 | `nGame::System::HandleCommand_2002B` | player left: remove castle |
 | 00600760 | `Requester_SendRefereeGiveUpGame` | menu give-up → referee |
@@ -1157,7 +1160,7 @@ to ticks.
 | 005c1370 / 005c30c0 | `GoodArrangement::InitFromTribe` / `ArrangementBase::PickNext` | good distribution |
 | 005c0930 | `NPlayer::Military::ResetDefaults` | military setting defaults |
 | 005c17f0 | `Counter08_IncrementWrap20` | ship name counter step (0..20) |
-| 005be2c0 | `Player_GetColorEntry` | colour table entry of a player |
+| 005be2c0 | `ai::player::Player::GetColorEntry` | colour table entry of a player |
 | 00775dd0 / 00775ca0 | `Game_DistributeChestsForNetworkMatch` / `ChestPlacement_PickFarthestFromPlayers` | seeded chests of a network match |
 | 00528360 / 00528910 / 00526f30 | `NLogic::System::ctor` / `GameSystem_Construct` / `GameSystem_Destroy` | per-match lifetime of the logic system |
 | 007842e0 / 007834e0 / 00781cb0 | `nGame::System::BuildScene` / `Shutdown` / `ShutdownAndDestroyGameSystem` | create / destroy the logic system |

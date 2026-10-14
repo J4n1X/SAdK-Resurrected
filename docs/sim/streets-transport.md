@@ -158,7 +158,7 @@ stride 0x20 [known] S 0066b640.
 | +0x05 (+0x25) | `hasNextWaypoint` (byte) | 1 while `nextWaypoint` is a valid next-hop flag cell [known] S 0064f470 |
 | +0x08 (+0x28) | `carrierRef` | the settler that carries the package **or has claimed it** on a flag [known] S 0077ac50 |
 | +0x28 (+0x48) | `flagRef` | the flag the package is registered on (id hi at package+0x5c) [known] S 0053c980 |
-| +0x48 (+0x68) | `nextWaypoint` | cell of the next flag on the route, −1,−1 = none [known]. Every reader goes through `TransportMovement_GetNextWaypoint` S 0064ef90, which returns this cell only while `hasNextWaypoint` = 1; otherwise the cell of the flag in `flagRef` if that is valid; otherwise the cell of the settler in `carrierRef` if that is valid and his movement is not busy; otherwise an invalid cell [known]. "Next waypoint" in §3 always means this value |
+| +0x48 (+0x68) | `nextWaypoint` | cell of the next flag on the route, −1,−1 = none [known]. Every reader goes through `ai::transport::TransportMovement::GetNextWaypoint` S 0064ef90, which returns this cell only while `hasNextWaypoint` = 1; otherwise the cell of the flag in `flagRef` if that is valid; otherwise the cell of the settler in `carrierRef` if that is valid and his movement is not busy; otherwise an invalid cell [known]. "Next waypoint" in §3 always means this value |
 | +0x50 (+0x70) | `placedOnFlag` (byte) | 1 = physically lying on a flag; 0 = in a hand or in cargo [known] S 0064f4c0, S 0064cd10 |
 | +0x54 (+0x74) | `revalidateCount` | int, §3.6 [known] S 0064f510 |
 | +0x58..+0x74 | next-hop cache | `cachedHop` cell, `cachedFrom` cell, `cachedFromNet` Unique (§3.6) [known] S 0064f3a0 |
@@ -717,10 +717,10 @@ idle-like state do nothing; if `notYetOnStreet` → `UpdateDropOffAfterSpawn`; e
 
 **WaitForPackage** S 0077ac50 [known]: the carrier waits at his working position (settler vtable +0x2c =
 S 0065ab00: the `mid` cell of his street, §2.9). While he stands there he looks for work only
-when `(tickCounter + settler.idLo) % 20 == 0` [known for the modulus; inferred that settler+0x10 is the low dword of
-his id]; when displaced he looks every tick. If his cell is on his street's path and
+when `(tickCounter + settler.unique.idLo) % 20 == 0` [known; `Settler.unique` is the `NLogic::Unique` at
+settler+8, whose `idLo` is at +8, S 00656c20]; when displaced he looks every tick. If his cell is on his street's path and
 `CarrierChoosePackageOnStreet` returns a package, he **claims** it (package `carrierRef` = him) and the movie ends.
-Otherwise, when displaced: if `SettlerMovement_StopAndIsCellCentered` holds and the walk back to the working
+Otherwise, when displaced: if `ai::settlers::SettlerMovement::StopAndIsCellCentered` holds and the walk back to the working
 position can be started, he walks back (movie step 0x15, then waiting again); if not, the movie **ends without a
 package**, which in state 0x16 leads to `Settler::StopAndSetState3` (table above) [known].
 
@@ -776,10 +776,10 @@ the carrier's street path, else the movie fails to start.
   `hasNextWaypoint`, its next waypoint is its target flag and equals `flag`'s cell (final destination); else true
   when the package is already registered on a flag (`flagRef` valid, i.e. admission was granted earlier); else
   false.
-- *Waiting at the target* (step 0x14): when `(tickCounter + settler.idLo) % 10 == 0`: take the flag at the
+- *Waiting at the target* (step 0x14): when `(tickCounter + settler.unique.idLo) % 10 == 0`: take the flag at the
   package's next waypoint (or at his own cell if the waypoint is not on his street) and
   `Transport_CarrierTryPlacePackageOnFlag`; on success the movie ends if he stands there, else it restarts.
-  On failure, when `(tickCounter + settler.idLo) % 200 == 0`, try the **street swap** (§3.10).
+  On failure, when `(tickCounter + settler.unique.idLo) % 200 == 0`, try the **street swap** (§3.10).
 
 **Pickup / Drop** (S 007781e0, S 00777e00, S 00777d10, S 00777d50) [known]: each movie arms the settler action
 timer (`NSettlers::Animation`, settler +0x18) twice. In **both** movies the first phase (before the hand-over) is
@@ -929,9 +929,9 @@ building is removed and when an upgrade is cancelled. `CreatePackageAt` S 0064cd
 ### 3.10 Street swap between two carriers
 
 Tried by a carrier that waits at his target flag with a package he cannot put down, when
-`(tickCounter + settler.idLo) % 200 == 0` (`GoToPackageTarget::Update` S 0077a2f0) [known]:
+`(tickCounter + settler.unique.idLo) % 200 == 0` (`GoToPackageTarget::Update` S 0077a2f0) [known]:
 
-1. the carried package has a ship or building target (`FUN_005b7b40` S 005b7b40 on the `TransportTarget`: true
+1. the carried package has a ship or building target (`ai::transport::TransportTarget::HasTarget` S 005b7b40 on the `TransportTarget`: true
    when the building or the ship reference is valid [known]);
    `hop = ComputeNextHop(flag cell)`; `hop` valid and ≠ the flag cell;
 2. `other` = the street of the first link from this flag to the flag at `hop` (`Flag::FindLinkToFlag`); it must not
@@ -975,7 +975,7 @@ The callers (production, construction, sacrifice, training, expedition, catapult
      `sortedIdx` vectors then keep their old content [known].
    - Within a player a category is left when its entries are exhausted; within an entry the node list is
      collected with `AddUniqueNode` S 00652fd0 and reset when the iterator moves to the next entry
-     (`NextNodeInPlayer` S 00653180, `GoodOrderIterator_NextNode` S 00653250) [known].
+     (`NextNodeInPlayer` S 00653180, `ai::logistics::GoodOrderIterator::NextNode` S 00653250) [known].
    - The *node* of a need is its target flag (need vtable +0xc). Two nodes are the same when their flags have the
      same kind-0 net continent (S 00652fd0). So **one node per connected goods network** is visited per good and
      category, represented by the first need's flag [known].
@@ -1124,7 +1124,7 @@ fromCell, toCell, currentStreet)` S 007735b0 [known]:
   current street already leads there (`Flag::FindShortestLinkToFlag` S 0066a1f0, `StreetPath::ComputeRoute`
   S 007741e0).
 
-`SettlerMovement_AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next flag of the
+`ai::settlers::SettlerMovement::AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next flag of the
 route also has a harbour link and the shortest street between them is a sea street with a valid ship route, the
 settler is linked into the flag's `waitingSettlers` and waits for the ship (the test on the street is that its
 `shipRouteRef` is valid). The same link is made when a settler arrives on the cell that is his route target, a
@@ -1193,7 +1193,7 @@ executor that does nothing in this build (`game-commands.md`).
 | village: building removed / upgrade cancelled / construction aborted | `SpillGoodsOntoFlag`, `CreatePackageAt` | goods back onto the flag |
 | village: requests | `NeedGoods::AddRequest(s)`, `CancelRequest`, `ClearAll`, `CancelAllRequestsOfGood` | needs |
 | village: supplier and settler-order searches | `GetFlagPathCost`, `NLogic_UniqueArray40_IsEqualAt` | distance and connectivity |
-| village: order system | `StreetLink_LinkCarrierSlot78` / `FUN_0053cb20` (slot 2) | carrier arrives for a street |
+| village: order system | `StreetLink_LinkCarrierSlot78` / `StreetLink_LinkCarrierSlot98` (slot 2) | carrier arrives for a street |
 | production workers | `Transport_CarrierTryPlacePackageOnFlag`, `PutDownCarriedPackage`, package creation S 0064cce0 (also called by the ship-building movie S 0077d6c0) | product onto the flag |
 | navy | `BuildStreet(type 3)` (S 005b71d0), `BuildStreet(type 0)` (expedition, S 005b8ac0), `RemoveStreet`, `Logic_PlaceFlag` (harbour flag, S 005b5670), `Flag::LinkNavyObject / UnlinkNavyObject`, `Transport_LoadPackageIntoHolder` S 0064cd60, `UnloadPackageFromCargo` S 0064d0b0 | sea streets, harbour flags, cargo |
 | map / territory | `RemoveForeignStreetsInRadius`, `RemoveStreetsOutsideTerritory` | territory changes |
@@ -1240,7 +1240,7 @@ doodads of the cell at once, inside a batch it adds the cell to the dirty rectan
 | `properties.hp_setWaterStreetPosition(harbor, index, x, y)` (`harbors.lua`) | S 0054b120 → `HarbourProperty+0x20+index*8` | e.g. `(harbor_sw, 0, -2, -3)` | cell offsets used by the navy for the sea street through a harbour (`navy-and-military.md`) |
 | `properties.dd_setDeleteByStreet(doodad, bool)` (`doodads.lua`, 26 calls) | S 00550150 → `DoodadProperty+0x41`; `NDoodads::Object::ShouldBeRemoved` S 005454f0 | `false` for the 26 sign doodads (`doodad_emptySign`, `doodad_waterSign`, the resource signs); not set for any other doodad (default in `properties-data.md`) | a doodad with the flag set is removed by the obstructed-doodad pass when its cell has the street bit 0x2 (unless the doodad is indestructible) [known] |
 | `properties.ai_enableStreetOptimizing`, `ai_enableWaterStreets` (`ai.lua`) | AI properties | per AI profile | computer player only |
-| `<Street .../>` (`settings/graphics.xml`) | `StreetRenderer_LoadConfigXml` S 006c3f10 | textures, colours, buoy | presentation only |
+| `<Street .../>` (`settings/graphics.xml`) | `ai::gfx::StreetRenderer::LoadConfigXml` S 006c3f10 | textures, colours, buoy | presentation only |
 
 Constants in code, not data [known]: measuring limit 6000 (a period is 6001 street updates, §3.7) and upgrade
 threshold 130.0 (S 00668e10); ×3 busy
@@ -1256,7 +1256,7 @@ factors 0.8 / 0.6 / 0.4 (S 0052d9e0).
 ## 7. Save and load
 
 Stream primitives: section tag (stream vtable +0x40), byte (+0x58), i32 (+0x5c), u32 (+0x64), float32 (+0x4c);
-a `Unique` or reference stores its 64-bit id; a cell stores two i32 (`PatternCursor_Serialize`). The container and
+a `Unique` or reference stores its 64-bit id; a cell stores two i32 (`ai::map::MapPos::Store`). The container and
 the order of the systems are in `logic-core.md` §7 (transport is saved before the street net).
 
 Section tag texts are the strings of the log categories [known, string table S 007f81f8..007f88f4; `Flag`
@@ -1470,12 +1470,12 @@ disappears without being booked when there is no such building.
 | 0064d120 / 0064d2f0 / 0064d750 | `CanSwapPackagesAtFlag` / `FindBestSwapPackageOnFlag` / `FindSwapPackageAtStreetEnd` | exchange |
 | 0053c980 / 0053c9d0 | `TransportLink_AttachPackageToFlag` / `DetachPackageFromFlag` | package–flag link |
 | 0064f3a0 / 0064f470 / 0064f510 / 0064f4c0 | `TransportMovement::ComputeNextHop` / set next hop / `RevalidateNextHop` / `OnPlacedOnFlag` | package routing |
-| 0064ef20 / 0064ef90 | `TransportTarget_GetTargetFlag` / `TransportMovement_GetNextWaypoint` | target flag, waypoint |
+| 0064ef20 / 0064ef90 | `ai::transport::TransportTarget::GetTargetFlag` / `ai::transport::TransportMovement::GetNextWaypoint` | target flag, waypoint |
 | 00652170 | `NTransport::NeedSystem::Update` | need dispatcher |
 | 00651f10 | `NeedSystem::SettleIdlePackages` | release / deliver idle serving packages |
 | 00652420 / 00651bc0 / 00651cb0 | `NeedSystem::CreateNeed` / `DeliverPackage` / `DiscardAssignedPackage` | need life cycle |
 | 006541e0 / 00652e00 / 00651330 / 00652b70 | `GoodOrder_GetCategory` / select order / stock-and-age score / arrangement | need selection |
-| 006538f0 / 00653250 / 00653180 | sorted entries / `GoodOrderIterator_NextNode` / `NextNodeInPlayer` | need iteration |
+| 006538f0 / 00653250 / 00653180 | sorted entries / `ai::logistics::GoodOrderIterator::NextNode` / `NextNodeInPlayer` | need iteration |
 | 006506a0 | `NTransport::PackageNeedSystem::Update` | free packages to storehouses |
 | 006501d0 / 006502d0 | `HasFreePackageInNetwork` / `FindNearestFreePackage` | free package lookup |
 | 00557da0 / 00557ef0 / 006517d0 | nearest connected supplier (with good / any) / `Transport_FindSupplierBuilding` | supplier search |
@@ -1486,7 +1486,7 @@ disappears without being booked when there is no such building.
 | 0077a0c0 / 00557fe0 / 00557ef0 | give-up test / `BuildingList_FindNearestReachable` / `FindNearestConnected` | giving up a blocked package |
 | 007781e0 / 00777e00 / 00777d10 / 00777d50 / 0065f040 | `Pickup::Start` / `Update`, `Drop::Start` / `Update`, `Animation::Tick` | hand-over timers |
 | 00664fb0 | `StreetNet_AssignCarrierToSplitStreet` | carrier after a split |
-| 007735b0 / 007741e0 / 00657b80 | `StreetRoutePlan::Plan` / `StreetPath::ComputeRoute` / `SettlerMovement_AdvanceStreetRoute` | settlers walking by street |
+| 007735b0 / 007741e0 / 00657b80 | `StreetRoutePlan::Plan` / `StreetPath::ComputeRoute` / `ai::settlers::SettlerMovement::AdvanceStreetRoute` | settlers walking by street |
 | 0066d390 / 00671730 | `FlagParking::FindFreeSpot` / `FreeSpotSearch::Init` | waiting spots, random draw |
 | 005c2620 | `NPlayer::GoodPriorities::GetRankOfGood` | rank of a good |
 | 005c2bf0 | `NPlayer::GoodPriorities::InitFromGoodTable` | default priority list |
@@ -1501,7 +1501,7 @@ disappears without being booked when there is no such building.
 | 00652fd0 | `GoodOrderIterator::AddUniqueNode` | one node per network |
 | 00623da0 | `nMenu::ActionButton::RefreshAvailability` | the only writer of `cacheDisabled` = 1 |
 | 0066b470 / 006707f0 / 00664550 | `Flag::Load` / `NetContinentIds::Load` / `NNet::System::StoreForChecksum` | load gates, checksum |
-| 00651530 / 0064f060 / 0064ee00 / 00652900 / 00775740 | `Package::Store` / `TransportMovement::Store` / target store / `NeedGood_Store` / `NLogic::Need::Store` | transport records |
+| 00651530 / 0064f060 / 0064ee00 / 00652900 / 00775740 | `Package::Store` / `TransportMovement::Store` / target store / `NTransport::NeedGood::Store` / `NLogic::Need::Store` | transport records |
 | 0054c4a0 / 0054c200 / 0054ad40 / 0054e670 | Lua property setters | data keys of §6 |
 | 0054c410 / 0054c440 / 0054b120 / 00550150 | Lua property setters (`cfg_setPickupTime`, `cfg_setDropTime`, `hp_setWaterStreetPosition`, `dd_setDeleteByStreet`) | data keys of §6 |
 | 005454f0 | `NDoodads::Object::ShouldBeRemoved` | reader of `deleteByStreet` (street bit 0x2) |

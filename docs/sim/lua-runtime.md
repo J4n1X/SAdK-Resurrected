@@ -320,7 +320,7 @@ script calls it.
 | `vi_addGoodsToDepot(p, x, y, good, amount)` | C, P | building at the cell owned by `p` whose type has `depot`: adds to its stock | yes |
 | `vi_enableProduction(p, x, y, bool)` | C, P | finished building at the cell owned by `p` that produces goods: `Production::SetEnabled` if the state differs | yes |
 | `vi_orderSacrifice(p, x, y, sacrifice)` | C, P | building at the cell owned by `p` with `workingMode == 9`: if `VillageSacrifice::CanOrder(id)`, `Order(id, 0)` | yes |
-| `vi_startSacrifice(p, x, y, target)` | C, P, P on `target` | same building test, and `VillageSacrifice::CheckCanStart() == 0` (S 00560f20: a sacrifice is on order, none is active, the goods are complete or the order was free, no cooldown, no running sacrifice of that definition, an enemy exists if the sacrifice targets one, not locked; [quests-sacrifices-stats.md](quests-sacrifices-stats.md) §3.2): sets the target player (field +0x0c) and calls `VillageSacrifice_Start` | yes |
+| `vi_startSacrifice(p, x, y, target)` | C, P, P on `target` | same building test, and `VillageSacrifice::CheckCanStart() == 0` (S 00560f20: a sacrifice is on order, none is active, the goods are complete or the order was free, no cooldown, no running sacrifice of that definition, an enemy exists if the sacrifice targets one, not locked; [quests-sacrifices-stats.md](quests-sacrifices-stats.md) §3.2): sets the target player (field +0x0c) and calls `ai::village::VillageSacrifice::Start` | yes |
 
 **Ships** (`na_`; [navy.md](navy.md))
 
@@ -458,9 +458,13 @@ isFullPath)` S 0078ac10, which first replaces the camera spline by a new empty o
 
 - `cutscene.addPosition(dt, x, y, z)`: appends a position key at time `lastPositionKeyTime + dt` (S 0078a5b0);
 - `cutscene.addLookAt(dt, x, y, z)`: the same for the look-at track, which has its own running time (S 0078a660);
-- `cutscene.setRelative()`: sets the spline's "relative" byte (+0x41): coordinates are offsets from the page's
-  anchor cell (`x, y` of `menu.addCinematicPage`) [inferred from the name and from the data: 39 of the 186 map
-  cutscene files call it and use small coordinates];
+- `cutscene.setRelative()`: sets the spline's `relative` byte (`CameraSpline +0x41`, S 0078a640) [known]. No
+  function reads that byte, so the call has no effect of its own [inferred, search of the decompiled program].
+  Whether the position keys are offsets from a page's anchor cell is decided by the page, not by this call:
+  `nMenu::Cinematic::Update` S 005fb3e0 plays the path at the page's cell when the page has one (`x, y` of
+  `menu.addCinematicPage`) and unshifted otherwise ([camera-input-cutscenes.md](camera-input-cutscenes.md)
+  §3.7). 40 cutscene scripts of the game data call it in their first line, the ones written with small
+  coordinates [known: data];
 - `cutscene.createLoopAtEnd()`: `CameraSpline::SetLoop(true)` (S 0078a6f0; only `cutscene_circle.lua`).
 
 The two `add` functions read four floats (float32); `setRelative` and `createLoopAtEnd` read no argument; all
@@ -722,16 +726,25 @@ simulation state and draw from the simulation random generator.
   The same control-word call (`Fpu_SetDefaultControlWord` S 0057b9b0) is also made in
   `CApplicationEx::Initialize` S 004075d0 **before** the script host is created and `data.lua` runs, in
   `nGame::System::HandleGameCommand` S 007845a0 and in `Lobby::CLobby::Update` S 004fb460 [known: its four
-  callers]. [inferred] the property scripts, the top-level chunk and `onStarted` / `onLoaded` therefore also run
-  at 24-bit precision, unless a library call in between changes the control word. Inside the executable nothing
+  callers]. The scripts of a world build run at 24-bit precision: the control word read through `_controlfp(0, 0)`
+  on the main thread is `0xA001F` (all exceptions masked, 24-bit precision, round to nearest) at the entry of
+  `onLoaded` S 005b2180 and at the entry and exit of `BuildWorld` S 00784d40, which also calls `onStarted`
+  [live, 2026-10-14]. [inferred] the property scripts at start-up also run at 24-bit precision, unless a library
+  call between `Initialize` and them changes the control word (they run before a debugger can attach and were not
+  read live). Inside the executable nothing
   else does [known]: `__controlfp` S 006fa4ab has this one caller, there is no `FNINIT`, and every other `FLDCW`
   is an inline float-to-integer conversion or a runtime math function that restores the word it found; between
   the call in `Initialize` and `RunPropertyScript("data")` only the file scan, `GetWindowRect`, the timer and
-  the script host run (S 004075d0). [TODO] not established: that no library outside the executable (Direct3D,
-  FMOD, tincat3) changes it before `onStarted` / `onLoaded`
-  (`weissBeerAmount * 0.34` with `weissBeerAmount = 60` in `C02.lua` gives 20.4 in double but 20.39999961853
-  when rounded to float32 and printed with `%.14g`); settled by reading the FPU control word in the running
-  game during `onStarted`. The affected values
+  the script host run (S 004075d0). Outside the executable: Direct3D 9 leaves the word alone, because the device
+  is created with `D3DCREATE_FPU_PRESERVE` (`behaviorFlags | 2`, `CGraphicDevice::CreateDevice` S 004d5bf0)
+  [known]; `tincat3.dll` and `NxCharacter.dll` load a control word only around inline float-to-integer
+  conversions and restore it, and `NxCharacter.dll`'s `__control87` has no caller [known]. The word is per
+  thread, so FMOD's mixer thread does not matter. `PhysXLoader.dll` contains no `FLDCW` [known]. FMOD's API
+  (`fmod.dll` is packed: 162,816 bytes on disk, 618,496 in memory, so it cannot be read statically as shipped),
+  D3DX (a Windows library, effect compilation during the splash screen) and the PhysX core were not read; whatever
+  they do, the word is `0xA001F` when `onStarted` / `onLoaded` run [live, 2026-10-14]. So
+  `weissBeerAmount * 0.34` with `weissBeerAmount = 60` in `C02.lua` gives 20.39999961853 (float32, printed with
+  `%.14g`), not the double 20.4 [inferred]. The affected values
   reach the simulation only as quest progress text (saved, displayed) and through comparisons such as
   `goodAmount >= 20.4`, where both roundings give the same integer threshold (21).
 - **Number formatting.** `"%.14g"` of the C runtime (S 007ec644); integers print without a decimal point.
@@ -783,8 +796,8 @@ simulation state and draw from the simulation random generator.
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | FPU precision during `onStarted` / `onLoaded` (§8): whether a library outside the executable changes the control word. Inside the executable nothing but `Fpu_SetDefaultControlWord` sets precision or masks, and the property scripts run right after it | running game: read the control word in a hook of S 005b2220 and of S 0054f8d0 |
-| 2 | Time unit of cutscene keys and the exact meaning of `setRelative` (§3.8) | static read of the `CameraSpline` evaluation |
+| 1 | Answered (§8): the control word is `0xA001F` (24-bit precision, all exceptions masked, round to nearest) at the entry of `onLoaded` and at the entry and exit of `BuildWorld`, which calls `onStarted`, so the scripts of a world build run at single precision [live, 2026-10-14]. The property scripts at start-up run before an attach and were not read live; inside the executable nothing between `Fpu_SetDefaultControlWord` and them changes the word | — |
+| 2 | Time unit of cutscene keys (§3.8). `setRelative` is answered there: it sets a byte that nothing reads; the shift of a path comes from the cinematic page's cell | static read of the `CameraSpline` evaluation |
 | 3 | Whether a `vi_forEachBuilding` callback may add or remove buildings (§3.6). The loop S 005b14c0 keeps a raw pointer into the village's building vector across the callback and re-reads only the vector's end each step [known]; [inferred] an erase in front of the pointer skips one building and a reallocation leaves the pointer dangling. Open: whether the removal functions erase from that vector at once or defer it. The shipped callbacks (`C08.lua`: `stopProduction`, `startProduction`, `create...Fire`, `create...Water`) are not meant to remove buildings | static read of the building removal path (`vi_destroyBuilding` → village erase) |
 | 4 | Answered (§6.1): the info-page scripts (`scripts\info\*.lua`) never run; `nMenu::Info::Open` S 005f6310 has one reference, the direct call at S 005d9776 with mode 0 | static: references to S 005f6310 |
 | 5 | Behaviour of the unused `ui.set*` widget functions and `editor.*`; the pixel reference of the `ui.*` coordinates (§3.7) | static read; low priority, no shipped map script depends on it outside the quest list |

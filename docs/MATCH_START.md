@@ -1,124 +1,122 @@
 # Match start — pre-game room → loading the map → playing
 
-> ## ⚠️ CORRECTED 2026-07-25/26
->
-> `0x4316c0` was named `LobbyGameScreen_OnStartLoading` and described as the **`NE_StartLoading`
-> (NComm `0x30012`) handler**. **Both were wrong.** It is the **village connection's `LoggedOut`
-> observer** (`villageConn+0x1c`), renamed `LobbyGameScreen_OnVillageConnectionLoggedOut`. The real
-> `NE_StartLoading` handler is `Manager_HandleNCommEvent@0x40e560` case `0x30012`, which only sets
-> `NComm+0x3cc`. Trigger references below have been corrected in place.
->
-> ⛔ Consequence for the chain: the referee is armed by a **village LoggedOut**, which the client only
-> reaches after sending msg **2002** (leave village) — and `OnLoggedOut` has since been shown
-> **unreachable** for the village transport class (`CommLayer::ConnectionReal`). So the
-> "match-start needs a village LoggedOut" model **cannot be how the real flow works**. Treat the
-> referee/GameSeed phases below as still-valid RE, but the *entry* into them as an open question.
-> Evidence: `decomp/RENAME_LIST.md`, 2026-07-25/26 entries.
+How the **client** leaves the pre-game room and starts the match. All addresses are in
+`sadk_noav.exe`. Tags: `[PROVEN]` = address plus live evidence (the stub's referee chain, two matches
+back-to-back on 2026-07-27, `lobby/sadk_lobby/referee.py`, `engagement_records/2026-07-27_referee-*.md`);
+`[known]` = read at the address; `[TODO]` = open.
 
-How the **client** transitions out of the pre-game game-screen into actually loading the
-map and starting the match. This is the long-stuck `[TODO]` ("Entering matches"). All
-addresses are **`sadk_noav.exe`** (the active binary), verified live via the Ghidra MCP
-this session. Evidence tags: `[PROVEN]` = address + decompiled evidence here;
-`[TODO]` = inferred or runtime-indirected, needs a live trace.
+Match start is **referee-gated**: the load starts in the handler of the referee's
+`RegisterGameResult(0xDB8)` (S 00431800). The `GameSeed` that message carries only seeds the chest
+contents (Phase 2).
 
-> **Why it's broken in the stub.** Match start is **referee-gated**. The referee /
-> match-arbiter subsystem was removed from `lobby/sadk_lobby/`, so the client's referee login
-> never completes and the host's `RegisterGame` never gets a `RegisterGameResult(0xDB8)` back — and
-> the handler of that message is what starts the load (S 00431800). The `GameSeed` it carries only
-> seeds the chest contents (Phase 2). The 3D lobby works; pressing through to a match does not.
+Names: the lobby root object is `LobbyComm::System` (`g_pLobbyManager`; called LobbyManager in older
+notes; `LM+0x..` is an offset inside it). The 3D village screen is `LobbyMenu::WorldScreen` (called
+LobbyGameScreen in older notes).
 
 ---
 
 ## The big picture (sequence)
 
 ```
-        ┌── HOST only ──────────────────────────────────────────────┐
-        │ Start clicked → Lobby_HostRegisterGameWithReferee@0x432240 │
-        │   gathers room state, sends RegisterGame(0xDB6) ──────────────► REFEREE
-        │                                              RegisterGameResult(0xDB8) ◄──
-        │                                              { Result==0 → GameSeed }    │
-        └────────────────────────────────────────────────────────────┘
-                                                                            (seed → +0x50 fan-out)
-
   ALL clients (host + joiners):
-   NE_StartLoading (NComm 0x30012) sets NComm+0x3cc; then client sends msg 2002 (leave village)
-   and the village conn must report LoggedOut (+0x1c)  [SEE CORRECTION BANNER]
-        → LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0
-            ├ observer?         → just proceed (vtbl[0x30])
-            ├ MP game?          → ARM referee login  (+0x3624=1,+0x3625=1,+0x362c=0,+0x3628=0x10)
-            └ single/direct?    → LOAD NOW: Game_SetRunMode(game,2) + Game_PropagateModeToChildren(game)
+   NE_StartLoading (NComm 0x30012) sets NComm_Manager.cStartLoading (+0x3cc)
+   the client sends village msg 2002 (leave village); the server answers 1006 {0xDEADBEEF};
+   the client logs the village transport out; the village conn reports LoggedOut (+0x1c)
+        → WorldScreen::OnVillageConnectionLoggedOut@0x4316c0
+            ├ observer?                         → Hide (vtbl+0x30), nothing else
+            ├ NComm active and cStartLoading?   → ARM referee login
+            │                                     (+0x3624=1, +0x3625=1, +0x362c=0, +0x3628=0x10)
+            └ otherwise                         → NComm Shutdown, clear the arm flags,
+                                                  back to the avatar screen (RequestScreen(2))
 
-   per-frame: LobbyGameScreen_Update@0x435980  (the referee-login pump)
-        if armed:
-            retry>4            → give up waiting, LOAD ANYWAY (same Game_SetRunMode(2)+Propagate)
-            else after 0x10 fr → RefereeServerConnection_Login(LM+0x490, commSystem); clear do-login
-        OnLoginSuccess(0xDCA)  → fan-out refConn+0x80 → screen callback un-arms & proceeds   [TODO callback]
-        OnLoginFailed(0xDCB)   → fan-out refConn+0x8c → screen callback re-arms / ++retry      [TODO callback]
+   per frame: WorldScreen::Update@0x435980  (the referee-login pump, while +0x3624 is set)
+        tries > 4, or NComm state 0 → ABORT: clear the flags, RequestScreen(2), NComm Shutdown
+        armed and delay == 0        → RefereeServerConnection::Login(LM+0x490, local perm id); +0x3625 = 0
+        armed and delay > 0         → delay -= 1
+        LoginSuccess(0xDCA)  → refConn+0x80 → WorldScreen::OnRefereeLoginSuccess_RegisterGame@0x432240
+                               sends RegisterGame(0xDB6)            ─────────────► REFEREE
+        LoginFailed(0xDCB)   → refConn+0x8c → tries += 1, re-arm, delay = tries*8 + 16
+                                              RegisterGameAck(0xDB7), RegisterGameResult(0xDB8) ◄──
 
-   LOAD KICK:
-     Game_SetRunMode(game,2)            game+0xc = 2  (run mode → loading/in-game)
-     Game_PropagateModeToChildren(game) → Game_NotifyChildrenLifecycle: walk game+0x3b0 child
-                                          list, call each child vtbl[0x10] → every subsystem starts
+   LOAD KICK (success branch of 0xDB8):
+     WorldScreen::OnRefereeRegisterGameResult@0x431800 (gameId, GameSeed)
+        NComm_Manager::SetGameSeedIfState2(GameSeed)
+        SetupGameDialog::SetupSession(game information)   fills the load descriptor
+        clear +0x3624 / +0x3625
+        Lobby::CLobby vtbl+0x2c RequestModeTransition(1)  starts the match
 ```
+
+Every client whose WorldScreen is active subscribes these observers (`Activate` has no host check), so
+host and joiners both log in to the referee and both send `RegisterGame` `[PROVEN]` (0xDB6 arrived from
+both clients in the live run).
 
 ---
 
-## Actors & key addresses `[PROVEN]`
+## Actors & key addresses `[known]`
 
 | Thing | Where | Notes |
 |---|---|---|
-| `RefereeServerConnection` sub-object | `LobbyManager+0x490` | getter `LobbyManager_GetRefereeServerConnection@0x4624f0` |
-| Host start trigger | `Lobby_HostRegisterGameWithReferee@0x432240` | sole caller of `RegisterGame` |
-| Village-conn **LoggedOut** observer | `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | villageConn `+0x1c` LoggedOut — **NOT** NComm 0x30012 (corrected 2026-07-25) |
-| Per-frame pump / login retry | `LobbyGameScreen_Update@0x435980` | drives the arm flags below |
-| Observer subscribe / unsubscribe | `LobbyGameScreen_Subscribe/UnsubscribeConnectionObservers@0x4351a0 / 0x433d80` | OnEnter / OnExit |
-| Load kick | `Game_SetRunMode@0x429900` + `Game_PropagateModeToChildren@0x42a640` → `Game_NotifyChildrenLifecycle@0x429de0` | `game+0xc=2`, then fan-out to children |
+| `RefereeServerConnection` sub-object | `LM+0x490` | getter `LobbyComm::System::GetRefereeServerConnection@0x4624f0` |
+| RegisterGame sender | `LobbyMenu::WorldScreen::OnRefereeLoginSuccess_RegisterGame@0x432240` | sole caller of `RefereeServerConnection::RegisterGame` |
+| Village-conn **LoggedOut** observer | `LobbyMenu::WorldScreen::OnVillageConnectionLoggedOut@0x4316c0` | villageConn `+0x1c` LoggedOut. The NComm event 0x30012 (NE_StartLoading) is handled by `NComm_Manager::HandleEvent@0x40e560`, which only sets `cStartLoading` (`+0x3cc`) |
+| Per-frame pump / login retry | `LobbyMenu::WorldScreen::Update@0x435980` | drives the arm flags below |
+| Observer subscribe / unsubscribe | `LobbyMenu::WorldScreen::Activate@0x4351a0` / `Deactivate@0x433d80` | ten delegates; nothing is subscribed while the `LobbyComm::System` state is 1 |
+| Load kick | `Lobby::CLobby` vtbl `+0x2c` (slot `RequestModeTransition`, body `Lobby::CLobby::App_RequestStateTransition` S 004f4eb0; names `[inferred]`) with argument 1 | called by `OnRefereeRegisterGameResult` |
+| Abort / back to the lobby | `LobbyMenu::System::RequestScreen@0x429900` (screen 2) + `LobbyMenu::System::CloseDialogsOnScreenChange@0x42a640` | `RequestScreen` stores the requested lobby screen index (0 Empty, 1 Account, 2 Avatar, 3 World) in `System+0xc`; it is not a game run-mode setter |
 
-### `LobbyGameScreen` arm-state fields (`this+…`) `[PROVEN]`
+### `WorldScreen` referee-login fields `[known]`
 
-| Offset | Meaning |
-|---|---|
-| `+0x3624` | armed (referee login pending) |
-| `+0x3625` | do-login this cycle (one Login per arming) |
-| `+0x3628` | delay countdown (starts `0x10` frames) |
-| `+0x362c` | retry count; `>4` ⇒ stop waiting and load anyway |
+| Offset | Field | Meaning |
+|---|---|---|
+| `+0x35c8` | `setupGameDialog` | the 0xDB8 success handler acts only while this dialog exists |
+| `+0x3624` | `refereeLoginPending` | referee login in progress; `Update` hides the screen while it is set |
+| `+0x3625` | `refereeLoginArmed` | call `Login` when the delay has run out (one `Login` per arming) |
+| `+0x3628` | `refereeLoginDelay` | frames to wait (first 0x10, then tries × 8 + 16) |
+| `+0x362c` | `refereeLoginTries` | `> 4` aborts the match start |
 
 ---
 
-## Phase 1 — referee server assignment (before login) `[PROVEN, prior RE]`
+## Phase 1 — referee server assignment (before login) `[PROVEN]`
 
-The referee is a separate server, assigned on demand (see `REFEREE_FUNCTIONS_TO_NAME.md` §C/D):
+The referee is a separate server, assigned on demand:
 
-1. `LobbyServerList_RequestRefereeServer@0x468f60` → `GameServerManager::AssignServer` **NETMSG 189**
-   with `server_type=4, subtype=5`.
-2. `GameServerManager::OnGameServerAssigned` gates `type==4 && subtype==5` → fires the
-   referee-assigned callback `LobbyManager_SetRefereeServerAddress@0x4625d0` → stores `serverId`
-   to `LM+0x580`, arms a 60000 ms timer at `LM+0x588`.
-3. `LobbyManager_InitRefereeServerConnection@0x462910` (gated on `LM+0x580 != 0`) resolves the
-   serverId → ip:port and initialises the `RefereeServerConnection` at `LM+0x490`.
+1. `LobbyComm::ServerList::RequestRefereeServer@0x468f60` → tincat3 `GameServerManager::AssignServer`,
+   **NETMSG 189** with `server_type=4, subtype=4`.
+2. The reply reaches `ServerList::GameServerAssigned@0x469ad0`, which calls the pending callback
+   `LobbyComm::System::SetRefereeServerAddress@0x4625d0`: it stores `serverId` to `LM+0x580` and arms the
+   60000 ms timer at `LM+0x588`. The assign reply must be server type 4 / subtype 4: tincat3's
+   `GameServerManager::OnGameServerAssigned` (T 10021520) keeps a type 4 / subtype 5 reply to itself, and
+   `LM+0x580` then never latches.
+3. `LobbyComm::System::InitRefereeServerConnection@0x462910` (gated on `LM+0x580 != 0`) resolves the
+   serverId to ip:port and initialises the `RefereeServerConnection` at `LM+0x490`.
 
-## Phase 2 — host registers the game → GameSeed `[PROVEN]`
+## Phase 2 — the game is registered → GameSeed `[PROVEN]`
 
-`Lobby_HostRegisterGameWithReferee@0x432240` harvests the SetupGame room state and sends
+`WorldScreen::OnRefereeLoginSuccess_RegisterGame@0x432240` harvests the NComm session and sends
 **`RegisterGame(0xDB6)`**. Fields (cat 3 LobbyMessage):
 
 `GameID(u32)`, `MapGUID(16-byte buffer)`, `MapName(str)`, `MapSettings(str)`,
 `RankedGame(bool)`, `Wager(u32)`, `AIPlayer(u8 flags)`, `AvatarID(u32) ×6` (one per slot).
 
+`MapSettings` is three ASCII digits, `'0'` + the session bytes `+0x225..+0x227` (win condition, start
+resources, fog of war). A lobby match stores the WinCondition drop-down index + 1, so the first digit is
+1 (destroy all enemies), 2 (conquer) or 3 (coin: the team's coin deliveries are counted), never 0
+(endless); the free game stores 0..3 `[known]` (S 00454ad0).
+
 The referee answers **`RegisterGameResult(0xDB8)`**: `GameID`, `Result`; on `Result==0` it
-carries **`GameSeed(u32)`** and fires the 2-arg fan-out on `refConn+0x50`; on failure it
+carries **`GameSeed(u32)`** and fires the 2-arg observer list `refConn+0x50`; on failure it
 carries `FailReason(str)` and fires `refConn+0x5c`. (Intermediate `RegisterGameAck(0xDB7)`:
-`GameID`, `Result`.)
+`GameID`, `Result`.) The handler does not check the `GameID`.
 
 **What the `GameSeed` seeds `[known]`.** Only the contents of the chests of a network match; it is
 not the simulation's random seed. `GetGameSeed` S 004139e0 has two callers:
 - `Game_LoadWorldFromDescriptor` S 005ac770 (S 005ac7ed), for new-game map types only
-  (`FUN_0052c270(mapType)`): after `Game_CreatePlayersFromDescriptor`, if `GameSeed != 0` or
+  (`MapType_IsDataDirS2mMap(mapType)` S 0052c270): after `Game_CreatePlayersFromDescriptor`, if `GameSeed != 0` or
   `GameID` (`+0x22a`) `!= 0`, it calls `Game_DistributeChestsForNetworkMatch`.
 - `Game_DistributeChestsForNetworkMatch` S 00775dd0 (S 00775e1f): builds a local
   `ai::math::RandomGenerator` (Park-Miller, `Rng_ParkMillerNext` S 006ec350), seeds it with the
   GameSeed (`SetSeed` S 006ec2a0) and draws one number per chest, stored at `LogicChest +0x28`
-  (`LogicChest_SetContentKind` S 00539200). The chest positions are chosen without the generator.
+  (folded setter `Generic_SetDword28` S 00539200). The chest positions are chosen without the generator.
 
 The simulation uses a separate global generator at S 00889b08: constructed with the constant
 `0x5432ace0` (static initialiser S 007c07d0), reset from its stored seed in `LogicRandom_SetUp`
@@ -132,219 +130,152 @@ distributed when `GameID != 0`. Other accesses of session `+0x22f`: `SetGameSeed
 GameInformation / StartLoading / StartGame payload); `AssignGameData` / `CopyFrom`;
 `UpdateSettingsCrc` (S 004148c8); `Reset` (0).
 
-## Phase 3 — start-loading + the referee-login gate `[PROVEN]`
+**One seed per match** `[live, 2026-10-14]`. Each client seeds its chest pass with the GameSeed of its own
+`0xDB8`; the host's payload does not replace it before the pass. With the same seed (0x5EED1234) to both
+clients the four chests held identical `+0x28` values on host and joiner. With 0x5EED1294 to the host and
+0x5EED1295 to the joiner the four chest cells were the same and the contents differed; the match ran without
+desync (476 of 476 `ChecksumLog::VerifyLatest` S 00415a60 results on the joiner were 1), and the simulation
+generator S 00889b08 kept its constant seed. An opened chest is claimed by every client (`0xDAC`, each with
+its own chest id, all naming the opener as ActorID, `docs/message-catalog.md`), so with different seeds the
+server sees one chest as two. The server therefore sends every client the same seed.
 
-The village conn’s **LoggedOut** callback (`villageConn+0x1c`, fired by `BaseConnection::LoggedOut@0x48e2a0`) → `LobbyGameScreen_OnVillageConnectionLoggedOut` — **not** `NE_StartLoading` (corrected 2026-07-25). For a **multiplayer**
-game (gate: `NMenuSystem+0x3cc != 0`) it does *not* load immediately — it **arms** the login
-(`+0x3624/+0x3625/+0x362c/+0x3628`). Observers skip the gate; single-player / direct loads
-immediately.
+## Phase 3 — the referee-login gate `[known]`, chain `[PROVEN]`
 
-`LobbyGameScreen_Update` is the per-frame pump: after a `0x10`-frame delay it calls
-**`RefereeServerConnection_Login@0x4793f0`** (opens the referee transport channel via
-`transport+0x34->vtbl[0x10]`), one attempt per arming. After **5 attempts** (`+0x362c>4`) it
-**stops waiting and runs the load kick anyway**.
+The village connection's **LoggedOut** observers (`villageConn+0x1c`, fired by
+`BaseConnection::OnLoggedOut@0x48e2a0`) include `WorldScreen::OnVillageConnectionLoggedOut`. The logout
+itself follows the leave-village exchange (2002 → 1006 with 0xDEADBEEF → transport logout), see
+`docs/SOURCEMAP.md` §2b. For a starting match (NComm manager state != 0 and `cStartLoading` set) the
+observer **arms** the login (`+0x3624/+0x3625/+0x362c/+0x3628`); an observing client only hides the
+screen; otherwise NComm is shut down and the client returns to the avatar screen.
+
+`WorldScreen::Update` is the per-frame pump: after the delay it calls
+**`RefereeServerConnection::Login@0x4793f0`** (opens the referee transport channel via
+`transport+0x34->vtbl[0x10]`), one attempt per arming. With **more than 4 tries**, or when the NComm
+manager state is 0, it **aborts the match start**: it clears the flags, requests lobby screen 2 and shuts
+NComm down.
 
 Referee replies: **`LoginSuccess(0xDCA)`** (`PermID`) fires `refConn+0x80`;
-**`LoginFailed(0xDCB)`** (`PermID`) fires `refConn+0x8c`. The screen has callbacks on both
-lists (subscribed in `LobbyGameScreen_SubscribeConnectionObservers`) — success un-arms and
-proceeds, failure drives the retry. **The exact callback bodies are observer-template-
-indirected → `[TODO]`** (see below).
+**`LoginFailed(0xDCB)`** (`PermID`) fires `refConn+0x8c`. `LoginSuccessReceived@0x47ac20` drops a `PermID`
+that is not the local perm id; the field is big-endian on the wire.
 
-## Phase 4 — the load / start-playing kick `[PROVEN]`
+## Phase 4 — the load kick `[known]`
 
-Both the success path and the give-up-after-5 path converge on the same two calls:
-
-- `Game_SetRunMode(game, 2)` — sets `game+0xc = 2` (run mode → loading/in-game).
-- `Game_PropagateModeToChildren(game)` → `Game_NotifyChildrenLifecycle`: walks the game's
-  child-object list at `game+0x3b0` and calls each child's lifecycle `vtbl[0x10]` (with
-  `vtbl[0x44]` "active?" / `vtbl[0x1c]` / `vtbl[0x18]` guards). This is the fan-out that
-  actually brings up the map/simulation subsystems.
+`WorldScreen::OnRefereeRegisterGameResult@0x431800` stores the seed
+(`NComm_Manager::SetGameSeedIfState2` S 004082e0, applied only in session state 2), fills the load
+descriptor (`SetupGameDialog::SetupSession@0x4562d0`), clears the arm flags and calls
+`Lobby::CLobby` vtbl `+0x2c` `RequestModeTransition(1)`.
 
 ---
 
 ## Referee protocol reference (`RefereeServerConnection`, LobbyMessage **category 3**)
 
-Router: `RefereeServerConnection_OnReceive@0x47b090` (switch on msg id) `[PROVEN]`.
-Send/recv follow `send 0xD_6/0xD_0/… → ack +1 → result +2`.
+Router: `RefereeServerConnection::OnReceive@0x47b090` (switch on msg id) `[known]`.
+Send/recv follow `send 0xD_6/0xD_0/… → ack +1 → result +2`. All names are in
+`LobbyComm::RefereeServerConnection`.
 
-| Dir | ID | Message | Payload | Handler |
+| Dir | ID | Message | Payload | Function |
 |---|---|---|---|---|
-| C→R | (chan-open) | `Login` | opens transport channel | `…_Login@0x4793f0` |
-| C→R | — | `Logout` | | `…_Logout@0x479540` |
-| C→R | `0xDB6` | `RegisterGame` | GameID, MapGUID[16], MapName, MapSettings, RankedGame, Wager, AIPlayer, 6×AvatarID | `…_RegisterGame@0x479840` |
-| C→R | `0xDAC` | `ClaimChest` | | `…_ClaimChest@0x479670` |
-| C→R | `0xDC0` | `FinishGame` | | `…_FinishGame@0x479c40` |
-| C→R | `0xDD4` | `GiveUpGame` | | `…_GiveUpGame@0x479ab0` |
-| R→C | `0xDCA` | `LoginSuccess` | PermID | `…_OnLoginSuccess@0x47ac20` → `+0x80` |
-| R→C | `0xDCB` | `LoginFailed` | PermID | `…_OnLoginFailed@0x47ad50` → `+0x8c` |
-| R→C | `0xDB7` | `RegisterGameAck` | GameID, Result | `…_OnRegisterGameAck@0x47a3d0` |
-| R→C | `0xDB8` | `RegisterGameResult` | GameID, Result, **GameSeed** \| FailReason | `…_OnRegisterGameResult@0x47a580` → `+0x50`/`+0x5c` |
-| R→C | `0xDC1` | `FinishGameAck` | | `…_OnFinishGameAck@0x47a810` |
-| R→C | `0xDC2` | `FinishGameResult` | | `…_OnFinishGameResult@0x47a9c0` |
-| R→C | `0xDAD` | `ClaimChestAck` | GameID, Result | `…_OnClaimChestAck@0x479fb0` |
-| R→C | `0xDAE` | `ClaimChestResult` | AvatarID, ChestID, str | `…_OnClaimChestResult@0x47a160` |
-| R→C | `0xDD5` | `GiveUpGameAck` | | `…_OnGiveUpGameAck@0x47ae80` |
+| C→R | (chan-open) | `Login` | opens transport channel | `Login@0x4793f0` |
+| C→R | — | `Logout` | | `Logout@0x479540` |
+| C→R | `0xDB6` | `RegisterGame` | GameID, MapGUID[16], MapName, MapSettings, RankedGame, Wager, AIPlayer, 6×AvatarID | `RegisterGame@0x479840` |
+| C→R | `0xDAC` | `ClaimChest` | | `ClaimChest@0x479670` |
+| C→R | `0xDC0` | `FinishGame` | | `FinishGame@0x479c40` |
+| C→R | `0xDD4` | `GiveUpGame` | | `GiveUpGame@0x479ab0` |
+| R→C | `0xDCA` | `LoginSuccess` | PermID | `LoginSuccessReceived@0x47ac20` → `+0x80` |
+| R→C | `0xDCB` | `LoginFailed` | PermID | `LoginFailedReceived@0x47ad50` → `+0x8c` |
+| R→C | `0xDB7` | `RegisterGameAck` | GameID, Result | `RegisterGameAcknowledgeReceived@0x47a3d0` |
+| R→C | `0xDB8` | `RegisterGameResult` | GameID, Result, **GameSeed** \| FailReason | `RegisterGameResultReceived@0x47a580` → `+0x50`/`+0x5c` |
+| R→C | `0xDC1` | `FinishGameAck` | | `FinishGameAcknowledgeReceived@0x47a810` |
+| R→C | `0xDC2` | `FinishGameResult` | | `FinishGameResultReceived@0x47a9c0` |
+| R→C | `0xDAD` | `ClaimChestAck` | GameID, Result | `ClaimChestAcknowledgeReceived@0x479fb0` |
+| R→C | `0xDAE` | `ClaimChestResult` | AvatarID, ChestID, str | `ClaimChestResultReceived@0x47a160` |
+| R→C | `0xDD5` | `GiveUpGameAck` | | `GiveUpGameAcknowledgeReceived@0x47ae80` |
 
-### Game-screen observer-list map (referee conn = `LobbyManager+0x490`) `[PROVEN]`
+### WorldScreen observer-list map `[known]`
 
-Subscribed in `LobbyGameScreen_SubscribeConnectionObservers@0x4351a0`:
+All callbacks are subscribed in `WorldScreen::Activate@0x4351a0` as an 8-byte `{screen, handlerFn}`
+struct handed to `ObserverList::Subscribe@0x458860` at `conn+listOffset`; the handler addresses are plain
+immediates in the registration code. The screen watches **two** connections: the referee connection
+(`LM+0x490`) and the village connection (`LM+0x540`, `LobbyComm::System::GetVillageServerConnection@0x4624d0`).
 
-All callbacks are subscribed in `LobbyGameScreen_SubscribeConnectionObservers@0x4351a0` as an 8-byte
-`{screen, handlerFn}` struct handed to `ObserverList::Subscribe@0x458860` at `conn+listOffset`. The handler
-fn-ptrs are **plain immediates in the registration disassembly** — so the whole callback set is statically
-recoverable (no live trace needed; the decompiler only choked on the *fire* path, not the *subscribe* side).
-The screen watches **two** connections: the referee conn (`LM+0x490`) and the village/world conn
-(`LM+0x540`, via `LobbyManager_GetVillageServerConnection@0x4624d0`).
-
-| Conn list | Fires on | Screen handler (recovered `[PROVEN 2026-06-13]`) | Body |
+| Conn list | Fires on | Screen handler (`LobbyMenu::WorldScreen`) | Body |
 |---|---|---|---|
-| `refConn+0x04` | referee connect/lifecycle | `LobbyGameScreen_ArmRefereeLogin@0x431780` | arms login: `+0x3624=1, +0x3625=0` |
-| `refConn+0x10` | referee lifecycle | `LobbyGameScreen_RetryRefereeLogin@0x4317a0` | `+0x362c++, +0x3625=1, +0x3628=retries*8+0x10` |
-| `refConn+0x50` | `OnRegisterGameResult` success — (gameId, **GameSeed**) | `LobbyGameScreen_OnRefereeRegisterGameResult@0x431800` | **stores GameSeed → session `DAT_00885754+0xdc`** (`FUN_004082e0`→`FUN_004139f0`, gated `sess+0x1c==2`); `…FillMpDescriptor`; un-arms `+0x3624/+0x3625=0`; Game `vtbl[0x2c](1)` |
-| `refConn+0x5c` | `OnRegisterGameResult` failure | `LobbyGameScreen_OnRegisterGameFailed@0x432fd0` | `!REGISTER_GAME_FAILED` dialog |
-| `refConn+0x80` | `OnLoginSuccess` | `Lobby_HostRegisterGameWithReferee@0x432240` | **host sends `RegisterGame(0xDB6)`** (login OK → register) |
-| `refConn+0x8c` | `OnLoginFailed` | `LobbyGameScreen_OnRefereeLoginFailed@0x4317d0` | retry+backoff (identical to `+0x10`) |
-| `villageConn+0x1c` | **LoggedOut** (via `BaseConnection::LoggedOut@0x48e2a0`) | `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | arm referee login (MP) or load now |
-| `villageConn+0x28` | game-connect result | `LobbyGameScreen_OnGameConnectionResult@0x432ed0` | **load kick** (`Game_SetRunMode(2)`+propagate); `!CONNECTION_LOST` dialog on error |
-| `villageConn+0x8c` | join rejected: no table | `LobbyGameScreen_OnJoinFailedNoTable@0x433280` | `!MINIGAME_NOTABLELEFT` dialog |
-| `villageConn+0x98` | join rejected: no slot | `LobbyGameScreen_OnJoinFailedNoSlot@0x433380` | `!MINIGAME_NOPLAYERSLOTLEFT` dialog |
+| `refConn+0x04` | referee connection logged in | `OnRefereeConnectionLoggedIn@0x431780` | `+0x3624=1, +0x3625=0` |
+| `refConn+0x10` | referee connection login failed | `OnRefereeConnectionLoginFailed@0x4317a0` | `+0x362c++, +0x3625=1, +0x3628=tries*8+0x10` |
+| `refConn+0x50` | `RegisterGameResult` success — (gameId, **GameSeed**) | `OnRefereeRegisterGameResult@0x431800` | the load kick (Phase 4) |
+| `refConn+0x5c` | `RegisterGameResult` failure | `OnRegisterGameFailed@0x432fd0` | `!REGISTER_GAME_FAILED` dialog |
+| `refConn+0x80` | `LoginSuccess` | `OnRefereeLoginSuccess_RegisterGame@0x432240` | sends `RegisterGame(0xDB6)` |
+| `refConn+0x8c` | `LoginFailed` | `OnRefereeLoginFailed@0x4317d0` | retry with back-off (same body as `+0x10`) |
+| `villageConn+0x1c` | **LoggedOut** (via `BaseConnection::OnLoggedOut@0x48e2a0`) | `OnVillageConnectionLoggedOut@0x4316c0` | arm the referee login, or leave to the avatar screen |
+| `villageConn+0x28` | Disconnected | `OnVillageConnectionDisconnected@0x432ed0` | `RequestScreen(2)` and propagate; with reason != 0 an `!ERROR_DIALOG` / `!CONNECTION_LOST_TEXT` box |
+| `villageConn+0x8c` | minigame: no table left (message 219) | `OnJoinFailedNoTable@0x433280` | `!MINIGAME_NOTABLELEFT` dialog |
+| `villageConn+0x98` | minigame: no player slot left (message 220) | `OnJoinFailedNoSlot@0x433380` | `!MINIGAME_NOPLAYERSLOTLEFT` dialog |
 
-**Room model corroboration:** the village-conn join-failure handlers say `!MINIGAME_NOTABLELEFT` /
-`!MINIGAME_NOPLAYERSLOTLEFT` — i.e. a game is a **"table"** with **"player slots"**, and join failures
-arrive as **village/world-connection** events (the `GameServerConnection` at `+0x544` stays a no-op on the
-dispatch path). So the room/slot layer lives on the **village connection's** message+observer system.
+The last two lists belong to the minigame tables of the taverns (village messages 219 / 220), not to the
+match room.
 
 ---
 
-## LobbyManager connection topology `[PROVEN 2026-06-13]`
+## Connection topology of `LobbyComm::System` `[known]`
 
-The LobbyManager (`LobbyComm::System`, ctor `LobbyManager::ctor@0x463fd0`, singleton ptr
-`g_pLobbyManager@0x885890`) owns **three peer `LobbyBaseConnection` subclasses**, all created in its ctor:
+`LobbyComm::System` (ctor `0x463fd0`, singleton pointer `g_pLobbyManager@0x885890`) owns four
+`LobbyComm::BaseConnection` subclasses, all created in its ctor:
 
 | Field | Off | Class | Bytes | ctor |
 |---|---|---|---|---|
-| `pVillageConnection` | `LM+0x540` | `LobbyComm::VillageServerConnection` (vtbl `0x7dc8d4`*) | 0x280 | `VillageServerConnection::ctor_full` |
-| `pGameSlotConnection` | `LM+0x544` | `LobbyComm::GameServerConnection` (vtbl `0x7deaf0`, `LobbyGameServerConnection.cpp`) | 0x38 | `GameServerConnection::ctor@0x48ed50` |
-| `refereeServerConnection` | `LM+0x490` | `RefereeServerConnection` (embedded) | 0xB0 | — |
+| `userCommConnection` | `LM+0x3d8` | `LobbyComm::UserCommConnection` (embedded, vtbl `0x7dcecc`) | 0xb8 | – |
+| `refereeServerConnection` | `LM+0x490` | `LobbyComm::RefereeServerConnection` (embedded, vtbl `0x7dc1b0`) | 0xb0 | – |
+| `pVillageConnection` | `LM+0x540` | `LobbyComm::VillageServerConnection` (vtbl `0x7db8d4`) | 0x280 | `VillageServerConnection::ctor@0x46eee0` |
+| `pGameServerConnection` | `LM+0x544` | `LobbyComm::GameServerConnection` (vtbl `0x7deaf0`, `LobbyGameServerConnection.cpp`) | 0x38 | `GameServerConnection::ctor@0x48ed50` |
 
-\* village vtbl base is build-specific; `0x7dc8d4` is the SADK.exe map. In noav the gameserver vtbl is `0x7deaf0`
-(slot `+0x14`=`OnLoggedIn@0x48edf0` confirms the base — no off-by-0xc).
+**Inbound routing — `LobbyComm::System::DispatchInboundToConnection@0x462760`** (vtable slot 5 of the
+`IConnectionCallback` interface): for an inbound `(connId, channel, data, byteLen)` it finds which
+connection owns `connId` (`BaseConnection::HasTransport@0x48dd30`), wraps `data` in an `NCore::BitStream`,
+and calls `conn->vtbl[0x24](channel, &bitStream)`, the slot the village connection uses for
+`HandleMessage`.
 
-**Inbound routing — `LobbyManager::DispatchInboundToConnection@0x462760`:** for an inbound `(connId, channel,
-data, byteLen)` it finds which of the three connections owns `connId` (`FUN_0048dd30(conn, connId)` predicate),
-wraps `data` in an `NCore::BitStream`, and calls `conn->vtbl[0x24](channel, &bitStream)` — the same dispatch
-slot the village conn uses for `HandleMessage`.
+`GameServerConnection`'s `vtbl[0x24]` is the shared empty function `Stub_NoOpReturnVoid@0x472360`, so
+**the pre-game room protocol does not ride `GameServerConnection`**. The slot, tribe, team, colour and
+ready updates travel in the NComm match layer (peer-to-peer events of the `NComm_Manager`), see
+`docs/NCOMM_GAME_PROTOCOL.md`.
 
-**Key negative result:** `GameServerConnection`'s `vtbl[0x24]` is the engine's **shared no-op default**
-(`Stub_NoOpReturnVoid@0x472360`, referenced as the default slot by dozens of vtables). So **the pre-game room
-protocol does NOT ride `GameServerConnection::HandleMessage`** the way the 3D-world protocol rides
-`VillageServerConnection::HandleMessage`. The slot/tribe/team/color/ready updates ride **another
-layer** — and the recovered handler map (below) shows which one: the **village/world connection's**
-observer+message system. Its join-failure events (`!MINIGAME_NOTABLELEFT` / `_NOPLAYERSLOTLEFT`) and the
-`NE_StartLoading`/load-kick events all come off `LM+0x540`, not the game-slot conn. The granular slot **data**
-lives in the **NComm game-session object** (see "Pre-game room — player-slot model" below); the wire path that
-*updates* those slots is still `[TODO]` — the two village cases checked so far (`0xC1C`→`FUN_0046e660`,
-`0xC80`→`FUN_0046c940`) turned out to be in-world **entity-pool** ops (read `"ownr"`, touch `this+0x170`),
-**not** slot updates, so the slot-update messages are elsewhere (likely the NComm/NetEngine protocol).
+## Pre-game room — player-slot model `[known]`
 
-## Pre-game room — player-slot model `[PROVEN 2026-06-13]`
+The SetupGame dialog's slots are a fixed **6-slot array inside the NComm game information**
+(`NComm::EventGameInformation`, embedded in the `NComm_Manager` at `+0xdc`). Slot API:
+`EventGameInformation::GetSlot@0x413100` `(i) = this + 0x10 + i*0x4c`,
+`EventGameInformation::FindSlotByGuid@0x413300` (matches the 16-byte owner GUID, caps at 6). The match-start
+reader is `LobbyMenu::SetupGameDialog::SetupSession@0x4562d0`: it walks the 6 slots, reads each via the
+accessors below, and writes a `GameLoadDescriptor` (per-player setters `NLogic::MapInfo::SetPlayerKind`
+S 005293b0, `NLogic::MapInfo::SetPlayerTribe` S 005293e0, …).
 
-The SetupGame dialog's slots are a fixed **6-slot array inside the NComm game-session object**. Slot API:
-`NComm_GetSlotDataPtr(gameObj, i) = gameObj + 0x10 + i*0x4c` (`@0x413100`), `NComm_IsSlotEmpty@0x409cc0`,
-`NComm_FindPlayerSlotByNamePtr@0x413300` (matches the 16-byte owner GUID, caps at 6). The match-start reader
-is `LobbyMenu_SetupGameDialog_SetupSession_FillMpDescriptor@0x4562d0` — it walks the 6 slots, reads each via
-the accessors below, and writes a `GameLoadDescriptor` (the per-player setters `FUN_005293b0`=type,
-`FUN_005293e0`=color/faction, … verified against `MapSelect_ConfigurePlayerSlot_FillDescriptor@0x5df2c0`).
-
-**`NCommGameSlot` (0x4c = 76 bytes):**
+**`NComm::PlayerInfo` (0x4c = 76 bytes; accessors are methods of this class):**
 
 | Off | Type | Field | Accessor | Note |
 |----:|------|-------|----------|------|
-| `+0x00` | — | (header, 13B) | — | `[TODO]` unknown |
-| `+0x0d` | byte[16] | ownerGuid | `NComm_Slot_GetOwnerGuid@0x415200` | `NComm::NetGUID`; the `"ownr"` identity |
-| `+0x1e` | char[~0x1c] | playerName | `NComm_Slot_GetPlayerName@0x415430` | inline C-string |
-| `+0x3a` | int8 | playerIndex | `NComm_Slot_GetPlayerIndex@0x414d60` | |
-| `+0x3b` | int8 | **kind** | `NComm_Slot_GetKind@0x414d70` | `0`=empty, `1`=human, `2`=AI, `3`=closed |
-| `+0x3c` | int8 | aiLevel | `NComm_Slot_GetAiLevel@0x414d80` | valid when kind==AI |
+| `+0x00` | — | vftable, state (`+0x04`), playerId (`+0x05`), NetGUID vftable (`+0x09`) | — | see `docs/types.md` §2.3 |
+| `+0x0d` | byte[16] | ownerGuid | `GetOwnerGuid@0x415200` | `NComm::NetGUID`; the `"ownr"` identity |
+| `+0x1e` | std::string | playerName | `GetPlayerName@0x415430` | |
+| `+0x3a` | int8 | playerIndex | `GetPlayerIndex@0x414d60` | |
+| `+0x3b` | int8 | **kind** | `GetKind@0x414d70` | `0`=empty, `1`=human, `2`=AI, `3`=closed |
+| `+0x3c` | int8 | aiLevel | `GetAiLevel@0x414d80` | valid when kind==AI |
 | `+0x3d` | int8 | tribe | `GetTribe` S 00414da0 (→ `NComm_GetNationIdForTribe` S 004538b0 → descriptor `+0x68`) | `[known]` |
 | `+0x3e` | int8 | colour | `GetColor` S 00414db0 (→ descriptor `+0x88`) | `[known]` |
 | `+0x3f` | int8 | team | `GetTeam` S 00414dc0 (→ descriptor `+0xa8` → `Player.team`) | `[known]`; -1 = no team |
 | `+0x40` | int8 | readyState | folded setter S 00552f10 | `[known]`; 0 not ready, 1 ready, 2 loaded |
 | `+0x41..+0x4b` | — | avatar look, avatar colours, AvatarID, left-notice latch | — | see `docs/NCOMM_GAME_PROTOCOL.md` |
 
-The full slot table, the team chain and the ready-state writers are in `docs/NCOMM_GAME_PROTOCOL.md`.
-`[TODO]` to finish the room model: (b) formalize `NCommGameSlot` as a Ghidra struct;
-(c) **the wire-update path** — how slots get populated/changed over the network (join, pick tribe, ready). The
-slot object passed to `FillMpDescriptor` is the SetupGame game object; the GameSeed lives in the
-`EventGameInformation` embedded in the NComm manager (`DAT_00885754+0xdc`, field `+0x22f`).
+The full slot table, the team chain and the ready-state writers are in `docs/NCOMM_GAME_PROTOCOL.md` and
+`docs/types.md` §2.3. The GameSeed lives in the same game information (`g_NCommManager` `0x885754`,
+`+0xdc`, field `+0x22f`).
 
-## Open `[TODO]` — to finish the model / unblock the stub
+## Open `[TODO]`
 
-1. ~~**Observer callback bodies (the linchpin).**~~ **DONE 2026-06-13 — statically.** The
-   subscribe side stores each callback fn-ptr as a plain immediate, so a live trace was NOT needed:
-   all ten handlers are recovered + named (see the table above). `LoginSuccess→`
-   `Lobby_HostRegisterGameWithReferee` (host registers the game); `LoginFailed→` retry+backoff.
-2. ~~**GameSeed consumer.**~~ **DONE 2026-06-13 (storage endpoint).** `refConn+0x50` →
-   `LobbyGameScreen_OnRefereeRegisterGameResult@0x431800` stores the seed into the game-session
-   singleton **`DAT_00885754+0xdc`** (via `FUN_004082e0`→`FUN_004139f0`, gated on `sess+0x1c==2`),
-   fills the MP descriptor, and kicks the Game (`vtbl[0x2c](1)`). The readers are
-   `Game_LoadWorldFromDescriptor` S 005ac770 and `Game_DistributeChestsForNetworkMatch` S 00775dd0:
-   the seed feeds only the chest-content generator, not the simulation generator S 00889b08
-   `[known]` (Phase 2).
-   `[TODO]` **Differing seeds inside one match.** Established: each client stores the seed of its own
+1. Answered (Phase 2): **differing seeds inside one match.** Each client stores the seed of its own
    `RegisterGameResult` and then loads; `AssignGameData` copies `+0x22f` from the host's payload
    (S 00414388) in events 0x30003 (GameInformation), 0x30012 (StartLoading) and 0x30005 (StartGame),
-   and the host rebroadcasts 0x30003 after every 0x30004 / 0x30011 / 0x30002 it receives, so the
-   host's value (0 before its own `RegisterGameResult`) can replace a client's seed at several
-   points. Not established: whether such a replacement lands before that client's chest pass
-   (S 00775e1f), which depends on message timing; and whether `LogicChest +0x28` is part of the
-   checksummed state, i.e. whether different seeds cause a detected desync or only different chest
-   contents per client.
-3. ~~**Identify `FUN_004624d0`**~~ — **DONE 2026-06-13.** It is `LobbyManager_GetVillageServerConnection@0x4624d0`
-   (returns `VillageServerConnection*` at `LM+0x540`). The game screen's second observer target is the
-   **village/world connection**, not a new actor — proven via the noav struct field + the
-   `CreateVillageServerConnection@0x463850` setter. (New lead surfaced here: `LobbyManager.pGameSlotConnection`
-   at `LM+0x544` — a *distinct* connection slot beside `pVillageConnection@0x540`, not previously mapped;
-   candidate carrier of the unreversed pre-game slot/tribe/team/ready protocol.)
-4. **Stub implication.** To start a match the stub referee must, at minimum: accept the
-   referee `Login` (→ `LoginSuccess 0xDCA`), accept the host's `RegisterGame 0xDB6`
-   (→ `RegisterGameAck 0xDB7` then `RegisterGameResult 0xDB8` **with a `GameSeed`**). Sending
-   every client of a match the same seed is the safe choice while item 2's `[TODO]` is open.
-   Re-introducing the referee server is the path to unblocking "entering matches".
-5. **Re-verify live** that the "give-up-after-5-retries → load anyway" path is what actually
-   happened in past failed tests (the seed is not what the simulation waits for, see Phase 2).
-
----
-
-## Live debug plan (run on Windows — the game can't run on the Linux box)
-
-Static RE is exhausted at the observer-callback boundary; the rest needs a live trace. Drive
-the **real client** against the stub via the Ghidra MCP debugger (HARNESS §1 — attach/breakpoint
-through the MCP, not a standalone script). Addresses are `sadk_noav.exe` base `0x400000`.
-
-**In-game path (single play session):** launch the client pointed at the stub → log in
-`test/test/test` → enter the lobby/village → **Host** a game (SetupGame dialog) → add a joiner
-or an AI to a slot → click **Start**. (For the joiner side, join the hosted game and ready up.)
-
-**Tier A — observable against the *current* stub (no referee needed):**
-| Breakpoint | Read | Confirms |
-|---|---|---|
-| `LobbyGameScreen_OnVillageConnectionLoggedOut@0x4316c0` | `this+0x3624/0x3625/0x362c/0x3628`; `NMenuSystem+0x3cc` | the arm vs load-now fork |
-| `RefereeServerConnection_Login@0x4793f0` | the referee transport target (ip:port) at `this+0x34` | Phase 1/3 — client *does* try the referee |
-| `LobbyGameScreen_Update@0x435980` (the `0x362c>4` branch) | retry count | the give-up-after-5 → load-anyway path |
-| `Game_SetRunMode@0x429900` | `game+0xc` becomes `2` | the load kick fires |
-| `Lobby_HostRegisterGameWithReferee@0x432240` | the harvested args before `RegisterGame` | host's RegisterGame payload (host only) |
-
-**Tier B — needs a minimal stub-referee responder first** (accept `Login`→`LoginSuccess 0xDCA`,
-and `RegisterGame 0xDB6`→`Ack 0xDB7`+`Result 0xDB8` with a `GameSeed`). Only then do these fire:
-| Breakpoint | Read | Resolves |
-|---|---|---|
-| inside `FUN_00479ef0` at the callback dispatch `(*(code*)puVar3[3])(…)` | `puVar3[3]` (the callback fn ptr) | **the game-screen LoginSuccess/Failed callback** (`[TODO]` #1) |
-| inside `FUN_00464300` (register-result fan-out) | the callback fn ptr + the `GameSeed` arg | **the seed-result callback** |
-| `RefereeServerConnection_OnRegisterGameResult@0x47a580` | the `GameSeed` value read off the wire | seed delivery |
-| `Game_DistributeChestsForNetworkMatch` S 00775dd0, at the `GetGameSeed` call S 00775e1f | session `+0x22f` on each client | **which seed each client's chest pass uses** (`[TODO]` #2) |
-
-Chicken-and-egg: Tier B's success callbacks can't fire until the stub at least *answers* the
-referee `Login`/`RegisterGame`. So the practical order is: (1) Tier A first (pure observation,
-nothing to build); (2) stand up a minimal stub referee responder; (3) Tier B to read the live
-callback targets and seed wiring; (4) flesh out the stub referee from what Tier B reveals.
+   and the host rebroadcasts 0x30003 after every 0x30004 / 0x30011 / 0x30002 it receives `[known]`.
+   In a two-player match no such replacement landed before the chest pass: each client seeded its
+   chests with its own GameSeed, and different seeds gave different chest contents and ids on the two
+   clients without a desync (`LogicChest +0x28` is not in the checksummed state) `[live, 2026-10-14]`.
+   The server must send every client of a match the same seed; the stub does.

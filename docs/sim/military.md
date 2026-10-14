@@ -162,7 +162,7 @@ is in the production functions, §3.4).
 | +0x1c0 | home building reference (id high word +0x1d4) |
 | +0x1e0 | `Livepoints`: +0xc current life points (= `Soldier+0x1ec`), +0x10 regeneration tick counter |
 | +0x1f4 | references to projectiles flying at this soldier |
-| +0x208 | `SettlerBow`: reference to the last projectile shot |
+| +0x208 | `ai::settlers::Bow`: reference to the last projectile shot |
 | +0x230 | `SoldierFightState` (below) |
 | +0x338 | paired soldier (the one this soldier replaces, or its replacement) |
 | +0x358 | order building (the building whose exchange slot this soldier serves) |
@@ -393,11 +393,16 @@ order [known].
 not present in the building (fight ignored) → unlinked from the building at once, without cooldown (the index
 still advances, so the entry that moves into its place is skipped in this tick); idle → order a **level-0**
 soldier of the wanted kind through slot 1,
-paired with this soldier; otherwise, if `FUN_00658df0` S 00658df0 holds, its order and pairing are dissolved.
-`FUN_00658df0` is true when the soldier has a paired soldier, no order building, and the paired soldier's
+paired with this soldier; otherwise, if `Soldier::IsPairedSettlerTypeEqualSoldierType` S 00658df0 holds, its order
+and pairing are dissolved. That test is true when the soldier has a paired soldier, no order building, and the paired soldier's
 `GoodProperty+0x7c` equals this soldier's `soldierType` (+0x80) [known]. `+0x7c` is the **settler type** (3 for
 every soldier good), `soldierType` is 0 or 1, so with the shipped data the test is never true and this branch
-never runs [inferred; the comparison of two different fields looks like a slip in the original code].
+never runs. The code settles this without a run: the paired object is always an `NSettlers::Soldier` (the member
+is an `NLogic::ReferenceSoldier`, written only by `LinkPairedSoldier` S 006587e0 and by `Load`), a `Soldier`
+exists only for a good whose settler type is 3 (`NSettlers::System::CreateSettler` S 00656500; `Jobs.lua` gives
+all 16 soldier goods `settlerType_Soldier`), and 3 never equals 0 or 1 [inferred; the comparison of two
+different fields looks like a slip in the original code]. Data that sets a `soldierType` of 3 would make the
+test true.
 When the order matching finds **no supplier** for a kind-exchange order (category 4), it releases the waiting
 wrong-kind soldier of the selected order from the building if `cooldownTicks == 0`, and sets
 `cooldownTicks = 10` (`OrderSystem::Update` S 005626c0 → `Military::ReleaseSoldier` S 0055fc40) [known]. So
@@ -411,8 +416,8 @@ served only from soldiers of that level or higher already stocked in a barracks 
 (`village-buildings.md` §3.12: categories 1/2, "same kind from the requested level upwards") [inferred].
 
 **Replacement of the wounded** (S 00560110) [known]: for each garrison soldier, in list order, whose life points
-are `<= maxHealth / 2` (integer division, S 0065da50) and for which `FUN_00658df0` (above; never true with the
-shipped data) is false:
+are `<= maxHealth / 2` (integer division, S 0065da50) and for which `IsPairedSettlerTypeEqualSoldierType`
+(above; never true with the shipped data) is false:
 
 1. if the soldier has no paired soldier and no order building but holds an order whose reference at `Order+0xb4`
    is valid (`HasUnpairedUpgradeOrder` S 00659390; the pending promotion order of slot 0 [inferred]), that order
@@ -818,7 +823,7 @@ Groups whose target reference is invalid or whose member list is empty are delet
      `FindGroupOfSoldier(own side, soldier)` S 00571c60: the first group of the side's list that has the
      soldier as a member or as its target [known].
      If the soldier's sword group is **not outnumbered** (below), its walk stops one step short of the target
-     cell [inferred from the stop-distance flag `FUN_00657640(movement, 1)`].
+     cell [inferred from the stop-distance flag `ai::settlers::SettlerMovement::SetStopDistance(movement, 1)`].
 4. `cellB` unchanged → 0x2b (or first back to the grid, 0x2f, when outnumbered and off-centre). Changed → walk
    there (0x2a), via 0x2f when off-centre; walk impossible → 0x2d.
 
@@ -886,7 +891,7 @@ with one roll.
 
 - **Sword**, if `strikeHits` and the opponent is still set: `opponent.TakeDamage(striker's player,
   StrikeValue(striker))`.
-- **Bow**, if the opponent is still set: shoot a projectile (`SettlerBow::Shoot` S 0065f270): `flightTicks =
+- **Bow**, if the opponent is still set: shoot a projectile (`ai::settlers::Bow::Shoot` S 0065f270): `flightTicks =
   trunc(hexDistance(target cell, shooter cell) * cfg_setBowFlightTimeFactor)` (2 per cell; the conversion
   sets the FPU to truncation, read in the disassembly), type from the good,
   `damage = StrikeValue(shooter)` taken **when shot**. If `strikeHits` is false the projectile is unlinked from
@@ -933,7 +938,7 @@ if lifePoints < 1: attacker player's kill counter += 1
 The soldier object dies in its next update (§3.5.1). A projectile hit calls the same function with the stored
 damage and the shooter's player.
 
-**Projectiles** (`MilitaryProjectile_Update` S 00572fa0) [known]: `elapsedTicks += 1` each tick; when
+**Projectiles** (`ai::military::MilitaryProjectile::Update` S 00572fa0) [known]: `elapsedTicks += 1` each tick; when
 `elapsedTicks >= flightTicks`: target kind 0 (soldier, still linked) → `TakeDamage` and a strike notification at
 the **source** cell; kind 1 (building) → `Building::OnCatapultHit`; otherwise nothing. The projectile is then
 deleted. A projectile whose target soldier died or was unlinked expires without effect [inferred].
@@ -1067,7 +1072,7 @@ it is driven only by the worker of a building type with `bp_setCatapult` and wor
 4. **Fire** (`Catapult::Fire` S 005678b0) [known]: unless `GameSystem+0xec` is set, remove one ammunition good
    from the input stock and request a new one. Create a projectile of type 1 with `flightTicks =
    trunc(hexDistance(building, aim) * cfg_setCatapultFlightTimeFactor)` (5 per cell; truncation [inferred from
-   the same control-word conversion as in `SettlerBow::Shoot`, seen here only in the decompiled C]). If aim
+   the same control-word conversion as in `ai::settlers::Bow::Shoot`, seen here only in the decompiled C]). If aim
    equals target and a
    building is found at or nearest to the target cell (`FindBuildingAtOrNearest`), the projectile targets that
    building, else the position. Projectile damage = `bp_setCatapultDamage` of the catapult's type (10).
@@ -1389,6 +1394,12 @@ of §2.3 are hashed with the player (`players-victory.md`).
   gets no garrison orders and no exchanges until the fight object is gone (§3.8); the defence fraction a
   computer player computes for its attacked building is overwritten at once (§3.5); a cell search that finds
   nothing returns the last cell it tested (§3.6.1).
+- The paired-soldier test of §3.3 (`IsPairedSettlerTypeEqualSoldierType`) is always false with the shipped data.
+  It decides simulation state (which wounded soldiers are replaced, which exchange orders are dissolved): a
+  remake that must stay in step with original clients keeps the comparison as it is, settler type against
+  soldier kind; comparing soldier kind with soldier kind changes the outcome.
+- The command `0x20017` (toggle an ignore-distance flag, §5) has no sender in the original client
+  (`game-commands.md` §3.4); it changes simulation state only when a peer's command stream contains it.
 - `Military_GetAttackOriginCell` dereferences the first attacker without a check, and with no building found
   but a harbour found whose distance to the target is not smaller than the first soldier's, it reads the cell
   of a null building [known, decompiled C of S 00576d00]: guard both.
@@ -1398,7 +1409,7 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | The code makes an occupied building whose wanted size is 0 dismiss all its soldiers and keep its territory (§3.2). Does the running game show this? | observation in the game: a far guard house (capacity 2..4) with default sliders; watch the garrison and the border |
-| 2 | Whether `FUN_00658df0` (settler type compared with soldier kind, §3.3) is ever true in the running game | a hook on S 00658df0 |
+| 2 | Answered (§3.3): `Soldier::IsPairedSettlerTypeEqualSoldierType` (settler type compared with soldier kind) is always false with the shipped data, so `ReplaceSoldiers` S 00560110 never skips a wounded soldier because of it and `ExchangeWrongKindSoldiers` S 00560190 never reaches its unlink call [inferred]. Not observed in the running game | static: S 00658df0, S 006587e0, S 00656500; `Jobs.lua` |
 | 3 | Meaning of `MilitaryConfig+0x108/+0x10c`, `SoldierFightState+4`, `Catapult+0x1c`: [TODO] not established, no reader found in the functions read | field xrefs / data-flow in Ghidra over the whole binary |
 | 4 | Answered (§3.2): index -1 in `Soldiers::GetSoldierObject` ends the process (exit code 0xC000000D), and play can reach it: all present soldiers bound to an attack during its 10-tick start countdown, wanted size below the garrison, an allocation pass in that window. Not observed in the running game | static: S 00574a00, S 00566220, S 00658f90, S 005751e0, S 006594a0 (state 0xc), S 006f26de; observation: lower the garrison slider, then at once attack with all soldiers of that building |
 | 5 | What `Player+0x18` holds, the argument of `!Castle was destroyed!` (§5) | the `Player` layout / its constructor |
@@ -1460,8 +1471,8 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | S 00658ea0 / 00658ed0 | soldier vtable slots +0x30 / +0x34 | stretched hit times |
 | S 005721a0 / 005735b0 | `Fight::ComputeSoldierStrikeValue` / `FightGroup::GetStrikeMultiplier` | damage |
 | S 00659260 | `NSettlers::Soldier::TakeDamage` | armor, death, kill credit |
-| S 0065f270 | `ai::settlers::SettlerBow::Shoot` | arrow launch |
-| S 00572fa0 | `MilitaryProjectile_Update` | flight and impact |
+| S 0065f270 | `ai::settlers::Bow::Shoot` | arrow launch |
+| S 00572fa0 | `ai::military::MilitaryProjectile::Update` | flight and impact |
 | S 00571440 / 005707d0 / 00576900 | `CanSoldierEnterTargetBuilding` / `CanSoldierOccupyTarget` / `HasFreeSlotForSoldier` | who captures |
 | S 00571af0 | `Military_SoldierCaptureTargetBuilding` | capture or castle destruction |
 | S 00574c50 | `Military_TryAssignSoldierToBuilding` | capturer becomes garrison |

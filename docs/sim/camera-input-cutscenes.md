@@ -97,7 +97,7 @@ through `CGraphicDevice + 0x1b4` with offset 0x18).
 | 2 | FreeFly | `ResetView(2)`: typed cheat `ThatsANiceView` (§3.12) | `UpdateFreeFlyMode` S 00786ae0 |
 | 3 | Cinematic (screensaver) | nothing [inferred, below] | `UpdateCinematicMode` S 00786140 |
 | 4 | Frozen | nothing [inferred, below] | hides the mouse cursor, nothing else |
-| 5 | scripted | `CutsceneCamera_Start` S 0078a840 | none: the cutscene camera writes `eyePos` and `lookDir` |
+| 5 | scripted | `ai::camera::CutsceneCamera::Start` S 0078a840 | none: the cutscene camera writes `eyePos` and `lookDir` |
 
 Writers of `mode` in the decompiled code of the whole binary [inferred: search of every function's decompiled C
 for the field and for the raw offsets `Camera + 8` / `nGame::System + 0x2d8`; a write through an untyped pointer
@@ -417,7 +417,7 @@ random; from any other state → state 0 with `timer = rand() % 15 + 20` s. Then
      render character as follow target and remember its id; the frame ends.
   2. If the remembered id no longer resolves to a settler: start orbit with `timer = 2`.
   3. `UpdateFollowTargetView` (below).
-  4. If the settler's movement is not busy (`SettlerMovement_IsBusy` false), it is a Worker (settler type 0)
+  4. If the settler's movement is not busy (`ai::settlers::SettlerMovement::IsBusy` false), it is a Worker (settler type 0)
      and it stands on its workplace's work cell (`Worker::IsAtWorkplaceWorkCell`): with `rand() % 100 ≤ 50`
      switch to state 2 (`flyAwayOrigin = eye + lookDir`, `timer = rand() % 35 + 10` s), else start orbit with
      `timer = 7`.
@@ -490,12 +490,12 @@ tracks of a file have equal length, path durations 9..230 s, 40 files call `setR
   itself has no missing-file branch.
 - A script that adds no key leaves both tracks empty; sampling then leaves the spline's current position and
   look vector as they are, and the constructor does not initialise them, so the pose copied to the camera at
-  start is undefined; the first `CutsceneCamera_Tick` finds `time ≥ span = 0`, stops the spline and returns the
+  start is undefined; the first `ai::camera::CutsceneCamera::Tick` finds `time ≥ span = 0`, stops the spline and returns the
   camera to standard mode [inferred from S 0078d6f0, S 0078d2b0, S 0078d190].
 
 **Loading** (`CutsceneCamera::LoadScript` S 0078ac10) [known]: the old spline is destroyed, a new empty one is
 created (`loaded = 1`), the file is run, the thread is destroyed. The Lua callbacks reach the spline through the
-active game screen: `nGame::System + 0x630 → +4`. **Start** (`CutsceneCamera_Start` S 0078a840) [known]:
+active game screen: `nGame::System + 0x630 → +4`. **Start** (`ai::camera::CutsceneCamera::Start` S 0078a840) [known]:
 the spline gets `playing = 1`, `time = 0`, `paused = 0` (S 0078d170), the camera gets `mode = 5`,
 `hasTargetPos = 0` and the mouse cursor is hidden (S 00784e90), the spline is sampled at `t = 0` and the pose is
 copied. `CutsceneCamera::Play(name)` S 0078aeb0 is load then start; `PlayAtOffset` S 0078aed0 is load,
@@ -514,7 +514,7 @@ The tangents are not scaled by the segment duration.
 
 **Advance** (`CameraSpline::Update(dt)` S 0078d420) [known]: when playing and not paused, `time += dt`; while
 `time > loopEndTime`, `time −= loopLength`; then both tracks are sampled (also when not playing). Per frame,
-`CutsceneCamera_Tick` S 0078a8a0 (from `nGame::System::Update`; only while a spline exists and is playing) does
+`ai::camera::CutsceneCamera::Tick` S 0078a8a0 (from `nGame::System::Update`; only while a spline exists and is playing) does
 this with the frame time, copies position → `Camera.eyePos` and look vector → `Camera.lookDir`
 (normalised), and when `time ≥ span of the position track` (S 0078d190) clears `playing` and calls
 `Camera::ResetToStandardMode`. The cutscene pose bypasses all terrain, water and border rules.
@@ -627,7 +627,7 @@ The in-game screen `nMenu::Game` (event face vftable S 007eec1c) [known]:
 
 | Input | Handler | Behaviour |
 |---|---|---|
-| left press | `OnMousePress` S 005eaae0 | swallowed while the network game hangs; else widget default, then `Cursor::SelectAtCursor` and `MenuSelection::HandleClick` (§3.10) |
+| left press | `OnMouseButton0Down` S 005eaae0 | swallowed while the network game hangs; else widget default, then `Cursor::SelectAtCursor` and `MenuSelection::HandleClick` (§3.10) |
 | right press / release | S 005eab40 / S 005eab70 | `MenuSelection::HandleRightClick`; `Game + 0x3a` = 1 / 0 (look-around) |
 | middle press / release | S 005eab80 / S 005eaba0 | `ActionButtonPanel::CloseUnlessConfirming`; `Game + 0x3b` = 1 / 0 (drag); a middle press reaches this handler even when the base dispatch refuses the event (S 005eaaa0) |
 | wheel | `OnMouseWheel` S 005eb140 | sign only → `Camera::OnWheelUp` / `OnWheelDown`; never consumed |
@@ -872,7 +872,7 @@ list is in [game-commands.md](game-commands.md) §4):
    during a cinematic and while `uiSuppressed`); the embedded cursor's update slot, which is an empty function
    (vftable S 008352b8 slot 1 = S 005657b0); `Camera::Update` (zoom easing, mode handler, i.e. scrolling and the
    view solve); then, only once the first logic tick has run (`tickCounter ≠ −1`): the update of the `Script`
-   member at `nGame::System + 0x60c`, and (unless `uiSuppressed`) the music and `CutsceneCamera_Tick`. The
+   member at `nGame::System + 0x60c`, and (unless `uiSuppressed`) the music and `ai::camera::CutsceneCamera::Tick`. The
    cutscene pose therefore overwrites `eyePos` / `lookDir` after the camera's own update of the same frame.
    After it, the message list of the in-game screen is updated.
 4. `nMenu::System::Update` S 005da500 [known]: language reload check; `nUi::Cursor::Update`; each open dialog of
@@ -1095,7 +1095,7 @@ Scroll and cursor options live in `settings.cfg`; screenshots are write-only.
 | 00785fe0 / 00786060 / 007860e0 / 00784f10 / 00784eb0 | `FocusOnCell` / `FocusOnVertex` / `FocusOnLocalPlayerBuilding` / `SetEyePosition` / `ResetToStandardMode` | jumps |
 | 00648de0 / 005f1520 | `nMenu_FocusCameraOnUnique` / `nMenu::MiniMap::FocusCameraOnCursor` | "go to" callers |
 | 0078ac10 / 0078a940 | `CutsceneCamera::LoadScript` / `Cutscene_BuildScriptPath` | cutscene file |
-| 0078aeb0 / 0078aed0 / 0078a840 / 0078a8a0 | `CutsceneCamera::Play` / `PlayAtOffset` / `CutsceneCamera_Start` / `CutsceneCamera_Tick` | playback |
+| 0078aeb0 / 0078aed0 / 0078a840 / 0078a8a0 | `CutsceneCamera::Play` / `PlayAtOffset` / `ai::camera::CutsceneCamera::Start` / `ai::camera::CutsceneCamera::Tick` | playback |
 | 0078a5b0 / 0078a660 / 0078a640 / 0078a6f0 | `cutscene.addPosition` / `addLookAt` / `setRelative` / `createLoopAtEnd` | Lua library |
 | 0078d420 / 0078d2b0 / 0078c870 / 0078d1c0 / 0078d030 / 0078d4a0 | `CameraSpline::Update` / `CameraSpline_SampleTrack` / `CameraSpline_KeyMap_RecomputeTangents` / `CameraSpline::SetLoop` / `CameraSpline_KeyMap_AppendLoopSegment` / `CameraSpline::OffsetPositions` | spline |
 | 005dd3c0 / 005dd410 / 005fc110 | `menu.startCinematic` / `menu.addCinematicPage` / `nMenu::Cinematic::AddPage` | pages |

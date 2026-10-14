@@ -98,14 +98,14 @@ constant `0xEFFFFFCC` (S 0041e610) [known].
 | +0x00 | i32 | serverId | -1 | replaced by the local map key |
 | +0x04 | std::string | gameName | session gameName (`EventGameInformation +0x1d8`) | from the payload |
 | +0x20 | std::string | mapName | session mapName (`+0x208`) | from the payload |
-| +0x3c | std::string | not serialised, never written by the functions of this document | empty | empty |
-| +0x58 | i32 | connected humans: human slots with a playerId other than `0xEFFFFFEE`, over the six slots (`CountConnectedHumans` S 004133c0) | computed | from the payload |
-| +0x5c | i32 | maxPlayers (`GetMaxPlayers` S 00412fc0: session `+0x224`, an i8, sign-extended) | computed | from the payload |
-| +0x60..+0x6c | i32[4] | host IPv4 address, one octet per dword | -1 each | the UDP source address of the reply |
-| +0x70 | i32 | game port (TCP port to connect to); 0 after construction | `gamePort` (`network.ini`) | the record's `value` field |
-| +0x74 | std::string | trailing string; never set by the host code | empty | from the payload when present |
+| +0x3c | std::string | `string_3c`: not serialised, never written by the functions of this document | empty | empty |
+| +0x58 | i32 | `connectedHumans`: human slots with a playerId other than `0xEFFFFFEE`, over the six slots (`CountConnectedHumans` S 004133c0) | computed | from the payload |
+| +0x5c | i32 | `maxPlayers` (`GetMaxPlayers` S 00412fc0: session `+0x224`, an i8, sign-extended) | computed | from the payload |
+| +0x60..+0x6c | i32[4] | `hostIp`: host IPv4 address, one octet per dword | -1 each | the UDP source address of the reply |
+| +0x70 | i32 | `gamePort` (TCP port to connect to); 0 after construction | `gamePort` (`network.ini`) | the record's `value` field |
+| +0x74 | std::string | `string_74`: trailing string; never set by the host code | empty | from the payload when present |
 
-The map calls `+0x58` `hostTick`; the value written is the human count [known, S 0041aa90, S 0041adb0].
+`+0x58` is written with the human count by `BC_Start` S 0041aa90 and `BC_Update` S 0041adb0 [known].
 
 ### 2.4 `ai::network::TinCatUserEntry` (0x48 bytes; one user of the session)
 
@@ -471,8 +471,10 @@ What TinCat does with it [known unless tagged]:
   two connect calls (`ConnectToIP` T 10009670, `ConnectAsyncToIP` T 10009870), which a server-mode instance
   refuses. The accept path sets the option only when that flag is 1 (`NETDRV_ServerLookForNewConnection`
   T 10001e70). So the value "disable Nagle" = 1 of step 5 takes effect on a client's socket and **not on the
-  host's accepted sockets** [known for the writers of the field: search of all decompiled library functions;
-  inferred for the consequence].
+  host's accepted sockets** [known for the writers of the field: search of all decompiled library functions].
+  Both sockets a host accepted in a two-player room (a join and a rejoin, `accept` called from T 10032996) read
+  `TCP_NODELAY` = 0 by `getsockopt`, and no `setsockopt(IPPROTO_TCP, TCP_NODELAY)` call was made: Nagle stays
+  on for the host's connections [live, 2026-10-14].
 - The user limit after start-up is the preset's 5000 (`usrMax`); the six-slot limit is enforced by the session
   layer, not by TinCat [known for the value, §6.2; inferred for the consequence].
 
@@ -944,7 +946,9 @@ values of the examined install [known, file and S 0041ede0]:
 
 The code defaults of the three integer keys are 5479, 6582 and 10000 (`GetPrivateProfileIntA` arguments)
 [known, S 0041ede0]. The file of the install is plain text and starts with a UTF-8 byte order mark directly
-before `[Basics]`; which `gamePort` the running game ends up with is the open question of §10.
+before `[Basics]`. `GetPrivateProfileIntA` does not find a section line that follows the mark directly, so that
+first section (`gamePort = 5478`) is hidden and the effective `gamePort` is 5479, from the file's second `[Basics]`
+section or the code default (both 5479) [live, 2026-10-14; `network-session.md` §6].
 
 ### 6.2 TinCat values (compiled in, not a file)
 
@@ -979,7 +983,7 @@ S 0041e610].
 | preset `+0x80` | 0 | same | returned by the tail call of `TinCat_CTRL::Process` (§4); no other reader |
 | `connectTimeoutMs` | 30000 | same | client: longest wait for the logon reply after the logon request was sent (T 10009670); the blocking `connect` before it is not covered by this timer |
 | `connectPollSleepMs` | 50 | same | sleep per round while waiting for the logon |
-| disable Nagle | 0 | **1** | `TCP_NODELAY` on a client's connection; not on the host's accepted ones (§3.4) |
+| disable Nagle | 0 | **1** | `TCP_NODELAY` on a client's connection; not on the host's accepted ones (§3.4) [live, 2026-10-14] |
 | message poll count (API; not a preset field: the `PROGFLOW_NET` constructor T 10006b40 sets 10) | 10 | **500** | frames handed to the game per `Process` |
 
 The millisecond values from `thrdExit` to `usrLogoffTimeout` reach the driver as one block: the values getter
@@ -988,7 +992,9 @@ from it (`thrdExit`, then driver `+0x40..+0x68`: `srvNewConnect`, `srvSendLogonR
 `srvWaitForFlags`, `srvCheckDeadCon`, `srvCheckDeadCallTime`, `srvSendAlive`, `usrInitNew`, `usrRemove`,
 `usrLogonCheck`, `usrLogoffTimeout`) [known, T 10001090, T 100029d0, T 1000b880]. No function of the library
 calls `LoadFromIni` (values slot `+0x0c`, T 1000b960) either [known: search of the decompiled library
-functions]. None of the `[TODO]` rows is a rule the session layer depends on.
+functions]. None of the `[TODO]` rows is a rule the session layer depends on. A join and a leave in a
+two-player room did not settle them live: the getter T 10006cf0 is too short for a Frida hook, and read
+watchpoints on driver `+0x60` / `+0x68` stall the game [live, 2026-10-14].
 
 ### 6.3 Code constants
 
@@ -1098,9 +1104,9 @@ only ports and periods, which a remake keeps in its own settings with the same d
 | Question | Settled by |
 |---|---|
 | Whether the remote side of a TinCat `Disconnect` really reports *connection closed* (§3.7: inferred from the reader thread) | a kick observed with a hook on `cb_ConnectionClosed` S 0041bcc0 and `cb_LoggedOut` S 0041b990 |
-| Whether the host's accepted sockets run without `TCP_NODELAY` (§3.4: inferred from the writers of driver `+0xb8`) | `getsockopt` on a host's client socket in the running game |
-| Whether `usrRemove`, `usrLogoffTimeout` and `drvRemoveTime` are read at all (§6.2 rows marked `[TODO]`) | read breakpoints on driver `+0x60` and `+0x68`; a call breakpoint on T 10006cf0 |
-| The effective `gamePort` in the running game (5478 from the file, or the fallback 5479 because the byte order mark hides the first section from `GetPrivateProfileIntA`; see `network-session.md` §6) | one read of manager `+0x360` |
+| Answered (§3.4): the host's accepted sockets run without `TCP_NODELAY` (both read 0 by `getsockopt`, no `setsockopt` call) [live, 2026-10-14] | — |
+| Whether `usrRemove`, `usrLogoffTimeout` and `drvRemoveTime` are read at all (§6.2 rows marked `[TODO]`). A join and a leave were run live 2026-10-14 without settling it: the getter T 10006cf0 is too short for a Frida hook, and read watchpoints on driver `+0x60` / `+0x68` stall the game | static: a full search for readers of driver `+0x60`, `+0x68` and callers of T 10006cf0; live: a debugger that can break on them |
+| Answered (§6): the effective `gamePort` is 5479; the byte order mark hides the first `[Basics]` section (5478) from `GetPrivateProfileIntA`, and the second section and the code default both give 5479 [live, 2026-10-14] | — |
 | Relation of this LAN code to the `CommLayer` LAN classes of `tincat3.dll` (`ConnectionLANLobby`, `ConnectionBC`, `ai::net::LanLobbyHost` T 100276a0), which are a second, lobby-level LAN path | read those classes and their users in the game; not needed for a match |
 | Whether the dormant LAN path works end to end (a role 2 host answering a role 1 client) | calling `StartUpNetwork(2)` and `BC_Start` in the running game on two machines |
 

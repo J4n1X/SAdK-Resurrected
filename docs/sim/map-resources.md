@@ -270,7 +270,7 @@ replaces them (§6) [known].
 | Offset | Field | Saved | Meaning |
 |---|---|---|---|
 | +0x04 | map system | no | |
-| +0x08 | `mapTreeType` | yes (v > 5) | 100 by default; the tag a plantable deposit type must carry (§3.9) [inferred from `Afforest_PickRandomDepositForCell` S 0077bb30 and `deposits.lua` `mapTreeType_Bavarian = 100`] |
+| +0x08 | `mapTreeType` | yes (v > 5) | the tag a plantable deposit type must carry (§3.9): 100 `mapTreeType_Bavarian`, 101 `mapTreeType_Egyptain` (spelling of the game data), 102 `mapTreeType_Scot` [known: `deposits.lua` lines 1-3; reader `Afforest_PickRandomDepositForCell` S 0077bb30]. The constructor stores 100 and `Load` is the only other writer, so another value comes from a map or a save [known] |
 | +0x0c | `deposits` (vector of `Deposit*`) | yes | creation order |
 | +0x1c | `depositById` (map Unique -> `Deposit*`) | no | |
 | +0x28 | `activeDeposits` (vector of `Deposit*`) | no (rebuilt) | deposits that need a per-tick update |
@@ -627,7 +627,7 @@ empty text, at the source position) unless an identical message near that positi
 **Full recomputation** `Territory::RecalcAll` S 0067a3b0 -> `RecalcFullMap` S 00679ac0 (x outer, y inner), then
 `MapModifier::RefreshTerritoryAll` S 00672eb0: border bits of the whole map, whole construction map,
 `TerritoryChanged`, `RemoveStreetsOutsideTerritory`, buildings outside territory. Caller chain [known]:
-`MapModifier_RecalcTerritoryAll` S 00672f10 <- `Logic_RecalcTerritoryForPlayer(player, enable)` S 00538d10 (anchor =
+`ai::map::MapModifier::RecalcTerritoryAll` S 00672f10 <- `Logic_RecalcTerritoryForPlayer(player, enable)` S 00538d10 (anchor =
 the player's first building, or (-1, -1)) <- the start and stop of a sacrifice's toggle effects (S 00661cf0,
 S 00661d60); S 00672f10 has no other caller. Neither argument changes the source list [known] S 0067a3b0,
 S 00679ac0: `RecalcAll` always collects with `pos` = (0, 0) and radius 0x7fffffff, that is every building of every
@@ -650,7 +650,7 @@ mark the contact at the cell where the countdown passes below zero) [known].
    `player`): `Exploration::RevealHexArea(center, radius, p)` and `PlayerRectChanged(rect, p)` with the rectangle
    `center +- (radius + 1)` clamped to the map;
 2. then for every in-map cell of the spiral that has a territory owner and a building (layer 1): every active
-   player who has that cell explored gets `spotted[owner] = 1` (`Player_SetFlagByIndex`).
+   player who has that cell explored gets `spotted[owner] = 1` (`ai::player::Player::SetPlayerSpotted`).
 
 `RevealHexArea` S 00677570 [known]: sets the byte of every spiral cell that satisfies `0 < x < W-2` and
 `0 < y < H-2`. Column 0, the last two columns, row 0 and the last two rows are never explored.

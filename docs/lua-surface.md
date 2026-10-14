@@ -31,7 +31,7 @@ There is exactly **one** `lua_State` in the process. `lua_open` (`005ce3c0`) has
 the state it was created from, so every library registered on any thread is visible to every script
 [inferred: Lua 5.0.2 `lua_newthread` semantics].
 
-The **lobby** (3D village, `Lobby::*`, `LobbyManager`) does not use Lua: none of the callers of `lua_open`,
+The **lobby** (3D village, `Lobby::*`, `LobbyComm::System`) does not use Lua: none of the callers of `lua_open`,
 `luaL_openlib`, `lua_newthread`, `Lua_RegisterLibrary` or `LuaScriptHost::RegisterLib` is lobby code, and the
 lobby data tree contains no `.lua` file [known: xrefs + data]. Lua is used by the game side only: properties,
 menus, map scripts, cutscenes, info pages and the map editor.
@@ -507,7 +507,7 @@ Registered at start-up, before `menu.cfg` runs.
 | `menu.lockSacrifice` | `005DAB40` | LuaMenu_LockSacrifice | `fn::LuaMenu_LockSacrifice` | yes |
 | `menu.unlockSacrifice` | `005DABD0` | LuaMenu_UnlockSacrifice | `fn::LuaMenu_UnlockSacrifice` | no |
 | `menu.addSacrifice` | `005DAC60` | LuaMenu_AddSacrifice | `fn::LuaMenu_AddSacrifice` | yes |
-| `menu.showSacrificeEffect` | `005D9550` | FUN_005d9550 | — (unnamed in Ghidra; not generated) | yes |
+| `menu.showSacrificeEffect` | `005D9550` | LuaMenu_ShowSacrificeEffect | `fn::LuaMenu_ShowSacrificeEffect` | yes |
 | `menu.setPlayerColor` | `005D9E00` | LuaMenu_SetPlayerColor | `fn::LuaMenu_SetPlayerColor` | yes |
 | `menu.createBuilding` | `005D9A30` | LuaMenu_CreateBuilding | `fn::LuaMenu_CreateBuilding` | yes |
 | `menu.createBuildingWithSettler` | `005D9AC0` | LuaMenu_CreateBuildingWithSettler | `fn::LuaMenu_CreateBuildingWithSettler` | yes |
@@ -518,7 +518,7 @@ Registered at start-up, before `menu.cfg` runs.
 | `menu.removeMinimapSymbol` | `005DD9E0` | LuaMenu_RemoveMinimapSymbol | `fn::LuaMenu_RemoveMinimapSymbol` | yes |
 | `menu.startCinematic` | `005DD3C0` | LuaMenu_StartCinematic | `fn::LuaMenu_StartCinematic` | yes |
 | `menu.addCinematicPage` | `005DD410` | LuaMenu_AddCinematicPage | `fn::LuaMenu_AddCinematicPage` | yes |
-| `menu.showMinimap` | `005D9530` | FUN_005d9530 | — (unnamed in Ghidra; not generated) | no |
+| `menu.showMinimap` | `005D9530` | LuaMenu_ShowMinimap | `fn::LuaMenu_ShowMinimap` | no |
 | `menu.updateCinematic` | `005DD5C0` | nMenu_CallForegroundScreensSlot1 | `fn::nMenu_CallForegroundScreensSlot1` (address only) | yes |
 | `menu.allowActions` | `005D9570` | LuaMenu_AllowActions | `fn::LuaMenu_AllowActions` | yes |
 | `menu.addTutorialPage` | `005DAA30` | LuaMenu_AddTutorialPage | `fn::LuaMenu_AddTutorialPage` | yes |
@@ -670,7 +670,7 @@ Registered on the map-script thread during world build, only when `NComm_Manager
 | `logic.q_updateInfo` | `005B1BE0` | GameScript_Lua_q_updateInfo | `fn::GameScript_Lua_q_updateInfo` | yes |
 | `logic.q_isValid` | `005AF790` | GameScript_Lua_q_isValid | `fn::GameScript_Lua_q_isValid` | yes |
 | `logic.q_isFailed` | `005AF6B0` | GameScript_Lua_q_isFailed | `fn::GameScript_Lua_q_isFailed` | yes |
-| `logic.victory_setupQuests` | `005AF7E0` | FUN_005af7e0 | — (unnamed in Ghidra; not generated) | yes |
+| `logic.victory_setupQuests` | `005AF7E0` | GameScript_Lua_victory_setupQuests | `fn::GameScript_Lua_victory_setupQuests` | yes |
 | `logic.se_createSettler` | `005AE160` | GameScript_Lua_se_createSettler | `fn::GameScript_Lua_se_createSettler` | no |
 | `logic.se_moveNPCTo` | `005AE3B0` | GameScript_Lua_se_moveNPCTo | `fn::GameScript_Lua_se_moveNPCTo` | no |
 | `logic.se_moveNPCToFine` | `005AE490` | GameScript_Lua_se_moveNPCToFine | `fn::GameScript_Lua_se_moveNPCToFine` | no |
@@ -697,8 +697,8 @@ Registered on the cutscene's temporary thread each time a cutscene script is loa
 |---|---|---|---|---|
 | `cutscene.addLookAt` | `0078A660` | LuaCutscene_addLookAt | `fn::LuaCutscene_addLookAt` | yes |
 | `cutscene.addPosition` | `0078A5B0` | LuaCutscene_addPosition | `fn::LuaCutscene_addPosition` | yes |
-| `cutscene.createLoopAtEnd` | `0078A6F0` | Unk_Cmd_Call0078d1c0OnSub630 | `fn::Unk_Cmd_Call0078d1c0OnSub630` | yes |
-| `cutscene.setRelative` | `0078A640` | Unk_Cmd_SetFlag41OnSub630 | `fn::Unk_Cmd_SetFlag41OnSub630` | yes |
+| `cutscene.createLoopAtEnd` | `0078A6F0` | LuaCutscene_createLoopAtEnd | `fn::LuaCutscene_createLoopAtEnd` | yes |
+| `cutscene.setRelative` | `0078A640` | LuaCutscene_setRelative | `fn::LuaCutscene_setRelative` | yes |
 
 ### 3.8 `editor` — `nMenu::Debug::OnShow` `0060a340`
 

@@ -169,7 +169,7 @@ S 0046a850) and parsed by every browser (`ParseDescriptionData` S 0048d810) [kno
 - The parser needs **at least 6 tokens** (so at least one name); with fewer it changes nothing and returns
   false, and the caller ignores the result. Numbers are read with `atol` (non-numeric text gives 0).
 
-### 2.5 `LobbyComm::ServerList` (0xac bytes; `LobbyManager +0x54`, getter S 0046b610)
+### 2.5 `LobbyComm::ServerList` (0xac bytes; `LobbyComm::System +0x54`, getter S 0046b610)
 
 Fields used here [known, Ghidra struct, constructor S 0046a160]:
 
@@ -246,7 +246,7 @@ Static tables [known]:
 Terms: **host** = `NComm_Manager::IsHost` S 00408410 (role 0, 2 or 4; in the lobby: role 4); **client** =
 `IsClient` S 004083b0 (role 1 or 3; in the lobby: role 3); **own row** = the slot whose owner GUID equals the
 local GUID (four dwords compared); **gold** = `AvatarProxy +0xd0` of the local lobby avatar
-(`LobbyManager::GetLocalAvatar` S 004625c0).
+(`LobbyComm::System::GetLocalAvatar` S 004625c0).
 
 ### 3.1 Where the dialogs live and when they are visible
 
@@ -675,7 +675,7 @@ equal another player's.
 **Hand-over.** Every frame, on every peer (`Update` S 00457bc8..00457c11) [known]:
 
 ```
-if StartLoading received (manager +0x3cc) and LobbyManager state == 9 (VillageEntered):
+if StartLoading received (manager +0x3cc) and LobbyComm::System state == 9 (VillageEntered):
     ServerList::DestroyGameServer()       host: message 169 RemoveServer for hostedGameId; clients: nothing
     CLobby virtual +0x84                  starts leaving the village
 ```
@@ -838,7 +838,7 @@ The host's join checks run in the order build version (`!VERSION MISMATCH`), bui
 mode (`CLobby +0x270`) is 2 it requests mode 0 through its own vtable `+0x2c` (a request is latched only while
 none is pending, S 004f4eb0); otherwise, when the lobby client object exists, it calls
 `CLobbyClient::LeaveVillage`; otherwise it does nothing [known]. `SetupGameDialog::Update` calls it, and
-`DestroyGameServer` before it, in every frame in which `StartLoading` is set and the `LobbyManager` state is
+`DestroyGameServer` before it, in every frame in which `StartLoading` is set and the `LobbyComm::System` state is
 9: the host sends one more 169 per such frame as long as `hostedGameId` is still a real id (`DestroyGameServer`
 S 004683e0 does not change the id itself) [known]. "Game screen" is the same `CLobby` vtable `+0x2c` with
 argument 1, called by `OnRefereeRegisterGameResult` S 00431800 after `SetupSession` [known].

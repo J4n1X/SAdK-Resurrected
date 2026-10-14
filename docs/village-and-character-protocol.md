@@ -30,19 +30,19 @@ offsets such as `LM+0x57c` are relative to the named object.
 
 | Object | Where | Holds | Tag |
 |---|---|---|---|
-| `LobbyManager` (LM) | singleton | state `+0x57c`; local avatar id `+0x54c`; local `AvatarProxy*` `+0x554`; village conn `+0x540`; UC conn `+0x3d8` | [known] |
+| `LobbyComm::System` (LM; the singleton `g_pLobbyManager`, called LobbyManager in older notes) | singleton, 0x5a8 bytes | state `+0x57c` (enum `LobbyManagerState`); local avatar id `+0x54c`; local `AvatarProxy*` `+0x554`; village conn `+0x540`; UC conn `+0x3d8`; `characterManager` `+0x140`; `postOffice` `+0x2f8`; `properties` `+0x3bc` | [known] |
 | `LobbyComm::CharacterManager` | embedded at `LM+0x140` (ctor S 00478f80) | character map `+0x8c` (id → AvatarProxy, 0xE0 each); list-valid flag `+0x88`; selected id `+0x98`; working/preview avatar `+0xa0`; action queue `+0x74`; buddy/ignore maps `+0x184`/`+0x194`; name↔id caches `+0x1a0`/`+0x1ac` | [known] |
 | tincat3 `CommLayer::CharacterManager` | `CharacterManager+0x5c` | sends 72/86/77/90/94; per-request busy flags `+0xc/+0x10/+0x14/+0x18` | [known] |
 | tincat3 `CommLayer::UserManager` | `CharacterManager+0x60` | sends 55/88/56/157/…; collects 60 rows at `+0xd0` | [known] |
-| `LobbyComm::VillageServerConnection` | `LM+0x540` | transport `+0x34`; server perm `+0x160`; chat map `+0x164` (zone byte → cell id); avatar map `+0x170`; NPC map `+0x174`; minigame tables `+0x178`; event queues `+0x184/+0x198/+0x1ac`; current chat zone `+0x225`; world name `+0x228`; link quality `+0x244`; pending ping `+0x248`; trade latch `+0x274` | [known] |
+| `LobbyComm::VillageServerConnection` | `LM+0x540` | transport `+0x34`; owner `pSystem` `+0x158`; `serverPermId` `+0x160`; `zoneChatChannels` `+0x164` (zone byte → cell id); avatar map `+0x170`; NPC map `+0x174`; `miniGameTables` `+0x178`; event queues `+0x184/+0x198/+0x1ac`; `worldLoginAckReceived` `+0x224`; `currentZone` `+0x225`; `zoneJoinPending` `+0x226`; `worldName` `+0x228`; `connectionQuality` `+0x244`; pending ping `+0x248`; trade latch `+0x274` | [known] |
 | `LobbyMenu::AvatarScreen` | screen | view mode `+0x1e8` (0 create, 1 select, 2 entering); wait dialog `+0x200` | [inferred] |
 
-### 1.2 LobbyManager states (`LM+0x57c`)
+### 1.2 `LobbyComm::System` states (`LM+0x57c`, enum `LobbyManagerState`)
 
 | Value | Name | Entered by | Left by |
 |---|---|---|---|
 | 1 | Disconnected | init, login failed, logged out | lobby login |
-| 2 | Connecting | lobby login | 207 SessionKey |
+| 2 | Authorizing | lobby login | 207 SessionKey |
 | 3 | Authorized | OnLoggedIn | state pump |
 | 4–5 | version check | state pump | 42 for 188 |
 | 6 | LoadingGlobalData | state pump | all four global lists valid (§2.1) |
@@ -51,7 +51,7 @@ offsets such as `LM+0x57c` are relative to the named object.
 | 9 | VillageEntered | `HandleEnterWorld` S 0046f670 | msg 2002 sent |
 | 10 | LeavingVillage | `SendLeaveVillageRequest` S 0046bde0 | only LoggedOut (→11) or Disconnected (→11) |
 | 11 | VillageLeft | `HandleLoggedOut` / `HandleDisconnected` | — |
-| 12 | LobbyConnectionLost | main connection lost | — |
+| 12 | ConnectionLost | main connection lost | — |
 
 [known] for the values and setters; LIVE_DEBUG_RUNBOOK.md has the trace evidence.
 
@@ -347,7 +347,7 @@ Server decisions:
 | `ServerPerm` | any u32 that is **not** a player perm id | chat lines whose `from_id == ServerPerm` show as `[SYSTEM]` plus the modal `!LOBBY_IMPORTANT_SYSTEM_MESSAGE` (S 00436180) | [inferred]; the stub sends 0 |
 | channel key `0xFF` | required | global tab; auto-joined | [PROVEN 2026-08-01, S 0046f670] |
 | channel key `0xFE` | recommended | minigame tab | [inferred] |
-| channel keys `0x00..0x0D` | optional, one per zone | local tab. On a zone change `SetLocalChatZone` S 0046e860 leaves the old cell and joins `map[zone]` | [inferred] |
+| channel keys `0x00..0x0D` | optional, one per zone | local tab. On a zone change `JoinZoneChatChannel` S 0046e860 leaves the old cell and joins `map[zone]` | [inferred] |
 | `ChatChannelID` | **non-zero**, and the cell must also exist on the UC/chat server | cell id 0 is the invalid sentinel: chat submit returns silently (S 00436860) | [PROVEN 2026-08-01] |
 
 After 1000, the server should send, in this order (stub order, [PROVEN 2026-08-01]):
@@ -422,7 +422,7 @@ Rules:
   S 007e70e8 slot 4 = S 0072db80), so nothing is pushed and the avatar neither moves nor
   vanishes; `CGfxObjAvatar::UpdateAppearance` runs and shows the new look. [known]
 - The own avatar is in the avatar map without any 1001: `+0x170` points at the map at `LM+0x558`,
-  and `LobbyManager::SetLocalAvatar` S 004626c0 inserts a copy of the chosen character there before
+  and `LobbyComm::System::SetLocalAvatar` S 004626c0 inserts a copy of the chosen character there before
   the village login is sent (`OnUserCommLoggedIn` S 004704e0). The `ownr` lookups of 0xC1C–0xC1E
   and 0xC80 / 0xC81 therefore find it. Nothing empties the avatar map while the local proxy stays
   registered (`ClearAvatarsAndEventQueues` S 0046fab0 runs only after `ClearLocalAvatar`, in
@@ -484,7 +484,7 @@ client A                         server                          client B
 
 `itmid` values are the item ids of `ItemsClient.txt`, a plain-text file (not an encrypted
 container) in the install's `data/lobby/config/`; the shipped file defines 36 items, ids 1..36.
-`LobbyManager::Initialize` S 004643d0 loads it once with `ItemDatabase::LoadFromFile` S 0048bfd0
+`LobbyComm::System::Initialize` S 004643d0 loads it once with `ItemDatabase::LoadFromFile` S 0048bfd0
 into a map (item id → ItemInfo) at `LM+0x570`; if the file cannot be opened it logs `Loading of
 ItemDatabase failed!` and returns before the comm layer is created, so the lobby never starts.
 [known] That 3100–3102 `itmid` uses these ids is [inferred]; for 0xE11 `ItemID` it is [known]
@@ -523,8 +523,9 @@ is ignored (first wins) [inferred].
   `_invalid_parameter_noinfo` and then reads one entry past the end of the stock vector
   (S 0046d73e..0046d7dd). [known] On an avatar an unknown `itmid` shows nothing:
   `CGfxObjAvatar::SyncEquipmentSlot` S 00507f60 attaches only a valid item and clears a slot that
-  showed one before. [known] Whether the shop path ends the process is covered in
-  `docs/live-checks/2026-10-12_read-from-code.md` ("Unknown item id (part b)").
+  showed one before. [known] In the backpack an unknown id (99) draws an empty slot, hovering it with a shop
+  open shows nothing and the process keeps running [live, 2026-10-14], so the hover does not reach the
+  failure path above (`docs/message-catalog.md` V23).
 
 ---
 
@@ -641,7 +642,7 @@ Codes 12–15 from an NPC would use table / parameter 0, because an NPC's slot p
   - everything else, i.e. every `NPCProxy`: **`set` is the constant 0**, `index` = the proxy's NPC index
     (`+0xc0`).
 
-  `DrawRenderItem` S 00507580, the only other caller, reuses the stored pair. No code path passes another
+  `Lobby::CGfxObjAvatar::Render` S 00507580, the only other caller, reuses the stored pair. No code path passes another
   set, so the **female, MacDoyleJr and MacGabhan sets of `npc_bodyparts.xml` are never used by this
   build**: Sakhmet, Moppet, the three tribe women, MacDoyleJr and MacGabhan cannot appear as NPCs
   without a client patch.

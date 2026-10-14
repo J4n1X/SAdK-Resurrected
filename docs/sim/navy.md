@@ -409,7 +409,7 @@ if no path was found: stop [known].
 
 **Path source** (`NNavy::Path::FindPath` S 005bdb30) [known]:
 - `movement.state == 3`: the sub-sequence of the route's stored path between the two cells, inclusive
-  (`MapPosPath_ExtractSegment` S 005bd900). The function always reports success. If the ship's cell is
+  (`MapPosVector_ExtractSegment` S 005bd900). The function always reports success. If the ship's cell is
   **not** on the stored path, the result is the stored path from the target cell to the path's end (when the
   target comes first in the vector, as `path[1]` does) [known];
 - otherwise A* with `pPathfinderA` (`AStar::FindPath(from, to, 0)`), and on success
@@ -537,7 +537,7 @@ reservation exists from the moment of the decision, so two ships never choose th
 
 ### 3.6 Condition and sinking
 
-`NavyCondition_Update` S 005bdc30, called once per tick **only while the ship lies still and is not in state
+`ai::navy::NavyCondition::Update` S 005bdc30, called once per tick **only while the ship lies still and is not in state
 8** [known]:
 
 ```
@@ -600,7 +600,7 @@ switch state: (table below)
 cell as its next flag (settler movement +0x140/+0x144), or a package on flagA's stacks is flagged for
 transport (package +0x25) and its next waypoint is flagB's cell.
 
-"Cargo empty" (`NavyCargo_IsEmpty` S 005bcc60) = no package and no settler **aboard** [known].
+"Cargo empty" (`ai::navy::NavyCargo::IsEmpty` S 005bcc60) = no package and no settler **aboard** [known].
 
 Timing notes [inferred from the code above]: `LoadAtHarbor` reports "worked" on the two of three ticks it
 skips (below), so in state 2 `stateCountdown` advances on every third tick only, and only on phase ticks on
@@ -683,7 +683,7 @@ disembarks (`DisembarkAt`) → true; else `UnloadOnePackage(throttled)`.
 
 **`DisembarkOneSettler(out)`** S 005bcd10 (idle ships, military mission): if `(tick + id) % 5 != 0` → return
 "any linked settler?". Else the first settler aboard disembarks regardless of its destination (its movement
-is aborted with `SettlerMovement_Abort`, it is unlinked from the cargo, then `DisembarkAt`) → true; none →
+is aborted with `ai::settlers::SettlerMovement::Abort`, it is unlinked from the cargo, then `DisembarkAt`) → true; none →
 false.
 
 **`UnassignPendingSettlers`** S 005bd3b0: unlink every settler that references this ship and is not aboard.
@@ -765,7 +765,7 @@ losing a harbour takes the owner's ships off its routes and deactivates their ex
    - No unit yet but settlers are linked to the cargo: each becomes a unit of the expedition (settler ship
      reference at settler +0xf8, expedition `units`).
    - Units exist, nobody linked to the cargo: every settler in the harbour flag's waiting list whose ship
-     reference is this ship is linked to the cargo and boards (`EnterShip`, then `SettlerMovement_Abort`).
+     reference is this ship is linked to the cargo and boards (`EnterShip`, then `ai::settlers::SettlerMovement::Abort`).
    - Units exist and somebody is linked to the cargo: `ready = true`.
 2. Materials. `missing` = `frameCost ++ cost` of the tribe's expedition building, minus one per package aboard
    (by good type). If `missing` is not empty: `ready = false`; subtract the open `NeedGoods` requests; if
@@ -1166,7 +1166,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
   (`../navy-and-military.md` §7); decide per rule whether the remake keeps the original behaviour.
 - Rendering needs from the logic only: cell, next cell, `progress`, ship state, cargo empty or not, the
   construction values and `buildCell` [inferred: of the renderer only the callers `S2CG::Ship::Update`
-  (`ShipConfig::GetSpeed`) and `S2CG::Ship::UpdateVisuals` (`NavyCargo_IsEmpty`) were seen; `S2CG::Ship` was
+  (`ShipConfig::GetSpeed`) and `S2CG::Ship::UpdateVisuals` (`ai::navy::NavyCargo::IsEmpty`) were seen; `S2CG::Ship` was
   not read].
 
 ## 10. Open questions
@@ -1207,7 +1207,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005bb500 | `NNavy::Ship::Update` | ship state machine |
 | S 005bab60 | `Ship::ReturnToOwnHarbor` | idle ship adopts a ferry route |
 | S 005bb010 / 005bb210 / 005bb250 | `Ship::BeginSinking` / `ScheduleSinking` / `ScheduleSinkingNoDelay` | sinking |
-| S 005bdc30 | `NavyCondition_Update` | condition |
+| S 005bdc30 | `ai::navy::NavyCondition::Update` | condition |
 | S 005b9b90 | `NNavy::Movement::Update` | movement per tick, anchoring |
 | S 005b97f0 / 005b99d0 / 005b9990 | `Movement::MoveToHarbor` / `AdvanceRouteLeg` / `SailToOppositeRouteEnd` | route following |
 | S 005b92e0 / 005b9340 | `Movement::SetRoute` / `ClearRoute` | route link |
@@ -1215,7 +1215,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005bdb30 | `NNavy::Path::FindPath` | route segment or A* |
 | S 005bba90 / 005bbbe0 / 005bb9d0 | `NNavy::AStar::GetStepCost` / `CanTraverse` (search precondition, slot 0), `ShipRouteAStar::GetStepCost` | water path costs |
 | S 00676900 / 00676e80 / 00676d10 | `NMap::AStar::FindPath` / `BuildPathReversed` / `BuildPath` | shared A* core, random path read-back (`map-resources.md`) |
-| S 005bd900 | `MapPosPath_ExtractSegment` | stored route segment |
+| S 005bd900 | `MapPosVector_ExtractSegment` | stored route segment |
 | S 0053c2d0 / 0053c300 | `NavyLink_LinkMovementDocking` / `UnlinkMovementDocking` | docking reservation (no null test) |
 | S 005baf20 / 005b96c0 / 005b3c40 | `Ship::dtor` / `Movement::dtor` / `System::DeleteAllShips` | destruction order |
 | S 0055e8c0 | `NVillage::Construction::dtor` | removing a ship-building site deletes its ship |
@@ -1226,9 +1226,9 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 0055a820 / 00673af0 / 00565350 | `PlaceExpeditionBuilding`, `MapModifier::AddTerritorySource`, `TerritoryUpdater::Activate` | colony territory |
 | S 006632d0 / 006630b0 / 006631e0 | `SacrificeModifiers::GetShipSpeed` / `ApplyOwnEffect` / `ApplyHostileEffect` | ship speed factor |
 | S 00674800 / 00532400 | `MapModifier::ExploreArea`, `MapUpdateBatch::InvalidateConstructionAroundCell` | exploring, map-change notice |
-| S 005bd4e0 / 005bcfa0 / 005bcea0 / 005bcd10 | `NavyCargo_LoadAtHarbor` / `UnloadStep` / `UnloadOnePackage` / `DisembarkOneSettler` | cargo exchange |
-| S 005bd270 / 005bd3b0 / 005bb420 | `NavyCargo_AssignWaitingSettlers` / `UnassignPendingSettlers`, `NavyHarbor_HasPendingCargoFor` | passengers, demand test |
-| S 005bcc30 / 005bcc60 / 005bd0f0 | `NavyCargo_IsFull` / `IsEmpty` / `ReleaseAll` | capacity, loss of cargo |
+| S 005bd4e0 / 005bcfa0 / 005bcea0 / 005bcd10 | `ai::navy::NavyCargo::LoadAtHarbor` / `UnloadStep` / `UnloadOnePackage` / `DisembarkOneSettler` | cargo exchange |
+| S 005bd270 / 005bd3b0 / 005bb420 | `ai::navy::NavyCargo::AssignWaitingSettlers` / `UnassignPendingSettlers`, `NavyHarbor_HasPendingCargoFor` | passengers, demand test |
+| S 005bcc30 / 005bcc60 / 005bd0f0 | `ai::navy::NavyCargo::IsFull` / `IsEmpty` / `ReleaseAll` | capacity, loss of cargo |
 | S 005b8ac0 / 005b8470 / 005b7e50 | `NNavy::Expedition::Update` / `GatherCargo` / `FindBuildingPosition` | expedition |
 | S 005b7b80 / 005b7c30 / 005b7d00 / 005b8370 | `Expedition::ChooseStartHarbor` / `Finish` / `Abort` / `ReleaseUnitsAndOrders` | expedition helpers |
 | S 005ba250 / 005b9f30 / 005ba190 | `NNavy::Military::Update` / `BoardSettlersAtHarbor` / `Finish` | sea attack mission |

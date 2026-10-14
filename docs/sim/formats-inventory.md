@@ -47,7 +47,7 @@ Out of scope: the network protocols, and `bin\` (executables, DLLs, `msgdefs.ini
 
 ### 2.2 The file index (`ai::file::FileScan`)
 
-One object, held by the global `FileScanHolder` (getter `Generic_GetGlobal_0088e194`).
+One object, held by the global `FileScanHolder` (getter `ai::file::FileScanHolder::GetInstance`).
 
 | Field | Meaning | Evidence |
 |---|---|---|
@@ -130,7 +130,7 @@ exactly with those widths [inferred].
 `ai::render::Particle`, 0x78 bytes [known: array stride S 004f0c10]: `+0x10` current position, `+0x1c` current
 size, `+0x20` current colour, `+0x30` life `t`, `+0x34` current velocity, `+0x40` spawned byte, `+0x44` spawn
 time, `+0x48` ttl, `+0x4c` start position, `+0x58` start velocity, `+0x64` start colour, `+0x74` start size
-[known: reads and writes in `ApplyCurves` S 004f1960 and `Particle_Update` S 004f16c0], `+0x04` index,
+[known: reads and writes in `ApplyCurves` S 004f1960 and `ai::render::Particle::Update` S 004f16c0], `+0x04` index,
 `+0x08` squared camera distance, `+0x0c` next in the sorted list [known] S 004f0c10, S 004f0790.
 
 Enums:
@@ -224,7 +224,7 @@ whose index is the kind [known]: 0 `Item`, 1 `Slider`, 2 `Slider2`, 3 `StackedSl
 
 **Index build** [known]: `CApplicationEx::Initialize` S 004075d0 calls
 `FileScanHolder::ScanDirectory` S 006e3ca0 once with `data\`. `FileScan::ScanDirectory` S 006ef440 enumerates
-`<dir>\*.*`; `FileScan_ProcessEntry` S 006f1330 skips `.` and `..`, recurses into directories
+`<dir>\*.*`; `ai::file::FileScan::ProcessEntry` S 006f1330 skips `.` and `..`, recurses into directories
 (`HandleSubdirectory` S 006f0630, unless `ShouldSkipSubdirectory` S 006f0200 vetoes; that test compares path
 components with those of the stored root, which is empty at start-up, so nothing is skipped [inferred]) and
 enters every file (§2.2). The index is never rebuilt: a file that appears below `data\` later is not found by name.
@@ -297,7 +297,7 @@ Listings read the disk, not the index.
 | language `.txt` | `ai::ui::Localization::LoadTextFile` S 004966d0 | required [inferred: calls S 006e7770] |
 | `.KEX` | `KFile::Load` S 0072b820 | plain |
 | `.pfx` | `ParticleEmitter::Load` S 004f1150 | plain [known: `NBase::File::Read`] |
-| `.npc`, `.avo` | `InGameAvatarData_LoadFromFile` S 0068b850 | plain [known] |
+| `.npc`, `.avo` | `ai::render::InGameAvatarData::LoadFromFile` S 0068b850 | plain [known] |
 | `.fnt` | `BitmapFont::LoadFromFnt` S 004e3860 | plain [known: `NBase::File::Open` + line buffer] |
 | `.ogg`, `.wav` | `ai::audio::SoundManager::LoadSound` S 005c7250, `PlayOneShotFile` S 005c7510 (FMOD 3, `fmod.dll`) | plain |
 | `.ini` | Win32 `GetPrivateProfile*` | plain |
@@ -398,7 +398,7 @@ is rotated by the emitter's quaternion and moved by its position [known] S 004f3
 the six draws to those functions (called through the params' virtual slots `+0x10`..`+0x24`, vtable
 S 007e53a0 not read).
 
-**Update** (`Particle_Update` S 004f16c0, once per particle and frame from `ParticleEmitter::Update` S 004f0790)
+**Update** (`ai::render::Particle::Update` S 004f16c0, once per particle and frame from `ParticleEmitter::Update` S 004f0790)
 [known: disassembly]. `age = elapsed − spawnTime`; the function returns whether the particle is visible.
 
 1. `age < 0` (not born): on a non-looping emitter with `age > −ttl`, `spawnTime += ttl`. In every case start
@@ -423,7 +423,7 @@ at the emitter position, grows them by each visible particle's position ± half 
 particles and links them into a list ordered by descending squared distance to the camera [known] S 004f0790.
 
 **Rendering** [known unless tagged]: one atlas for all effects, `[data]\gfx\particles_texture.tga`, effect
-`particle_shader.fx` (`ParticleManager_InitResources` S 004e0ad0). `passIndex` selects the pass of that effect
+`particle_shader.fx` (`ai::render::ParticleManager::InitResources` S 004e0ad0). `passIndex` selects the pass of that effect
 (`RenderEmitter` S 004e0280: effect call with `emitter+0x98`). Passes of technique `Default` in file order
 [known: `particle_shader.fx`]: 0 `FlatDecal`, 1 `Spherical`, 2 `VolumeSphere`, 3 `FlatDecalAdditive` (source and
 destination blend `One`), 4 `FlatNormal`, 5 `FlatDecalAlphaTest`; passes 0, 1, 2, 4 blend `SrcAlpha` /
@@ -469,7 +469,7 @@ seen in `particle_shader.fx`: `Default` and `ffp` (fixed function).
 
 ### 3.5 `.npc` and `.avo` avatar files
 
-Same layout for both (`InGameAvatarData_LoadFromFile` S 0068b850) [known]; all 32 `.npc` files parse to their last
+Same layout for both (`ai::render::InGameAvatarData::LoadFromFile` S 0068b850) [known]; all 32 `.npc` files parse to their last
 byte:
 
 ```
@@ -488,7 +488,7 @@ str  idleAnimation   e.g. "[data]/avatars/male_idle01.KEX"; empty = none (no ins
   `<My Documents>\SAdK\users\<name>.avo` (`InGameAvatar::LoadAvatar` S 0068bf30) [known: format strings
   `%s.npc`, `%s\%s.avo`]. A file that cannot be opened yields −1 without a message [known]. The record
   (0x54 bytes) is appended to the avatar table and its index returned; each part's palette starts from a
-  default fill (`ColorPalette256_InitMagenta`) before the 0x400 bytes are read [known] S 0068b850.
+  default fill (`ai::gfx::Palette256::ctor`) before the 0x400 bytes are read [known] S 0068b850.
 - Writer: `Lobby::CGfxObjAvatar::SaveAvatarFile` S 00506a40 / `AvatarBodyParts::WriteAvoFile` S 004fd110 write
   the same layout with the idle animation `Stand` [inferred from the summaries].
 - `typeName` matches the lobby's animation graphs (`<typeName>_animation_graph.xml` in `data\lobby\config`)
@@ -719,7 +719,8 @@ frames, 5 fps, hot spot 15 16), 3 build (`Mousecursors_BuildHouse.tga`, hot spot
 
 **`engine.ini`** (`data\game\settings`, plain; `S2CE::CGraphicDevice::Init` S 004da2a0, `GetPrivateProfileIntA`)
 [known: keys and defaults]: section `[Engine]`: `vsync` (default 1), `refreshRate` (0), `useMeshCache` (1),
-`hardwareCursor` (1; `docs/BINARY_PATCHES.md`). **`engine.xml`** (encrypted, read by the same function when
+`hardwareCursor` (1; `docs/BINARY_PATCHES.md`); in the reference install all four take these defaults, because
+the file's byte order mark hides `[Engine]` (next paragraph) [live, 2026-10-14]. **`engine.xml`** (encrypted, read by the same function when
 it can be opened): attributes of the root element (its name is not tested; `Engine` in the install):
 `pureDevice`, `specialDepthMap`, `lowresDepthMap`, `mixedDevice` (booleans), `multiSample` (integer),
 `hwCursor` (cursor image path) and, only with `hwCursor`, `hotspot` (two integers) [known]. The install's file
@@ -727,10 +728,13 @@ also carries `hardwareCursor` and `vsync` attributes, which this function does n
 `mixedDevice`.
 
 The reference install's `engine.ini` and `network.ini` start with a UTF-8 byte order mark (`EF BB BF`)
-[known: file bytes]. [inferred] The Win32 profile reader then does not recognise the first section header
-(`[Engine]`, `[Basics]`), so the keys of that section read as their defaults (e.g. `gamePort` 5479 = 0x1567
-instead of the written 5478). [TODO] not established: whether the retail files carry the mark, or only this
-copy.
+[known: file bytes]. The Win32 profile reader does not find a section whose header follows the mark directly
+(`GetPrivateProfileIntA` called in the game process on test files) [live, 2026-10-14]. `engine.ini` has the mark
+directly before its only section `[Engine]`, so every `[Engine]` key takes the code default, and edits to the file
+have no effect until it is saved without the mark; in `network.ini` the first `[Basics]` section (`gamePort`
+5478) is hidden and the effective value is 5479 = 0x1567, from a second `[Basics]` section further down or the
+default [live, 2026-10-14]. A remake's reader should strip the mark. [TODO] not established: whether the retail
+files carry the mark, or only this copy.
 
 **`network.ini`** (plain; `NComm_NetworkConfig_LoadFromIni` S 0041ede0): sections `[Basics]` `gamePort`;
 `[Broadcast]` `broadcastPort`, `broadcastTimeout`; `[Ping]` `pingFrequencyMenu`, `pingFrequencyGame`;
@@ -738,8 +742,8 @@ copy.
 `[Lobby]` `url`, `patchlevel`. Read again at every network start-up.
 
 **`LobbySettings.ini`** (`data\lobby\config`, plain; the path is set up by `LobbyProfile::Init` S 00465dd0, the
-keys are read on demand by `LobbyProfile_GetLobbyServerHost` S 00466230, `LobbyProfile_GetLobbyServerPort`
-S 00465450 and `LobbyProfile_GetHallOfFameUrl` S 00465960) [known: key strings]: `[LobbyServer]` `Host`,
+keys are read on demand by `ai::lobby::LobbyProfile::GetLobbyServerHost` S 00466230, `LobbyProfile_GetLobbyServerPort`
+S 00465450 and `ai::lobby::LobbyProfile::GetHallOfFameUrl` S 00465960) [known: key strings]: `[LobbyServer]` `Host`,
 `Port`; `[LobbyClient]` `HallOfFameURL<n>` (default empty), `HallOfFameURL<n>_AppendPermID`,
 `HallOfFameURL<n>_AppendCharname` (the install writes `n` = 0..2 and no `_AppendCharname` key).
 
@@ -768,9 +772,9 @@ match unless noted (`docs/data-loading.md` §2). Root, main elements and attribu
 | `map_objects.xml` | 221 `LandscapeElement name mesh meshType shader blendMode numInstances offset rot scaleX/Y/Z priority alignOnWater shadowCast shadowReceive forceShadowPass` | `nGame::System::BuildScene` S 007842e0 |
 | `terrain_static_data.xml` | `Patterns` / 114 `Pattern name alias type texture normal transition texScale nrmScale parallaxHeight specularIntensity specularPower blocking groundCover`; `GroundCover` / `Cover name density height bend opacity sliceCount` | `BuildScene` |
 | `daytimes.xml` | 9 `Daytime hour background fog lightambient lightcolor lightelevation lightheading shadowIntensity skydome` | `CEnviromentMgr::LoadDaytimes` S 00684130 |
-| `local_enviroment.xml` | `Enviroment` (defaults) and `XEnvSphere center innerRadius outerRadius ...` | `MapEnvData_LoadDefaultsXml` S 006aec60 |
+| `local_enviroment.xml` | `Enviroment` (defaults) and `XEnvSphere center innerRadius outerRadius ...` | `ai::render::MapEnvData::LoadDefaultsXml` S 006aec60 |
 | `decals.xml` | 3 `Texture name` | `DecalRenderer::CreateResources` S 004df850 |
-| `effectMovies.xml` | 7 `EffectMovie name` with `FX start duration link particles sound` | `EffectScriptMgr_LoadEffectMovies` S 00686160 |
+| `effectMovies.xml` | 7 `EffectMovie name` with `FX start duration link particles sound` | `ai::gfx::EffectScriptMgr::LoadEffectMovies` S 00686160 |
 | `projectiles.xml` | 4 `Projectile name mesh rotation flightPFX impactPFX impactSound` | `ProjectileTable::LoadProjectilesXml` S 006a4440 |
 | `flocks.xml` | `Flocks maxFlocks minSpawn maxSpawn swarmTimeout`; `Bird`, `Fish`, `Bug` with `Evade`, `Pack`, `MatchSpeed` | `SwarmMgr::LoadSettings` S 0069a9c0 |
 | `settler_config.xml` | `Characters scale lod0Range.. goodOffset ...`; 98 `Character name mesh mesh1..3 color slotMap`; `Models` / `Model file`; `Donkey`; 47 `Animation name filename` | `CCharacterMgr::LoadFromXml` S 00695130 |
@@ -901,7 +905,7 @@ where an address is given, otherwise per `docs/data-loading.md` §1):
    when the file does not exist or cannot be opened.
 6. Lobby profile (`LobbyProfile::Init` S 00465dd0): only the paths of `LobbySettings.ini` and of the per-user
    `lobby\<profile>.ini` are built; the values are read on demand. Unless `-nolobby`: `ItemsClient.txt`
-   (`LobbyManager::Initialize` S 004643d0).
+   (`LobbyComm::System::Initialize` S 004643d0).
 7. Engine layer (`CApplicationEx::InitEngineLayer` S 00405590): `engine.ini` and `engine.xml`
    (`CGraphicDevice::Init` S 004da2a0); after the device exists the mesh renderer, the particle manager
    (`particle_shader.fx`, the particle atlas, S 004e0ad0) and the decal renderer are created. A failed device
@@ -1090,7 +1094,7 @@ resource's metadata, since references are by name.
 | 6 | Text markup grammar (`<hcenter>`, `[Name:n]`, `#`, `%`) | static read of the text block and rich text layout code |
 | 7 | `settings.cfg`: the layout is established ([app-shell.md](app-shell.md) §3.9). Open are only the meanings of the stored but unread profile fields `+0x32`, `+0x38`, `+0x78` and of the scene-settings byte `+0x48` | [app-shell.md](app-shell.md) §10, questions 1 and 3 |
 | 8 | KEX vertex stream types (still inferred from sizes) | static read of the renderer's vertex declaration code (`docs/asset-formats.md` §2) |
-| 9 | Whether `engine.ini`'s leading UTF-8 byte-order mark in the reference install hides `[Engine]` from `GetPrivateProfileIntA` | observation in the running game (toggle `useMeshCache`, watch for `.mshraw` files) |
+| 9 | Answered (§3.10): the leading UTF-8 byte order mark of the reference install's `engine.ini` hides its only section `[Engine]` from `GetPrivateProfileIntA`, so every key takes the code default and edits have no effect until the file is saved without the mark [live, 2026-10-14] | — |
 | 10 | Whether the debug editor ever reads `copypaste.dat` back (§3.11): the write falls back to the bare name, the read does not | static read of `Fs_FileExists` S 0057d060 and `nMenu::Debug::LoadCopyPasteBuffer` S 00606050 with its caller S 0060a340 |
 | 11 | Per-attribute semantics of the settings and lobby XML files of §3.10 | static read of the listed readers, per rendering specification |
 | 12 | `.lep` body | the map editor's binary (not in the install) |
@@ -1105,8 +1109,8 @@ resource's metadata, since references are by name.
 | 00403ac0 | `CApplicationEx::ParseCommandLine` | `-log_path`, `-nolobby` and the other switches |
 | 006e3ca0 | `FileScanHolder::ScanDirectory` | builds the index from `data\` |
 | 006ef440 | `FileScan::ScanDirectory` | enumerates one directory |
-| 006f1330 | `FileScan_ProcessEntry` (proposed; `FUN_006f1330` in the name index) | per entry: recurse or record |
-| 006f10e0 | `FileScan_AddFileEntry` (proposed; `FUN_006f10e0` in the name index) | lower-case name → directory list |
+| 006f1330 | `ai::file::FileScan::ProcessEntry` | per entry: recurse or record |
+| 006f10e0 | `ai::file::FileScan::AddFile` | lower-case name → directory list |
 | 006e3fd0 | `FileScanHolder::ResolvePath` | request path → real path |
 | 006ef8a0 | `FileScan::ResolvePath` | name lookup, duplicate choice |
 | 006ef680 | `FileScan::PickCandidateByParentDir` | choice among duplicates |
@@ -1128,10 +1132,10 @@ resource's metadata, since references are by name.
 | 004f39a0 / 004f3a60 | `ParticleQuad::Load` / `ParticleQuadAnim::Load` | renderer block |
 | 004f0f10 | `ParticleEmitter::CreateRenderer` | renderer type names |
 | 004f04b0 | `ParticleEmitter::Restart` | staggered spawn |
-| 004f1660 / 004f16c0 | `Particle::Spawn` / `Particle_Update` | particle life cycle |
+| 004f1660 / 004f16c0 | `Particle::Spawn` / `ai::render::Particle::Update` | particle life cycle |
 | 004f1960 | `Particle::ApplyCurves` | curves → velocity, size, colour, position |
 | 004f1db0..004f2830 | curve `Evaluate` / `Prepare` functions | curve formulas |
-| 004e0ad0 | `ParticleManager_InitResources` | atlas texture, particle effect |
+| 004e0ad0 | `ai::render::ParticleManager::InitResources` | atlas texture, particle effect |
 | 004e0280 / 004dfdc0 | `ParticleManager::RenderEmitter` / `RenderAll` | pass selection, emitter update and draw: one emitter (lobby) / all emitters in view (scene) |
 | 004e0660 | `ParticleManager::CullAndSortEmitters` | frustum test, depth buckets, removal of finished emitters |
 | 004f0790 | `ParticleEmitter::Update` | per-emitter update: particles, bounds, depth-sorted list |
@@ -1142,7 +1146,7 @@ resource's metadata, since references are by name.
 | 004ebad0 | `S2CE::CShaderProgram::GetCompiledEffect` | compile and cache |
 | 004ebe80 / 004ec910 | `ShaderProgram_BuildPreloadList` / `ShaderProgram_PreloadNext` | `*.fx` list; one effect per splash update |
 | 004e80d0 | `S2CE::CTexture::CreateFromFile` | texture load |
-| 0068b850 | `InGameAvatarData_LoadFromFile` | `.npc` / `.avo` layout |
+| 0068b850 | `ai::render::InGameAvatarData::LoadFromFile` | `.npc` / `.avo` layout |
 | 0068bf30 | `S2CG::InGameAvatar::LoadAvatar` | `.npc` / `.avo` paths |
 | 004e3860 | `BitmapFont::LoadFromFnt` | `.fnt` reader |
 | 004e2770 / 004e28b0 | `BitmapFont::ParseCommonLine` / `BitmapFontGlyph::ParseCharLine` | metrics, glyph arithmetic |

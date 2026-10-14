@@ -3,7 +3,7 @@
 Status: **static RE on `sadk_noav.exe`** (base 0x400000) via the Ghidra MCP, 2026-06-17. RTTI intact
 (namespace `NComm`, `.?AV…@NComm@@`). All renames/structs/enums applied + saved in the Ghidra project.
 `[PROVEN static]` unless marked `[inferred]`. This is the **match transport** — the host's match never
-starts because its NComm never leaves `EManagerState_Connected(2)`; see `MATCH_START_STATIC_RECONCILIATION.md`.
+starts because its NComm never leaves `EManagerState_SessionStarted(2)`; see `MATCH_START_STATIC_RECONCILIATION.md`.
 
 NComm is the engine's network abstraction (`Manager.cpp`). A process-global **`NComm::Manager`** singleton
 (`NComm_GetManager@0x408290` → `DAT_00885754`) owns one polymorphic **transport** (`INetworkHandler`),
@@ -12,12 +12,14 @@ and the game talks to peers by sending **`Event`** objects.
 ## `NComm::Manager` — the transport state machine [PROVEN static]
 
 Struct **`NComm_Manager`** (973 B modelled; key fields only, gaps undefined):
-`+0x1c eManagerState` (`EManagerState`), `+0x20 cShutdownFlag`, `+0x34/0x38 nMaxPlayers`,
+`+0x1c eManagerState` (`EManagerState`), `+0x20 cShutdownFlag`, `+0x34 logicTicksPerNetTick`
+(logic ticks per net tick = `gameSpeedMultiplier` × `netTickLength`), `+0x38 netTickLength` (base logic ticks per net tick),
 `+0xdc` the 6-entry **player-slot table** (room model; `NComm_GetSlotDataPtr(mgr+0xdc, i)`),
-`+0x32c` local player name, `+0x340 pNetwork` (`NComm_INetworkHandler*`), `+0x3c8 nMode`,
+`+0x32c localGuid` (`NetGUID`, the local player's GUID), `+0x340 pNetwork` (`NComm_INetworkHandler*`), `+0x3c8 nMode`,
 `+0x3cc fStartLoading`.
 
-**`EManagerState` (mgr+0x1c):** `None=0` → `NetworkStarted=1` → `Connected=2`.
+**`EManagerState` (mgr+0x1c):** `None=0` → `NetworkStarted=1` → `SessionStarted=2` → `GameStarting=3` → `GameRunning=4`
+(the names are the binary's own: `"m_ManagerState != EManagerState_SessionStarted"` in `BeginGameStarting@0x40b170`).
 
 | Method | Addr | Effect |
 |---|---|---|
@@ -33,7 +35,7 @@ Struct **`NComm_Manager`** (973 B modelled; key fields only, gaps undefined):
 
 **Transport-by-mode table** (`StartUpNetwork`): mode 0 → `DummyNetwork` (loopback, single-player);
 1 → `TinCatNetwork`(client); 2 → `TinCatNetwork`(host); 3 → `TinCatNetwork`(client/joiner);
-4 → `TinCatNetwork`(host/match-host). Modes 1-4 set max-players 4; mode 0 sets 1.
+4 → `TinCatNetwork`(host/match-host). Modes 1-4 set `logicTicksPerNetTick` and `netTickLength` to 4; mode 0 sets both to 1.
 
 ## Transport: `INetworkHandler` + `TinCatNetwork` + `DummyNetwork` [PROVEN static]
 

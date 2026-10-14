@@ -20,7 +20,7 @@ before the game starts, a file read per match by any mod active when the match i
 | Directory scan of `data\` (the data roots for `[data]` paths) | `FileScanHolder::ScanDirectory` | [known] call; [TODO] what the scan keeps beyond the roots |
 | The property database (`PropertiesDb`, singleton `00889dd8`): every tribe, good, building, animal, ship, doodad, deposit, pattern, sound, AI and game-config value | `Properties_RegisterLuaLibrary` `00550e40` sets defaults and registers the Lua library `properties` (243 bindings); `PropertiesDb::RunPropertyScript("data")` `0054f8d0` runs `[data]\scripts\properties\data.lua`, which pulls in the other property scripts (`docs/lua-surface.md` §2.2) | [known] |
 | Sound system, user profile, `LobbyProfile` | `Sound_Init`, `LobbyProfile::Init` | [known] calls |
-| The lobby (unless `-nolobby`): `LobbyManager`, the lobby's zone table `world1.xml` | `LobbyManager::Initialize`, `CLobby` vtable `LoadZoneTable` | [known] calls |
+| The lobby (unless `-nolobby`): `LobbyComm::System`, the lobby's zone table `world1.xml` | `LobbyComm::System::Initialize`, `CLobby` vtable `LoadZoneTable` | [known] calls |
 | Menus: `[data]\scripts\menu.cfg` | `nMenu::System::Initialize` `005dda30` | [known] |
 
 The property database is filled only there. Its bindings create records (`*_create`) and append to lists
@@ -43,7 +43,7 @@ every value set before is lost [known].
 **Starting goods come from the map, not from `tribes.lua`** [known]:
 - A match's headquarters is filled by `NVillage::Depot::AddInitialStock` `0055b020`. It adds the map's list for the
   owner's tribe (`NLogic::MapInfo::GetInitialGoods` `005296e0`, `MapInfo+0x1f8`) and, for a player in the default
-  state (`Player_IsStateDefault`), the tribe's bonus goods (`TribeProperty::bonusResources`, `tp_addBonusResources`).
+  state (`ai::player::Player::IsStateDefault`), the tribe's bonus goods (`TribeProperty::bonusResources`, `tp_addBonusResources`).
 - Maps of save format 14 and later store that list themselves (`MapInfo::Load` `0052c000`). The tribe's
   `tp_addStartResources` list is copied in only for older maps and by `MapInfo::Reset`
   (`MapInfo::ResetInitialGoodsFromTribes` `0052b550`). So a mod changing `tp_addStartResources` does not reach

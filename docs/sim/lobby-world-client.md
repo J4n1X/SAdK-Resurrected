@@ -408,7 +408,10 @@ tagged]:
     `Move(displacement, collisionMask)`.
 
 Resulting speeds: 0.5 units per 83 ms step = about **6.0 units/s** walking, **12.0 units/s** running.
-[inferred from the step length] The jump is an animation only (§3.6).
+[inferred from the step length] Walking measured: 0.49-0.5 units per step, one step every 83 ms, 6.15-6.3
+units/s in straight runs of 1-4 s, with height changes below 0.01 per step on the square
+(`CPhysicObjCharacter::GetTransform` S 00523610 after each step) [live, 2026-10-14]; running was not measured.
+The jump is an animation only (§3.6).
 
 Camera collision (`ComputeCameraCollisionDistance` S 0051a450) [known]: with the own character's collision
 switched off, 8 rays are cast from points on a circle of radius 0.5 around the camera target, perpendicular to
@@ -424,7 +427,10 @@ send, running, jump)` is called every step, with `send` = true on every 4th step
 second) and only when the context has a client. The jump latch is cleared only after a step that sent. The
 client method does nothing in lobby mode 2 or without a logged-in village connection; otherwise
 `VillageServerConnection::SendAvatarLocation` S 0046ca40 mirrors pose, heading, zone and ghost zone into the
-own `AvatarProxy` every step and sends message **2000** when `send` is set. S 005034e0 Layout and quantisation:
+own `AvatarProxy` every step and sends message **2000** only when `send` is set (S 0046ca40, the `sendToServer`
+argument [known]). S 005034e0 While walking, S 0046ca40 ran about 10 times per second, about once per 83 ms step
+[live, 2026-10-14]; with `send` set on every 4th call that is about 3 messages 2000 per second [inferred], the rate
+the server saw on 2026-08-01. Layout and quantisation:
 [`../village-and-character-protocol.md`](../village-and-character-protocol.md) §4.2.
 
 ### 3.5 Net controller: other avatars and NPCs
@@ -457,7 +463,8 @@ constructor activates the controller right after creating it, which discards the
 that has received no sample since outputs (0, 0, 0) and is hidden by the 3 s rule (its newest time is 0).
 Actors of another type keep the seeded slot 0. [known] S 00519ab0, S 00502e60 The 2000 ms offset
 is a fixed playback delay: the server must stamp positions so that, after the offset, they bracket the client's
-clock (the rule and its live verification: protocol document §4.2).
+clock (the rule and its live verification: protocol document §4.2). With the stub relaying the reports, a second
+client saw the remote avatar move smoothly and stop at the right spot [live, 2026-10-14].
 
 ### 3.6 Avatars
 
@@ -734,7 +741,7 @@ zone 0 (`scene_ad.xml`, classes `ad0`, `ad1`). The Hall of Fame dialog uses the 
 1. Store `cameraActive` in the context (`ctx + 0x84`, read by `ResyncTime`); set the global animation time
    scale S 00884a6c to 1.0. In lobby mode 2 or 3, if a sound manager exists: `SoundManager::Update` (listener
    and FMOD).
-2. `nowMs = now`. `CLobbyClient::Update` S 00503fc0: `LobbyManager::StatePump_Tick` (all network delivery,
+2. `nowMs = now`. `CLobbyClient::Update` S 00503fc0: `LobbyComm::System::StatePump_Tick` (all network delivery,
    including the village connection's event queues, runs here); a connection flagged for release is
    unsubscribed and dropped; the re-enter timer is counted down (§5.2).
 3. Camera hand-over to walking mode if due (§3.7).
@@ -785,14 +792,14 @@ Nothing happens while `requestedMode` is −1.
   - Request 2: create the local avatar at once at the default spawn (−31.24, 2.71, −8.28), heading 0, zone 0,
     ghost zone 0xf (§5.2), request lobby screen 3 and run `LobbyMenu::System::Update(true)`.
     [known] constants S 007dd028, S 007dd02c, S 007dd06c, S 007db52c
-  - Request 3, by the `LobbyManager` state (enum `LobbyManagerState`):
+  - Request 3, by the `LobbyComm::System` state (enum `LobbyManagerState`):
     - Authorized (3) or VillageLeft (11), coming from mode 1: `FindBestVillageServer(client protocol version,
       cached village server id)`. Found: select the character whose id is the local permanent id, select
       that server, `RequestEnterVillage(false)`; no screen is requested. Not found (−1): select the
       character, request screen 2.
     - Authorized or VillageLeft, coming from mode 0: request screen 2.
     - Disconnected (1): request screen 1, `LobbyMenu::System::Update(true)`, open the login dialog.
-    - any other state: `LobbyManager::Logout`, then as for Disconnected.
+    - any other state: `LobbyComm::System::Logout`, then as for Disconnected.
 - 2 / 3 → 0 / 1: `ResyncTime`, remove the listener, destroy the local avatar object, `viewMode` = 5, dirty,
   preset 0, lobby screen 0 with `LobbyMenu::System::Update(true)`, hand input back to the game action,
   deactivate the lobby UI, show the menu again; request 1 activates the game screen, request 0 the main
@@ -846,12 +853,12 @@ same subscriptions. Message layouts and server flows: [`../village-and-character
 | 1005 WorldTick | +0x11c (direct) → `OnWorldTick` S 00503590 | `Timer_SyncElapsedToServerTick16(tick, 250)` S 0057b910: compare the low 16 bits of the application's elapsed milliseconds with the 16-bit server tick; if the shorter distance modulo 65536 is 250 ms or more, shift the clock's start so that the low 16 bits equal the tick (elapsed time stays ≥ 0). If shifted: `ResyncTime(elapsed ms)` (§4.3) | [known] |
 | 0xC1C active items, 0xC1E full item sync | queues → +0xc8, +0xe0 → `OnAvatarItemsChanged` S 005036d0 | `UpdateAppearance` of that avatar (items, pet), if it has an object | [known] S 0046e660, S 0046e780 |
 | 0xC1D inventory | queue → +0xd4, not subscribed here | none in the world | [known] S 00503d00, S 0046e6f0 |
-| 0xD9 table update | handled only in `LobbyManager` state VillageEntered, for a table whose key has a non-zero chat channel id and whose proxy exists (S 0046f380). First update of a new proxy: +0x68 → `OnMiniGameTableShown` S 005032b0. Every update the proxy parses successfully: +0x80 → S 00503780 | +0x68: create the 0x1c-byte minigame client for the table by game type (1 dice, 2 poker, 3 pawn chess; any other type: none, the proxy's table object stays null) and store it in the proxy (`+0x20`); the client spawns the board at the table anchor. +0x80: call virtual +4 of that table client (no null check) | [known] |
-| (table events) | +0x5c → S 00503730, +0x50 → S 00503710 | forward one argument to virtual +0xc / +8 of the proxy's table client. [TODO] not established: which code fires these two lists and with what argument (search for notifications on `VillageServerConnection + 0x50` and `+ 0x5c` made through the proxy's owner pointer) | [known] for the subscriptions |
+| 0xD9 table update | handled only in `LobbyComm::System` state VillageEntered, for a table whose key has a non-zero chat channel id and whose proxy exists (S 0046f380). First update of a new proxy: +0x68 → `OnMiniGameTableShown` S 005032b0. Every update the proxy parses successfully: +0x80 → S 00503780 | +0x68: create the 0x1c-byte minigame client for the table by game type (1 dice, 2 poker, 3 pawn chess; any other type: none, the proxy's table object stays null) and store it in the proxy (`+0x20`); the client spawns the board at the table anchor. +0x80: call virtual +4 of that table client (no null check) | [known] |
+| (table events) | +0x5c → S 00503730, +0x50 → S 00503710 | forward one argument to virtual +0xc / +8 of the proxy's table client. [TODO] not established: which code fires these two lists and with what argument (search for notifications on `VillageServerConnection + 0x50` and `+ 0x5c` made through the proxy's owner pointer). Neither list fired through a login, a village entry and exit (no table played), a hosted room and a lost lobby connection, with `ObserverList_NotifyAll` S 00464300 and S 0045f620 hooked [live, 2026-10-14] | [known] for the subscriptions |
 | 0xD8 table remove | +0x74 → S 00503750 | delete the proxy's table client (if any) and null the pointer; also fired for every table when the connection clears its table map (S 0046fd10) | [known] S 0046f510 |
 | login failed (fired among others when the user-comm login fails, code −1, S 00470660, and when `OpenUserComm` fails, code 0x91, S 00470d50) | +0x10 → `OnVillageLoginFailed` S 00503800 | while re-entering and `nReenterRetries` < 3: timeout 2.5 s, retries + 1, release the connection (`Update` re-enters). Else: lobby screen 2, message box titled `!ERROR_DIALOG` with text `!LOGIN_FAILED_TEXT`, release the connection, clear `bReenterPending`, +0x14 and the retry count | [known] |
 | logged out / disconnected | +0x1c, +0x28 → `OnVillageConnectionClosed` S 00503280 | `DestroyLocalAvatarObject` (vtable +0xf0, S 004f5ee0: removes the own avatar object and clears the selection), `viewMode` 5, camera preset 0, flag the connection for release | [known] |
-| (list +0x110) | +0x110 → S 005037a0 | unsubscribe from chat lines, `DestroyLocalAvatarObject`, `viewMode` 5, camera preset 0. No function in the decompile cache fires this list (only the connection's constructor and destructor and the subscribe / unsubscribe pair touch it) [known: cache-wide search], so the chat-line subscription made at EnterWorld is not removed by any path seen | [known] |
+| (list +0x110) | +0x110 → S 005037a0 | unsubscribe from chat lines, `DestroyLocalAvatarObject`, `viewMode` 5, camera preset 0. No function in the decompile cache fires this list (only the connection's constructor and destructor and the subscribe / unsubscribe pair touch it) [known: cache-wide search], so the chat-line subscription made at EnterWorld is not removed by any path seen. Hooks on S 005037a0 and on both notify bodies saw no call through a login, a village entry and exit, a hosted room and a lost lobby connection [live, 2026-10-14] | [known] |
 | chat line (UC connection) | → `OnChatMessage` S 00503200 | if a village connection exists and is logged in, the channel is the current zone channel or the main channel, and the sender's avatar is known and has an object: `ShowChatText(channel kind, text)` (§3.6) | [known] |
 
 Sent: **2000 AvatarLocation** (§3.4) through `SendAvatarLocation` S 005034e0, which sends nothing in lobby
@@ -883,8 +890,8 @@ of the first step. [inferred: no use of the fourth argument in the decompile]
 `RequestExitVillage` S 004f5090: in lobby mode 2 it requests mode 0; otherwise, if a client exists, it calls
 `LeaveVillage`. [known]
 
-Re-entry (`RequestReenterVillage` S 00503560): mark pending, store `LobbyManager`'s local permanent id
-(`LobbyManager + 0x54c`, S 00462510) in +0x14, timeout 2.5 s, retries 0, `LeaveVillage`. In `Update`
+Re-entry (`RequestReenterVillage` S 00503560): mark pending, store `LobbyComm::System`'s local permanent id
+(`LobbyComm::System + 0x54c`, S 00462510) in +0x14, timeout 2.5 s, retries 0, `LeaveVillage`. In `Update`
 S 00503fc0, while a re-entry is pending and the connection object is gone, the timeout is reduced by the
 frame time (`Timer_GetFrameDeltaSeconds`) in every frame in which the `CharacterManager`'s action queue is
 not busy (virtual +0x10, S 0048ee90); at ≤ 0 it calls `EnterVillage(false)`. The pending flag is cleared by
@@ -1084,10 +1091,10 @@ bit-identical villages, and need not.
 | 9 | Handedness of the world, and with it the sense of the three `orientation` turns (the composition is in §3.1) | live: compare one rotated object with its place in the game |
 | 10 | Whether `heightmap1.tga`, `density.tga`, `grassblade.TGA`, `physic/*.xml`, `web/*` are referenced from inside `.KEX` files. The 17 lobby `.fx` files name none of them (`grass.fx` has a density-map switch on its second texture stage but no file name) [known: text search of the decrypted `fx_20`] | data: search the decrypted `.KEX` containers |
 | 12 | The seated animation and camera constants of each minigame | static: the `CMiniGameController*` constructors |
-| 13 | Observed walking speed, report rate and remote smoothing | live: two clients, measure against §3.4 and §3.5 |
+| 13 | Answered (§3.4, §3.5): walking 6.15-6.3 units/s (0.49-0.5 units per 83 ms step); about 3 position reports per second while walking (S 0046ca40 runs every step and sends on every 4th); the watching client shows the remote avatar moving smoothly and stopping at the right spot [live, 2026-10-14]. Whether the 10/s are sends or every-step calls is open (§3.4) | — |
 | 14 | Whether the group argument of `CPhysicObj::ctor` (zone, zone + 16) is the value of the 16-bit store into the group field of the `NxTriangleMeshShapeDesc` | static: disassembly of that store in S 00522410 (which stack argument it reads) |
 | 15 | Which UI caller of `RenderAvatarSnapshotGrid` (vtable +0xcc) passes the save flag that writes `slot_<n>.avo` (§7) | static: virtual call sites of `CLobby` vtable +0xcc in `LobbyMenu` |
-| 16 | Which code fires the village connection's lists +0x50 and +0x5c (forwarded to the table client, §5.2), and whether any path fires +0x110 | static: instruction search for the notifier S 00464300 with those list offsets; live: hook S 005037a0 |
+| 16 | Which code fires the village connection's lists +0x50 and +0x5c (forwarded to the table client, §5.2). Answered for +0x110 (§5.2): no path fired it through a login, a village entry and exit, a hosted room and a lost lobby connection [live, 2026-10-14]; +0x50 and +0x5c did not fire in that window either, which held no table play | static: instruction search for the notifier S 00464300 with those list offsets; live: the same hooks during table play |
 | 17 | Whether any caller requests a lobby mode pair that `ProcessModeTransition` does not handle (§4.3) | static: callers of vtable +0x2c and their arguments |
 | 18 | The two PhysX calls before the object loop and the second call of `LobbyPhysics::Step` (§4.1) | the PhysX SDK headers of the shipped version (vtable offsets 0x1d4, 0x1cc, 0xe0 of `NxScene`, 0x14 of the controller manager) |
 
@@ -1135,7 +1142,7 @@ bit-identical villages, and need not.
 | 005084b0 / 00508090 / 00506e10 | `CGfxObjAvatar::ctor` / `UpdateAppearance` / `CreateAnimation` | avatar model |
 | 00507f60 / 00507ca0 | `SyncEquipmentSlot` / `AttachItem` | items and pets |
 | 005079b0 / 00506610 / 00506530 | `ShowChatText` / `PlayEmote` / `PlayJumpOverlay` | bubbles, emotes, jump |
-| 00507060 / 00507580 / 00506860 / 00505c10 / 00505b10 | `CollectRenderItems` / `DrawRenderItem` / `DrawNameTag` / `DrawChatBubble` / `GetTextAnchor` | avatar drawing |
+| 00507060 / 00507580 / 00506860 / 00505c10 / 00505b10 | `CollectRenderItems` / `Render` / `DrawNameTag` / `DrawChatBubble` / `GetTextAnchor` | avatar drawing |
 | 004fd760 / 004fd2a0 / 004fcc90 / 004fcc10 | `AvatarBodyParts::LoadFromXml` / `AcquireVariant` / `BuildVariantPalette` / `CopyVariantColorRamp` | catalogue and colours |
 | 0050d920 | `AvatarColorSlots::LoadXml` | `color_slots.xml` |
 | 004fec10 / 004fe5c0 / 004fe080 | `LobbyPetMgr::ctor` / `CreateInstance` / `UpdateInstance` | pets |

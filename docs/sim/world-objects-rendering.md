@@ -344,7 +344,7 @@ matrix when it was the top item; a stack with six empty slots becomes free (`key
 whether or not the item was found. The return value is the stack direction in radians (`d * 1.0471976`), 0 when
 the item was in no stack.
 
-**Merging** `ItemPile_MergeStacks` S 006cee50 [known]: for each used stack whose slot 5 is empty, while a later
+**Merging** `ai::render::ItemPile::MergeStacks` S 006cee50 [known]: for each used stack whose slot 5 is empty, while a later
 stack with the same key exists, move that stack's slot-0 item into this one (remove, then add).
 
 **Visibility** `SetPilesVisibleInRect(minCell, maxCell, visible)` S 0069c300 [known] switches all piles whose
@@ -468,8 +468,9 @@ on, no alpha blend.
    normal is straight up. At `t` = 0 (and for a segment index past the end) the result is the cell position, the
    cell normal and the stored tangent of point `seg`; at `t` = 1 those of point `seg + 1`.
 
-A water street (type 2) is built with the fixed height `Generic_IntField08ToHeight(&g_TerrainGrid)` [known]
-S 006cd320; that value is the water level [inferred]. A street is created only for a path of at least 2 cells
+A water street (type 2) is built with the fixed height `ai::map::TerrainGrid::GetSeaLevelHeight(&g_TerrainGrid)` [known]
+S 006cd320: the renderer's sea level, the constant -100 of the image times the height scale
+(`docs/sim/rendering.md` §2.1) [known] S 00687050. A street is created only for a path of at least 2 cells
 [known] S 0069f570.
 
 ### 3.6 Street mesh
@@ -538,7 +539,9 @@ in the image and no code writes it (its only references are the two reads in `Dr
 The modes come from the street build mode [known] `StreetBuildMode::UpdatePreview` S 0078bbe0,
 `CreatePreviewCasters` S 0078b890: when the cursor cell changes, both preview streets are removed and rebuilt
 from the paths of the build mode's two result objects, `points1` (planned in this call with the cursor cell
-appended to the waypoints) and `points0`. The shorter path (`points0`'s when both have the same number of
+appended to the waypoints) and `points0`. Both are `NNet::StreetConstructorPoints` (0x30 bytes), street
+constructors that only record points; each belongs to one `ai::logic::StreetPlanner` of the build mode
+(`planner0` +0x10 with `points0` +8, `planner1` +0x14 with `points1` +0xc) [known]. The shorter path (`points0`'s when both have the same number of
 cells) becomes a preview street of mode 0. From the longer path the cells from its end back to the last cell of
 the shorter path become a second preview street: mode 1 (alpha) when the longer path is `points1`'s, mode 2
 (red) when it is `points0`'s. Either street needs at least 2 cells. A result of kind 2 makes the preview a
@@ -693,10 +696,12 @@ fog switched as requested; pass `Skydome` draws the grid only (`triangleCount - 
 - World matrix [known] disassembly S 006af28a..S 006af2bb: identity with the translation
   `(p.x, p.y + 15, p.z)`, `p` = `SkyRenderer +0x40` (the constant 15 is the double at S 007e2aa8). `p` is filled
   by `SkyRenderer::Update` (below). The dome is not rotated or scaled.
-- No function in the address range of `SkyRenderer` (S 006af120..S 006af960) begins the pass `Sun` or draws
-  the last 4 triangles [known for that range]. [TODO] not established: whether sun and moon are drawn at all;
-  the pass handle would have to be read through `SkyRenderer +0x2c` from another class (candidates: the
-  callers of `CEnviromentMgr::CreateCelestialTextures` S 00683c90).
+- Sun and moon are built and never drawn. `SkyRenderer::InitEffect` S 006af300 stores the handle of the pass
+  `Sun` in `SkyRenderer.hSunPass` (+0x2c) and `BuildGeometry` adds the two quads (8 vertices, the last 4
+  triangles), but no function of the program reads `hSunPass`: no `SkyRenderer` method (S 006af120..S 006af960)
+  and none of the functions that hold the `SkyRenderer` pointer begins that pass or draws those triangles
+  [known for the write; inferred for the absence of a reader, from a search of the whole decompiled program].
+  This is presentation only.
 
 Shader `enviroment_shader.fx` [known, file]: vertex: `uv0 = uv * TextureTransform[0] + time * (0.015, 0.005)`
 (the cloud drift, `time` = `g_Timer.y`), `uv1 = uv * TextureTransform[1]`. Pixel, technique `Default`: both
@@ -926,20 +931,20 @@ the exploration texture with camera-space texture coordinates [known, file].
 ## 4. Update order
 
 **At program start** [known]: `CApplicationEx::InitEngineLayer` S 00405590 creates the `DecalRenderer`
-(`DecalRenderer_CreateInstance` S 004dfbd0), whose constructor loads `decals.xml` and the decal textures
+(`ai::render::DecalRenderer::CreateInstance` S 004dfbd0), whose constructor loads `decals.xml` and the decal textures
 (S 004df850). The decal renderer is not rebuilt per match.
 
 **On load / match start**, `Scene::Init` S 006824c0, in this order [known]:
 
 1. `[data]\settings\graphics.xml` is opened; when it cannot be opened nothing below runs. Once per program run
-   (latch byte S 0088ca6a): `MapRender_LoadSettingsXml` S 00688170 → `StreetRenderer_LoadConfigXml` S 006c3f10
+   (latch byte S 0088ca6a): `MapRender_LoadSettingsXml` S 00688170 → `ai::gfx::StreetRenderer::LoadConfigXml` S 006c3f10
    for the `<Street>` element, and `Env_ParseEnvironmentXml` S 00684be0 for `<Enviroment>` (sun and moon size,
    skydome definitions).
 2. `Env_CreateEnviromentMgr` S 00685230: the `CEnviromentMgr` constructor S 00685070 creates the `SkyRenderer`
    (geometry built once) and then the skydome instances.
 3. `CMapRenderer::CreateInstance`: its constructor S 006890f0 creates the `StreetSet`, whose constructor
    S 0069f4b0 creates the `StreetRenderer` (streams, effect, textures).
-4. `ItemMgr_CreateInstance`, then `[data]\settings\items.xml` → `ItemMgr::LoadFromXml` S 0069d650 (types,
+4. `S2CG::ItemMgr::CreateInstance`, then `[data]\settings\items.xml` → `ItemMgr::LoadFromXml` S 0069d650 (types,
    animated types, donkey meshes, stack layouts); a file that cannot be opened leaves the item table empty.
 5. Later in the load [inferred, not part of `Scene::Init`]: terrain blocks are created and with them the
    `GridQuadTree` (`CTerrainCellMgr::CreateTerrainCells` S 006b73b0, called from `CLandscape::RebuildCells`).
@@ -1135,7 +1140,7 @@ A remake may therefore change any rule of this document without affecting synchr
 | 3 | What the build mode's `points0` holds, and therefore what the red preview tint tells the player (§3.6) | static read of `StreetBuildMode::RebuildPath` and the writers of `points0` |
 | 4 | Whether the settler blob is visible in the running game (statically every vertex is raised to 3.4e38, §3.9) | a screenshot at shadow level 1 to 3 |
 | 5 | Layout of `decals.dds` (the blob uses the whole texture: uv offset (0, 0), scale (1, 1)) | look at the texture |
-| 6 | Are sun and moon ever drawn. Statically: the pass handle `Sun` is stored at `SkyRenderer +0x2c` by S 006af300 and the two quads are built, but none of the functions that hold the `SkyRenderer` pointer (`CEnviromentMgr` constructor, destructor, `Update` S 00683d50, `RenderSkydome` S 00683e50) nor a `SkyRenderer` method begins that pass [inferred from a search of the decompiled program] | observation in the running game |
+| 6 | Answered (§3.10): sun and moon are not drawn. The pass handle `Sun` is stored at `SkyRenderer.hSunPass` (+0x2c) by S 006af300 and the two quads are built, but no function of the decompiled program reads the handle: none of the functions that hold the `SkyRenderer` pointer (`CEnviromentMgr` constructor, destructor, `Update` S 00683d50, `RenderSkydome` S 00683e50) nor a `SkyRenderer` method begins that pass [inferred]. Not observed in the running game | static: S 006af300, S 006af490, S 00683e50 |
 | 7 | Contents of `TIMER.x`, `.z`, `.w` and of `CAMERA_FOCUS`; where the `POSTFX` define is supplied (§3.11) | writers of S 00887460..S 00887490; callers of `CShaderProgram::Reload` S 004ec260 |
 | 8 | The class behind `CGraphicDevice +0x1b4` that fills the dome position (§3.10) | writer of that field |
 | 9 | Animated items (`AnimatedItem`, `ItemEvent`) are unused by the install's data; their play rules | static read of S 006c9660, S 006b0800 if a mod needs them |
@@ -1146,7 +1151,7 @@ A remake may therefore change any rule of this document without affecting synchr
 
 | Address | Name | Role |
 |---|---|---|
-| S 00405590 / 004dfbd0 | `CApplicationEx::InitEngineLayer` / `DecalRenderer_CreateInstance` | decal renderer created at program start |
+| S 00405590 / 004dfbd0 | `CApplicationEx::InitEngineLayer` / `ai::render::DecalRenderer::CreateInstance` | decal renderer created at program start |
 | S 006824c0 | `S2CG::Scene::Init` | load order: `graphics.xml`, environment, map renderer, `items.xml` |
 | S 00680550 / 006805e0 | `Scene::SyncLogicTick` / `Scene::Update` | per logic tick, per frame |
 | S 00682ca0 | `Scene::OnFlagCreated` | flag map object and pile |
@@ -1165,13 +1170,13 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 006d09b0 / 006d0830 / 006d0620 | `Item::UpdateCarrierAttachment` / `AttachToCharacter` / `UpdateAttachedTransform` | carried goods |
 | S 006d0bd0 / 006d0c20 | `Item::OnAddedToPile` / `OnRemovedFromPile` | pile entry and exit, stack direction to the carrier |
 | S 006ce8d0 | `ai::render::ItemPile::ctor` | 6 x 6 slots |
-| S 006cece0 / 006ceb50 / 006cee50 | `ItemPile::AddItem` / `RemoveItem` / `ItemPile_MergeStacks` | pile rules |
+| S 006cece0 / 006ceb50 / 006cee50 | `ItemPile::AddItem` / `RemoveItem` / `ai::render::ItemPile::MergeStacks` | pile rules |
 | S 006ce9c0 / 006ce970 / 006ce7a0 | `ItemPile::ComputeStackTransforms` / `ApplySlotTransform` / `FindItem` | slot matrices, stack and slot of an item |
 | S 006cf8a0 / 006cf210 / 006cf480 | `ai::render::ItemRenderer::Render` / `RenderPlain` / `RenderInstanced` | item drawing |
 | S 006d0090 / 006cfd30 | `ItemRenderer::UpdateInstancing` / `BuildInstancedMesh` | instancing switch |
-| S 006cfc20 | `ItemRenderer_CreateResources` | plain item streams, `item_shader.fx` |
-| S 006d82f0 / 006d8240 / 006d8070 | `ai::render::BuildingScaffold::RebuildIfSourceChanged` / `BuildingScaffold_BuildStacks` / `BuildingScaffold_LayoutItems` | goods on a building site |
-| S 006c3f10 | `StreetRenderer_LoadConfigXml` | `<Street>` of `graphics.xml` |
+| S 006cfc20 | `ai::render::ItemRenderer::CreateResources` | plain item streams, `item_shader.fx` |
+| S 006d82f0 / 006d8240 / 006d8070 | `ai::render::BuildingScaffold::RebuildIfSourceChanged` / `ai::render::BuildingScaffold::BuildStacks` / `ai::render::BuildingScaffold::LayoutItems` | goods on a building site |
+| S 006c3f10 | `ai::gfx::StreetRenderer::LoadConfigXml` | `<Street>` of `graphics.xml` |
 | S 006d7a80 / 006d6ff0 / 006d6db0 / 006d75b0 | `ai::math::RouteSpline::ctor` / `ComputeTangent` / `EvaluateSegment` / `EvaluateFrame` | street path |
 | S 006d71a0 | `RouteSpline::ApproxSegmentLength` | segment length from 31 chords |
 | S 006d6ab0 | `Math_CubicHermiteBasis` | basis weights |
@@ -1181,7 +1186,7 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 006cd3c0 / 006cd410 | `CStreet::SetStartFlagNode` / `SetEndFlagNode` | link to a flag node, then mesh rebuild |
 | S 006df940 | `S2CG::StreetDecal::BuildFromSpline` | street mesh |
 | S 006de590 | `StreetDecal::BuildJunctionFan` | crossing mesh |
-| S 006d1370 / 006d1670 / 006d1310 / 006d1d90 | `ai::gfx::StreetFlagNode::Init` / `StreetFlagNode_ComputeCornerPoints` / `StreetFlagNode::GetCornerPoint` / `AttachStreet` | flag node |
+| S 006d1370 / 006d1670 / 006d1310 / 006d1d90 | `ai::gfx::StreetFlagNode::Init` / `ai::gfx::StreetFlagNode::ComputeCornerPoints` / `StreetFlagNode::GetCornerPoint` / `AttachStreet` | flag node |
 | S 006e1e30 | `S2CG::StreetBuoy::BuildBuoyChain` | water street buoys |
 | S 006e2450 | `S2CG::RouteDecal::BuildFromSpline` | sea route strip |
 | S 006d2050 | `S2CG::WaterStreet::InitBoatResources` | boat item |
@@ -1194,8 +1199,8 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 006b0b50 / 006b0d00 | `ai::render::SelectionMarker::CreateDecal` / `UpdateDecal` | selection markers |
 | S 00689500 | `S2CG::CMapRenderer::UpdateSelectionMarkers` | chooses marker targets and styles, calls `UpdateDecal` |
 | S 00690bd0 | `S2CG::CCharacter::Update` | per-frame character update; creates and projects the settler blob decal |
-| S 006af960 / 006af490 / 006af150 / 006af260 | `ai::render::SkyRenderer::ctor` / `BuildGeometry` / `DrawSkydome` / `SkyRenderer_BeginSkydomePass` | sky dome |
-| S 006af300 / 006af210 | `SkyRenderer_InitEffect` / `SkyRenderer::Update` | effect and pass handles; dome position per frame |
+| S 006af960 / 006af490 / 006af150 / 006af260 | `ai::render::SkyRenderer::ctor` / `BuildGeometry` / `DrawSkydome` / `ai::render::SkyRenderer::BeginSkydomePass` | sky dome |
+| S 006af300 / 006af210 | `ai::render::SkyRenderer::InitEffect` / `SkyRenderer::Update` | effect and pass handles; dome position per frame |
 | S 00685070 / 00683d50 / 00683e50 / 00684fb0 | `S2CG::CEnviromentMgr::ctor` / `Update` / `RenderSkydome` / `CreateSkydomes` | sky renderer and sky textures |
 | S 006daf20 / 006da9f0 / 006db440 / 006db220 / 006dac90 / 006dad30 | `ai::render::GridQuadTree::ctor` / `BuildNode` / `Cull` / `CullNode` / `IsAabbInFrustum` / `SelectNearestChild` | block culling |
 | S 004def10 | `ai::render::MeshRenderer::AddInstance` | single meshes drawn with `mesh_shader.fx`; its three callers are `S2CG::Projectile::ctor` S 006a3720, `S2CG::Ship::UpdateVisuals` S 006a5cc0 and `S2CG::WaterStreet::SetBoatVisible` S 006d1ea0 [known, xrefs] |

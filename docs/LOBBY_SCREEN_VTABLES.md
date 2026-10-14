@@ -1,135 +1,145 @@
 # Lobby menu screen/dialog vtables — `LobbyMenu::ScreenBase` family
 
-Status: **static RE on `sadk_noav.exe`** (magazine build, base 0x400000), via the Ghidra MCP,
-2026-06-17. RTTI is intact: ~41 `LobbyMenu::*` classes (`.?AV…@LobbyMenu@@`). All renames/structs
-below are applied + saved in the Ghidra project. `[PROVEN static]` unless marked `[inferred]`.
+Static reference for `sadk_noav.exe` (image base 0x400000). RTTI is intact: about 41 `LobbyMenu::*`
+classes (`.?AV…@LobbyMenu@@`). Vtable contents and slot targets are `[known]` (read from the binary); the
+slot names carry the confidence of the Ghidra vtable structs (`[inferred]` unless a row says otherwise).
 
-This maps the screen/dialog UI framework the match-start logic lives in. The two screens that matter
-for "Host + Join" are **`WorldScreen`** (the 3D village screen; holds the referee pump + the game-server
-request arm) and **`SetupGameDialog`** (the host's match-setup dialog; shows the "Connecting to Game
-Server" modal). Both derive from **`LobbyMenu::ScreenBase`** — see `MATCH_START_STATIC_RECONCILIATION.md`.
+This maps the screen/dialog UI framework the match-start logic lives in. The two classes that matter
+for "Host + Join" are **`WorldScreen`** (the 3D village screen; holds the referee pump and the
+game-server request) and **`SetupGameDialog`** (the host's match-setup dialog; shows the "Connecting to
+Game Server" modal).
 
-## Class hierarchy (RTTI-confirmed)
-- `LobbyMenu::ScreenBase` (ctor `LobbyComm`-style `LobbyMenu_ScreenBase_ctor@0x45f420`, vftable **0x007da504**, 25 slots)
-  - `LobbyMenu::WorldScreen` (ctor `LobbyMenu_WorldScreen_ctor`, vftable **0x007d6eac**, 25 slots)
-  - `LobbyMenu::SetupGameDialog` (ctor `LobbyMenu_SetupGameDialog_ctor`, vftable **0x007d931c**, 38 slots — extends the base via a richer intermediate, see "Follow-ups")
-- (~35 more sibling dialogs share slots 0–24: AvatarScreen, AccountScreen, DialogBase, LoginDialog,
-  BrowseGameDialog, SelectMapDialog, … — all carry the same `0x45Fxxx` base methods at the shared slots.)
+## Class hierarchy (RTTI)
+- `nUi::XMLHandler` (+0..+0x1f) → `LobbyMenu::ScreenBase` (ctor `0x45f420`, ctor with an explicit parent
+  `0x45f520`, vftable **0x007da504**, 25 slots, struct `/LobbyMenu/ScreenBase` 0x1e8)
+  - `LobbyMenu::WorldScreen` (vftable **0x007d6eac**, 25 slots; its `NComm::IMessageCallbacks` part is at
+    `+0x1e8`, table `0x007d6e98`, 3 slots; its `LobbyMenu::IDropReceiver` part at `+0x1ec`, table `0x007d6e7c`)
+  - `LobbyMenu::AvatarScreen` (vftable **0x007d72fc**, struct 0x220; character select / enter-village
+    screen; called LobbyVillageScreen in older notes)
+  - `LobbyMenu::AccountScreen`, `LobbyMenu::EmptyScreen` (`0x007d7604`, identical to the base except slot 0)
+  - `LobbyMenu::DialogBase` (vftable **0x007da62c**, 38 slots = the 25 of ScreenBase plus 13 dialog
+    slots; struct 0xb48)
+    - `LobbyMenu::SetupGameDialog` (vftable **0x007d931c**, 38 slots), `LoginDialog`, `BrowseGameDialog`,
+      `SelectMapDialog`, `SetStackDialog`, `MailboxDialog`, … (every dialog)
 
-## `LobbyMenu::ScreenBase` vtable (25 slots @ 0x007da504) — base interface [PROVEN static]
+## `LobbyMenu::ScreenBase` vtable (25 slots @ 0x007da504)
 
-| Slot | vtbl off | Base target | Role |
-|---|---|---|---|
-| 0 | +0x00 | `0x45F360` `..._Destructor` | scalar-deleting destructor |
-| 1 | +0x04 | `0x45F180` `..._RouteInputToContainer` | routes input to the ScreenContainer child (`this+0x40`) |
-| 2 | +0x08 | `0x45F270` `..._IsVisibleAndEnabled` | `GetFlag1e0() && +0x1e1` |
-| 3 | +0x0c | `0x45F170` `..._SetFlag1e0` | set `+0x1e0 = 1` |
-| 4 | +0x10 | `0x45F6F0` `..._OnHide` | clears `+0x1e0` |
-| 5 | +0x14 | `0x45F380` `..._OnShow` | sets `+0x1e1 = 1` |
-| 6 | +0x18 | `0x45F710` `..._OnLeave` | clears `+0x1e1` |
-| 7 | +0x1c | `0x45F2E0` `..._GetFlag1e1` | get `+0x1e1` |
-| 8 | +0x20 | `0x5657B0` `Stub_EmptyVoid_5657b0` | **Update** — base no-op; **subclasses override** |
-| 9 | +0x24 | `0x45F2D0` `..._GetFlag1d8AsBool` | **HandleInput** — base trivial; WorldScreen→`OnLeaveVillage`, SetupGameDialog→`HandleButtonClicks` |
-| 10 | +0x28 | `0x5657B0` (no-op) | vf28 |
-| 11 | +0x2c | `0x45F1E0` `..._SetConnectingOverlayEnabled` | set `+0x1d9` |
-| 12 | +0x30 | `0x45F200` `..._ClearConnectingOverlayEnabled` | clear `+0x1d9` |
-| 13 | +0x34 | `0x45F220` `..._GetConnectingOverlayEnabled` | get `+0x1d9`; **SetupGameDialog overrides → `IsConnectingPhaseActive`** (panel-visible `&& +0x1d9`) |
-| 14 | +0x38 | `0x45F230` `..._SetFlag1d8` | |
-| 15 | +0x3c | `0x45F240` `..._ClearFlag1d8` | |
-| 16 | +0x40 | `0x45F250` `..._GetFlag1d8` | |
-| 17 | +0x44 | `0x45F260` `..._GetFlag1e0` | |
-| 18 | +0x48 | `0x45F2A0` `..._GetField1dc` | |
-| 19 | +0x4c | `0x45F2B0` `..._SetField1dc` | |
-| 20 | +0x50 | `0x45F2C0` `..._GetField3c` | |
-| 21 | +0x54 | `0x45F2C0` (dup) | |
-| 22 | +0x58 | `0x48CFA0` `..._GetScreenContainer` | returns `this+0x40` |
-| 23 | +0x5c | `0x48CFA0` (dup) | |
-| 24 | +0x60 | `0x5657B0` (no-op) | vf60 |
+Struct `/LobbyMenu/ScreenBase_vftable` (100 bytes, one typed function pointer per slot).
 
-### Typed structs created (Ghidra)
-- **`LobbyMenu_ScreenBase_vftable`** (100 B, 25 members named by the roles above).
-- **`LobbyMenu_ScreenBase`** (object; proven fields only, gaps left undefined): `+0x00 pVftable`
-  (→ vftable struct), `+0x38 pOwner`, `+0x3c nId`, `+0x40 screenContainer` (embedded), `+0x1d8 flag1d8`,
-  `+0x1d9 fConnectingOverlayEnabled`, `+0x1dc field1dc`, `+0x1e0 flag1e0`, `+0x1e1 flag1e1`.
+| Slot | vtbl off | Base target | Name | Role |
+|---|---|---|---|---|
+| 0 | +0x00 | `0x45F360` | `scalar_deleting_dtor` | |
+| 1 | +0x04 | `0x45F180` | `BuildWidgets` | calls slot 24, then builds the widgets into the screen container (`this+0x40`) |
+| 2 | +0x08 | `0x45F270` | `IsActiveAndShown` | `active` (`+0x1e0`) and `shown` (`+0x1e1`) |
+| 3 | +0x0c | `0x45F170` | `Activate` | sets `active` |
+| 4 | +0x10 | `0x45F6F0` | `Deactivate` | clears `active`, fires `deactivateObservers` (`+0x20`) |
+| 5 | +0x14 | `0x45F380` | `OnShow` | sets `shown`, attaches the screen container to `parentNode` |
+| 6 | +0x18 | `0x45F710` | `OnLeave` | clears `shown`, fires `leaveObservers` (`+0x2c`) |
+| 7 | +0x1c | `0x45F2E0` | `IsShown` | |
+| 8 | +0x20 | `0x5657B0` (empty) | `Update` | base empty; subclasses override |
+| 9 | +0x24 | `0x45F2D0` | `HandleButtonClicks` | base returns `inputEnabled`; WorldScreen → `0x437760`, SetupGameDialog → `0x457F00` |
+| 10 | +0x28 | `0x5657B0` (empty) | `slot10_Stub` | `[TODO]` no override with a body found |
+| 11 | +0x2c | `0x45F1E0` | `SetVisible(bool)` | stores `visible` (`+0x1d9`) |
+| 12 | +0x30 | `0x45F200` | `Hide` | clears `visible` |
+| 13 | +0x34 | `0x45F220` | `IsVisible` | |
+| 14 | +0x38 | `0x45F230` | `SetInputEnabled(bool)` | stores `inputEnabled` (`+0x1d8`) |
+| 15 | +0x3c | `0x45F240` | `DisableInput` | |
+| 16 | +0x40 | `0x45F250` | `IsInputEnabled` | |
+| 17 | +0x44 | `0x45F260` | `IsActive` | |
+| 18 | +0x48 | `0x45F2A0` | `GetTag` | returns the caller-assigned `tag` (`+0x1dc`) `[known]` |
+| 19 | +0x4c | `0x45F2B0` | `SetTag` | stores `tag` (`+0x1dc`) `[known]` |
+| 20 / 21 | +0x50 / +0x54 | `0x45F2C0` | `GetParentNode` | returns `parentNode` (`+0x3c`); both slots hold the same body |
+| 22 / 23 | +0x58 / +0x5c | `0x48CFA0` | `GetScreenContainer` | returns `this+0x40`. The body is a folded getter (`Generic_GetAddr_40`); `DialogBase` overrides both with `0x4608A0` (returns the frame, `this+0x1e8`) |
+| 24 | +0x60 | `0x5657B0` (empty) | `PreBuildWidgets` | hook that `BuildWidgets` calls before it rebuilds (name `[guess]`) |
 
-## `LobbyMenu::WorldScreen` overrides (vtable 0x007d6eac, 25 slots) [PROVEN static]
+### `LobbyMenu::ScreenBase` fields (`/LobbyMenu/ScreenBase`, 0x1e8)
+`+0x00 vftable` · `+0x04 fileName` (std::string, the `nUi::XMLHandler` member: the layout file name) ·
+`+0x20 deactivateObservers` · `+0x2c leaveObservers` (std::list each) · `+0x38 owner`
+(`LobbyMenu::System*`) · `+0x3c parentNode` · `+0x40 screenContainer` (embedded `nUi::Object`, 0x198) ·
+`+0x1d8 inputEnabled` · `+0x1d9 visible` · `+0x1dc tag` (caller-assigned: dialog kind, message-box id,
+backpack index of a sell confirmation) · `+0x1e0 active` · `+0x1e1 shown`.
+
+## `LobbyMenu::WorldScreen` overrides (vtable 0x007d6eac, 25 slots)
 
 | Slot | Target | Name |
 |---|---|---|
-| 0 | `0x435180` | `LobbyMenu_WorldScreen_ScalarDeletingDestructor` |
-| 1 | `0x438050` | `LobbyMenu_WorldScreen_RouteInputAndBindWidgets` (caches ~20 child widgets into `this+0x3550..0x3610`) |
-| 3 | `0x4351A0` | `LobbyGameScreen_SubscribeConnectionObservers` *(legacy prefix — see Follow-ups)* |
-| 4 | `0x433D80` | `LobbyGameScreen_UnsubscribeConnectionObservers` *(legacy prefix)* |
-| 5 | `0x4389D0` | `LobbyMenu_WorldScreen_OnShow` (subscribe NComm/UC/Village + build sub-controllers + welcome chat) |
-| 6 | `0x439410` | `LobbyMenu_WorldScreen_OnLeave` (teardown mirror of OnShow) |
-| 8 | `0x435980` | `LobbyMenu_WorldScreen_Update` (referee pump + `ArmGameServerRequest` + world activate) |
-| 9 | `0x437760` | `LobbyVillageScreen__OnLeaveVillage` (input handler; the deferred AssignServer trigger) |
-| 11/12 | `0x431E30`/`0x431E40` | thunks → ScreenBase Set/ClearConnectingOverlayEnabled |
-| 24 | `0x4319F0` | `LobbyMenu_WorldScreen_Slot24_ForwardTo3588` |
+| 0 | `0x435180` | `scalar_deleting_dtor` |
+| 1 | `0x438050` | `BuildWidgets` (binds about 20 child widgets into `this+0x3550..0x3610`) |
+| 3 | `0x4351A0` | `Activate` (subscribes the village / referee connection observers) |
+| 4 | `0x433D80` | `Deactivate` (unsubscribes them) |
+| 5 | `0x4389D0` | `OnShow` (subscribes NComm / UC / village, builds the cached dialogs, welcome chat) |
+| 6 | `0x439410` | `OnLeave` (teardown mirror of `OnShow`) |
+| 8 | `0x435980` | `Update` (referee pump, world activation) |
+| 9 | `0x437760` | `HandleButtonClicks`: per-frame click dispatcher. MainMenu item 0 "host game" calls `ServerList::CreateGameServer` (call at `0x437899`); the SelectServerMenu calls `ServerList::SelectVillageServer` and sets `ServerList+0xa0`; item 5 opens the leave-village confirmation |
+| 11 / 12 | `0x431E30` / `0x431E40` | `SetVisible` / `Hide` overrides |
+| 24 | `0x4319F0` | `PreBuildWidgets` |
 
-(Slots 2,7,10,13–23 use the ScreenBase base targets.) Related, already-named:
-`LobbyMenu_WorldScreen_ArmGameServerRequest@0x433f60`, `..._DispatchSlotAction@0x434230`.
+Slots 2, 7, 10 and 13–23 hold the ScreenBase targets. Related: `WorldScreen::RefreshActionSlots`
+`0x433f60`, `WorldScreen::DispatchSlotAction` `0x434230`.
 
-## `LobbyMenu::SetupGameDialog` overrides/extensions (vtable 0x007d931c, 38 slots) [PROVEN static]
+## `LobbyMenu::DialogBase` slots 25–37 (vtable 0x007da62c)
+
+Slots 0–24 follow ScreenBase. Slots 25–37 are `LobbyMenu::DialogBase` methods inherited by every dialog:
+
+| Slot | vtbl off | Target | Name | Role |
+|---|---|---|---|---|
+| 25 | +0x64 | `0x460BE0` | `SetAnchoredPosition` | (h, v, offX, offY) |
+| 26 | +0x68 | `0x460E90` | `SetPosition` | |
+| 27 | +0x6c | `0x460AD0` | `GetFrameBounds` | |
+| 28 | +0x70 | `0x460ED0` | `SetRect` | |
+| 29 | +0x74 | `0x4607F0` | `BringToFront` | `nUi::Object::BringToFront` on the frame (`+0x1e8`) `[known]` |
+| 30 | +0x78 | `0x460B00` | `IsCursorOverFrame` | hit-tests the cursor against the frame rectangle |
+| 31 | +0x7c | `0x460790` | `Close` | calls slot 37 once, then sets `closeRequested` (`+0xb40`); `System::UpdateDialogs` `0x42a1c0` deletes the dialog once it is set |
+| 32 | +0x80 | `0x4607B0` | `IsCloseRequested` | returns `closeRequested` `[known]` |
+| 33 / 34 / 35 | +0x84 / +0x88 / +0x8c | `0x4607C0` / `0x4607D0` / `0x4607E0` | `SetAutoClose(bool)` / `ClearAutoClose` / `GetAutoClose` | `autoClose` (`+0xb42`, ctor 1); `System::CloseDialogs` `0x429de0` closes a dialog only when it is set or forced `[known]` |
+| 36 | +0x90 | `0x41ECC0` (returns 0) | `OnCancel` | called by the close button before `Close` (name `[guess]`) |
+| 37 | +0x94 | `0x5657B0` (empty) | `OnClose` | hook that `Close` calls once; `MailboxDialog` overrides it with `0x450170` |
+
+DialogBase also overrides slots 14 / 15 / 16 (`SetInputEnabled` `0x460880`, `DisableInput` `0x460960`,
+`IsInputEnabled` `0x460980`) and slot 13 (`IsVisible` `0x460850`).
+
+## `LobbyMenu::SetupGameDialog` overrides (vtable 0x007d931c, 38 slots)
 
 | Slot | Target | Name | Note |
 |---|---|---|---|
-| 0 | `0x453890` | `LobbyMenu_SetupGameDialog_Destructor` | |
-| 1 | `0x456C70` | `LobbyMenu_SetupGameDialog_BuildWidgets` | builds Map/MaxPlayer/WinCondition/Ready/Leave/… widgets |
-| 5 | `0x455F20` | `LobbyMenu_SetupGameDialog_OnShow` | |
-| 6 | `0x455E70` | `LobbyMenu_SetupGameDialog_OnLeave` | releases child `+0xb80`, deregisters `+0xb8c` |
-| 8 | `0x457A00` | `LobbyMenu_SetupGameDialog_Update` | the **"Connecting to Game Server" modal** gate (`+0x9c ∈ {-1,-2}`) |
-| 9 | `0x457F00` | `LobbyMenu_SetupGameDialog_HandleButtonClicks` | Minimize/Ready/Leave latches |
-| 11 | `0x452DD0` | `LobbyMenu_SetupGameDialog_SetConnectingOverlayEnabled` | **creates/destroys the "Connecting…" overlay object at `this+0xBB8`** |
-| 12 | `0x452E20` | `LobbyMenu_SetupGameDialog_HideConnectingOverlay` | |
-| 13 | `0x460850` | `LobbyMenu_SetupGameDialog_IsConnectingPhaseActive` | `panel->vtbl[0x2c]() && +0x1d9` |
-| 14 | `0x460880` | (slot 14 forwarder) | |
-| 22/23 | `0x4608A0` | `LobbyMenu_SetupGameDialog_GetScreenContainer` | returns `&this+0x1e8` |
-| 24 | `0x455E60` | `LobbyMenu_SetupGameDialog_DetachSlotWidgetCallbacks` | **the 6 Player{Type,Tribe,Team,HQ,Color} slot widgets** — the room slot model |
-| 36 | `0x452D90` | `LobbyVillageServerList_ShutdownNComm_Wrapper` | (slot 36, the teardown wrapper) |
+| 0 | `0x453890` | `scalar_deleting_dtor` | |
+| 1 | `0x456C70` | `BuildWidgets` | builds Map/MaxPlayer/WinCondition/Ready/Leave/… widgets |
+| 5 | `0x455F20` | `OnShow` | |
+| 6 | `0x455E70` | `OnLeave` | releases child `+0xb80`, deregisters `+0xb8c` |
+| 8 | `0x457A00` | `Update` | the **"Connecting to Game Server" modal** gate (`ServerList+0x9c ∈ {-1,-2}`) |
+| 9 | `0x457F00` | `HandleButtonClicks` | Minimize/Ready/Leave latches |
+| 11 | `0x452DD0` | `SetConnectingOverlayEnabled` (override of `SetVisible`) | creates/destroys the "Connecting…" overlay object at `this+0xBB8` |
+| 12 | `0x452E20` | override of `Hide` | |
+| 24 | `0x455E60` | override of `PreBuildWidgets` | a jump to `UnbindPlayerRowWidgets` `0x455800`: the six player rows (Type, Tribe, Team, HQ, Color), the room slot model |
+| 36 | `0x452D90` | `OnCancel` | |
 
-Slots 25–35 (`0x460BE0/E90/AD0/ED0`, `0x4607F0/B00/90/B0/C0/D0/E0`) are small geometry/flag accessors
-(SetChildPosition/Bounds/Rect, layout, init-flag `+0xb40`, flag `+0xb42`) currently carrying a
-`SetupGameDialog_` prefix but **shared across ~30 vtables** — see Follow-ups.
+The other slots hold the DialogBase targets.
 
-## `LobbyComm_ServerList` (villageList, `LobbyManager+0x54`) — field map [PROVEN static, 2026-07-26]
+## `LobbyComm::ServerList` (`LobbyComm::System+0x54`) — field map
 
-> **⛔ The 2026-06-17 "correction" recorded here was itself wrong and has been reverted.** It renamed
-> `+0x9c` → `nGameServerAssignState` and `+0xa0` → `pAssignCompleteCallback`; **the ORIGINAL names were
-> right.** Root cause: `LobbyComm_ServerList_ctor@0x0046a160` installs **two** vtables — `0x7dafcc` at
-> `[ServerList+0]` and `0x7daf8c` (`CommLayer::IGameServerObserver`) at `[ServerList+8]` — so every
-> function in the `0x7daf8c` table runs on `this = ServerList+8` and **all its offsets are +8 shifted**.
-> `GameServerAssigned`'s `this+0x9c`/`this+0xa0` are `ServerList+0xa4`/`+0xa8`, a different pair
-> entirely. Proof: `CreateResultReceived` passes `(int)this + -8` as the observer subject.
-> Full derivation: `decomp/RENAME_LIST.md`, 2026-07-26 (night, cont.).
+The object the documents call the village list holds the village servers and the game servers. The ctor
+`0x0046a160` installs two vtables: `0x7dafcc` at `[ServerList+0]` and `0x7daf8c`
+(`CommLayer::IGameServerObserver`, 15 slots) at `[ServerList+8]`. Every function of the `0x7daf8c` table
+runs with ECX = `ServerList+8`; in Ghidra its `this` is the offset pointer
+`ServerList * __((offset(0x8))) this`, so the decompile shows the fields below under their names. In the
+listing an operand `[ECX+N]` of such a function is `ServerList+N+8`: `GameServerAssigned`'s `[ECX+0x9c]` /
+`[ECX+0xa0]` are `refereeCbContext` / `refereeCbFn`, not `gameServerId` / `bSelectionLocked`.
 
-Byte-exact from the ctor disassembly (`0046a27a`–`0046a2aa`):
+From the ctor disassembly (`0046a27a`–`0046a2aa`) `[known]`:
 
 | off | type | name | meaning |
 |---|---|---|---|
-| `+0x6c` | ptr | `pGameServerManager` | `vtbl[0x20]`=AddGameServer(168) · `vtbl[0x24]`=UpdateGameServer · `vtbl[0x28]`=DeleteGameServer · `vtbl[0x2c]`=AssignServer |
-| `+0x94` | u32 | `nVillageServerId` | village-server slot, same sentinels |
-| `+0x98`,`+0x99` | bool ×2 | | village-slot flags |
-| `+0x9c` | u32 | **`nPendingCreateGameServerId`** | the hosted game's server id. `0xFFFFFFFF`=INVALID · `0xFFFFFFFE`=PENDING · anything else = the **real assigned id**. Gates the "Connecting to Game Server" modal (`Update@0x457A00` early-returns while `∈{-1,-2}`) |
-| `+0xa0` | **bool** | **`fVillageLoginPending`** | a **BYTE**, not a pointer. Set `=1` in `LobbyVillageScreen::OnLeaveVillage@0x00437899` right after `SelectServerForRoom` |
-| `+0xa4` | ptr | `pPendingRefereeCbCtx` | armed **only** by `LobbyServerList_RequestRefereeServer@0x00468f80` |
-| `+0xa8` | fptr | `pPendingRefereeCbFn` | fired+cleared by `GameServerAssigned` — this is the **referee** completion |
+| `+0x6c` | ptr | `pGameServerManager` | tincat3 `CommLayer::GameServerManager`: `vtbl[0x20]`=AddGameServer(168) · `vtbl[0x24]`=UpdateGameServer · `vtbl[0x28]`=DeleteGameServer · `vtbl[0x2c]`=AssignServer |
+| `+0x80` | u32 | `selectedVillageServerId` | -1 = none; set by `SelectVillageServer` `0x468380` |
+| `+0x94` | u32 | `selectedGameServerId` | ctor -1; `RemoveServer` `0x46a5e0` resets it to -1 when the removed game id matches `[inferred]` |
+| `+0x98`, `+0x99` | byte ×2 | `unk98`, `unk99` | set to 0 by the ctor and touched by nothing else: unused in this build |
+| `+0x9c` | u32 | **`gameServerId`** | the hosted game's server id. `0xFFFFFFFF`=INVALID · `0xFFFFFFFE`=PENDING · anything else = the **real assigned id**. Gates the "Connecting to Game Server" modal (`SetupGameDialog::Update` `0x457A00` early-returns while `∈{-1,-2}`) |
+| `+0xa0` | byte | **`bSelectionLocked`** | a byte, not a pointer. Set to 1 by `WorldScreen::HandleButtonClicks` `0x437760` right after `SelectVillageServer` (village-server switch) and by `SelectVillageServerDialog::HandleButtonClicks` `0x440690`; cleared by `LobbyComm::System::OnLoggedIn` `0x463a10` when the village connection logs in. While set, `Reset` `0x468c50` does nothing and `StartObservation` `0x468e80` sends nothing |
+| `+0xa4` | ptr | `refereeCbContext` | armed only by `ServerList::RequestRefereeServer` `0x468f60` |
+| `+0xa8` | fptr | `refereeCbFn` | called with the assigned server id and cleared by `GameServerAssigned` `0x469ad0`: this is the **referee** completion |
 
-**Complete writer set of `+0x9c` — five, no more** (scripted sweep of every `[reg+0x9c]` store):
-`ctor`→INVALID · `LobbyServerList_CreateGameServer@0x0046aaa0`→PENDING ·
-`CreateResultReceived@0x0046a6a0`→real id (err 0) / INVALID + `NComm_Shutdown` (err≠0) ·
-`DeleteResultReceived@0x00469990`→INVALID · `DestroyGameServerAndShutdown@0x00468410`→INVALID +
-`NComm_Shutdown`. There is **no unidentified sixth writer** and no need for a hardware watchpoint.
-
-## Follow-ups (not done this session — flagged honestly, no guessing)
-1. **`ComponentBase`/`DialogBase` reattribution.** SetupGameDialog vtable slots 25–35 target shared
-   UI base methods (appear in ~30 vtables; geometry/flag accessors). They were named with a
-   `LobbyMenu_SetupGameDialog_` prefix for now; reattribute to the correct base class once the
-   `LobbyMenu::ComponentBase` (`0x0087ad7c`) / `DialogBase` vtable is mapped. The plate comments already
-   note "shared across ~30 vtables."
-2. **Legacy `LobbyGameScreen_` prefix.** A few WorldScreen methods (`0x4351A0`, `0x433D80`, and the
-   `LobbyGameScreen_*` names in `MEMORY.md`) predate the RTTI class name `WorldScreen`; unify under
-   `LobbyMenu_WorldScreen_` in a dedicated rename pass.
-3. **`set_function_this_type` pass.** The `this`-typing of the ~90 named methods to the RTTI class
-   structs (using the class-hygiene script in `RE_PRACTICES.md`) is deferred to avoid the duplicate-
-   `GhidraClass` trap; do it as one careful pass per class.
+**Complete writer set of `+0x9c`: five** (every `[reg+0x9c]` store):
+`ctor`→INVALID · `ServerList::CreateGameServer` `0x0046aaa0`→PENDING ·
+`CreateResultReceived` `0x0046a6a0`→real id (err 0) / INVALID + `NComm_Shutdown` (err≠0) ·
+`DeleteResultReceived` `0x00469990`→INVALID · `DestroyGameServerAndShutdown` `0x00468410`→INVALID +
+`NComm_Shutdown`.

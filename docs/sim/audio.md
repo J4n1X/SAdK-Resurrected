@@ -203,7 +203,7 @@ world transform as position and the constant vector at S 0088f1b0 as velocity [k
   string, takes the part after the last `\` and looks that file name up in the index built by the start-up scan
   of `data\game` and `data\lobby`; a name that is not indexed yields an empty path. The directory written in
   `sounds.lua` therefore only matters when several indexed files share the name (the candidate whose parent
-  directory occurs in the request is taken [inferred from the callee `FileScan_PickCandidateByParentDir`]), and
+  directory occurs in the request is taken [inferred from the callee `ai::file::FileScan::PickCandidateByParentDir`]), and
   the bare names of the lobby records (`"shake0.wav"`) resolve the same way as the `[data]\sound\...` ones.
 - Sample: `FSOUND_Sample_Load(FSOUND_FREE, path, mode, 0, 0)`; the whole file is decoded into memory at start-up.
 - Stream: `FSOUND_Stream_Open(path, mode, 0, 0)` only to read the length, then closed. Each later play opens the
@@ -212,9 +212,8 @@ world transform as position and the constant vector at S 0088f1b0 as velocity [k
   is an out-of-range vector access guarded only by the checked-iterator handler [inferred].
 
 Consequence of step 2 [known]: looping music gets `FSOUND_LOOP_BIDI`, looping effects and ambients
-`FSOUND_LOOP_NORMAL`, everything else no loop. [TODO] not established: what FMOD 3 does with the bidirectional
-flag on an Ogg stream (most likely a plain forward loop); settle by listening to `maintheme.ogg` at its end in the
-running game.
+`FSOUND_LOOP_NORMAL`, everything else no loop. On the Ogg music streams the bidirectional flag acts as a plain
+forward loop: `maintheme.ogg` restarts cleanly at its end [live, maintainer, 2026-10-14].
 
 Variants: `SoundSystem::PickRandomVariant` S 0056a2a0 returns `groups[id][rand() % count]` with the C runtime
 `rand()` (`Stl_VectorInt_PickRandom` S 0056f880) [known]. No "not the same twice" rule.
@@ -877,7 +876,7 @@ Converter output:
 | 1 | Answered (§3.4, outcome of step 4): on a processor with SSE2 the fade-out never frees the channel (`targetVolume` becomes −2147483648.0); without SSE2 it does. To hear once: a map with more than four ambient sound ids | static: S 0056bab0, S 0056d2e0, S 006f2af0, S 0056fda0 |
 | 2 | Answered (§3.2): in a match the device camera is the `nGame::Camera`, `target − eye` is its look direction of length 1, and the listener sits `0.8 * (eye.y − h)` units down the view line | static: S 00784f70, S 00784f90; live 2026-10-12 |
 | 3 | Who plays `music_won` and `music_lost` (menu indices 2, 3). The five callers of `nMenu::System::PlayMusic` pass only the constants 0, 1, 4, 5, 6, and `PlayMusicGroup` / `SetForcedGroup` have no other caller that could pass the two ids [known], so by the static call graph the two jingles are never started [inferred] | live: break on S 005d9f60 at the end of a won and a lost match; static: readers of `nMenu::System + 0x90` / `+0x94` outside `PlayMusic` |
-| 4 | Behaviour of `FSOUND_LOOP_BIDI` on the looping music streams | live: listen across the loop point of `maintheme.ogg` |
+| 4 | Answered (§3.1): `FSOUND_LOOP_BIDI` on the music streams loops forward; `maintheme.ogg` restarts cleanly [live, maintainer, 2026-10-14] | — |
 | 5 | What reads the `nGame::Sound` byte +4 (`nGame::System + 0x614`; set by `BuildWorld`, cleared by `nGame::System::Shutdown`). The two observer slots do not test it: they test `SoundSystem.enabled` only [known] | static: accesses to `nGame::System + 0x614` |
 | 6 | Callers of `Building::SetHidden` (what hides a building and so silences its door and collapse sounds), and subclass overrides of slot 1 (§3.9) | static: the slot 0 and slot 1 entries of the `S2CG::Building` subclass vftables and their call sites |
 | 7 | When animation event objects are created and re-armed: does a `<Sound>` of a looping animation fire every cycle (§3.9)? | static: callers of the `EventCreator` slot S 00685970; writers of `EventBase.startTime` and `started` |
@@ -918,7 +917,7 @@ Converter output:
 | 0056f700 / 0056f550 | `UiSoundPlayer::Play` / `PruneChannels` | UI sounds, priority rule |
 | 0056f480 / 0056f1f0 / 0056ec40 | `MusicPlayer::Play` / `Update` / `UpdateChannelVolume` | music cross-fade |
 | 0056e190 | `SoundPlaylist::Update` | playlist scheduler |
-| 0056ebf0 / 0056e150 / 0056e170 / 0056e680 | `SoundPlaylist::AddTrack` / `SetForcedGroup` / release of the forced group (`Generic_ResetF30_RewindC`) / `SoundPlaylist_Reset` | playlist control |
+| 0056ebf0 / 0056e150 / 0056e170 / 0056e680 | `SoundPlaylist::AddTrack` / `SetForcedGroup` / `ClearForcedGroup` (release of the forced group) / `SoundPlaylist_Reset` | playlist control |
 | 0056e100 / 0056e070 / 0056e030 | `VoiceOverPlayer::Play` / `Update` / `Stop` | voice-over |
 | 005db000 | `Menu_PlayVoiceOver` | voice file path |
 | 005c65e0 | `ai::audio::SoundManager::Init` | `FSOUND_SetOutput`, `FSOUND_Init` |

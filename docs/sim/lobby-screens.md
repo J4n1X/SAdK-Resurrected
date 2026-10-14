@@ -32,7 +32,7 @@ behind the dialogs ([lobby-client-state.md](lobby-client-state.md)); the wire fo
 only covered as far as the world screen opens them (§3.17); the dialogs are specified in
 [minigames-client.md](minigames-client.md), the wire rules in `../message-catalog.md` section "Minigames".
 
-The dialogs never build network messages themselves. They call the lobby model (`LobbyManager` and its
+The dialogs never build network messages themselves. They call the lobby model (`LobbyComm::System` and its
 members `CharacterManager`, `ServerList`, `PostOffice`, `VillageServerConnection`, `UserCommConnection`,
 `RefereeServerConnection`) and subscribe to its observer lists for the results. The message ids in this
 document name the message the called model function sends, as recorded in `../message-catalog.md`.
@@ -314,7 +314,7 @@ valid; the backpack accepts everything; any other container refuses [known] S 00
 | Offset | Meaning |
 |---|---|
 | +0x1e8 | `viewMode`: 0 create, 1 select (initial), 2 entering the village |
-| +0x1ec | `CharacterManager*` (`LobbyManager+0x140`), set in `Activate` |
+| +0x1ec | `CharacterManager*` (`LobbyComm::System+0x140`), set in `Activate` |
 | +0x1f0 | `ServerList*` (village servers), set in `Activate` |
 | +0x1f4, +0x1f8, +0x1fc | `SelectAvatarDialog*`, `SelectVillageServerDialog*`, `CustomizeAvatarDialog*` |
 | +0x200 | the open wait box (tag 0x3000), or 0 |
@@ -412,7 +412,7 @@ frame the current screen gets `Update` (and clicks) only while it `IsActive` [kn
 | Request | By | When |
 |---|---|---|
 | [inferred] 0 Empty | `CLobby::StartUp` S 004f8c90 | once, right after `System::Initialize` (§2.1) |
-| 1 Account | `CLobby::ProcessModeTransition` S 004f5950 | entering the lobby (CLobby mode 0 or 1 → 2 or 3, requested mode ≠ 2) while the `LobbyManager` state is 1, or in any state other than 3 / 11 after calling `LobbyManager::Logout`. The function then runs `System::Update(true)` at once and opens the login dialog centred. State names (1 Disconnected, 3 Authorized, 11 VillageLeft): [lobby-client-state.md](lobby-client-state.md) |
+| 1 Account | `CLobby::ProcessModeTransition` S 004f5950 | entering the lobby (CLobby mode 0 or 1 → 2 or 3, requested mode ≠ 2) while the `LobbyComm::System` state is 1, or in any state other than 3 / 11 after calling `LobbyComm::System::Logout`. The function then runs `System::Update(true)` at once and opens the login dialog centred. State names (1 Disconnected, 3 Authorized, 11 VillageLeft): [lobby-client-state.md](lobby-client-state.md) |
 | 2 Avatar | S 004f5950 | entering the lobby in state 3 or 11 without an automatic village entry |
 | 2 Avatar | `MotDDialog` Okay; `CreateAccountDialog` success box | §3.4, §3.5 |
 | 2 Avatar | `WorldScreen` | village connection logged out or disconnected; referee login given up (§3.16) |
@@ -519,7 +519,7 @@ Widgets [known] S 0043c380: `Username`, `Password`, `CDKey` (EditEx); `SaveUsern
 `Password` `maxLength="20"`, `isPassword="true"`, no character restriction; `CDKey` `maxLength="19"`,
 `allowedChars` = a-z A-Z 0-9 `-`.
 
-On show [known] S 0043d150: subscribes to `LobbyManager+0x10` (login succeeded), `+0x1c` (login failed),
+On show [known] S 0043d150: subscribes to `LobbyComm::System+0x10` (login succeeded), `+0x1c` (login failed),
 `+0x40` (version check failed); fills Username, CDKey and Password from the profile (`LobbyProfile`
 `GetUserName` / `GetCDKey` / `GetPassword`); a stored key that normalises to 16 characters is shown in its
 dashed form (`Str_FormatKey16WithDashes`; the grouping `XXXX-XXXX-XXXX-XXXX` is [inferred], the formatter was
@@ -529,7 +529,7 @@ the parts, upper-case, valid iff the result has exactly 16 characters [known].
 
 | Control | Rule and action | Tag |
 |---|---|---|
-| `Okay` | Any of the three fields empty → box `!ERROR_DIALOG` / `!UNCKPW_EMPTY_TEXT` (Ok), nothing sent. Otherwise: read the lobby server host and port from the profile (`LobbyProfile::GetLobbyServerHost`, `LobbyProfile_GetLobbyServerPort`; keys `[LobbyServer] Host`, `Port` as in §6) and the configured protocol version (if it is not -1 it replaces `g_ClientProtocolVersion`); normalise the key (if that fails the raw text is used); `LobbyManager::Login(host, port, user, password, key)`. True → wait box `!WAIT_DIALOG` / `!LOGGING_IN_TEXT` (set 4 Cancel, tag 2); false → `!ERROR_DIALOG` / `!LOGIN_FAILED_TEXT` (Ok, tag 1). The dialog is hidden in both cases. | [known] S 0043cbf0 |
+| `Okay` | Any of the three fields empty → box `!ERROR_DIALOG` / `!UNCKPW_EMPTY_TEXT` (Ok), nothing sent. Otherwise: read the lobby server host and port from the profile (`LobbyProfile::GetLobbyServerHost`, `LobbyProfile_GetLobbyServerPort`; keys `[LobbyServer] Host`, `Port` as in §6) and the configured protocol version (if it is not -1 it replaces `g_ClientProtocolVersion`); normalise the key (if that fails the raw text is used); `LobbyComm::System::Login(host, port, user, password, key)`. True → wait box `!WAIT_DIALOG` / `!LOGGING_IN_TEXT` (set 4 Cancel, tag 2); false → `!ERROR_DIALOG` / `!LOGIN_FAILED_TEXT` (Ok, tag 1). The dialog is hidden in both cases. | [known] S 0043cbf0 |
 | `CreateAccount` | opens `CreateAccountDialog`, closes this dialog | [known] S 0043cbf0 |
 | `RetrieveAccount` | `ShellExecuteA(open, "http://support.ubisoft.de/home.php")` | [known] S 0043cbf0 |
 | `Close` | CLobby vtbl+0x2c: leave the lobby (the argument is not visible in the decompile) | [known] S 0043cbf0 |
@@ -547,7 +547,7 @@ Results:
 | version check failed (`+0x40`) | only if the wait box is active: close it, box `!ERROR_DIALOG` / `!VERSIONCHECK_FAILED_TEXT` (Yes / No, tag 3) | [known] S 0043ca60 |
 
 Box results by tag [known] S 0043c790 (the handler first unsubscribes itself from the box): 1 and 4 → show
-the login dialog again; 2 (Cancel on the wait box) → forget the wait box, `LobbyManager::Logout`; 3 with Yes →
+the login dialog again; 2 (Cancel on the wait box) → forget the wait box, `LobbyComm::System::Logout`; 3 with Yes →
 request quit of the game (`nMenu::System::RequestQuit`), open the support URL, leave the lobby (CLobby
 vtbl+0x2c(0)); 3 with No → leave the lobby.
 
@@ -573,14 +573,14 @@ checks run in this order; the first failure shows one `!ERROR_DIALOG` box (Ok) a
 7. e-mail = password → `!EMPW_MUSTNOTIDENTICAL_TEXT`;
 8. the key does not normalise to 16 characters → `!CDKEY_INVALID`.
 
-Then `LobbyManager::CreateUser(host, port, user, password, normalisedKey, email)` (203 SelfRegistration, see
+Then `LobbyComm::System::CreateUser(host, port, user, password, normalisedKey, email)` (203 SelfRegistration, see
 `../message-catalog.md`). True → the dialog is hidden and a wait box `!WAIT_DIALOG` /
 `!CREATING_ACCOUNT_TEXT` (set 5, no buttons, tag 1) is shown; false → `!ERROR_DIALOG` /
 `!CREATE_ACCOUNT_FAILED_TEXT` (Ok), the dialog stays visible.
 
 `Cancel`: close, open the login dialog [known] S 0043e080.
 
-Results arrive on the same observer lists as a login (`LobbyManager+0x10` / `+0x1c`, subscribed in
+Results arrive on the same observer lists as a login (`LobbyComm::System+0x10` / `+0x1c`, subscribed in
 `Activate` S 0043e410) and are handled only while the wait box is active:
 
 | Event | Reaction | Tag |
@@ -597,7 +597,7 @@ cannot be dismissed by the player; there is no timeout [known: set 5; no time so
 ### 3.5 Message-of-the-day dialog (`lobbyMotDDialog.xml`)
 
 Embedded `TextBlock` (node `Message`, +0xb48, font `body_arial`) and `Button` (node `Okay`, +0xce8); source
-object = `LobbyManager+0x100` (stored at +0x1150 in `Activate`) [known] S 0043ecc0, S 0043ef90, S 0043f0d0.
+object = `LobbyComm::System+0x100` (stored at +0x1150 in `Activate`) [known] S 0043ecc0, S 0043ef90, S 0043f0d0.
 
 - `RefreshMessage(force)` S 0043eda0: only if the source is valid (byte +0x1c), and then if it reports new
   content (source vtbl+4) or `force`: set the text from the `std::string` at source +0x20 (trimmed),
@@ -617,7 +617,7 @@ gives `Okay` the hotkey 13 (Enter). The request is 105 RequestMOTD, the answer 1
 ### 3.6 Avatar screen (`lobbyAvatarScreen.xml`)
 
 **Activate** S 0043be30 [known]: subscribes to `CharacterManager+0x08` (character created) and `+0x14`
-(create failed), `LobbyManager+0x28` (lobby logged out), `+0x34` (with an empty handler), `+0x04`
+(create failed), `LobbyComm::System+0x28` (lobby logged out), `+0x34` (with an empty handler), `+0x04`
 (connection lost); then CLobby vtbl+0x6c (`EnterCustomizeMode`: the 3D view switches to the avatar preview).
 
 **OnShow** S 0043b3a0 [known]: creates the three dialogs hidden, input-disabled and with +0xb42 cleared,
@@ -655,9 +655,9 @@ automatically.
 | Click | Action |
 |---|---|
 | Start, create mode | `OnCreateAvatarClicked` (below) |
-| Start, select mode | `OnStartGameClicked_EnterVillage` S 0043abc0, then `DisableButtons` S 00439cc0. In S 0043abc0, `CodersRule` off: `FindBestVillageServer(g_ClientProtocolVersion, -1)` and `SelectVillageServer`; if either fails, the buttons are enabled and `!ERROR` / `!COULDNOT_CONNECT_TO_VILLAGE` (Ok, no callback) is shown. Otherwise (and always with `CodersRule` on) `SetViewMode(2)`, CLobby vtbl+0x80(checked state of the `ResetLoginPosition` toggle, widget +0x2ec) = request village entry. Because `DisableButtons` runs after the handler, the buttons (Start, Back, name field, reset toggle and label) are disabled after the error box as well, and nothing in the class enables them again in select mode: `Update` only enables Start while +0x218 is set [known for the order of the two calls; inferred for the dead end] |
+| Start, select mode | `OnStartGameClicked_EnterVillage` S 0043abc0, then `DisableButtons` S 00439cc0. In S 0043abc0, `CodersRule` off: `FindBestVillageServer(g_ClientProtocolVersion, -1)` and `SelectVillageServer`; if either fails, the buttons are enabled and `!ERROR` / `!COULDNOT_CONNECT_TO_VILLAGE` (Ok, no callback) is shown. Otherwise (and always with `CodersRule` on) `SetViewMode(2)`, CLobby vtbl+0x80(checked state of the `ResetLoginPosition` toggle, widget +0x2ec) = request village entry [known]. Called with no joinable village server, the handler takes the failure branch: +0x218 is 1 before and after, the buttons are re-enabled for the view mode, the box reads "FEHLER" / "Willkommen im Dorf" (the shipped `language\de\lobby_ui.txt` translates `!COULDNOT_CONNECT_TO_VILLAGE` wrongly as "Willkommen im Dorf"), and the screen stays usable: leaving it works, and Start keeps waiting for a joinable server [live, 2026-10-14; the handler was called directly, since Start cannot be pressed without such a server, so the `DisableButtons` that follows it in `HandleButtonClicks` was not part of the run]. In a real click Start is enabled only while `HasJoinableServerForProtocol` holds (`Update`, above), so the failure branch needs a listed server that `FindBestVillageServer` or `SelectVillageServer` then refuses [inferred] |
 | Back, create mode | disable the buttons; box `!WARNING_DIALOG` / `!ABORT_CHARACTER_CREATION_TEXT` (Yes / No, tag 0x2000) (S 0043bc40) |
-| Back, select mode | `LobbyManager::Logout`; if it returns false: request screen 0 and leave the lobby (CLobby vtbl+0x2c(0)) at once; otherwise the same happens in the logged-out observer when the reported handle equals `LobbyManager`'s chat server handle (`LobbyManager+0x548`) (S 00439be0, S 00439c20) |
+| Back, select mode | `LobbyComm::System::Logout`; if it returns false: request screen 0 and leave the lobby (CLobby vtbl+0x2c(0)) at once; otherwise the same happens in the logged-out observer when the reported handle equals `LobbyComm::System`'s chat server handle (`LobbyComm::System+0x548`) (S 00439be0, S 00439c20) |
 
 A click on Start or Back in mode 2 does nothing [known].
 
@@ -685,7 +685,7 @@ has no timeout of its own in mode 2 [known: no time source in the class].
 |---|---|---|
 | character created (`CharacterManager+0x08`) | if the wait box pointer is set and its tag is 0x3000: close it, `SelectAvatarDialog::Update`, `SelectCharacter(new id)`, `SetViewMode(1)`, re-enable the buttons | [known] S 0043afc0 |
 | create failed (`+0x14`, errorCode) | if the wait box (tag 0x3000) is open: close it; box `!ERROR_DIALOG` with the text `CommLayer_GetErrorString(errorCode)` (S 00486010), Ok, tag 0x1000 | [known] S 0043b0a0 |
-| connection lost (`LobbyManager+0x04`) | box `!ERROR` / `!CONNECTION_LOST_TEXT`, button set 5 (no buttons), tag 0x500, without any condition | [known] S 0043b1b0 |
+| connection lost (`LobbyComm::System+0x04`) | box `!ERROR` / `!CONNECTION_LOST_TEXT`, button set 5 (no buttons), tag 0x500, without any condition | [known] S 0043b1b0 |
 
 Box results by tag [known] S 0043ad90: 0x1000 → re-enable the buttons; 0x2000 → on Yes `SetViewMode(1)`,
 then re-enable the buttons; 0x3000 → open a new identical wait box; 0x500 → request screen 0 and leave the
@@ -725,7 +725,7 @@ handler in the class].
 ### 3.8 Avatar customisation dialog (`lobbyCustomizeAvatarDialog.xml`) and the tailor
 
 The same class serves character creation (avatar screen) and the tailor (world screen). `OnShow` latches
-`inVillageMode` (+0xb5c) = "`LobbyManager` state is VillageEntered" and positions the dialog with
+`inVillageMode` (+0xb5c) = "`LobbyComm::System` state is VillageEntered" and positions the dialog with
 `SetAnchoredPosition(0, 1, 0, 0)` [known] S 0043e6e0.
 
 Layout attributes on the dialog node [known] S 0043e7f0 and the layout file: `AvatarCount="6"`,
@@ -780,7 +780,7 @@ call CLobby vtbl+0x88 (switch village); then hide the dialog. On any other scree
 
 **`SelectServerMenu`** of the world screen is the shipped way to change village. Its fill callback
 `PopulateSelectServerMenu` S 004375a0 adds, for every village server that is not the current one
-(`LobbyManager+0x550`), has the client's protocol version and is online, an item `<name> (<n> Player)` with
+(`LobbyComm::System+0x550`), has the client's protocol version and is online, an item `<name> (<n> Player)` with
 the server id as item value (n = the dword at entry +0x28). A pick closes the menu and, without any
 further test, selects the server, sets `ServerList+0xa0` and calls CLobby vtbl+0x88 [known] S 00437760.
 
@@ -1326,7 +1326,7 @@ on both desktops, names the second one "MessageBoxDesktop", creates the four scr
 ## 5. Inputs and outputs
 
 **Consumes**: the lobby layouts and text tables (§6); mouse and keyboard through `nUi` and `LobbyAction`;
-model state of `LobbyManager` (state, perm id, character list, server list, mail, buddy and ignore maps, item
+model state of `LobbyComm::System` (state, perm id, character list, server list, mail, buddy and ignore maps, item
 definitions, local avatar) and of `Lobby::CLobby` (selection, local avatar, customise mode, distance
 watches).
 
@@ -1335,10 +1335,10 @@ watches).
 
 | UI action | Model call | Message |
 |---|---|---|
-| login Okay | `LobbyManager::Login` | 188, 201, 204 and following ["Login, authentication and the UC/chat connection"] |
-| create account Okay | `LobbyManager::CreateUser` | 203 SelfRegistration |
-| cancel login / Back | `LobbyManager::Logout` | connection close |
-| MOTD dialog | (source `LobbyManager+0x100`) | 105 / 106 ["MotD"] |
+| login Okay | `LobbyComm::System::Login` | 188, 201, 204 and following ["Login, authentication and the UC/chat connection"] |
+| create account Okay | `LobbyComm::System::CreateUser` | 203 SelfRegistration |
+| cancel login / Back | `LobbyComm::System::Logout` | connection close |
+| MOTD dialog | (source `LobbyComm::System+0x100`) | 105 / 106 ["MotD"] |
 | create character | `CharacterManager::CreateCharacter` S 004750f0 (queued) | 86 AddCharacter → 153 AddResult ["Characters"] |
 | delete character | `CharacterManager::DeleteCharacter` S 004751e0 (queued) | 94 RemoveCharacter |
 | enter village | CLobby vtbl+0x80 `RequestEnterVillage` S 004f5070 → `CLobbyClient::EnterVillage` | chain of `../village-and-character-protocol.md` §2.3; answer 1000 EnterWorld |
@@ -1476,12 +1476,11 @@ room dialog exists) [known]; its use is in [network-session.md](network-session.
 
 ## 10. Open questions
 
-1. **Avatar screen after a failed "enter village"**: `HandleButtonClicks` S 0043bd50 calls `DisableButtons`
-   unconditionally after the handler that shows `!COULDNOT_CONNECT_TO_VILLAGE` (§3.6) [known]; +0x218 is set
-   again only by `BuildWidgets` (through `SetButtonsEnabled` S 004399a0, its one caller [known]) and by the
-   box results of tags 0x1000 / 0x2000 and the character-created observer (§3.6), none of which follows
-   that box [inferred]. Whether the player is really stuck needs an observation with no joinable village
-   server.
+1. **Avatar screen after a failed "enter village"**: Answered (§3.6): with no joinable village server the
+   handler S 0043abc0 shows "FEHLER" / "Willkommen im Dorf" (the shipped German text of
+   `!COULDNOT_CONNECT_TO_VILLAGE`), +0x218 stays 1, the buttons are re-enabled and the player is not stuck
+   [live, 2026-10-14]. `HandleButtonClicks` S 0043bd50 still calls `DisableButtons` after the handler
+   [known]; that path was not exercised, because Start cannot be pressed without a joinable server.
 2. **Unreachable box results**: the wait box (tag 0x3000) and the connection-lost box (tag 0x500) of the
    avatar screen have button set 5; confirm that nothing but `MessageBoxDialog::HandleButtonClicks`
    S 0045ebe0 notifies the result list +0xb48 (xrefs of `ObserverList_NotifyAll` with a box).

@@ -1,22 +1,24 @@
 # Match-start world-login (`0x27D2` → `EnterWorld(1000)`) — model
 
-> ## ⛔ CORRECTED 2026-07-25/26 — READ BEFORE USING THIS DOC
+> ## ⛔ Superseded — read before using this document
 >
-> **The core prescription of this document is WRONG.** Msg **2002** (`0x27D2`, `code=0xAFFEDEAD`) is a
-> **LEAVE-VILLAGE request**, not a world-login request: `VillageServerConnection_SendLeaveVillageRequest_2002
-> @0x46bde0` calls `SetState(LeavingVillage=10)` and waits. Answering it with `EnterWorld(1000)` tells the
-> client to *enter* the lobby world when it asked to *leave* — that is the origin of the "clone" (both
-> clients reloading the lobby world at match-start). **Do not answer `0x27D2` with `1000`.**
+> The body below is the model of 2026-06-10 and its prescription is wrong. The current reference is
+> `docs/SOURCEMAP.md` §2b ("Leaving the village") and `docs/MATCH_START.md`.
 >
-> Live-proven 2026-07-25: the stub receives the frame and no-ops it; the client parks in
-> `LeavingVillage(10)` and retries forever (no timeout, no disconnect).
+> Msg **2002** (`0x27D2`, `code=0xAFFEDEAD`) is a **leave-village request**, not a world-login request:
+> `LobbyComm::VillageServerConnection::SendLeaveVillageRequest` (`0x46bde0`) calls
+> `LobbyComm::System::SetState(LeavingVillage=10)` and sends it. **Do not answer `0x27D2` with `1000`**:
+> `EnterWorld(1000)` makes the client enter the lobby world again.
 >
-> Also **do not** "fix" it by closing the village connection: that reaches `VillageLeft(11)` but fires the
-> **Disconnected** observer (`villageConn+0x28` → `LobbyGameScreen_OnGameConnectionResult@0x432ed0`),
-> producing an `!ERROR_DIALOG` / `!CONNECTION_LOST_TEXT` and never arming the referee. `[PROVEN]`
+> The answer is msg **1006** with `code=0xDEADBEEF`: `HandleWorldLoginAck` (`0x46ec50`) then logs the
+> UserComm connection and the village transport out, the logout arrives as `HandleLoggedOut` (`0x470e20`),
+> the state becomes `VillageLeft(11)` and the village connection's LoggedOut observers fire; one of them
+> (`LobbyMenu::WorldScreen::OnVillageConnectionLoggedOut`, `0x4316c0`) arms the referee login when a match
+> is starting. `[PROVEN]` (live trace of 2026-07-26; stub `village.py send_world_login_ack`).
 >
-> What legitimately clears `LeavingVillage(10)` is **still unknown** — see `decomp/RENAME_LIST.md`
-> (2026-07-25/26 entries) for the full evidence chain and the open question.
+> Closing the village connection instead reaches `VillageLeft(11)` through the **Disconnected** observer
+> (`villageConn+0x28` → `LobbyMenu::WorldScreen::OnVillageConnectionDisconnected`, `0x432ed0`), which shows
+> an `!ERROR_DIALOG` / `!CONNECTION_LOST_TEXT` box and never arms the referee. `[PROVEN]`
 
 > **s42 (2026-06-10), ranked MP live test + read-only RE on `sadk_noav.exe` (image base 0x400000).**
 > Status discipline: every claim tagged **[PROVEN]** (binary addr + read-only/live evidence) or

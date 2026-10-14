@@ -232,6 +232,7 @@ All nine derive from `nMenu::Overlapped` (a draggable framed dialog: frame +0x1c
 | +0xb098 / +0xb09c | chatFadeOutTime / chatFadeInTime (XML) |
 | +0xb0a0 | "sacrifice started" effect picture |
 | +0xb328 / +0xb32c | `QuestLog*` / `Tutorial*` |
+| +0xbf20 | an `nUi::Slider` (0x560 bytes) that the constructor builds (S 005eeb2b) and the destructor S 005ed340 destroys; nothing creates, loads or reads it: an unused member of the screen, no simulation state [known for the two writes; inferred for the absence of any other use] |
 | +0xb330 | deferred "leave the match" flag |
 | +0xcc70 | `LoadingPanel*` |
 | +0xcc74 | `StatisticPanel*` |
@@ -244,6 +245,7 @@ All nine derive from `nMenu::Overlapped` (a draggable framed dialog: frame +0x1c
 | +0xffe8 | `nGame::System*` (cursor at +0x10 with the hovered cell at +0x24 / +0x28, camera at +0x2d0, state at +0x2d8) |
 | +0xfff0 | info-map overlay mode (0 / 1) |
 | +0xfff4 | local player entry (`*entry` = player index) |
+| +0x11010 / +0x11020 | two `NLogic::Unique` members: the constructor S 005ee5d0 and `OnEnter` S 005eed00 set their ids to -1; no function assigns or reads them: unused members of the screen, no simulation state [known for the writes; inferred for the absence of a reader] |
 | +0xfff9 | paused |
 | +0x10000.. | four debug toggles |
 | +0x11030 | game speed saved while paused |
@@ -710,7 +712,7 @@ paths that do not return "consumed" then close the action panel unless confirmin
 **Street placement start** (`BeginStreetBuild` S 00615e30, action 9): mode = 3,
 `nGame::System::BeginStreetBuildMode(position of the selected flag)`, selection reset. `MenuSelection::Update`
 S 006163f0 [known] stays in mode 3 only while all of these hold: a street mode exists, its point vector
-(+0x24 / +0x28, 8-byte entries) is not empty, `StreetBuildMode_IsValid` is true, the test S 0078b180 above is
+(+0x24 / +0x28, 8-byte entries) is not empty, `ai::game::StreetBuildMode::IsValid` is true, the test S 0078b180 above is
 false and its byte +0x39 is 0; otherwise it calls `Cancel`.
 
 **Cancel** (S 006162e0) [known]: plays `uiCancel` unless silent, mode = 1, calls `StreetBuildMode::Cancel` if
@@ -752,7 +754,7 @@ and the selection is refreshed with the camera focused on it [inferred] S 005eb8
 | Ship | own | 1, else −1 |
 | ShipRoute | the route's building or its second reference belongs to the local player | 0, else −1 |
 
-Owner test of the mine row (`Player_IsStateNotDefault` S 005be330) [known]: with the owner's `kind` (+0x08)
+Owner test of the mine row (`ai::player::Player::IsStateNotDefault` S 005be330) [known]: with the owner's `kind` (+0x08)
 equal to 1 it is `level ≠ 3`, otherwise `level ≠ 0`, where `level` is the player field +0xec, the match's
 start-resources / difficulty level 0..3 ([players-victory.md](players-victory.md) §2). So a mine opens the
 `Mine` box (0xf) unless that level is 0 (3 for a kind-1 owner), in which case it opens the plain production
@@ -1509,7 +1511,7 @@ reads the icon grid parameters from `actionbuttons`.
 | 005ee5d0 / 005ecaf0 | `nMenu::Game::ctor` / `LoadFromXml` | game screen, HUD binding |
 | 005ed700 / 005ea650 | `nMenu::Game::SetupHud` / `DestroyHudWidgets` | HUD lifetime |
 | 005efea0 | `nMenu::Game::Update` | per-frame HUD logic, end-of-game checks |
-| 005eaae0 / 005eab40 | `nMenu::Game::OnMousePress` / `UiMenuSelection_ForwardRightClick_SetFlag12` | world clicks |
+| 005eaae0 / 005eab40 | `nMenu::Game::OnMouseButton0Down` / `nMenu::Game::OnMouseButton1Down` | world clicks |
 | 005eb180 / 005ec340 / 005eb230 | `nMenu::Game::OnChar` / `OnKeyDown` / `OnKeyUp` | `p`, `h`, `x`, Enter, Shift, cheats |
 | 005eba50 | `nMenu::Game::Cheat_FillStoreWithGoods` | `ItsLikeAJackpot` |
 | 005eb850 / 005eb310 | `nMenu::Game::OnButtonClick` / `OnMenuComboSelected` | HUD buttons, game menu |

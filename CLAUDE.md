@@ -222,8 +222,15 @@ Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive
 - `sadkmod/gen/gen_game_headers.py` — generates sadkmod's C++ declarations of the game from `sadkmod/sourcemap/`
   (types, functions, globals). Stated reason (approved by the maintainer 2026-10-07): neither MCP produces source
   code; it reads only the committed sourcemap. `sadkmod/sourcemap/ExportTypesJson.java` (runs inside Ghidra) feeds it.
+- `tools/s2m_upgrade.py` — rewrites a map in the old prototype layout (`data\game\map\Presentation.s2m`) into the
+  layout the shipped loader reads (`docs/map-format.md` §9). Stated reason (asked for by the maintainer 2026-10-12):
+  neither MCP rewrites a file from one container layout into another
+- `tools/screenshot.ps1` — saves a PNG of the game window only (`PrintWindow`), run on the game PC through the scheduled
+  task `sadk-screenshot` in the logged-on desktop session. Stated reason (approved by the maintainer 2026-10-14): an SSH
+  session cannot see the interactive desktop and neither MCP captures the screen; used for the look checks
 - `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
-  the optional patch in `docs/BINARY_PATCHES.md`; neither Ghidra nor a debugger speaks its text protocol
+  the optional patch in `docs/BINARY_PATCHES.md` or when created at run time (same file); neither Ghidra nor a
+  debugger speaks its text protocol
 
 Adding anything else requires the stated-reason gate in `HARNESS.md §3`. Treat
 captures/logs as valuable RE artifacts — don't delete or casually rewrite them.

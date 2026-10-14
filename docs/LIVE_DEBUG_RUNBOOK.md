@@ -40,67 +40,69 @@
 
 ## 2. The state probe (read-only, no freeze, ~5 reads)
 
-Walk the chain. **The LobbyManager address is stable for the process lifetime; everything below it is not
-— re-walk each time.**
+Walk the chain. The root object is the `LobbyComm::System` that `g_pLobbyManager` points at (called
+LobbyManager in older notes; `LM+0x..` below is an offset inside it). **Its address is stable for the
+process lifetime; everything below it is not — re-walk each time.**
 
 ```
-g_pLobbyManager  = *(0x00885890)
-  +0x54   LobbyComm_ServerList      (embedded)
-  +0x140  world-stream/loader        (embedded)
-  +0x2f8  LobbyWorldStreamHandler    (embedded)
-  +0x3bc  LobbyPostOffice            (embedded)
-  +0x3d8  UserCommConnection         (EMBEDDED — its address IS LM+0x3d8; vtable 0x007DCECC)
-  +0x490  RefereeServerConnection    (embedded)
-  +0x540  pVillageConnection         (POINTER; vtable 0x007DB8D4)
-  +0x544  pGameSlotConnection        (POINTER)
+g_pLobbyManager  = *(0x00885890)     LobbyComm::System (0x5a8 bytes, vtable 0x007DACB0)
+  +0x54   serverList                LobbyComm::ServerList       (embedded)
+  +0x100  serverMessages            LobbyComm::ServerMessages   (embedded)
+  +0x140  characterManager          LobbyComm::CharacterManager (embedded)
+  +0x2f8  postOffice                LobbyComm::PostOffice       (embedded)
+  +0x3bc  properties                LobbyComm::Properties       (embedded)
+  +0x3d8  userCommConnection        (EMBEDDED — its address IS LM+0x3d8; vtable 0x007DCECC)
+  +0x490  refereeServerConnection   (embedded)
+  +0x540  pVillageConnection        (POINTER; vtable 0x007DB8D4)
+  +0x544  pGameServerConnection     (POINTER)
   +0x550  selected village server id (50 = our stub's village)
-  +0x57C  ***LobbyManager.state***
+  +0x57C  ***state*** (LobbyManagerState)
   +0x580  nRefereeServerId
 
 <any LobbyComm connection>
   +0x34   transport  (CommLayer::ConnectionReal, vtable 0x10051694) — NULL when disconnected
-  +0x1c   observer list: LoggedOut      → fired by BaseConnection::LoggedOut@0x0048e2a0
-  +0x28   observer list: Disconnected   → fired by BaseConnection::Disconnected@0x0048e3c0
+  +0x1c   observer list: LoggedOut      → fired by BaseConnection::OnLoggedOut@0x0048e2a0
+  +0x28   observer list: Disconnected   → fired by BaseConnection::OnDisconnected@0x0048e3c0
 
 <transport (ConnectionReal)>
-  +0x08   ***transport state***  (GetState@0x10036bd0 is literally `return *(this+8)`)
+  +0x08   ***transport state***  (the folded getter at 0x10036bd0 is literally `return *(this+8)`)
   +0x1c   server id
   +0x24   net-driver / socket wrapper
   +0x38   state observer (its vtbl[0x0C] is a no-op stub for our connection)
 ```
 
-### `LobbyManager.state` (+0x57C) values
+### `LobbyComm::System.state` (+0x57C, enum `LobbyManagerState`) values
 | val | name | set by |
 |---|---|---|
 | 1 | Disconnected | Initialize / OnLoginFailed / OnLoggedOut(main) |
-| 2 | Connecting | Login, `FUN_004633f0` |
+| 2 | Authorizing | `Login`, `CreateUser` (`0x004633f0`) |
 | 3 | Authorized | OnLoggedIn |
 | 4 / 5 / 6 / 7 | version-check → global-data ladder | StatePump_Tick, OnVersionChecked |
 | 8 | EnteringVillage | `0x0047063e` |
 | 9 | **VillageEntered** | HandleEnterWorld (msg 1000) |
-| 10 | **LeavingVillage** | SendLeaveVillageRequest_2002 (msg 2002) — **has no self-recovery** |
+| 10 | **LeavingVillage** | SendLeaveVillageRequest (msg 2002) — **has no self-recovery** |
 | 11 | **VillageLeft** | HandleLoggedOut **or** HandleDisconnected — the ONLY two exits from 10 |
-| 12 | LobbyConnectionLost | OnConnectionLost (main conn) |
+| 12 | ConnectionLost | OnConnectionLost (main conn) |
 
 ### transport state (+0x08) values
 `0` none · `2` connecting · `5`/`6`/`7` handshake ladder · **`8` authorized** · **`9` logging out**
 
 ### ⭐ The single most important rule this instrument encodes
-`FUN_10030ad0` (ConnectionReal event handler) **case 4 = disconnect** branches on transport state:
+`CommLayer::ConnectionReal::OnTinCatEvent` (`0x10030ad0`) **case 4 = disconnect** branches on transport state:
 
 | transport state at disconnect | result |
 |---|---|
 | **8** | `ConnectionLost` with a **hardcoded reason 10** → `!CONNECTION_LOST_TEXT` dialog |
 | **9** | **`OnLoggedOut`** → `HandleLoggedOut` → `VillageLeft(11)` → `+0x1c` observer → **arms the referee** |
 
-State 9 is set **only** by `ConnectionReal::Logout@0x10030510`, which is called only from
-`HandleWorldLoginAck` (msg 1006), `UserCommConnection::Logout@0x0047ed70`, and
-`RefereeServerConnection_Logout@0x00479540`.
+State 9 is set **only** by `CommLayer::ConnectionReal::Disconnect@0x10030510` (the transport's vtbl
+`+0x18`, the logout), which is called only from `HandleWorldLoginAck` (msg 1006),
+`UserCommConnection::Logout@0x0047ed70`, and `RefereeServerConnection::Logout@0x00479540`.
 
 ### Worked example (2026-07-26, validated live)
 ```
-*(0x885890)      = 0x0E5C9040   LobbyManager
-  +0x57C         = 0x0C  (12)   → LobbyConnectionLost  ← client was disconnected
+*(0x885890)      = 0x0E5C9040   LobbyComm::System
+  +0x57C         = 0x0C  (12)   → ConnectionLost       ← client was disconnected
   +0x540         = 0x0E5C95F0   village conn (vtable 0x007DB8D4 ✓)
       +0x34      = 0x00000000   transport NULL          ← consistent with state 12
   +0x3d8         = 0x0E5C9418   UserComm conn (vtable 0x007DCECC)
@@ -117,22 +119,22 @@ Read hits with `debugger_trace_log()`; stop with `debugger_trace_stop`.
 
 | # | address | module | conv | args | what it tells you |
 |---|---|---|---|---|---|
-| 0 | `0x00462540` `LobbyManager::SetState` | SADK | `__thiscall` | `newState` | **every** lobby state transition, with the value. The backbone. |
+| 0 | `0x00462540` `LobbyComm::System::SetState` | SADK | `__thiscall` | `newState` | **every** lobby state transition, with the value. The backbone. |
 | 1 | `0x004647e0` `OnConnectionLost` | SADK | `__thiscall` | `connId,p2,reason` | the **reason code** (10 = dialog) |
-| 2 | `0x0046bde0` `SendLeaveVillageRequest_2002` | SADK | `__thiscall` | — | the client asked to leave |
+| 2 | `0x0046bde0` `SendLeaveVillageRequest` | SADK | `__thiscall` | — | the client asked to leave |
 | 3 | `0x0046ec50` `HandleWorldLoginAck` | SADK | `__thiscall` | `msgStream` | msg 1006 arrived → the Logout branch |
-| 4 | `0x10030510` `ConnectionReal::Logout` | tincat3 | `__fastcall` | — | **state → 9** (the good path) |
+| 4 | `0x10030510` `ConnectionReal::Disconnect` | tincat3 | `__fastcall` | — | **state → 9** (the good path) |
 | 5 | `0x00470e20` `HandleLoggedOut` | SADK | `__thiscall` | `arg` | the exit we want |
 | 6 | `0x00470f90` `HandleDisconnected` | SADK | `__thiscall` | `arg` | the exit that shows a dialog |
-| 7 | `0x10030ad0` `ConnectionReal` event handler | tincat3 | `__thiscall` | `eventType,p2` | `eventType==4` = disconnect |
+| 7 | `0x10030ad0` `ConnectionReal::OnTinCatEvent` | tincat3 | `__thiscall` | `eventType,p2` | `eventType==4` = disconnect |
 
 A single play-through with these armed yields an ordered event timeline instead of a symptom report.
 
 ## 4. Watchpoints — limitation
 
 `debugger_watch_memory` only accepts **module-mapped** addresses; heap addresses are rejected
-(*"not in any mapped module"*), so `LobbyManager+0x57C` and `transport+0x08` **cannot** be watched
-directly. Trace their *writers* instead — trace #0 (`SetState`) and #4 (`Logout`) cover every transition
+(*"not in any mapped module"*), so `LM+0x57C` and `transport+0x08` **cannot** be watched
+directly. Trace their *writers* instead — trace #0 (`SetState`) and #4 (`Disconnect`) cover every transition
 that matters. Reserve real watchpoints for globals in `.data`.
 
 > **This limitation is lifted by TTD (§9).** `ttd_memory` reconstructs the full read/write history of
@@ -192,7 +194,7 @@ After fixing it, every integer the stub puts on the wire was audited. The rule:
 
 **`[TODO]` Latent, NOT currently harmful — `referee.py`.** Its `_u32()` packs *property values*
 little-endian, which is wrong by the rule above. It does not bite today:
-`RefereeServerConnection_OnRegisterGameResult@0x0047a580` reads `GameID` but **never compares it**; its
+`RefereeServerConnection::RegisterGameResultReceived@0x0047a580` reads `GameID` but **never compares it**; its
 only branch is `if (Result == 0)`, and `Result = 0` is byte-order symmetric; `GameSeed` is byte-swapped
 but our fixed constant swaps identically for every client, so every client gets the same value (it
 seeds only the chest contents, `docs/MATCH_START.md` Phase 2); `PermID` in
@@ -209,13 +211,13 @@ handler but nothing happens, check the encoding before abandoning the theory.
 
 ## 8. `LobbyComm::ServerList` — the hosting latch (added 2026-07-26)
 
-`ServerList = LobbyManager + 0x54` (`LobbyManager_GetServerList@0x0046b610` is literally
+`ServerList = LM + 0x54` (the folded getter `Generic_GetAddr_54@0x0046b610` is literally
 `return this + 0x54`). It carries the latch that gates hosting **and** the
 "Verbindung zu Spieleserver wird hergestellt" modal.
 
 ### ⚠️ Read this before quoting any offset out of a ServerList observer
 
-`LobbyComm_ServerList_ctor@0x0046a160` installs **two** vtables:
+`LobbyComm::ServerList::ctor@0x0046a160` installs **two** vtables:
 
 ```
 0046a1a6  MOV [ESI],       0x7dafcc     ; primary                       -> this = ServerList+0
@@ -224,17 +226,18 @@ handler but nothing happens, check the encoding before abandoning the theory.
 
 Every function in the `0x7daf8c` table (`GameServerAdded`, `CreateResultReceived`,
 `DeleteResultReceived`, `GameServerAssigned`, `AssignGameServerResultReceived`, `TANConnectionGranted`,
-…) runs on `this = ServerList + 8`, so **their field offsets are all +8 shifted**. Getting this wrong
-cost two false "facts" in one session. Proof: `CreateResultReceived` passes `(int)this + -8` as the
-observer subject.
+…) runs with **ECX = `ServerList + 8`**. In Ghidra their `this` is the offset pointer
+`ServerList * __((offset(0x8))) this`, so the decompile shows the ServerList field names at the offsets
+of the table below. A raw register value read in a live trace or an operand `[ECX+N]` in the listing is
+still relative to `ServerList + 8`: add 8 to get the offset of the table.
 
 | field | type | meaning |
 |---|---|---|
 | `+0x6c` | ptr | `pGameServerManager` — `vtbl[0x20]` AddGameServer(168) · `[0x24]` Update · `[0x28]` Delete · `[0x2c]` AssignServer |
-| `+0x94` / `+0x98` / `+0x99` | u32 / bool / bool | village-server slot |
-| **`+0x9c`** | u32 | **the hosting latch.** `0xFFFFFFFF` INVALID · `0xFFFFFFFE` PENDING · else = the real assigned game-server id |
-| `+0xa0` | **bool** | a byte flag (`=1` in `OnLeaveVillage` after `SelectServerForRoom`) — **not** a pointer |
-| `+0xa4` / `+0xa8` | ptr / fptr | pending **referee** callback (ctx, fn); armed only by `RequestRefereeServer@0x00468f80`, fired+cleared by `GameServerAssigned` |
+| `+0x94` / `+0x98` / `+0x99` | u32 / byte / byte | `selectedGameServerId` (-1 = none) / two bytes the ctor zeroes and nothing else touches |
+| **`+0x9c`** | u32 | **`gameServerId`, the hosting latch.** `0xFFFFFFFF` INVALID · `0xFFFFFFFE` PENDING · else = the real assigned game-server id |
+| `+0xa0` | **byte** | `bSelectionLocked` (`=1` in `WorldScreen::HandleButtonClicks@0x00437760` after `ServerList::SelectVillageServer`; cleared when the village connection logs in) — **not** a pointer |
+| `+0xa4` / `+0xa8` | ptr / fptr | `refereeCbContext` / `refereeCbFn`, the pending **referee** callback; armed only by `RequestRefereeServer@0x00468f60`, fired+cleared by `GameServerAssigned` |
 
 Reading `+0xa0` as a dword yields the flag byte plus 3 bytes of uninitialised heap padding — it will
 look like garbage (e.g. `0x70732E00`). That is normal, not a stale pointer.
@@ -245,24 +248,24 @@ look like garbage (e.g. `0x70732E00`). That is normal, not a stale pointer.
 CreateGameServer@0x0046aaa0   guard +0x9c == INVALID
    Shutdown(false) -> StartUpNetwork(4) -> ConnectAndJoin -> AddGameServer(168) type5/sub1
    send ok -> +0x9c = PENDING
-CreateResultReceived@0x0046a6a0 (newGameServerId, errorCode)      [this = ServerList+8]
+CreateResultReceived@0x0046a6a0 (newGameServerId, errorCode)      [ECX = ServerList+8]
    +0x9c != PENDING -> log "…but no create pending." and DISCARD
    errorCode == 0   -> +0x9c = newGameServerId          (hosting live)
-   errorCode != 0   -> +0x9c = INVALID + NComm_Manager_Shutdown()
+   errorCode != 0   -> +0x9c = INVALID + NComm_Manager::Shutdown()
 ```
 
-`LobbyMenu_SetupGameDialog_Update@0x00457a00` shows the modal and **early-returns every frame** while
+`LobbyMenu::SetupGameDialog::Update@0x00457a00` shows the modal and **early-returns every frame** while
 `+0x9c ∈ {INVALID, PENDING}` — which also stops the widget pump that could clear it.
 
 ### The decisive trace set for a match-start run (no stub change needed)
 
 | # | address | function | what it proves |
 |---|---|---|---|
-| 1 | `0x0046aaa0` | `LobbyServerList_CreateGameServer` | did the host attempt to host at all? |
+| 1 | `0x0046aaa0` | `ServerList::CreateGameServer` | did the host attempt to host at all? |
 | 2 | `0x0046a6a0` | `CreateResultReceived` | **args `(newGameServerId, errorCode)`** — did our 153 land, and with what code? The single most informative value on this path. |
 | 3 | `0x00468410` | `DestroyGameServerAndShutdown` | reset-to-INVALID + NComm teardown |
 | 4 | `0x00469990` | `DeleteResultReceived` | the other reset-to-INVALID |
-| 5 | `0x00469610` | `LobbyServerList_GameServerAdded` | did the 170 reach the observer |
+| 5 | `0x00469610` | `ServerList::GameServerAdded` | did the 170 reach the observer |
 
 ---
 

@@ -38,10 +38,19 @@ S 004f84b0).
   VA 0x0067c701 becomes two NOPs, so the server is always created). Original md5
   d4832bc5103c14f5445471af29b8d778.
 - The server then listens on TCP **1234** (u16 at 0x008810bc; file offset 0x4810bc, `d2 04`) and polls
-  every 200 ms. Talk to it with `tools/cvar_client.py` (protocol in its docstring). [inferred until tried]
+  every 200 ms. Talk to it with `tools/cvar_client.py` (protocol in its docstring). Its `set` command splits
+  the input at spaces, so for a name with spaces (`Lobby/Show PhysicDBG`) use `raw CHANGE$group$name$value`.
 - Whether the copy-protection layer objects to a modified `.text` is untested.
-- **Tried live 2026-10-07: connection refused on port 1234; not pursued further.** Unresolved whether the
-  patched exe was the one running, the port was taken, or the server failed to bind. Treat as unproven.
+- **The server works when created at run time** [live, 2026-10-14], without the patch: `CVarRemoteServer::ctor`
+  S 0067e690 called in the running game on a 0x760-byte block from `operator new` S 006f2524 opened its listen
+  socket (`0.0.0.0:1234 LISTENING`) and was reached from the LAN (`APP$DefaultApp`); its pointer written into
+  the holder `g_pCVarServer` S 0088ca58 makes tweaks created later register (the `Lobby` and `CharSelection`
+  groups, 16 tweaks). The lobby debug switches are function-local statics created once per process (guard
+  bytes S 008896cc / S 00889300); when they exist before the server, each CVar's `RemoteCVarEntry` (pointer at
+  CVar +0x38) is registered by calling `RegisterVar` S 0067c760. `raw CHANGE$Lobby$Show PhysicDBG$1` then drew
+  the lobby's collision wireframes.
+- Before a listener exists, a LAN probe of port 1234 times out (the Windows firewall drops it) rather than
+  being refused. Why the patched executable of 2026-10-07 did not start the server is [TODO] not established.
 
 ## Map sharing (mod `lobby/mods/assetshare`, in memory)
 

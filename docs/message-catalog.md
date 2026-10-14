@@ -14,6 +14,12 @@ evidence; **[PROVEN]** = the working stub demonstrates it against the real clien
 live evidence); **[TODO]** marks a point that is still open. Open decisions carry a family prefix
 (`L` login, `H` hosting, `V` village, `T` tincat3) and are collected in [Server decisions](#server-decisions).
 
+`LobbyManager` in this catalog is the client's lobby root object: the RTTI class `LobbyComm::System`
+(0x5a8 bytes, vtable S 007dacb0), reached through the global `g_pLobbyManager` S 00885890. Its methods are
+named `LobbyComm::System::…`; `LobbyManager+0x..` gives an offset inside it. tincat3's ConnectionManager
+holds it as the application's `CommLayer::IConnectionCallback` (ConnectionManager +0x08, set by
+`SetCallback` T 10019430) and reports login, login failure, logout and connection loss through it [known].
+
 ## Wire encoding
 
 ### Connections
@@ -121,7 +127,10 @@ Rules [known]:
   Deserialize fail and the message is dropped (board #262).
 - The template comes from the client's own msgdefs.ini (LoadMsgDefs T 1001f6e0); duplicate keys and
   section merges follow IniFile_Load T 1000f630 (board #358/#364). A type with no template makes
-  CreatePropertySet return NULL and the message is dropped.
+  CreatePropertySet return NULL and the message is dropped. Without an ini path LoadMsgDefs registers
+  the schema compiled into tincat3.dll (`CommLayer_RegisterBuiltinMsgDefs` T 10019ad0): 221 message
+  types, ids 1..262, 1106 fields, identical to the shipped msgdefs.ini in every type, field name, field
+  order, field type and length [known].
 - A sender that writes a field that is not in the template (for example `ticket_id` on 252/254/256)
   has no wire effect. [inferred]
 - A reader that uses a narrower accessor than the template (for example `keypool` read with the byte
@@ -658,7 +667,7 @@ Stub: 32-byte random secret, SHA-512 OID. Matches.
 
 #### 0x0CB (203) SelfRegistration — C->S
 
-**Contract.** Account creation. The CreateAccountDialog (S 0043e080) calls LobbyManager CreateUser
+**Contract.** Account creation. The CreateAccountDialog (S 0043e080) calls `LobbyComm::System::CreateUser`
 S 004633f0, which runs `ConnectionManagerINet::RegisterUser` and handler mode 0. [known]
 
 | Field | Type | Content |
@@ -697,7 +706,7 @@ Stub: `_h_auth_cipher` decrypts the blob, logs the name and key, and always send
 
 #### 0x0CC (204) AuthenticateUser — C->S
 
-**Contract.** The normal login. LoginDialog (S 0043cbf0) calls LobbyManager::Login S 004630e0,
+**Contract.** The normal login. LoginDialog (S 0043cbf0) calls LobbyComm::System::Login S 004630e0,
 which runs `ConnectionManagerINet::LoginUser` T 10030f00 and handler mode 1. [known]
 
 | Field | Type | Content |
@@ -1494,8 +1503,11 @@ code path, inferred for the consequence]
 
 #### 0x0AA (170) GameServerData — S->C
 
-**Contract.** (msgdefs order; descriptor offset from T 1002f5a0; consumer reads from S 0048da70 for
-games and S 00481640 for villages)
+**Contract.** (msgdefs order. The decoder on the lobby connection is the 0xAA case of
+`HandlerLobby::HandleMessage` T 10023cc0, which fills a 0x5c-byte descriptor; the LAN discovery sinks
+`ConnectionBC::OnTinCatEvent` T 1002f5a0 and `ConnectionLANLobby::OnTinCatEvent` T 1002fda0 fill the same
+descriptor from a `CreatePropertySet(0xAA)` set. Consumer reads from S 0048da70 for games and S 00481640
+for villages) [known]
 
 | # | Field | Type | Desc off | Read by the game? |
 |---|---|---|---|---|
@@ -1524,10 +1536,17 @@ games and S 00481640 for villages)
 | 23 | data | MEMBLOCK 0 | +0x54/+0x58 | villages: ServerDataBlock (below) [PROVEN] |
 | 24 | ticket_id | UNLONG | — | routing (below) |
 
-Senders: the server only. Paths by ticket:
-- **ticket of a 171 (category 0xab)**: list entry.
-- **ticket 0**: observer push, handled by `GameServerAdded` S 00469610.
+Senders: the server only. Paths by ticket (T 10023cc0 case 0xAA) [known]:
+- **ticket 0, or the ticket of a 171 (category 0xab)**: observer push. A server id the tincat3
+  GameServerManager does not know yet goes to `AddKnownServerAndNotify` T 10020790 (listener slot +0x0c,
+  `ServerList::GameServerAdded` S 00469610, which forwards to `AddOrUpdateDescriptor` S 0046a440); a known
+  id goes to `NotifyServerUpdated` T 100207d0 (listener slot +0x10, `AddOrUpdateDescriptor`). The ticket
+  is not released.
+- **ticket of a 166 (category 0xa6)**: `QueueServerListEntry` T 10020990, then the ticket is released, so
+  a second 170 or the closing Result(42) on that ticket is dropped.
+- **ticket of a 167 (category 0xa7)**: `MachineManager::OnGameServerData` T 10028470.
 - **ticket of a 189 (category 0x108)**: assign reply, handled by T 10021520 (see 189).
+- any other ticket: released and dropped.
 
 Village rules [known, S 0046a440; desc+0x4c = `running`, confirmed by the Ghidra struct offset]:
 - **Unknown id**: the entry is added only if `running == 1`. Otherwise it is ignored silently.
@@ -1685,7 +1704,7 @@ and AssignServerTicketData{type, subtype} (T 10021830). tincat3 refuses types ot
 SAdK sender is `ServerList::RequestRefereeServer` S 00468f60, with **(4,4)**. [known] No SAdK path sends
 (5,1). [inferred, board #4774]
 
-Cadence: `LobbyManager::StatePump_Tick` S 00464ee0 sends it once when the state passes 5. It re-sends
+Cadence: `LobbyComm::System::StatePump_Tick` S 00464ee0 sends it once when the state passes 5. It re-sends
 when the +0x588 timer goes negative. A successful assign arms that timer to 60000 ms
 (SetRefereeServerAddress S 004625d0). So the client sends one 189 every 60 s for the whole session
 **only after the first assign succeeded**. If the first one fails, no 189 is ever sent again in that
@@ -1884,7 +1903,7 @@ little-endian encoded value, it **returns silently**. [PROVEN]
 S 004317d0: tries+1, re-arm, backoff = tries×8+16 pump ticks. [known for the body; inferred that the unit is frames]
 
 **Required server behaviour.** Only send it to refuse. After 5 attempts (WorldScreen +0x362c > 4),
-the client **aborts match start** (`NComm_Manager_Shutdown`, S 00435980). [inferred]
+the client **aborts match start** (`NComm_Manager::Shutdown`, S 00435980). [inferred]
 
 **Open decisions.** Covered by H15.
 
@@ -1897,7 +1916,7 @@ the client **aborts match start** (`NComm_Manager_Shutdown`, S 00435980). [infer
 | 1 | GameID | 32 | NComm session +0x22a (same on every client of the match) |
 | 2 | MapGUID | 128 raw | map GUID |
 | 3 | MapName | u8 len + bytes | session map name |
-| 4 | MapSettings | u8 len + 3 ASCII digits | `'0'+gi[0x225..0x227]` |
+| 4 | MapSettings | u8 len + 3 ASCII digits | `'0'+gi[0x225..0x227]` = win condition, start resources, fog of war. A lobby match stores the WinCondition drop-down index + 1 (S 00454ad0), so the first digit is `1` destroy all enemies, `2` conquer or `3` coin (the team's coin deliveries are counted), never `0` (endless; only the free game stores 0..3) [known] |
 | 5 | RankedGame | **1** | gi+0x22e |
 | 6 | Wager | 32 | gi+0x233 (bit-shifted by 1 from here on) |
 | 7 | AIPlayer | 8 | **count** of AI slots (not a mask) |
@@ -1994,14 +2013,17 @@ Handler S 0047a580.
   (S 00889b08) that the seed never reaches. [known] What the match needs is this message, not a
   particular seed: 0 is accepted. [known]
 - Give every client of one match the **same** seed. The session field +0x22F is also copied from the
-  host's GameInformation / StartLoading / StartGame payloads (`AssignGameData` S 00414388), so a
-  client's seed can be replaced by the host's; whether differing seeds desync or only give different
-  chest contents is [TODO] (docs/MATCH_START.md).
+  host's GameInformation / StartLoading / StartGame payloads (`AssignGameData` S 00414388), but each
+  client seeds its chest pass with its own GameSeed from this message; the host's payload does not
+  replace it first. Different seeds do not desync (the chests are not in the checksum) but give each
+  client different chest ids and contents, so the two clients' `ClaimChest` for one chest name different
+  chests [live, 2026-10-14] (docs/MATCH_START.md). The stub sends every client the same seed.
 - Never send both GameSeed and FailReason. [known]
 
 **Open decisions.**
-- **H17** GameSeed value. The client accepts any u32 and never validates it. Default: one value per
-  match, for example derived from GameID (the stub uses the fixed 0x5EED1234).
+- **H17** GameSeed value. The client accepts any u32 and never validates it. Different seeds within one
+  match give different chest ids, not a desync [live, 2026-10-14]. Default: one value per match, the same
+  for every client, for example derived from GameID (the stub sends every client the fixed 0x5EED1234).
 - **H18** GameID echoed. Not compared on this message. Default: echo the request's GameID.
 
 #### 0xDC0 (3520) FinishGame — C -> referee
@@ -2099,15 +2121,19 @@ to an ERefereeResult name (S 0046b3d0), logs it, then list +0xa4. **≥21 -> NUL
 | 3 | ActorID | 32 |
 | 4 | ChestID | 32 |
 
-[known]
+[known] ActorID is the avatar id of the chest's opener, the player whose territory opened it (S 00782a60)
+[known]. Every client of the match sends a claim for every opened chest, all naming the same ActorID (two
+clients, 30 ms apart) [live, 2026-10-14]; with the same GameSeed the ChestIDs agree too.
 
 **Required server behaviour.**
 - Reply `0xDAD` and then `0xDAE`. [inferred]
 - `0xDAD` must use Result 0. Its failure branch fires list **+0x5c**, the RegisterGame-failure list. With
   the WorldScreen active, that shows `!REGISTER_GAME_FAILED` and tears down the referee session
   (S 00479fb0, disasm 0047a0ff). [known]
-- The stub answers `0xDAD` (Result 0) and `0xDAE` with the first claimant as the owner. [PROVEN: server log
-  2026-10-10, match 115: each chest claimed by both clients, 0.2 s apart]
+- Give the chest to the ActorID and answer every claim of one chest with that owner, so all clients agree;
+  the first claim to arrive is a race, not the owner. The stub does this (`lobby/sadk_lobby/referee.py`):
+  `0xDAD` (Result 0), then `0xDAE` with the ActorID. [PROVEN: server log 2026-10-10, match 115: each chest
+  claimed by both clients, 0.2 s apart; live 2026-10-14: both claims named the opener]
 
 **Open decisions.**
 - **H22** Grant or deny the chest, and the AvatarID / Text returned. See 0xDAE.
@@ -2129,8 +2155,8 @@ There is no Result field. AvatarID ≠ 0 -> list +0x38 (chestId, avatarId, &text
 AvatarID 0 -> list +0x44. [known] The push order was verified at disasm 0047a2b0. [known]
 
 **Open decisions.** Under H22, which AvatarID wins the chest. The client accepts any non-zero AvatarID
-for success and 0 for failure. Text is free; its display use was not traced. Default: the claimant's
-AvatarID, empty text.
+for success and 0 for failure. Text is free; its display use was not traced. Default: the opener's
+AvatarID (the claim's ActorID, the same in every client's claim), empty text.
 
 ### Match start: the full chain (who waits for whom)
 
@@ -2250,7 +2276,7 @@ were a separate 74; stops silently when an entry header or body would overrun th
 | 3 | ChatChannelsCount | 32 | N |
 | 4.. | N x {ChatChannelZone 32, ChatChannelID 32} | 32 + 32 | zone map key = low byte of ChatChannelZone; ID = chat cell id |
 
-Handler order: `LobbyManager::SetState(9 VillageEntered)` before any field is read; map +0x164 is
+Handler order: `LobbyComm::System::SetState(9 VillageEntered)` before any field is read; map +0x164 is
 cleared and rebuilt (duplicate key keeps the first); then `UserCommConnection::JoinChannel(map[0xFF])`,
 `PostOffice::RequestMailHeaders`, srand from the world clock, link quality +0x244 = 3, first
 `SendPing` (0xED6, random code), +0x160 = ServerPerm, observers +0x104 (CLobbyClient S 00503940
@@ -2266,7 +2292,7 @@ spawns the local avatar) [known]. All of it [PROVEN] by the live world render (s
   client joins it; tincat3 rejects a join for an unknown cell with StatusReply status 2 [PROVEN 2026-08-02].
 - Answer the JoinChannel (NETMSG 17) on the UC connection and the 0xED6 that follows (see below).
 - Tab mapping: GLOBAL tab -> key 0xFF, LOCAL tab -> the avatar's current zone byte (+0x225, re-joined
-  per zone change by `SetLocalChatZone` S 0046e860), MINIGAME tab -> key 0xFE [PROVEN 2026-08-01].
+  per zone change by `JoinZoneChatChannel` S 0046e860), MINIGAME tab -> key 0xFE [PROVEN 2026-08-01].
 - Stub: matches, sends 1000 2.0 s after the village 153 (`config.ENTER_WORLD_DELAY`).
 
 **Open decisions.**
@@ -2399,7 +2425,7 @@ avatar's position [PROVEN 2026-08-01, TTD traces].
 - Never send a short body: a truncated 1001 crashed the client about 1.1 s later [PROVEN 2026-07-31].
 - The own-avatar branch in S 004824b0 shows the original server also sent each client a 1001 for its
   own id [inferred]. The own avatar is in the +0x170 map without one [known]: +0x170 points at the
-  map at LobbyManager+0x558 (ctor S 0046f193), and `LobbyManager::SetLocalAvatar` S 004626c0 inserts
+  map at LobbyManager+0x558 (ctor S 0046f193), and `LobbyComm::System::SetLocalAvatar` S 004626c0 inserts
   a copy of the chosen character there before the village login is sent (`OnUserCommLoggedIn`
   S 004704e0), so the 3100-3201 `ownr` lookups find it, with the style, items and stats of the
   character data. It leaves the map only through `ClearLocalAvatar` S 00462570 (logout, disconnect,
@@ -2473,8 +2499,9 @@ stays in the map until world exit; a later 1001 for the same id reuses it [known
 | 8 | rnng | 1 | |
 | 9 | jmp | 1 | latched on Space until a frame is sent |
 
-Sent every 4th frame of the local controller (S 0051ace0), no time throttle: about 15/s at 60 fps
-(board #1160) [known]. No reply handler exists [known].
+Sent on every 4th call from the local controller (S 0051ace0), no time throttle [known]. The controller runs once
+per fixed 83 ms object step, not per rendered frame: S 0046ca40 was called about 10 times per second while walking
+[live, 2026-10-14], so about 3 messages per second [inferred]. No reply handler exists [known].
 
 **Required server behaviour.**
 - Nothing is expected back. To make other players see the movement, relay it to them as 1001
@@ -2673,10 +2700,13 @@ state 9 [known].
   at LobbyManager+0x570 [known]; that `itmid` of 3100-3102 uses the same ids as 0xE11 `ItemID` is
   [inferred]. Any u32 is accepted on the wire; an id outside the file resolves to the invalid-item
   placeholder `g_InvalidItemInfo` S 00885978 (S 0048b6c0), which fits no equipment container [known].
-  With a shop open, hovering an inventory slot that holds such an id runs a checked-iterator failure
-  path in `GetShopSellPriceByItemId` S 0046d6d0 (S 0046d73e..0046d7dd, `_invalid_parameter_noinfo`,
-  before the read past the stock vector) [known]; that ends the process with exit code 0xC000000D, because no
-  invalid-parameter handler is installed (S 006f26de, S 006f25e2) [known]. Token 5 of the
+  Called with such an id, `GetShopSellPriceByItemId` S 0046d6d0 runs a checked-iterator failure path
+  (S 0046d73e..0046d7dd, `_invalid_parameter_noinfo`, before the read past the stock vector), which would
+  end the process with exit code 0xC000000D, because no invalid-parameter handler is installed (S 006f26de,
+  S 006f25e2) [known]. Hovering does not reach it: item id 99 in backpack slot 0 (3102) is drawn as an empty
+  slot, hovering it with a shop open shows nothing, and the process keeps running through moving items and
+  opening the shop [live, 2026-10-14]. `OnHoverSlot` S 0044d550 queries the price only for a slot widget
+  whose item id (+0x28) is not 0 [known]; that a slot drawn empty holds 0 there is [inferred]. Token 5 of the
   file is the slot mask: container 0 (backpack) always fits, containers 2 / 3 / 4 / 5 need mask bit
   0 / 1 / 2 / 3 (`CanItemGoToSlot` S 0044d390) [known]; head / right hand / left hand / pet for
   2..5 is [inferred] (docs/village-and-character-protocol.md §4.3). Which code interprets the wire
@@ -2872,7 +2902,9 @@ with the same ItemID if the shop lists the item, otherwise the item's base value
 token 8, ItemInfo +0x80) x SellMod, truncated toward zero (S 0046d7b3), 0 when below 1 [known]. A
 price of 0 shows `!LOBBY_CANT_SELL_ITEM_CAPTION` with `!LOBBY_TRADER_NOT_WANTS_ITEM` for a valid item
 and `!LOBBY_CANT_SELL_ITEM` otherwise, and nothing is sent; with a shop open an equipment slot
-(container != 0) does nothing (S 0044e0f0, S 0045c560) [known]. Closing the dialog sends nothing
+(container != 0) does nothing (S 0044e0f0, S 0045c560) [known]. A stock entry with Sell 0 for a listed
+item gives the `!LOBBY_TRADER_NOT_WANTS_ITEM` box ("Der Händler ist an diesem Gegenstand nicht
+interessiert") [live, 2026-10-14]. Closing the dialog sends nothing
 (`CloseAndClearShop` S 0045b920 only clears local state) [known].
 
 **Required server behaviour.**
@@ -3294,7 +3326,10 @@ Sent from the amount dialog of all three games; what the server books it as (top
 visible client-side [inferred].
 
 **Required server behaviour.**
-- Reflect the result in the next 0xD9 (`crdts` / `accnt`) [inferred]. Stub differs: dropped.
+- Reflect the result in the next 0xD9 (`crdts` / `accnt`) [inferred]. Stub: `minigames.handle_amount` moves
+  the amount from the wallet into the seat's `crdts` and sends the next 0xD9; it sends `accnt` 0 for every
+  seat (`_seat_accnt`), because the client offers avatar money − `accnt` for a top-up (S 00461470), and the
+  stake is already off the wallet [live, 2026-10-14: with the balance as `accnt` the dialog offered 0].
 
 **Open decisions.**
 - **V39** meaning of Amount (chip top-up from gold). Default: move `amnt` gold into table credits.
@@ -3437,7 +3472,7 @@ exactly once, no retry [PROVEN, trace].
 
 On 0xDEADBEEF: +0x224 = 1, then if the UC connection is open (UC vtbl+0x2c) -> subscribe UC +0x1c and
 `UserCommConnection::Logout` S 0047ed70 (acts only when the UC transport is in state 8); else ->
-village transport Logout (`ConnectionReal::Logout` T 10030510, state 9) -> on disconnect T 10030ad0
+village transport logout (`ConnectionReal::Disconnect` T 10030510, the transport's vtbl+0x18; state 9) -> on disconnect T 10030ad0
 takes the state-9 branch -> `OnLoggedOut` -> VillageLeft(11) [PROVEN 2026-07-26]. Any other code is
 ignored silently [known]. Despite its name this is the logout trigger, not a render gate: the world
 renders at state 9 without it [PROVEN].
@@ -3543,7 +3578,7 @@ Simple is logged as an invalid type and dropped [known: T 10023cc0 default].
 
 Lobby connection. Client side: tincat3 MotDManager (vftable T 1004fbb8, at CommLayer+0x40) and the
 SADK ServerMessages action (S 004884d0 / S 00488550). The MotD is one of the four conditions for
-leaving login state 6 (LobbyManager::StatePump_Tick S 00464ee0: MotD done, character list valid,
+leaving login state 6 (LobbyComm::System::StatePump_Tick S 00464ee0: MotD done, character list valid,
 buddy list valid, ignore list valid) [known, board #995].
 
 #### 0x069 (105) RequestMOTD — C->S
@@ -3596,7 +3631,7 @@ reject with errorcode 1 unless the account is an admin.
 Lobby connection. tincat3 PropertyManager (CommLayer+0x20); SADK LobbyComm::Properties
 (S 0048e880 / S 0048e920), one request in flight. The **only** SADK caller is the login version
 check: StatePump_Tick S 00464f31 -> RequestProperty S 0048ecb0 (kategory 1, index 1) -> callback
-LobbyManager::OnVersionChecked_State4to5 S 00464e70 [known: single xref to S 0048ecb0].
+LobbyComm::System::OnVersionChecked_State4to5 S 00464e70 [known: single xref to S 0048ecb0].
 
 #### 0x0A1 (161) PropertyGet — C->S
 
@@ -3816,7 +3851,7 @@ Lobby connection. tincat3 UserManager (CommLayer+0x18, vftable T 1005152c); SADK
 action queue (ProcessActions S 00476390) with UserObserverListener (vftable S 007dbb4c). The buddy
 list must be received for login to complete (BuddyListValid, S 004722d0) and before Add/Remove
 friend is allowed [known, board #995]. `user_id` on every request is the client's chat-server
-handle (LobbyManager::GetChatServerHandle) = local perm id [inferred].
+handle (LobbyComm::System::GetChatServerHandle) = local perm id [inferred].
 
 Buddy record rules on the client (CharMgrUserEntry::AssignFromBuddyInfo S 0046b540) [known]:
 - `perm_id_type` must be **2**, else the record is skipped.
@@ -3985,6 +4020,12 @@ HandlerStatSurf T 100268e0 [known]. Connection setup:
    StartValidateTokenSession -> 212 AckValidateTokenSession {nonce} -> 213 SendToken -> **153
    AddResult** errorcode 0 -> state 8 and RankingManager login notify (T 100268e0) [inferred]. A
    Result(42) on the 211 ticket always fails the connection [inferred].
+4. Client defect [known]: a 153 on the 213 ticket with errorcode != 0 (token refused) makes the handler
+   call the RankingManager's `OnError(connection, errorcode)` (T 10026cf2) and disconnect (T 10026cfc),
+   and then jump (T 10026cfe) into the success path's `OnLoggedIn(connection, permId, 0)` call
+   (T 10026d25, body T 10029cd0). `RankingManager.loggedIn` (+0x10) becomes 1 on a closed connection and
+   the observer receives the error code followed by 0; only the state write (connection+8 = 8) is
+   skipped. The SAdK client installs no ranking observer, so nothing in the game consumes either call.
 
 No SADK caller of RankingManager is identified; the Hall of Fame is a web page
 (HallOfFame_BuildUrl S 00442640, `HallOfFameURL<n>` in the client ini) [inferred]. This is also why
@@ -4037,7 +4078,9 @@ the template [inferred].
 
 #### 0x0FF (255) ReceiveSingleUserRank — S->C (ranking connection)
 
-**Contract.** HandlerStatSurf case 0xff -> slot 10 -> observer vtbl+0xc [inferred].
+**Contract.** HandlerStatSurf case 0xff (T 100268e0) calls RankingManager slot 10 (T 10029d30) at
+T 10026e6f with (ranktable, perm_id, nick, rank, points, played, won, lost, tie, disconnected) [known] ->
+observer vtbl+0xc [inferred].
 
 | # | Field | Type | Read |
 |---|---|---|---|
@@ -4046,7 +4089,7 @@ the template [inferred].
 | 3 | nick | STRING 256 | yes |
 | 4 | rank | UNLONG | yes |
 | 5 | points | UNLONG | yes |
-| 6 | played | UNLONG | **not read**; the handler derives played = won + lost + tie + disconnected [inferred: key strings T 1004ee8c..eeac, 'played' 1004ee9c never pushed] |
+| 6 | played | UNLONG | **not read**; the handler computes played = won + lost + tie + disconnected (ADD chain T 10026e4b..10026e55) [known: key strings T 1004ee7c..eeac, the string 'played' T 1004ee9c is not referenced by the handler] |
 | 7 | won | UNLONG | yes |
 | 8 | lost | UNLONG | yes |
 | 9 | tie | UNLONG | yes |
@@ -4587,12 +4630,12 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | H14 | 0xDCA LoginSuccess | delay after the 153 | any, within the retry window | 0.5 s |
 | H15 | 0xDCA / 0xDCB | referee admission | either | always LoginSuccess |
 | H16 | 0xDB7 / 0xDB8 | RegisterGame validation | Result 0 proceeds; non-zero fails the match | accept |
-| H17 | 0xDB8 | GameSeed | any u32, 0 included; seeds only the network-match chest contents (S 00775dd0) [known]; whether clients of one match may differ is [TODO] | one value per match, the same for every client, e.g. from GameID |
+| H17 | 0xDB8 | GameSeed | any u32, 0 included; seeds only the network-match chest contents (S 00775dd0) [known]; different seeds per client give different chest ids, no desync [live, 2026-10-14] | one value per match, the same for every client, e.g. from GameID |
 | H18 | 0xDB8 | GameID echoed | not compared | echo the request's GameID |
 | H19 | 0xDC0 FinishGame | reconcile N reports | anything | accept every report; record when they agree |
 | H20 | 0xDD4 GiveUpGame | record a give-up as a loss | anything | record it |
 | H21 | 0xDD5 | Result code | 0..20 (>= 21 crashes the client) | 0 |
-| H22 | 0xDAC / 0xDAE | grant or deny a chest, AvatarID / Text | AvatarID != 0 = grant, 0 = deny; Text free | claimant's AvatarID, empty text |
+| H22 | 0xDAC / 0xDAE | grant or deny a chest, AvatarID / Text | AvatarID != 0 = grant, 0 = deny; Text free | the opener's AvatarID (the claim's ActorID), empty text |
 
 ### Village / world
 
@@ -4620,7 +4663,7 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 | V20 | 1004 | NPC ids | any u32 not colliding with avatar ids [inferred] | a reserved high range |
 | V21 | 3001 MoveItem | move validation | whatever the following update says | apply legal moves, resend state otherwise |
 | V22 | 3002 DeleteItemRequest | allow deletion | any | allow |
-| V23 | 3100 / 3102 | item ids and slot types | any u32 on the wire; ids 1..36 from `ItemsClient.txt` (plain text, loader S 0048bfd0) [known]; another id resolves to the invalid-item placeholder | empty slots; ids 1..36 only |
+| V23 | 3100 / 3102 | item ids and slot types | any u32 on the wire; ids 1..36 from `ItemsClient.txt` (plain text, loader S 0048bfd0) [known]; another id resolves to the invalid-item placeholder; in the backpack it shows as an empty slot and the client survives a hover with a shop open [live, 2026-10-14] | empty slots; ids 1..36 only |
 | V24 | 3101 / 3102 | sltcnt | ignored | the true slot count |
 | V25 | 3600 OpenShop | NPC id -> shop | any | one shop per shop NPC |
 | V26 | 3601 ShopInventoryData | stock (ItemID, Buy, Sell) | any prices; item ids 1..36 from `ItemsClient.txt` [known]; an unknown id shows as an empty slot; only the first 25 entries are shown (S 0045b790) [known] | curated list per shop, at most 25 entries |
@@ -4719,11 +4762,11 @@ the client handles and the stub ignores or only logs.
 | 0xDB6 RegisterGame | reads only GameID; docstring describes u32-length strings | MSB-first bitstream, u8 strings, 1-bit bool | no wire effect today [known] | S 00479840 |
 | 0xDC0 FinishGame | logs, no reply | 0xDC1 then 0xDC2 | what the client blocks on is [TODO] | S 00479c40, S 0047a810, S 0047a9c0 |
 | 0xDD4 GiveUpGame | logs, no reply | 0xDD5 with the request's GameID, Result 0..20 | client stays on "Finalizing" [known] | S 00479ab0, S 0047ae80 |
-| 0xDAC ClaimChest | logs, no reply | 0xDAD Result 0, then 0xDAE | chest claim never resolves [inferred] | S 00479670, S 00479fb0 |
+| 0xDAC ClaimChest | 0xDAD Result 0, then 0xDAE with the claim's ActorID (the opener) for every claim of the chest; every client gets the same GameSeed | 0xDAD Result 0, then 0xDAE | none [live, 2026-10-14] | S 00479670, S 00479fb0, S 00782a60 |
 | 1001 AvatarData | named EntityCreate; sends location + style blocks only; never sends a 1001 for the recipient's own id | the original server sent each client its own 1001 [inferred]; the own avatar is in the map without it (S 004626c0) and a 1001 for the own id is consumed bit-exactly (S 004824b0) [known] | none: 3100-3201 `ownr` lookups find the own avatar [known] | S 0046e1d0, S 004824b0, S 004626c0 |
 | 1002 AvatarLoggedIn | `config.VILLAGE_MSG_ENTITY_UPDATE = 1002 # (movement)` | 1002 is AvatarLoggedIn; movement is a repeated 1001 | comment only; the stub never sends 1002 | S 0046e390 |
 | 1004 NPCData | body builder matches; on (`config.VILLAGE_NPCS_ENABLED = True`); comments call it "PlayerCreate"; one NPC ("Herold Hartmut") carries two actions; `actChat` values are written like button labels | NPCs sent after 1000 to each entrant; one action per NPC, in slot 0; `actChat` is spoken (bubble + chat line) | the two-action NPC has no established way to run an action [inferred] | S 0046f8c0, S 0047b5c0, S 00437760, S 004337f0 |
-| 2000 AvatarLocation | relays correctly; comment says "~3/s" | the client sends about 15/s at 60 fps | comment only | S 0051ace0 |
+| 2000 AvatarLocation | relays correctly; comment says about 3/s | about 3/s: every 4th call of S 0046ca40, which runs once per 83 ms step [live call rate 2026-10-14, inferred send rate] | none (the comment matches) | S 0051ace0 |
 | 2002 LeaveVillageRequest | answers with two 1006 (correct); docstrings still call 0x27D2 a world-login request answered with 1000 | two 1006 {0xDEADBEEF} | comment only | S 0046bde0, S 0046ec50 |
 | 3950 AvatarColorChange | logged and dropped | 3201 + a style 1001 to everyone (V15) | colour changes are not seen by others; gold not charged | S 0046c760 |
 | 3200 / 3201 | not implemented | 3201 after any gold change | client-side gold checks drift [inferred] | S 0046c940, S 0046c9c0 |

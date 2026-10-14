@@ -60,7 +60,7 @@ Fields that carry core state [known] S 00528360 (constructor) unless noted:
 | +0x78 | float32 | `nextTickTime` | Simulation time (s) at which the next logic tick is due. Saved. |
 | +0x7c | float32 | `accumulatedTime` | Simulation time (s) accumulated so far. Saved. |
 | +0x80 | float32 | `speedFactor` | 1.0 at construction; multiplies the frame time. No other writer found [inferred]. |
-| +0x84 | float32 | `field84` | 0.0 at construction (stored with a float store, S 0052849d); `Generic_ResetState_74_88` S 005272b0 (map export reset) copies the tick interval `GameConfig + 4` into it and also sets +0x74/+0x78/+0x7c to 0 and `tickCounter` to −1. Not read by `Update`; no reader found [inferred]. |
+| +0x84 | float32 | `field84` | 0.0 at construction (stored with a float store, S 0052849d); `NLogic::System::ResetState_74_88` S 005272b0 (map export reset) copies the tick interval `GameConfig + 4` into it and also sets +0x74/+0x78/+0x7c to 0 and `tickCounter` to −1. Not read by `Update`; no reader found [inferred]. |
 | +0x88 | int32 | `tickCounter` | Logic tick number. −1 at construction, incremented **before** each tick, so the first tick is tick 0. Saved. |
 | +0x8c | ptr[8] | `streetConstructors` | One `NNet::StreetConstructorStreet` (0x18) per player slot. |
 | +0xac | ptr[8] | `streetPlanners` | One `ai::logic::StreetPlanner` (0x10) per player slot. |
@@ -195,7 +195,7 @@ the meanings below are from the code [known] S 00411990, S 004088b0, S 0040b270,
 | +0x2c | int | **Net tick** number. | −1 (ctor); 0 at match start |
 | +0x30 | int | Base net tick (net tick at match start or at the last reconnect). | −1 (ctor S 0040a530); 0 at match start |
 | +0x34 | int | **Logic ticks per net tick** = `+0x38 * +0x3c`. | 4 (ctor); 1 offline, 4 networked (`StartUpNetwork` S 0040a9a0) |
-| +0x38 | int | Net tick length (base logic ticks per net tick), 1..10. | same as +0x34 |
+| +0x38 | int | Net tick length (base logic ticks per net tick), 1..10. | same as +0x34; 1 to 2 in a two-player LAN match [live, 2026-10-14] |
 | +0x3c | int | Game speed multiplier (1..3). | 1 |
 | +0x40 | int | Sub-tick counter: logic ticks done inside the current net tick. | −1 (ctor); 0 at match start |
 | +0x44 | float | Wall time (s) of the last accepted logic tick. | 0 |
@@ -326,7 +326,7 @@ and no tick becomes due [inferred].
 The logic tick is the fine clock, the **net tick** the coarse one. A net tick consists of `S = netTickLength ×
 gameSpeed` logic ticks (manager +0x34). Commands and checksums travel per net tick.
 
-**Gate: `NComm_Manager_CanAdvanceTick`** S 004088b0 [known]:
+**Gate: `NComm_Manager::CanAdvanceTick`** S 004088b0 [known]:
 
 ```
 if state != 4 or reconnectState not in {0, 1}: return false
@@ -385,7 +385,7 @@ success); message 1001 goes through slot +0x18 S 0041db50, which sends to net id
 (`cb_Received_Data` S 0041d720: 1001 → `AddClientGameEventsToServerGameEvents` S 0040e0d0 into `hostCollected`,
 1002 → S 004082a0 into `toExecute`) [known].
 
-The call in the first line of the boundary (`NComm_Manager_StampTimeAndVcall_80` S 00408f30) stores the current time
+The call in the first line of the boundary (`NComm_Manager::StampTimeAndVcall_80` S 00408f30) stores the current time
 in manager +0x24 and calls the transport's slot +0x80 `ClearUserSamples` S 00419940, which empties the ping sample
 list of every user record (the same slot `BeginGameRunning` S 0040b270 calls) [known]. Since +0x24 is the timer of
 the net tick length adaptation below, no adaptation can happen during the first 10 net ticks as long as a net tick
@@ -418,19 +418,25 @@ Consequences [inferred from the two functions]:
   tick `N`, collected by the host under tick `N`, distributed at the boundary that ends tick `N+1`, and **executed
   by every peer at the boundary that ends net tick `N+2`** (the boundary at which the net tick number is still
   `N+2` and its package `N+2−2 = N` is run). The input delay is two full net ticks plus the rest of the current
-  one. With the default `S = 4` at speed 1 a net tick is 0.4 s of real time, so the delay is 0.8 s to 1.2 s.
+  one. The start value `S = 4` does not last: in a two-player match over a LAN at speed 1 the adaptation below
+  kept the length at 1, switching between 1 and 2, and the net tick advanced every 98-104 ms at length 1. A
+  command took 240-310 ms (3 logic ticks) from `QueueGameCommand` S 00408b10 to `HandleGameCommand` at length 1
+  and 440-540 ms (5-6 logic ticks) at length 2, road and building orders alike [live, 2026-10-14]. At the
+  start value 4 the same rule would give 0.8 s to 1.2 s.
 - Commands always execute on the logic tick that closes a net tick (the `S`-th logic tick of the net tick, where the
   sub-tick counter wraps to 0), before the subsystems of that logic tick run, in the order they appear in
   the merged package: the host's append order of the players' packages (arrival order, see "Host-side merge"
   above), and inside one player's package the order of queueing [inferred].
 - Offline (mode 0): `S = 1`, `QueueGameCommand` S 00408b10 dispatches a command locally at once instead of queueing
   it, and the checksum value is 0 [known] S 00408b10, S 004089c0. An offline command therefore takes effect in the
-  frame it is issued, between two logic ticks, not at a net tick boundary [inferred]. In every mode a command queued
+  frame it is issued, between two logic ticks, not at a net tick boundary: a `SendCreateFlag` S 00780e10 at tick
+  55,267 ran through `DispatchEventLocal` S 0040fd50 and `HandleGameCommand` (tick 55,267) before the send
+  returned [live, 2026-10-14]. In every mode a command queued
   without the `force` argument is dropped (returns false) while `IsGameHanging` is true [known] S 00408b10.
 - **`IsGameHanging`** S 00408860 [known] is true when the error latch (+0x20) is set, or a reconnect is in progress
   (reconnect state ≠ 0), or the manager state is 3 (game starting), or the state is 4 and the last accepted logic
   tick (wall time +0x44) is unset (0) or more than **2.0 s** old. In states 0..2 it is false. While it is true:
-  commands without `force` are dropped (not queued for later), `nMenu::Game::OnMousePress` S 005eaae0 and
+  commands without `force` are dropped (not queued for later), `nMenu::Game::OnMouseButton0Down` S 005eaae0 and
   `OnChar` S 005eb180 swallow the input (except the pause key `p`), and `nMenu::Game::Draw` S 005efdd0 draws the
   hang notice whose text `GetHangReason` S 0040d260 builds (waiting for start, waiting for packets, waiting for a
   named user, reconnect phase). Because the test only looks at the time of the last tick, it is also true in an
@@ -482,7 +488,7 @@ unit itself is not read]. Example under that reading: worst ping 250 ms, `q` = 3
 3. Every peer handles 0x30005 (`HandleEvent` S 0040e560): `SendEventUserChecksum(0)` starts the outgoing package of
    net tick 0 with a checksum of the freshly loaded world; the game information of the event replaces the local
    one; +0x28 = number of connected humans; then the listener's start-game slot (+8) is called.
-4. That slot is `NComm_BeginGameRunningForward` S 00782a50 (listener vtable S 008350c8: +4 `HandleGameCommand`,
+4. That slot is `nGame::System::BeginGameRunningForward` S 00782a50 (listener vtable S 008350c8: +4 `HandleGameCommand`,
    +8 this, +0xc `ComputeChecksum`). It only calls `NComm_Manager::BeginGameRunning` S 0040b270 and does **not**
    touch the logic system: if the error latch is clear and the state is 3, it zeroes net tick, base tick, sub-tick,
    last-tick time and number, sets +0x28 to the number of connected humans again, sets "in sync" false,
@@ -638,7 +644,7 @@ serialised and hashed.
    0x6f ticks S 00575b70, player low-resource check only after tick 0x32 S 005bf8a0.
 2. **Phase tests.** `tick % N == 0`, often with an object-specific offset so that work is spread over ticks.
    Examples [known]: `NTransport::System::Update` with N = 3, 5 and 11 S 0064cbe0; ships
-   `(tick + uniqueIdLo) % 11` S 005bb500; settler movement `(ownerField + tick) % 0x17` S 00658140; statistics
+   `(tick + unique.idLo) % 11` S 005bb500; settler movement `(ownerField + tick) % 0x17` S 00658140; statistics
    every 600 ticks S 00537ba0; spawn points (below). The offset additions are done in 64 bits where the unique id
    is involved (`__allrem`).
 3. **`NLogic::Ticker`.** `Tick()` S 00775480: if `elapsed == period` then `elapsed = 0` and return true, else
@@ -664,7 +670,7 @@ the amount is raised by 1 and capped at **7**, and the "unlimited" marker 1000 i
 sets every one to `SpawnType_Animal` (= 1; `SpawnType_Resource` = 0 is defined but not used), so resource spawn
 points only exist if a map or mod defines them [known, data].
 
-**Chests** (`LogicChestSystem_Update` S 0052d660) [known]: only when `enabled`. For each chest in vector order that
+**Chests** (`ai::logic::LogicChestSystem::Update` S 0052d660) [known]: only when `enabled`. For each chest in vector order that
 is not yet openable: `UpdateOpening` S 00539520 reads the territory owner of the chest's cell; same owner as stored
 → `openProgressTicks += 1`; different owner → `openProgressTicks = 0` and, if the new owner is a player, message
 type 5 `"!Player is trying to open a chest!"` (with the owner's name) to all other players and `"!chest found"` to
@@ -859,11 +865,11 @@ from the caller lists].
 | Set up | `SetUp(mapA, mapB)` S 005280a0 (from `nGame::System::BuildScene` S 007842e0) | `LogicRandom_SetUp`; close the map-update bracket; `InitSubsystems`; log "Set up process finished."; `running = 1`; `GameAccess::SetUp`. |
 | Init | `InitSubsystems(a, b)` S 00527f70 | Zero +0x70, `nextTickTime`, `accumulatedTime`; reset player table; init map; start the 8 street planners; init village, settlers, resources, selection, transport, doodads, military, navy, street-net path finder, AI players, ambients, statistics, quests, sacrifices, chests (and subscribe the village to chest openings), spawn system, victory conditions, in this order. If `a` or `b` is non-zero, receivers get slot +0x04 with 0 before and 1 after. `tickCounter` is **not** reset here [known]. |
 | Reset | `Reset` S 00526f80 | Stops the street planners, then resets victory conditions, spawns, chests, statistics, village, settlers, resources, selection, transport, doodads, military, navy, street net, player table, ambients, AI, map, quests, sacrifices, in this order. The map modifier is disabled from the start until after the AI reset and enabled again before the map reset [known]. |
-| Post-load | `PostLoad` S 005273d0 | For each street planner: if its delegate reports active, the cancel call of §4.2 step 3, then `StreetPlanner_Stop`; after that all 8 planners are started again (`StreetPlanner::Start` with the map and the slot's street constructor, as in `InitSubsystems`); post-load of village, street net, navy, settlers, transport, resources, AI (`ResetPlayersAndHelpers`), map info, doodads, military, map, ambients, sacrifices, chests, spawns, in this order; reset the frame timer if requested. |
+| Post-load | `PostLoad` S 005273d0 | For each street planner: if its street constructor reports active, the cancel call of §4.2 step 3, then `ai::logic::StreetPlanner::Stop`; after that all 8 planners are started again (`StreetPlanner::Start` with the map and the slot's street constructor, as in `InitSubsystems`); post-load of village, street net, navy, settlers, transport, resources, AI (`ResetPlayersAndHelpers`), map info, doodads, military, map, ambients, sacrifices, chests, spawns, in this order; reset the frame timer if requested. |
 | Shut down | `Shutdown` S 00527c40 | Callbacks off; `Reset`; log; `LogicRandom_Shutdown`; `running = 0`; open the map-update bracket; `GameAccess::Shutdown`; callbacks on; zero the unique id counter. |
 
 A new `NLogic::System` is constructed per world and destroyed with it (`nGame::System::ShutdownAndDestroyGameSystem`
-S 00781cb0) [inferred from the single caller of `Shutdown`]; `Generic_ResetState_74_88` S 005272b0 resets the timing
+S 00781cb0) [inferred from the single caller of `Shutdown`]; `NLogic::System::ResetState_74_88` S 005272b0 resets the timing
 floats and sets `tickCounter = −1` for a map export [known].
 
 ---
@@ -900,8 +906,8 @@ In this exact order, once per tick, at the rate given in §3.1:
 |---|---|---|
 | 1 | `tickCounter += 1` | |
 | 2 | `NComm_Manager::AdvanceNetTick(tickCounter)` | At a net tick boundary this **executes the player commands** and computes the checksum (§3.2, §3.6). |
-| 3 | For each of the 8 street planners, slot 0..7: if its delegate reports active (delegate slot +8) and `StreetPlanner::IsPathValid` S 00663900 is false, call `Generic_PollDelegateAndStart` S 00663740: delegate slot +4 with the planner's +4 value, planner state (+8) = 6 | The same call is what `Reset` uses to stop the planners (§3.8), so this cancels a street under construction whose path became invalid [inferred]; rules in `docs/sim/streets-transport.md`. |
-| 4 | `PlayerTable_UpdateAll` S 005bddd0 | `Player_Update` for each active player, slot 0..7. It also ages the players' on-screen messages by frame time (§8). |
+| 3 | For each of the 8 street planners, slot 0..7: if its street constructor (`StreetPlanner.constructor` +0xc, interface `NNet::IStreetConstructorStreet`) reports active (`IsActive`, slot +8) and `StreetPlanner::IsPathValid` S 00663900 is false, call `ai::logic::StreetPlanner::CancelConstruction` S 00663740: the constructor's `Cancel` (slot +4) with the planner's search object (`search` +4, an `NLogic::AStarStreet`), planner state (+8) = 6 | The same call is what `Reset` uses to stop the planners (§3.8), so this cancels a street under construction whose path became invalid [inferred]; rules in `docs/sim/streets-transport.md`. |
+| 4 | `ai::player::PlayerTable::UpdateAll` S 005bddd0 | `ai::player::Player::Update` for each active player, slot 0..7. It also ages the players' on-screen messages by frame time (§8). |
 | 5 | `MapUpdateBatch_Begin` S 00532180 | Opens a bracket that collects terrain/construction-map dirty areas: decrements the nesting counter (batch +0x2c), begins an elevation batch on the map modifier while the system is `running`, and, when the counter reaches 0, clears the collected dirty state. |
 | 6 | `NVillage::System::Update` | |
 | 7 | `NNet::System::Update` | Street net. |
@@ -916,7 +922,7 @@ In this exact order, once per tick, at the rate given in §3.1:
 | 16 | `NAI::System::Tick` S 00581a30 | Computer players. |
 | 17 | `NSacrifice::System` update (vtable slot +4) | |
 | 18 | `LogicSpawnSystem::Update(tickCounter)` | §3.5. |
-| 19 | `LogicChestSystem_Update` | §3.5. |
+| 19 | `ai::logic::LogicChestSystem::Update` | §3.5. |
 | 20 | `VictoryCond_Update` S 00535d70 | Eliminations, progress, winner. |
 
 After the subsystems, still inside the tick iteration but outside the simulation proper:
@@ -974,7 +980,7 @@ Steps 1..20 are skipped while batch editing is on; steps 21, 22 and 24 still run
 | Logic tick interval (s) | Lua `properties.cfg_setGameSpeed(x)` S 0054c380 → `GameConfig + 4` | `NLogic::System::Update` S 00527070 | Default **0.1** (0x3dcccccd) in `Properties_GameConfig_ctor` S 00555780. No Lua file of the installed game data calls the setter [known: searched all 355 decrypted `.lua` files; `scripts/properties/config.lua` has no such line], so 0.1 is the effective value. |
 | Spawn-point base interval (ticks) | `properties.cfg_setSpawnPointUpdateTime` → `GameConfig + 0x50` | `LogicSpawnSystem::Update` | Default 600; `config.lua` sets **1200**. |
 | Spawn-point rate (multiplier) | `properties.sp_setRate` S 0054a890 → record +0x70 | `LogicSpawnSystem::Update` | Default 1 S 00557530; `sp_setRate` is called by no Lua file of the installed game data [known]. Effective interval 1200 ticks = 120 s. |
-| Chest opening time (ticks) | `properties.cfg_setChestOwningTime` S 0054c1e0 → `GameConfig + 0x5c` | `LogicChest_IsOpenable` S 00539210 | Default **3000**; the setter is called by no Lua file of the installed game data [known]. 300 s at speed 1. |
+| Chest opening time (ticks) | `properties.cfg_setChestOwningTime` S 0054c1e0 → `GameConfig + 0x5c` | `ai::logic::LogicChest::IsOpenable` S 00539210 | Default **3000**; the setter is called by no Lua file of the installed game data [known]. 300 s at speed 1. |
 | User game speed | command 0x20023; pause, options panel, cinematics, cheat (§3.1) | `Update` | 1.0 at every game start; 1, 2, 3; 0 when paused. Stored in `settings.cfg` but reset to 1.0 right after it is read S 00579960, so it is effectively not a data value [known]. |
 | Tick-length check period (s) | `data/game/settings/network.ini` `[Ping] pingFrequencyGame` → manager +0x370 | `Process_MainLoop` S 00410f70 | Fallback string of the ini read **"2.5"** S 007d5be0 [known]; shipped 2.5. The value before the ini is read is 3.0 (`NComm_NetworkConfig_InitDefaults` S 0040a390). In manager states other than 3 and 4 `pingFrequencyMenu` (+0x36c, fallback "10.0" S 007d5c00, shipped 10.0) is the period of the same timer; in state 3 the timer is not run [known] S 00410f70. |
 | Initial net tick length | code | `StartUpNetwork` S 0040a9a0 | 1 offline, 4 networked. |
@@ -996,7 +1002,7 @@ part, for map types 10 and 0x6e (savegames); for any other map type only the map
 `GameFile_ResetWorldForMapExport` S 005aa150, and only when `MapDesc_IsStandardType` accepts the path [known].
 `docs/multiplayer-save.md` and `docs/map-format.md` describe the container. A section tag in a file is the
 section's version (u32, the third argument of the section object's constructor S 005816e0) followed by the CRC
-accumulator of the section name (`Crc32Acc_Write`) [known] S 0057cfc0; the reading call returns the version
+accumulator of the section name (`ai::core::Crc32Acc::Write`) [known] S 0057cfc0; the reading call returns the version
 (stream slot +0x3c S 0057cf80) or discards it (slot +0x14 S 007804f0). The parts owned by the logic core:
 
 **`NLogic::System::Save`** S 005275c0, section tag `LogicSystem`, current version **8** [known: static initialiser
@@ -1068,7 +1074,7 @@ without game script, quests and sacrifices into a text stream [known].
   the same, whole net tick everywhere [inferred from S 00411990]. A reconnect replaces `S` by `gameSpeed × 4`
   and zeroes the sub-tick counter locally on every surviving peer instead of through an event (§3.2); equality
   then rests on all peers having stalled in the same net tick, see §10.
-- **Frame-time state inside the tick.** `Player_Update` (step 4 of §4.2) ages each on-screen message by the
+- **Frame-time state inside the tick.** `ai::player::Player::Update` (step 4 of §4.2) ages each on-screen message by the
   frame delta (`NPlayer::Messages::UpdateTimers` S 005c1bb0 → `Timer_GetFrameDeltaSeconds`) [known]. Message
   lifetimes therefore differ between peers; messages are not hashed (§3.6). Nothing in the simulation may depend
   on them (`docs/sim/players-victory.md`).
@@ -1152,7 +1158,7 @@ without game script, quests and sacrifices into a text stream [known].
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Is a net tick really 0.4 s at speed 1, and does the input delay match "two net ticks"? | Observation: log `subTick`, `netTick` and the tick length events (0x3000d) in a running network match. |
+| 1 | Answered (§3.2): on a LAN at speed 1 the net tick length is 1 to 2, not 4, so a net tick lasts about 0.1 s to 0.2 s; a command takes 240-310 ms (3 logic ticks) at length 1 and 440-540 ms (5-6 logic ticks) at length 2, which matches "two net ticks plus the rest of the current one" [live, 2026-10-14] | — |
 | 2 | What sets a user's level `q`, whether the local user has a record in the transport's user list (slot +0x44 returns the list size; the "< 2" branch forces net tick length 1), and what the TinCat API function at +0xb0 called from slot +0x84 does. Answered: the ping samples are milliseconds of a full round trip, `GetTickCount()` at the reply minus the `GetTickCount()` value the request carried (T 1000a2a0 `Send_Ping`, T 10009070 `Received_Ping`, callback slot `+0x3c` → S 0041d910 → S 0041d610), so their resolution is that of `GetTickCount` | static read of the writers of user list node +0x3c and of the code that adds user records; or observation of 0x3000d values against measured pings |
 | 3 | Answered: nothing besides the notice, the log line and the optional dump happens on a desync. `AdvanceNetTick` S 00411990 stores the result of `VerifyLatest` in manager `+0x4c`, which nothing else reads, hands the translated `!DESYNC DETECTED` to the message sink (in a match the game screen, which shows it as a letter, S 005eb120; the observer list `+0x3e0` has no subscriber), logs the report and calls `NComm_WriteDesyncDump` S 0041f5e0 (a file only when the log level is above 1). No message is sent and the match goes on | static: S 00411990, S 00415a60, S 0040e3a0, S 005eb120, S 0041f5e0 |
 | 4 | After a host loss, can two surviving peers stall in different net ticks and still pass the rejoin check (their logic tick counters would then differ by up to `S − 1`), and are the discarded packages `N−2`, `N−1` the same on all of them? | Observation: kill the host in a three-client match and compare `tickCounter`, `netTick` and the first checksums after `0x3000f` on the two survivors. |
@@ -1176,8 +1182,8 @@ without game script, quests and sacrifices into a text stream [known].
 | 005280a0 / 00527c40 | `NLogic::System::SetUp` / `Shutdown` | Start and end of a simulation. |
 | 00527f70 / 00526f80 | `NLogic::System::InitSubsystems` / `Reset` | Subsystem init and reset order. |
 | 005275c0 / 00527d60 / 005273d0 | `NLogic::System::Save` / `Load` / `PostLoad` | `LogicSystem` section; post-load order. |
-| 005272b0 | `Generic_ResetState_74_88` | Resets tick timing and tick counter (map export). |
-| 004088b0 | `NComm_Manager_CanAdvanceTick` | Lockstep gate. |
+| 005272b0 | `NLogic::System::ResetState_74_88` | Resets tick timing and tick counter (map export). |
+| 004088b0 | `NComm_Manager::CanAdvanceTick` | Lockstep gate. |
 | 00411990 | `NComm_Manager::AdvanceNetTick` | Net tick boundary: execute, distribute, checksum, verify. |
 | 004089c0 | `NComm_Manager::SendEventUserChecksum` | Starts the outgoing package with the checksum event. |
 | 00410530 | `NComm_Manager::ExecuteEventPackage` | Runs the events of a tick package. |
@@ -1186,7 +1192,7 @@ without game script, quests and sacrifices into a text stream [known].
 | 0040b270 | `NComm_Manager::BeginGameRunning` | Resets net tick, sub-tick, checksum log at match start. |
 | 00408b10 | `NComm_Manager::QueueGameCommand` | Queues a command (or dispatches it offline). |
 | 00408860 / 0040d260 | `NComm_Manager::IsGameHanging` / `GetHangReason` | Hang test (error latch, reconnect, state 3, state 4 with no tick for 2 s or none yet) and its notice text. |
-| 0040ff90 / 00782a50 | `NComm_Manager::BroadcastStartGame` / `NComm_BeginGameRunningForward` | Host sends 0x30005; listener start-game slot → `BeginGameRunning`. |
+| 0040ff90 / 00782a50 | `NComm_Manager::BroadcastStartGame` / `nGame::System::BeginGameRunningForward` | Host sends 0x30005; listener start-game slot → `BeginGameRunning`. |
 | 0041d720 / 0040e0d0 / 004082a0 | `NComm::TinCatNetwork::cb_Received_Data` / `NComm_Manager::AddClientGameEventsToServerGameEvents` / `AddReceivedHostTickPackage` | Receive path of messages 1001 and 1002. |
 | 00412ae0 / 00412e80 | `ai::ncomm::TickPackageList::AddReceived` / `TickPackage::AppendEvents` | Append a received block to the package of its tick. |
 | 0041db50 / 0041dbb0 | `NComm::TinCatNetwork` vtable +0x18 / +0x1c | Send to id 0xEFFFFFCC (clients' package 1001) / to id 0xEFFFFFDD (host's merged package 1002; a host without other users sends nothing) [known for the ids; use from S 00411990]. The map names the two functions `Broadcast` / `SendToHost`. |
@@ -1210,7 +1216,7 @@ without game script, quests and sacrifices into a text stream [known].
 | 00539d40, 00539de0, 00539f00, 0053a380, 0053a400, 00539850, 00539fa0 | `NLogic::Stock::ctor`, `AddOne`, `RemoveOne`, `RemoveList`, `ExchangeCostForGood`, `Store`, `Load` | Goods multiset. |
 | 005282a0 / 005303a0..00531f20 | `NLogic::CallbackManager::ctor` / `Notify*` | Event broadcaster and its 56 broadcast functions (one per receiver slot). |
 | 0052ccc0 / 00538f40 | `ai::logic::LogicSpawnSystem::Update` / `NLogic::SpawnAnimal::Spawn` | Spawn points. |
-| 0052d660 / 00539520 / 00539210 | `LogicChestSystem_Update` / `LogicChest::UpdateOpening` / `LogicChest_IsOpenable` | Chests. |
+| 0052d660 / 00539520 / 00539210 | `ai::logic::LogicChestSystem::Update` / `LogicChest::UpdateOpening` / `ai::logic::LogicChest::IsOpenable` | Chests. |
 | 00775dd0 / 00782a60 | `Game_DistributeChestsForNetworkMatch` / `Referee_OnChestOpened_SendClaimChest` | Network-match chests: placement from the `GameSeed`, ClaimChest on opening. |
 | 00782b60 / 00782bb0 | cinematic begin / `nGame::System::EndCinematic` | Set and clear `cinematicActive`, AI and chest enable. |
 | 007842e0 / 00784d40 / 005ac770 | `nGame::System::BuildScene` / `BuildWorld` / `Game_LoadWorldFromDescriptor` | World creation order: construct, `SetUp`, receivers, load, players, chests. |

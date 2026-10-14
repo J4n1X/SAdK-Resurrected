@@ -59,16 +59,19 @@ The map is centred on the world origin: `ai::map::TerrainGrid::Init` S 00688050 
 sizes come from the first two virtuals of the grid's size source; they are the vertex grid sizes `4W+1`, `4H+1`
 [inferred: the same pair sizes the per-vertex normal array]. So world x runs from `-2W*stepX` to `+2W*stepX`.
 
-`g_TerrainGrid` is the global at S 00881440 (`ai::map::TerrainGrid`: size source +0, elevations +4, origin
-+0x10/+0x18, packed normals +0x1c, scanned minimum and maximum vertex height +0x20/+0x24, row stride +0x28,
-occupancy bitset +0x2c) [known] S 00688050, S 006872c0. All render code that tests "below water" compares
-integer heights against `g_TerrainGrid +8` (S 00881448), and the water height in world units is that value
-times `heightScale` (S 00687050) [known] S 006b4f60, S 006b6840. The same field and `+0xc` are the lower and
-upper end of the overlay height range (§3.7) [known] S 006bed80. The water level is the map's `minHeight`
-(-100 by default, `docs/map-format.md` §4.5), so the water plane is at world `y = -0.1` on a default map
-[inferred]. [TODO] not established: the writer of `g_TerrainGrid +8` and `+0xc` (no function in the cache stores
-to them by address, and `TerrainGrid::Init` writes only +0x20/+0x24); a search for the instructions that store
-through a pointer to S 00881448 settles it.
+`g_TerrainGrid` is the global at S 00881440 (`ai::map::TerrainGrid`: size source +0, elevations +4, `seaLevel`
++8, `deepWaterLevel` +0xc, origin +0x10/+0x18, packed normals +0x1c, scanned minimum and maximum vertex height
++0x20/+0x24, row stride +0x28, occupancy bitset +0x2c) [known] S 00688050, S 006872c0. All render code that tests
+"below water" compares integer heights against `seaLevel` (S 00881448), and the water height in world units is
+that value times `heightScale` (`TerrainGrid::GetSeaLevelHeight` S 00687050) [known] S 006b4f60, S 006b6840.
+`seaLevel` and `deepWaterLevel` are the two ends of the overlay height range (§3.7) [known] S 006bed80.
+
+Both are constants of the program image: S 00881448 holds **-100** and S 0088144c holds **-3000** in the
+initialised data, every reference to them is a read, and `TerrainGrid::Init` writes only +0x20/+0x24 [known]. So
+the renderer's water plane is at world `y = -0.1` on every map, and the water depth value of the overlay
+saturates 2900 height units below it. The renderer does not read the map's `minHeight`
+(`docs/map-format.md` §4.5; -100 by default), which is the water level of the simulation: the picture and the
+simulation agree only on a map that keeps the default [inferred].
 
 ### 2.2 `S2CG::Scene` (singleton S 0088ca60, primary vtable S 007f8f2c)
 
@@ -84,7 +87,7 @@ S 007f8f08), `NLogic::CallbackReceiver` (+0xc, vtable S 007f8e24), `S2CE::IDevic
 | +0x20 | float | shadow setting | 0..1 (settings virtual +0x24); `toInt(v*6 + 0.5)` is the shadow level (§3.13) | [known] S 0067f500; conversion [inferred] S 0067f6b0 |
 | +0x24 | u32 | `renderFlagsA` | map layer flags of the main view (§3.1); 0x3ff at construction | [known] S 0067eb20, S 0067fb40 |
 | +0x28 | u32 | `renderFlagsB` | map layer flags of the reflection view, rebuilt every frame (§3.1) | [known] S 0067eb20, S 0067f6b0 |
-| +0x2c | float | shadow map quality | settings virtual +0x1c; 0 disables the shadow map; passed to `ShadowMapBase::SetQuality` | [known] S 0067f500, S 0067f420, S 006810b0 |
+| +0x2c | float | shadow map quality | settings virtual +0x1c; 0 disables the shadow map; passed to `S2CE::ShadowManager::SetQuality` | [known] S 0067f500, S 0067f420, S 006810b0 |
 | +0x30, +0x34, +0x38 | int, u32, u32 | shadow technique, flags, caster mask | §3.13 | [known] S 0067f420 |
 | +0x48 | float | `gameTime` | time of the next logic tick (`NLogic::System +0x78`), stored on every logic tick | [known] S 00680550, S 006805e0 |
 | +0x4c | float | `realTime` | accumulated simulation time now (`+0x7c`), or a wall-clock sum | [known] S 0067f6b0 |
@@ -112,13 +115,13 @@ S 006aabe0, S 006aaab0.
 | Global | Class | Draws |
 |---|---|---|
 | S 0088cf64 | `S2CG::CMapRenderer` | terrain, water, streets, borders, buildings, map objects, markers |
-| S 0088cf28 | `S2CG::CEnviromentMgr` | sky, light, fog, local environment spheres, weather layer |
+| S 0088cf28 | `S2CG::CEnviromentMgr` | sky, light, fog, local environment spheres (and the pointer of the environment particle layer, always null, §3.13) |
 | S 0088d6b0 | `S2CG::CCharacterMgr` | settlers and transport donkeys |
 | S 0088d86c | `S2CG::ItemMgr` | goods (carried, stacked at flags and building sites) |
 | S 0088d868 | `S2CG::AnimalMgr` | animals |
 | S 0088d864 | `S2CG::SwarmMgr` | ambient flocks (birds, fish, bugs) |
-| `ShipMgr_GetInstance` | `S2CG::ShipMgr` | ships |
-| S 0088d9ac | `ai::render::ProjectileList` | projectiles |
+| `S2CG::ShipMgr::GetInstance` | `S2CG::ShipMgr` | ships |
+| S 0088d9ac | `S2CG::ProjectileTable` | projectile types (`projectiles.xml`) and the live projectile visuals |
 | S 008872f4 | `ai::render::MeshRenderer` | single meshes (ship status overlays and similar) |
 | S 008872fc | `ai::render::DecalRenderer` | projected ground decals (selection markers and similar) |
 | S 00887300 | `ai::render::ParticleManager` | all particle emitters |
@@ -278,7 +281,7 @@ therefore not updated on frames that go through the post processor [inferred].
 | 8 | 0x080 | projected decals, with cull mode 1, then cull mode back to `currentPass` |
 | 9 | 0x020 | map, second part: `CMapRenderer::RenderObjectsAndWater` |
 | 10 | 0x100 | particles, with fog switched off around them |
-| 11 | 0x001 | draw the environment's particle layer (`CEnviromentMgr +0x120`, if present; the weather layer of §3.13 [inferred]) |
+| 11 | 0x001 | draw the environment's particle layer (`CEnviromentMgr.envParticleLayer` +0x120, `DrawEnvParticleLayer` S 00683c20) if one exists; none is ever created in this build (§3.13), so the step draws nothing |
 | 12 | - | unbind the shadow map |
 
 "Shadows on" in this function = the shadow setting is on and `Scene +0x74` is clear; it also adds layer flag
@@ -289,8 +292,11 @@ Masks and flags of the two views [known] S 0067f6b0, S 0067f500, S 0067fb40:
 
 - main view: `passMask` = 0x1ff and `renderFlagsA` = 0x3ff, each bit cleared only by its debug CVar
   (`SceneDetail/*`, `MapDetail/*`); `renderFlagsA` bit 0x20000 follows the reflection setting, 0x10000 the
-  shadow setting, and bit 0x80 follows a boolean of the settings interface (virtual +0xc) [TODO] not
-  established: which setting that is and which layer reads 0x80;
+  shadow setting, and bit 0x80 follows the settings boolean `Coverage` (`S2CG::Settings.bCoverageEnabled` +0x24,
+  getter in slot 3 of the in-game settings interface S 00695c70; also the CVar `MapDetail/Coverage`). No map
+  render function tests bit 0x80, and no function calls the setter in slot 2 (S 00695c60): the value is saved
+  and loaded with the settings file and has no effect [inferred, plate of S 00695c60: the flag tests of
+  S 006898f0 and S 006889d0];
 - reflection view, from the detail level `d` = `toInt(detail * 4 + 0.5)`: `passMaskDefault` = 0x001 (sky);
   `d > 0` adds pass 0x020 and layer 0x1 (terrain); `d > 1` adds layer 0x8 (buildings); `d > 2` adds pass 0x008
   (characters); `d > 3` sets pass mask 0x1ff and layers 0x3ff. Layer 0x10000 is added when the shadow and the
@@ -373,7 +379,7 @@ named in the handler's mapped comment. Slots +0x28, +0x2c, +0x34 and +0x38 point
 | +0xbc | sacrifice applied to settler | attach the sacrifice's buff effect (`SacrificeProperty` `buffGfxName`) to the character | S 006819a0 |
 | +0xc0 | sacrifice applied to cell | one-shot particle effect of that name at the cell, only if the cell is explored by the local player | S 00681fd0 |
 | +0xc4 | building revealed by sacrifice | attach the buff effect to the building | S 00681960 |
-| +0xc8, +0xcc | chest created / removed | map object of the doodad property whose id is game config +0x44 (`chestDoodadId`), or +0x48 (`openChestDoodadId`) when the chest predicate `LogicChest_IsOpenable` S 00539210 holds; occupancy bit | S 006819e0, S 00681aa0 |
+| +0xc8, +0xcc | chest created / removed | map object of the doodad property whose id is game config +0x44 (`chestDoodadId`), or +0x48 (`openChestDoodadId`) when the chest predicate `ai::logic::LogicChest::IsOpenable` S 00539210 holds; occupancy bit | S 006819e0, S 00681aa0 |
 | +0xd0 | chest opened | swap the closed model for the opened one | S 00680c80 |
 | +0xd4, +0xd8 | spawn point added / removed | marker map object; occupancy bit | S 00681b30, S 00681bb0 |
 | +0xdc | spawn triggered | one-shot particle effect named by the spawn property | S 006820f0 |
@@ -670,8 +676,8 @@ all blocks revealed) and on again (everything hidden, then the viewing player's 
 A second texture "FogOfWar" (`W x H`, A8R8G8B8, 0xff000000 = hidden, cleared to 0 per explored cell) lives in
 `CEnviromentMgr +0x11c` S 006aefd0, S 006aeef0 [inferred]; it is resized to the map when the map renderer is
 initialised and updated on every exploration change of the viewing player [known] S 006883e0, S 00688d40.
-[TODO] not established: its consumer (candidates: the
-weather layer, the sky); an xref read of the texture's bind calls settles it.
+[TODO] not established: its consumer (candidate: the sky; the environment particle layer of §3.13 does not
+exist in this build); an xref read of the texture's bind calls settles it.
 
 ### 3.8 Territory borders
 
@@ -1053,8 +1059,13 @@ device values behind `g_ShadowScale` [inferred] S 0067edd0.
 rotating texture matrix (`rotation`); sun and moon quads (`size`); `enviroment_shader.fx`. The skydome index
 comes from the map's `.bin`.
 
-**Weather layer** [inferred] S 006adc90: a grid of falling streak billboards (spacing 0.1) around the camera with
-a per-point pseudo-random phase; `rain_shader.fx`.
+**Environment particle layer** (`ai::render::EnvParticleLayer`, 0x258 bytes) [inferred] S 006adc90: a grid of
+falling streak billboards (spacing 0.1) around the camera with a per-point pseudo-random phase;
+`rain_shader.fx`. **Not present in this build**: the class has no constructor in the binary, no function allocates
+0x258 bytes, and the only pointer to a layer, `CEnviromentMgr.envParticleLayer` (+0x120), is written by the
+manager's constructor (S 00685112) and destructor (S 00684880) only, both times with 0. `Update`, the draw step
+of §3.1 and the debug draw act only on a non-null pointer, so no weather is ever drawn [known for the writes;
+inferred for the absence of an allocation]. The layer is a render object: presentation only.
 
 **Post processing** [inferred] S 00697290.., [known, file] for the values: scene colour plus a view-depth target;
 downsample, separable blur, combine: bloom above `minLuminance 0.98` scaled by `bloomScale 0.25`; depth of field
@@ -1475,6 +1486,12 @@ why all walkers of the original step in phase.
 **Light.** `DirectionalLight3D` from heading and elevation, ambient colour, linear depth fog from `fog` start and
 end, shadow strength from `shadowIntensity` and the elevation rule; blend `EnvData` by the sphere weights.
 
+**Built in the original but without effect.** None of these changes simulation state; a remake that reproduces
+the original's picture leaves them out, a remake that refines it may add them: the environment particle layer
+(never created, §3.13), ground cover (the render call passes a constant 0, §3.6), the settings switch `Coverage`
+(saved and loaded, read by no render function, §3.1), and the sun and moon quads of the sky (built, never drawn;
+`docs/sim/world-objects-rendering.md` §3.10).
+
 **Must be exact** for the look: pattern rank order, the triangle split, mask selection and UVs, the transition
 pixel rule, the stage and clip-plane formulas, animation slot rules, the palette lookup, the border post rule.
 **Free**: culling, LOD thresholds, batching limits, buffer sizes, the fixed-function paths, the shadow fitting.
@@ -1517,7 +1534,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 00783790 | `Scene_LoadTerrainStaticDataAndMapObjects` | `terrain_static_data.xml`, `map_objects.xml` |
 | 006905e0 | `S2CG::CCharacter::SetPath` | path change; writes only scene objects |
 | 0069a9c0, 0069ab00 | `SwarmMgr::LoadSettings` / `ctor` | `flocks.xml` root keys, defaults, generator seed |
-| 006aec60 | `MapEnvData_LoadDefaultsXml` | `local_enviroment.xml` |
+| 006aec60 | `ai::render::MapEnvData::LoadDefaultsXml` | `local_enviroment.xml` |
 | 00684510, 00684690 | `CEnviromentMgr::LoadDaytimesBin` / `SaveDaytimesBin` | day-time key cache |
 | 00680550 | `S2CG::Scene::SyncLogicTick` | per-tick synchronisation |
 | 006805e0 | `S2CG::Scene::Update` | per-frame update order |
@@ -1578,9 +1595,9 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 00684be0, 00684130 | `Env_ParseEnvironmentXml` / `CEnviromentMgr::LoadDaytimes` | environment data |
 | 006ae700, 006ae3a0, 006aea80 | `MapEnvData::Update` / `ApplyToDevice` / `LoadBin` | local environment |
 | 006af490 | `ai::render::SkyRenderer::BuildGeometry` | sky dome |
-| 006810b0, 0069e2a0, 00769600 | `Scene::RenderShadowMapPass` / `ShadowManager::RenderCasters` / `ShadowMapBase::SetQuality` | shadow map |
+| 006810b0, 0069e2a0, 00769600 | `Scene::RenderShadowMapPass` / `ShadowManager::RenderCasters` / `S2CE::ShadowManager::SetQuality` | shadow map |
 | 00680ab0, 006d7cc0 | `Scene::RenderReflectionPass` / `MirrorCamera::ReflectViewMatrix` | reflection |
 | 00696d20, 00697010, 00696ac0 | `PostProcessor::BeginScene` / `RenderBlurPasses` / `RenderCombine` | post effects |
-| 006c3f10 | `StreetRenderer_LoadConfigXml` | `<Street>` |
+| 006c3f10 | `ai::gfx::StreetRenderer::LoadConfigXml` | `<Street>` |
 | 006a9830 | `S2CG::CGraphicAccess::PickAtScreenPos` | picking entry |
 | 006960a0, 00696270 | `S2CG::Settings::Load` / `Store` | scene settings stream |

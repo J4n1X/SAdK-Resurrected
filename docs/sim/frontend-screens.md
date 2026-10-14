@@ -784,7 +784,7 @@ it gets `clamp(accumulated × scale, 0, 1)`. `BuildWorld` S 00784d40 resets `acc
 | 9 | `!completed` | fraction 1.0 directly | `nMenu::Game::OnEnter` S 005eed00 |
 
 The fixed weights sum to 500 of 600. The elevation map carries the remaining 100: `TerrainMesh +0xb4` is set to
-100 by `TerrainMesh_Construct` S 006bebe0 [known], and `+0xb0` is slot +4 of the map interface
+100 by `ai::render::TerrainMesh::Construct` S 006bebe0 [known], and `+0xb0` is slot +4 of the map interface
 (`TerrainMesh::SetLoadProgressTotal` S 006beaa0) [known]. The map interface is the `NLogic::GameAccess` of the
 logic system (`NLogic::System +0x34`, passed by `S2CG::Scene::Init` S 006824c0 to
 `S2CG::CMapRenderer::CreateInstance` S 00689450); slot +4 of its vtable S 007e7be0 is S 005388e0, which returns
@@ -1075,7 +1075,7 @@ simulation state while a match runs, with these boundaries:
 | Address | Name | Role |
 |---|---|---|
 | 0060ba30 / 0060bbd0 | `nMenu::Splash::ctor` / `OnShow` | logo screen: layout name, code-built widgets |
-| 0060c5a0 / 0060b9a0 / 0060b7a0 | `Splash::Update` / `OnKeyDown` / `OnMousePress` | state machine, skip keys |
+| 0060c5a0 / 0060b9a0 / 0060b7a0 | `Splash::Update` / `OnKeyDown` / `OnMouseButton0Down` | state machine, skip keys |
 | 00768ab0 / 007684b0 | `nUi::Video::Create` / `Render` | still picture with timer and fades |
 | 00768490 / 007683f0 / 00768430 | `Video::IsFinished` / `IsFading` / `SkipTimerToFinalSecond` | |
 | 005e4ea0 / 005deee0 | `nMenu::Main::ctor` / `Activate` | main screen |
@@ -1127,4 +1127,4 @@ simulation state while a match runs, with these boundaries:
 | 004cab50 / 004ca9b0 / 004cacb0 | `nUi::TextScroller::ctor` / `LoadFromXml` / `AddLine` | credits defaults, attributes, line styles |
 | 004ca740 / 004ca8f0 | `nUi::TextScroller::ScrollLine` / `Update` | credits scroll and fade |
 | 005aa260 / 00579d60 / 005792c0 | `GameFile_Save` / `UserProfile::SetLastSaveName` / `UserProfile_SaveSettings` | last save name, `settings.cfg` |
-| 006beaa0 / 006bebe0 / 005388e0 | `TerrainMesh::SetLoadProgressTotal` / `TerrainMesh_Construct` / `NLogic::GameAccess` slot 1 | elevation-map progress total (map height in vertex rows) and weight 100 |
+| 006beaa0 / 006bebe0 / 005388e0 | `TerrainMesh::SetLoadProgressTotal` / `ai::render::TerrainMesh::Construct` / `NLogic::GameAccess` slot 1 | elevation-map progress total (map height in vertex rows) and weight 100 |

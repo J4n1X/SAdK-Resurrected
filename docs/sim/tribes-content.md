@@ -461,7 +461,7 @@ Notes on the economy tables [known: data unless tagged]:
 - `sacrificeOlympicFlame` employs the **Egyptian** `good_buildingHelper` for every tribe, and a
   `good_buildingHelper` costs the Egyptian `tool`. [inferred] A Bavarian or Scottish headquarters can supply
   that worker only when it holds an Egyptian `tool`. The sacrifice component does not need the worker [known]:
-  `Building::Update` S 0055e2f0 calls `VillageSacrifice_Update` S 00561940 for every finished mode-9 building,
+  `Building::Update` S 0055e2f0 calls `ai::village::VillageSacrifice::Update` S 00561940 for every finished mode-9 building,
   and neither it nor `CheckCanOrder` S 00561240 or `CheckCanStart` S 00560f20 tests the building's workers;
   working mode 9 gives the worker no action (`Worker::ChooseNextWork` S 0065d660).
 - `constructionBav`, `constructionClay` and `construction` (name `"Construction"`, graphics `"MediumDummy"`,
@@ -1130,7 +1130,7 @@ Component states: 0 recharging, 1 a sacrifice of this temple is running, 2 ready
    `tp_addAllowedSacrifice` list ([properties-data.md](properties-data.md) §2.3).
 2. **Research.** A sacrifice with a research duration above 0 must be researched once per player before it can
    be ordered. A player has one research record; it is tied to a temple and completes when
-   `tick - startTick >= researchDuration` (`SacrificeResearch::Update` S 0065ff00, `SacrificeResearch_Complete` S 0065fde0:
+   `tick - startTick >= researchDuration` (`SacrificeResearch::Update` S 0065ff00, `ai::logic::SacrificeResearch::Complete` S 0065fde0:
    message `!Sacrifice Researched`, the id is recorded in the player's researched set). The panel and the AI
    start a research only when `VillageSacrifice::GetResearchState` S 005610c0 returns 0: the sacrifice needs
    research, no research of the player is running and it is not researched yet. The lockstep handler
@@ -1144,25 +1144,25 @@ Component states: 0 recharging, 1 a sacrifice of this temple is running, 2 ready
    has none; it is locked for the owner. Ordering files one ware request per unit of the cost list at the
    temple and sets state 3. For a sacrifice against enemies every other player is told (`!Player orders
    sacrifice`, `!Sacrifice ordered`).
-4. **Start** (`CheckCanStart` S 00560f20, `VillageSacrifice_Start` S 005615e0). Refused when, in this order:
+4. **Start** (`CheckCanStart` S 00560f20, `ai::village::VillageSacrifice::Start` S 005615e0). Refused when, in this order:
    nothing is ordered; a sacrifice of this temple runs; the temple is in state 0; the input stock does not hold
    the whole cost list (skipped for an order made with a free ticket, which `Order` takes from a per-player
    counter instead of requesting goods); the sacrifice is regenerating; the player already runs a sacrifice of
    the same definition; it targets enemies and there are none; it is locked. The start comes from the player's
    command (with the chosen target player for a sacrifice against enemies), from the AI or from a map script.
-   `VillageSacrifice_Update` S 00561940 starts an ordered sacrifice by itself, as soon as `CheckCanStart`
+   `ai::village::VillageSacrifice::Update` S 00561940 starts an ordered sacrifice by itself, as soon as `CheckCanStart`
    allows it, only for a building type with `constructionTime < 1` that is not at once `depot`, `casern` and
    `territoryBuilding` (the headquarters), which in the data is the Olympic flame. Starting tells the target
    player (`!Player started a sacrifice against you!`, `!A Sacrifice is targeted at you!`) for a sacrifice
    against enemies, creates the running sacrifice, **empties the temple's whole input stock** and sets
-   state 1 (`VillageSacrifice_Start` S 005615e0).
+   state 1 (`ai::village::VillageSacrifice::Start` S 005615e0).
 5. **Running.** Modifier effects hold for the duration; one-shot effects fire at their threshold
    ([properties-data.md](properties-data.md) §3.9). The sacrifice ends when `tick - startTick >= duration`
-   (`Sacrifice_IsExpired` S 00660050).
+   (`ai::logic::Sacrifice::IsExpired` S 00660050).
 6. **End** (`SacrificePlayerData::RemoveSacrifice` S 006620a0, `VillageSacrifice::OnExpired` S 00561870). The
    definition is entered in the owner's regeneration set with the current tick; the temple goes to state 0 and
    becomes ready again (state 2, the ordered definition cleared) on the first building update at which its
-   output stock (`Depot.stockB`, depot `+0x28`) holds no good at all: `VillageSacrifice_Update` S 00561940 tests
+   output stock (`Depot.stockB`, depot `+0x28`) holds no good at all: `ai::village::VillageSacrifice::Update` S 00561940 tests
    the entry count of that stock's map (`Stock +0x10`, [logic-core.md](logic-core.md) §2.5) [known]. An entry leaves the regeneration set when `tick - entryTick >=
    regenerationDelay` (`SacrificeRegenerations_RemoveExpired` S 00662720). Regeneration is per player and
    definition, not per temple.
@@ -1180,8 +1180,8 @@ matching record `sacrifice_olympicFlame` (`0eaff063`) costs 10 `halberd` and 10 
 no effect of its own. The other campaign records of §2.8.4 are used the same way: a map script watches for the
 sacrifice and reacts. [known] None of the functions on the order and start path reads the building's worker
 count (the order command S 00782510, `CheckCanOrder` S 00561240, `Order` S 00561410, `CheckCanStart`
-S 00560f20, `VillageSacrifice_Update` S 00561940, which `Building::Update` S 0055e2f0 calls for every finished
-mode-9 building, and `VillageSacrifice_Start` S 005615e0); [inferred] the flame and the temples accept and run a
+S 00560f20, `ai::village::VillageSacrifice::Update` S 00561940, which `Building::Update` S 0055e2f0 calls for every finished
+mode-9 building, and `ai::village::VillageSacrifice::Start` S 005615e0); [inferred] the flame and the temples accept and run a
 sacrifice without their worker.
 
 ### 3.9 Oddities of the data
@@ -1352,7 +1352,7 @@ random numbers. Three properties of the data reach the simulation's determinism:
 
 - **List order.** The `tp_addGood` order decides which food a mine eats first (§3.4) and the order of group
   members everywhere: the group iterator walks the tribe's goods list and yields the goods that are in the
-  group's cost list (`PropertyGroupIter::Init` S 007767c0, `PropertyGroupIter_Next` S 00776690) [known]. The
+  group's cost list (`PropertyGroupIter::Init` S 007767c0, `ai::properties::PropertyGroupIter::Next` S 00776690) [known]. The
   `tp_addBuilding` order is the order of the producer and consumer lists (`Economy_CollectProducerBuildings`
   S 00534d00, `…ConsumerBuildings` S 00534f40) and of the AI's first-match building lookups (§5) [known]. A
   converter must keep script call order.
@@ -1447,7 +1447,7 @@ The content is data; these are the functions through which it is read, to start 
 | S 00554290 | `MilitaryConfig::SetSoldierId` | soldier rank tables: good id and copied health per kind, level and tribe; highest level per kind and tribe |
 | S 00552fa0 / 00553080 | `BuildingProperty::ProducesGood` / `ConsumesGood` | producer test (either product slot holds the good) and consumer test (the cost list of either product slot's good contains it, groups expanded) |
 | S 00534d00 / 00534f40 | `Economy_CollectProducerBuildings` / `…ConsumerBuildings` | which buildings of a tribe make or take a good, in `tp_addBuilding` order; for an either group the producers of every member; consumers only with `constructionTime > 0` or the headquarters flags |
-| S 007767c0 / 00776690 | `PropertyGroupIter::Init` / `PropertyGroupIter_Next` | members of a group in tribe list order |
+| S 007767c0 / 00776690 | `PropertyGroupIter::Init` / `ai::properties::PropertyGroupIter::Next` | members of a group in tribe list order |
 | S 005657c0 | `NVillage::Production::StartProductionCycle` | consumes the recipe of product slot 0; group picks |
 | S 00565bd0 | `NVillage::Production::CanStartProduction` | input test; mines; the 20-animal limit of mode 10 |
 | S 00565990 | `NVillage::Production::DeliverProducts` | output of both product slots |
@@ -1459,18 +1459,18 @@ The content is data; these are the functions through which it is read, to start 
 | S 00564360 | `SettlerSpawn::ConsumeSettlerGood` | tool → worker: if the settler good is not in the store stock, its cost list is exchanged for it; then one unit is removed |
 | S 005668e0 / 00566920 / 00566990 | `VillageSoldierTraining_CanStart` / `StartNext` / `Finish` | barracks cycle |
 | S 00561240 / 00561410 | `VillageSacrifice::CheckCanOrder` / `Order` | temple: order |
-| S 00560f20 / 005615e0 | `VillageSacrifice::CheckCanStart` / `VillageSacrifice_Start` | temple: start |
-| S 00561940 | `VillageSacrifice_Update` | temple per building update: state 0 → 2, automatic start of the Olympic flame |
+| S 00560f20 / 005615e0 | `VillageSacrifice::CheckCanStart` / `ai::village::VillageSacrifice::Start` | temple: start |
+| S 00561940 | `ai::village::VillageSacrifice::Update` | temple per building update: state 0 → 2, automatic start of the Olympic flame |
 | S 00561870 | `VillageSacrifice::OnExpired` | temple after a sacrifice ends |
-| S 0065fae0 / 0065ff00 / 0065fde0 | `SacrificeResearch::Start` / `Update` / `SacrificeResearch_Complete` | research |
+| S 0065fae0 / 0065ff00 / 0065fde0 | `SacrificeResearch::Start` / `Update` / `ai::logic::SacrificeResearch::Complete` | research |
 | S 00782700 / 00561150 | `nGame::System::HandleCommand_20027` / `VillageSacrifice::StartResearch` | research command: no stock and no temple state is read |
 | S 006620a0 / 006621f0 | `SacrificePlayerData::RemoveSacrifice` / `UpdateSacrifices` | end of a sacrifice, regeneration entry |
 | S 00662720 | `SacrificeRegenerations_RemoveExpired` | regeneration delay |
-| S 00660050 | `Sacrifice_IsExpired` | duration test |
+| S 00660050 | `ai::logic::Sacrifice::IsExpired` | duration test |
 | S 00661c50 | `SacrificePlayerTableRef::GetEntryWithModifiers` | product amount, corn doubling |
 | S 005ab800 | `GameData_ComputeBuildChecksum` | checksum over the scripts and settings that peers compare (§8) |
 | S 0052bd40 / 0052b550 | `NLogic::MapInfo::Load` / `ResetInitialGoodsFromTribes` | the map's copy of the start stock (§7) |
 | S 005e6be0 | `Tribe_ComboIndexToTribeId` | tribe by name in the setup (§5) |
 | S 005678b0 | `NVillage::Catapult::Fire` | ammunition = first cost entry of the product-slot good: one unit removed and re-requested per shot |
-| S 0055b020 | `NVillage::Depot::AddInitialStock` | fills a headquarters: the map's initial goods of the tribe, plus the tribe's bonus list for a player passing `Player_IsStateDefault` S 005be350 |
+| S 0055b020 | `NVillage::Depot::AddInitialStock` | fills a headquarters: the map's initial goods of the tribe, plus the tribe's bonus list for a player passing `ai::player::Player::IsStateDefault` S 005be350 |
 | S 0058dae0 | `NAI::DestructionSystem::CanDemolishBuilding` | example of a literal good id (`wood`) in the AI |

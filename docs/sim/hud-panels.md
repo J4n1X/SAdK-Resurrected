@@ -603,7 +603,7 @@ Rows, icons, alpha and click behaviour: [ingame-ui.md](ingame-ui.md) §2.10, §3
 message: [quests-sacrifices-stats.md](quests-sacrifices-stats.md) §3.6.2. Rules added here, all [known]
 S 005f86a0, S 005f73e0, S 005f85b0 unless tagged:
 
-1. The panel does nothing while `PlayerTable_HasActiveType2` is false (no active local human player).
+1. The panel does nothing while `ai::player::PlayerTable::HasActiveType2` is false (no active local human player).
 2. **New messages** are detected by comparing the store's message count with the last count. If it grew and
    the panel is visible, the **newest** message decides: type 1 → sound `uiMessage1`, minimap symbol 1; type 5
    → `uiMessage0`, symbol 5; any other type → `uiMessage0`, symbol 0. The symbol is added only if the message
@@ -685,7 +685,7 @@ Military flags, as far as the HUD meaning goes [known] S 0055fd00, S 006d2820, S
 flag when its property has `territoryRange` (+0x94) > 0 and `soldierLimit` (+0x98) ≠ 0
 ([properties-data.md](properties-data.md) §2 for the two fields), or is a headquarters (`depot`, `casern` and
 `territoryBuilding` all set). It is drawn only for finished buildings (both construction floats ≤ 0), in the
-owner's colour (`Player_GetColorEntry`). Mesh 0 (`[data]\buildings\MilitaryFlagInactive.KEX`) when
+owner's colour (`ai::player::Player::GetColorEntry`). Mesh 0 (`[data]\buildings\MilitaryFlagInactive.KEX`) when
 `Building::IsOccupied` is false or the byte at +8 of the object at building +0xc4 is 0 ([inferred] the flag
 component's "active" byte); else mesh `1 + count` (`MilitaryFlagSword00..10.KEX`) or `12 + count`
 (`MilitaryFlagBow00..10.KEX`), `count` = `Military::GetFlagSoldierCount()`: the flag shows the garrison size
@@ -856,7 +856,7 @@ visible [inferred: the tree only updates children of visible widgets]:
 - `Messages::Update` S 005f86a0 (slot 1 of the `IUpdateable` face at Messages +4, vftable S 007ef63c): called
   by the frame function S 004018e0 through `game.messages`, only while the game screen reports open, after the
   `nGame::System` update and before the menu system ([ingame-ui.md](ingame-ui.md) §4 step 3) [known]. Order
-  inside [known]: base update; hovered flag cleared; return if `PlayerTable_HasActiveType2` is false; bind the
+  inside [known]: base update; hovered flag cleared; return if `ai::player::PlayerTable::HasActiveType2` is false; bind the
   listener to the local player's store if unbound; new-message poll; `last` button; scroll repeat; slot
   clicks; expiry poll (1 s); rebuild of the filtered list (only after a poll, removal or expiry reported a
   change) and of the slots (after any change); row opacity.
@@ -1094,7 +1094,7 @@ survives from one match to the next inside one program run depends on the object
 | 00621820 / 00621910 | `StatisticPanel::OnSliderChanged` / `OnButtonClick` | time range; player toggles and category |
 | 006217c0 / 006217f0 | `StatisticPanel::SetGoodGraphShown` / `OnHide` | good curve on / off; fade out, leave-on-close |
 | 0064bef0 / 0064c0c0 | `nMenu::StatsGraph::ctor` / `LoadFromXml` | labels, default range 60 |
-| 0064be30 / 0064bd60 / 0064bde0 / 0064bea0 | `StatsGraph::Update_adj4` / `RefreshTimeAxisLabels` / `SetValueAxisMax` / `SetTimeRange` | listener registration, axis labels |
+| 0064be30 / 0064bd60 / 0064bde0 / 0064bea0 | `StatsGraph::Update` / `RefreshTimeAxisLabels` / `SetValueAxisMax` / `SetTimeRange` | listener registration, axis labels |
 | 00642fe0 / 00642d60 / 006435c0 | `StatsGraphPlayers::RefreshGraphs` / `SetStatisticCategory` / `LoadFromXml` | player curves |
 | 00642590 / 00642970 / 00642bb0 | `StatsGraphInventory::RefreshGraphs` / `CreateGraph` / `DestroyGraph` | good curves |
 | 00644840 / 00644430 / 006446c0 / 00644a50 / 00644ff0 | `StatsGoodList::Update` / `FillFromGoodVectors` / `FillFromGoodTable` / `LayoutItems` / `LoadFromXml` | inventory rows |
@@ -1121,7 +1121,7 @@ survives from one match to the next inside one program run depends on the object
 | 005f5ed0 / 005f2820 / 005f2690 | `MiniMap::SymbolRenderer::Draw` / `MinimapSymbolList_Clear` / `MinimapSymbolList_TickExpire` | symbol pass entry; list reset on map start and leave; lifetime countdown |
 | 005f3fc0 / 005f4390 | `MiniMap::UpdateTerritoryOverlay` / `UpdateObjectOverlay` | overlay textures |
 | 005f5bb0 / 005f55a0 / 005f20c0 / 005f5af0 | `MiniMap::RenderSymbols` / `MiniMap_DrawMapSymbol` / `MapCellToViewPos` / `MinimapSymbolList_Add` | symbols |
-| 005f18e0 / 005f2130 / 005f2390 / 005f1af0 / 005f1520 | `MiniMap::OnMousePress_Face8` / `OnMouseMove_Face8` / `OnMouseWheel_Face8` / `ZoomAroundPoint` / `FocusCameraOnCursor` | minimap input |
+| 005f18e0 / 005f2130 / 005f2390 / 005f1af0 / 005f1520 | `MiniMap::OnMouseButton0Down` / `OnMouseMove_Face8` / `OnMouseWheel_Face8` / `ZoomAroundPoint` / `FocusCameraOnCursor` | minimap input |
 | 005ec340 / 005eaed0 / 005ef320 / 005ef530 | `nMenu::Game::OnKeyDown` / `CloseChatInput` / `OnChatToAll` / `OnChatToAllied` | chat |
 | 005fe6c0 / 0061ff50 | `nMenu::Defeat::LoadFromXml` / `nMenu::GameEnded::OnButtonClick` | end dialogs |
 | 00643570 / 006420f0 / 00643560 / 00642930 | players graph update thunk / inventory graph update thunk / `StatsGraphPlayers::RefreshGraphs_thunk_m288` / `StatsGraphInventory::RefreshGraphs_thunk_m288` | per-frame update and statistics listener callbacks of the two graphs |

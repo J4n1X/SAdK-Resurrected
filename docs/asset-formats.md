@@ -66,9 +66,17 @@ u8   skeletonCount, then skeletonCount x Skeleton
 u8   animationCount, then animationCount x Animation
 ```
 
+Every mesh, material, skeleton and animation record starts with two strings (`KScene::NBaseObject`: `name`
++0x04, `exportName` +0x20). `name` is the object's own name in the 3ds Max scene (a node, a root bone such as
+`Bip01`, a material such as `16 - Default`). `exportName` is the name of the exported asset `[inferred]` and has
+one value per file: it is empty in 1,280 of the 1,639 files of the reference install; in the other 359 it is the file's own base
+name (326 files) or the base name of the asset the file was copied from (33 files, e.g. `mountainHare_idle.KEX`
+holds `rabbit_idle`) `[known]` (data). The object's virtual slot 1 (`NBaseObject::GetExportNameOrName` S 00730310)
+returns `exportName` when it is not empty, else `name` `[known]`.
+
 **Mesh** (`KMesh::Load` S 0072c880)
 ```
-str  name, name2
+str  name, exportName
 u32  numIndices, numVertices, numStreams, numBoneNames, numMaterials
 u32  indices[numIndices]                 triangle list
 numStreams x { u8 type; u32 byteSize; u8 data[byteSize] }
@@ -76,31 +84,39 @@ str  boneNames[numBoneNames]             skinned meshes
 numMaterials x Material
 ```
 
-Stream types, from their sizes across all 5,332 meshes `[inferred]` (the renderer's vertex-declaration mapping
-is not yet read):
+Stream types `[known]`: the engine's vertex fill `S2CE::CMesh::FillVertices` S 0076c030 switches on the type and
+writes each stream to one usage of the D3D vertex declaration (details in `docs/sim/animation-models.md` §2.4);
+the byte sizes agree across all 5,332 meshes:
 
 | Type | Bytes/vertex | Meaning |
 |---|---|---|
 | 0 | 12 | position (vec3) — every mesh |
 | 1 | 12 | normal (vec3) — every mesh |
-| 2 | 12 | rare (1 mesh); tangent? |
-| 3 | 4 | vertex colour (RGBA bytes) |
+| 2 | 12 | tangent (vec3); 1 mesh in the install |
+| 3 | 4 | vertex colour (one D3DCOLOR dword) |
 | 4, 5, 6, 7 | 8 | texture coordinate sets 1–4 (vec2) |
 | 12 | 16 | bone weights (4 × f32) — only with bone names, always with 13 |
-| 13 | 4 | bone indices (4 × u8) |
+| 13 | 4 | bone indices (4 × u8), indices into the mesh's own `boneNames` |
 
 **Material** (`KMaterialDesc::Load` S 007303a0)
 ```
-str  name, name2
-u32  a, b                 a is 0 in all files; b varies (0, 10, 12, 18, 20, 24) [TODO]
-u32  count, then count x { str usage; str textureFile }
+str  name, exportName
+u32  startIndex, triangleCount    the material's range in the mesh's index list
+u32  count, then count x { str usage; str file }
 ```
-Usages are 3ds Max slots: `DiffuseColor` (7,006), `Opacity`, `Self-Illumination`, `SpecularColor`,
-`SpecularLevel`, `Glossiness`, `Bump`, `Reflection`.
+`startIndex` and `triangleCount` `[known]`: the subset builder `Mesh_AppendSubsetsFromKMesh` S 0076d010 copies them
+into the subset's first index and primitive count and skips a material whose `triangleCount` is 0; in 5,279 of
+5,332 meshes the counts sum to `numIndices / 3` (the 53 others are helper meshes without materials).
+
+Each texture entry is a pair of strings (`KMaterialDesc::GetTextureUsage` S 00730340, `GetTextureFile`
+S 00730370) `[known]`. `usage` is the 3ds Max map slot: `DiffuseColor` (7,006), `Opacity`, `Self-Illumination`,
+`SpecularColor`, `SpecularLevel`, `Glossiness`, `Bump`, `Reflection`. `file` is the texture path as the exporter
+wrote it, an absolute path of the artist's machine; the mesh loader keeps only the part after the last backslash
+(S 0076d010) `[known]`.
 
 **Skeleton** (`KSkeleton::Load` S 0072d290)
 ```
-str  name, name2
+str  name, exportName
 u32  boneCount, then per bone:
   str  name
   BoneKey                 local transform
@@ -112,7 +128,7 @@ bit 2 → 3×3 scale matrix.
 
 **Animation** (`KAnimation::Load` S 0072dcf0)
 ```
-str  name, name2
+str  name, exportName
 f32  length               seconds
 i32  trackCount, keyCount  every track has keyCount evenly spaced keys
 per track:
@@ -144,5 +160,5 @@ import into Unity (glTFast / UnityGLTF) or Blender. Points to handle:
 - pair animation-only KEX files with their skeleton by bone name; the game's XML (e.g. `animals.xml`: `model=`,
   `mesh=`, `<Animation filename=…>`) says which files belong together;
 - map materials to PBR: `DiffuseColor` → base colour, `Opacity` → alpha, `Self-Illumination` → emission,
-  `Bump` → normal map; textures (`.dds`, `.tga`) import into Unity as they are;
-- confirm the stream types (table above) in the renderer's vertex-declaration code first.
+  `Bump` → normal map; textures (`.dds`, `.tga`) import into Unity as they are; use only the file name of a
+  texture entry (the stored directory is the artist's).

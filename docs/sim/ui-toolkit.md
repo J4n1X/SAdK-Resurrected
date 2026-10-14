@@ -27,8 +27,9 @@ there is no `CheckBox` class (a check box is a `Button` with `checkbutton="true"
 ## 2. Data model
 
 Offsets are from the object start unless a line says "face": every widget has three vtables (primary +0,
-`IUpdateable` +4, `Event`/`Configurable` +8, [ingame-ui.md](ingame-ui.md) §2.1); handlers that run on the Event
-face see every field 8 bytes lower.
+`IUpdateable` +4, `Event`/`Configurable` +8, [ingame-ui.md](ingame-ui.md) §2.1); a handler that runs on the Event
+face receives `this` = object + 8. The map types such a `this` as an offset pointer into the widget class, so the
+decompile of a face handler shows the widget's own fields at the object offsets.
 
 ### 2.1 Event face (`nUi::Event`, 0x18 bytes at Object +8) [known] S 004ab2c0, S 004ab060, S 004ab130
 
@@ -763,12 +764,12 @@ call [inferred]. A remake should give the flicker its own presentation-side gene
 | 004e4270 / 004e3fa0 / 004e3d20 | `RichTextLayout::SetText` / `ApplyTag` / `Render` | markup |
 | 004aa310 / 004a8f70 / 004a88a0 | `UiSprite_RenderToOwnerRect` / `Shape::DrawSliced` / `DrawQuad` | sprite, nine-slice |
 | 004af080 / 004afa10 / 004afd10 | `Button::UpdateMapping` / `LayoutCaption` / `Draw` | button look |
-| 004aeca0 / 004aecf0 / 004b1270 / 004b12d0 / 004b1470 | `Button::OnMousePress` / `OnMouseRelease` / double click / `OnClicked` / `OnPressed` | button events |
+| 004aeca0 / 004aecf0 / 004b1270 / 004b12d0 / 004b1470 | `Button::OnMouseButton0Down` / `OnMouseButton0Up` / `OnMouseButton0DoubleClick` / `OnClicked` / `OnPressed` | button events |
 | 004ce780 / 004ceaa0 | `Icon::Draw` / `UpdateShapeTexture` | icon |
 | 004c07e0 / 004c0a40 | `nUi_TextInput_InsertChar` / `nUi_TextInput_HandleKey` | `Edit` buffer |
-| 00497b60 / 00497f50 / 00498100 / 00498250 | `Edit::OnMousePress` / `Update` / `Draw` / `OnKeyDown` | `Edit` |
+| 00497b60 / 00497f50 / 00498100 / 00498250 | `Edit::OnMouseButton0Down` / `Update` / `Draw` / `OnKeyDown` | `Edit` |
 | 0049ebd0 / 0049f100 / 0049f530 | `EditEx::LoadFromXml` / `HandleChar` / `HandleKey` | `EditEx` rules |
-| 0049b7b0 / 0049b9b0 / 0049bae0 / 0049a3a0 | `EditEx::OnMousePress` / `OnMouseRelease` / `OnDoubleClick` / `UpdateMouseSelection` | selection |
+| 0049b7b0 / 0049b9b0 / 0049bae0 / 0049a3a0 | `EditEx::OnMouseButton0Down` / `OnMouseButton0Up` / `OnDoubleClick` / `UpdateMouseSelection` | selection |
 | 0049ad00 / 0049a750 / 0049a090 | `EditEx::Draw` / `DrawLine` / `Update` | caret, selection, password |
 | 004994a0 / 0049a6d0 | `UiClipboard_SetText` / `UiClipboard_GetText` | clipboard |
 | 004d0200 / 004d02f0 / 004d0790 | `Slider2::SetValue` / `Update` / `OnChildClicked` | slider |

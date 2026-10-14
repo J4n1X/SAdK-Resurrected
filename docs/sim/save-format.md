@@ -46,7 +46,7 @@ section, which is the first section after the 12-byte file tag (§2.5) [known] S
 
 ### 2.1 `NCore::IStoreable`
 
-Every storable object starts with (or embeds) a vtable of this shape [known] vftable S 007d4fbc, ctor S 00663dd0:
+Every storable object starts with (or embeds) a vtable of this shape [known] vftable S 007d4fbc (the base destructor S 00663dd0 restores it at the end of every derived destructor):
 
 | Slot | Offset | Name | Meaning |
 |---|---|---|---|
@@ -604,9 +604,9 @@ In this order:
 11. `military->PostLoad`.
 12. `map->PostLoad` (an empty function, `docs/map-format.md` §5.5).
 13. `ambients->PostLoad` (S 005366f0).
-14. `SacrificeSystem_PostLoad` (S 0065f540).
-15. `LogicChestSystem_PostLoad` (S 0052d2c0): raises "chest added" for every chest, in vector order.
-16. `LogicSpawnSystem_PostLoad` (S 0052cd70).
+14. `NSacrifice::System::PostLoad` (S 0065f540).
+15. `ai::logic::LogicChestSystem::PostLoad` (S 0052d2c0): raises "chest added" for every chest, in vector order.
+16. `ai::logic::LogicSpawnSystem::PostLoad` (S 0052cd70).
 17. If S 0057b800 returns true: `Timer_Reset()`. S 0057b800 returns the global byte `DAT_0088a614`, the frame
     timer's "initialised" flag: `Timer_Init` S 0057b790 sets it at application start-up (both of its branches)
     and S 0057b7f0 clears it at application shutdown; nothing else writes it [known] (xrefs). So the reset
@@ -862,7 +862,7 @@ reimplementation must rebuild or accept as lost:
 | Street planners, AI path analysers, the street-net path finder | restarted / recreated | [known] S 005273d0, S 005819a0, S 00668050 |
 | Player messages of type 8 (letters; also the type of the `!Autosave...` notice, §4) | written like every other message, but `NPlayer::Messages::Load` reads each one and does not put it back into the list | [known] S 005c1900, S 005c2520; `docs/sim/players-victory.md` §7 |
 | The frame timer | reset at the end of post-load (§3.6 step 17) | [known] S 005273d0 |
-| Game speed and pause | the speed is the float `UserProfile +0x24`: read by the speed-cycle command sender S 00782950 and Lua `getSpeed` S 005ad6f0, written by the lockstep command 0x20023 (S 00782a20: the command's integer as float, no range check; the sender produces `floor(speed) mod 3 + 1`, i.e. 1..3). Pause is speed 0: `nMenu::Game::SetPaused` S 005ea9b0 keeps the old speed in the game screen object, writes 0, and on unpause restores it (at least 1.0). It is a profile value, not part of the save: `StoreSettings` S 00579640 writes it to `settings.cfg` as it stands (0 if the profile is written while paused), but `LoadSettings` S 00579960 sets `+0x24` to 1.0 right after reading the stored float, so the stored value never takes effect. `nMenu::Game::SetupHud` S 005ed700 writes 1.0 inside its one top-level branch "UI not suppressed"; its only caller `nMenu::Game::OnEnter` S 005eed00 calls it unconditionally, before `BuildWorld` | [known] for each function; so every game entered with the HUD, a loaded one included, starts at speed 1.0 and unpaused in terms of speed [inferred]; with the UI suppressed the speed stays what the last command or pause left [inferred] |
+| Game speed and pause | the speed is the float `UserProfile +0x24`: read by the speed-cycle command sender S 00782950 and Lua `getSpeed` S 005ad6f0, written by the lockstep command 0x20023 (S 00782a20: the command's integer as float, no range check; the sender produces `floor(speed) mod 3 + 1`, i.e. 1..3). Pause is speed 0: `nMenu::Game::SetPaused` S 005ea9b0 keeps the old speed in the game screen object, writes 0, and on unpause restores it (at least 1.0). It is a profile value, not part of the save: `StoreSettings` S 00579640 writes it to `settings.cfg` as it stands (0 if the profile is written while paused), but `LoadSettings` S 00579960 sets `+0x24` to 1.0 right after reading the stored float, so the stored value never takes effect. `nMenu::Game::SetupHud` S 005ed700 writes 1.0 inside its one top-level branch "UI not suppressed"; its only caller `nMenu::Game::OnEnter` S 005eed00 calls it unconditionally, before `BuildWorld` | [known] for each function; so every game entered with the HUD, a loaded one included, starts at speed 1.0 and unpaused in terms of speed [inferred]; a save written while paused (`TogglePause` S 005da400 had set `+0x24` to 0, tick 54,259) loaded with the factor at 1.0 and the ticks running on from 54,259 [live, 2026-10-14]; with the UI suppressed the speed stays what the last command or pause left [inferred] |
 | Camera position, selection, open windows, minimap state | not part of any `Store` reached from `GameFile_Save`; the camera is re-activated by `BuildWorld` | [inferred] from the call lists of S 005a9fa0 and S 005a9ec0 |
 | Network session: slots, GUIDs, GameID, GameSeed, net tick, queued commands, checksum log | belongs to the session | `docs/multiplayer-save.md` |
 | Commands issued but not yet executed | lost [inferred] | |
@@ -897,9 +897,10 @@ S 00668050 reads them verbatim in current versions).
   re-add), a loaded game diverges from one that kept running. Known case: `NLogic::Stock::Load` re-adds goods unit
   by unit, advancing the change stamp once per unit [known] S 00539fa0 (`docs/sim/logic-core.md` §7); the stamp
   itself is in neither the save nor the checksum data (`Stock::Store` S 00539850 and `StoreContents` S 00539910
-  write flag, count and entries only), so this case does not show [known]. Whether any other
-  such difference is visible to the
-  checksum is [TODO] (needs two games: one saves and loads at tick N, the other runs on; compare checksums).
+  write flag, count and entries only), so this case does not show [known]. No other such difference reaches the
+  checksum: a developed six-player offline game saved at the end of tick 54,004, and the same save loaded, gave
+  equal `ComputeChecksum` values on all 45 compared ticks (54,010 to 54,054); the first tick after the load was
+  54,005. Save and load are checksum-neutral over this window [live, 2026-10-14].
 - **The checksum is weaker than the save**: bools count one byte, strings only four bytes, section tags nothing,
   and several saved systems are not covered (§3.9). Two games can be "in sync" with different quests, statistics
   or chests.
@@ -961,12 +962,12 @@ S 00668050 reads them verbatim in current versions).
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | [TODO] Byte layout of the second layer of the AI records (`AI Player` and the AI section types of Appendix A); which class owns which of the two `Ai Cell` tags | static: read each AI `Store` / `Load` pair below S 00583180 / S 00584320 and write the layouts into `docs/sim/ai-player.md` §7; needed to parse any original save past the street net |
-| 2 | Whether a save/load cycle is checksum-neutral (post-load side effects, §8) | running game: two synchronised games, one loads its own save at tick N; compare the checksums of the following ticks |
-| 3 | Pause and sacrifices: nothing of the pause is saved (it is game speed 0, §7) and running sacrifices are stored with their start ticks, so both saves are ordinary ones. Cinematic: a save can be written by `EmergencySave` S 005da7d0 (battery low) and, if a click gets through during the 1.0 s HUD fade, by an open save panel; it loads with the computer players and the chests switched off (`camera-input-cutscenes.md` §7) | open: the click during the fade (running game) |
+| 2 | Answered (§8): a save/load cycle is checksum-neutral; a developed six-player game and the same game loaded from its save at tick 54,004 gave equal checksums on all 45 compared ticks [live, 2026-10-14] | — |
+| 3 | Pause and sacrifices: nothing of the pause is saved (it is game speed 0, §7) and running sacrifices are stored with their start ticks, so both saves are ordinary ones. Answered for the pause (§7): a save made during a pause loads unpaused at speed 1.0 and runs on from the saved tick [live, 2026-10-14]; the sacrifice save was not tried. Cinematic: a save can be written by `EmergencySave` S 005da7d0 (battery low) and, if a click gets through during the 1.0 s HUD fade, by an open save panel; it loads with the computer players and the chests switched off (`camera-input-cutscenes.md` §7) | open: the click during the fade (running game) |
 | 4 | Answered (autosave rows of the "when a save is written" table): the autosave fires while the game is paused and not during a cinematic. `Autosave::Update` S 0078b040 compares wall-clock seconds and has no pause test; `nGame::System::Update` S 00780d20 calls it every frame unless the UI is suppressed or `nGame::System +0x635` is set, and that byte is set by `BeginCinematic` S 00782b60 (called from `nMenu::Cinematic::OnShow`) and cleared by `EndCinematic` S 00782bb0. The interval keeps running during the cinematic, so an overdue autosave fires in the first frame after it | static: S 0078b040, S 00780d20, S 00782b60; live 2026-10-12 (`Update` runs once per frame) |
 | 5 | [TODO] Which build wrote `.sav` (type 10) files into the save folder, and whether those were containers | a `.sav` from an old installation; static: none (this build never writes type 10) |
 | 6 | [TODO] The bodies of the eleven `Reference*::Relink` functions (§2.1): the container searched and the pointer value after a failed lookup | static: read S 00538620 .. S 0053e7c0 |
-| 7 | [TODO] `MapInfo` field meanings (`+0x48`, `+0x68`, `+0x88`, `+0xa8`, `+0xc8`, `+0x1c8`, `+0x1cc`, `+0x1ec`) are taken from `docs/map-format.md` §4.2 and were not derived here; only the write order and the version gates were (§3.2, §3.5) | static: the `MapInfo` setters S 005293b0 .. S 00529510 and their callers |
+| 7 | `MapInfo` field meanings are in `docs/map-format.md` §4.2: `+0x48` who controls the slot (0 none, 1 computer, 2 local human, 3 remote human), `+0x68` tribe, `+0xc8` AI level and `+0x1c8` win condition are [known] from their setters and readers (S 004562d0, S 005abb60, S 005293e0, S 00529470, S 00535870); `+0x88` colour and `+0xa8` team are [inferred] from one reader each; `+0x1ec` is a network-game flag that no function tests. [TODO] `+0x1cc` and `+0x1f0`: only the write order and the version gates are established (§3.2, §3.5) | static: readers of `MapInfo + 0x1cc` and `+0x1f0` |
 | 8 | [TODO] The order of the two maps of a player among the 16 flag-network maps (which k is which net kind) | static: the users of `NNet::System +0x1d0`; owner document `docs/sim/streets-transport.md` |
 | 9 | [TODO] Whether a game entered with the UI suppressed (a network match) ever resets the speed float `UserProfile +0x24`, since `SetupHud` skips its write of 1.0 there (§7) | static: every writer of `UserProfile +0x24` (callers of the setter used in S 00782a20, S 005ea9b0, S 005ed700) |
 
@@ -985,7 +986,7 @@ S 00668050 reads them verbatim in current versions).
 | 005aa150 | `GameFile_ResetWorldForMapExport` | strips the world before a map export |
 | 005ab220, 005aa690, 005aa540 | `GameFile_WriteDesyncDump`, `GameFile_DumpMap`, `GameFile_DumpLogic` | text dump |
 | 00784080 | `nGame::System::ComputeChecksum` | the checksum writer list |
-| 00663dd0 | `NCore::IStoreable::ctor` | base vtable S 007d4fbc |
+| 00663dd0 | `NCore::IStoreable::dtor` | base destructor: restores the base vtable S 007d4fbc |
 | 00581800 | `NCore::Stream::ctor` | base stream |
 | 007803c0, 007807f0, 007805d0 | `NCore::FileStreamCrypt` ctor, `Open`, `Close` | encrypted in-memory stream |
 | 00780470 / 00780480 | `FileStreamCrypt::ReadRaw` / `WriteRaw` | |
@@ -997,7 +998,7 @@ S 00668050 reads them verbatim in current versions).
 | 00780960, 00780bb0, 00780b70 | `NCore::DumpStream` ctor, `Open`, `WriteChunkHeader` | text sink |
 | 006e7770 | `File_ReadAndDecrypt` | read + decrypt a container (`gReadFileData`, then `gDecryptData`) |
 | 006eeac0 / 006ee8e0 | `FileCrypt_DeriveFileKey` / `FileCrypt_PackAndEncrypt` | key, packing |
-| 0052c880, 0052c320, 0052c1b0, 0052c100 | `MapPath::CtorWithFileName`, `MapPath_BuildDirectory`, `MapPath_GetFileExtension`, `MapPath_GetDataSubdir` | type → folder and extension |
+| 0052c880, 0052c320, 0052c1b0, 0052c100 | `MapPath::CtorWithFileName`, `ai::game::MapPath::BuildDirectory`, `MapPath_GetFileExtension`, `MapPath_GetDataSubdir` | type → folder and extension |
 | 0052c270 | (unnamed) is-new-game-type | types 0, 1, 2, 100, 102 |
 | 0057bfb0 | `Fs_CreateUserDataDirectories` | creates the user folders |
 | 005275c0 / 00527d60 / 005273d0 | `NLogic::System::Save` / `Load` / `PostLoad` | `MapInfo` + `LogicSystem`; post-load order |
@@ -1023,9 +1024,9 @@ S 00668050 reads them verbatim in current versions).
 | 005b0f30 / 005b2780 | `GameScript_Store` / `GameScript_Load` | script key-value store |
 | 005b1fe0, 005b2180, 005b2220 | `GameScript_LoadMapScript`, `GameScript_CallOnLoaded`, `GameScript_CallOnStarted` | script on load |
 | 00535ef0 / 00535f40, 00536000 / 00536090 | `NLogic::Quests::Store` / `Load`, `NLogic::Quest::Store` / `Load` | quests |
-| 0065f500 / 0065f650 / 0065f540 | `NSacrifice::System::Store` / `NSacrifice::System::Load` / `SacrificeSystem_PostLoad` | sacrifices |
+| 0065f500 / 0065f650 / 0065f540 | `NSacrifice::System::Store` / `NSacrifice::System::Load` / `NSacrifice::System::PostLoad` | sacrifices |
 | 00662b40 / 00662ba0 | `SacrificePlayerData::Store` / `Load` | per-player sacrifice data |
-| 0052d200 / 0052d600 / 0052d2c0 | `LogicChestSystem::Save` / `LogicChestSystem::Load` / `LogicChestSystem_PostLoad` | chests |
+| 0052d200 / 0052d600 / 0052d2c0 | `LogicChestSystem::Save` / `LogicChestSystem::Load` / `ai::logic::LogicChestSystem::PostLoad` | chests |
 | 00539360 / 005393e0 | `LogicChest::Store` / `Load` | one chest |
 | 005b35d0 / 005b4650 / 005b3a90 | `NNavy::System::Store` / `Load` / `PostLoad` | navy (map part) |
 | 0060ce40, 0060e0e0, 0060da50, 0060d000, 0060d5b0, 0060dd30 | `nMenu::LoadSavePanel` ctor, `LoadFromXml`, `RefreshFileList`, `Confirm`, `OnMessageBoxResult`, `Update` | the panel |

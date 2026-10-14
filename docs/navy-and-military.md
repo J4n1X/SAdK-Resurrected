@@ -34,7 +34,7 @@ assigned to a route per player [known: `NavyShipRoute::HasPlayerEntry` `005b6bb0
 
 | Code | Cause |
 |---|---|
-| 7 | The attacker's slot-table flag `+0x28` is set (`SlotTable_IsField28Positive`, `NSacrifice::System+0xc`) [known]; meaning [TODO: likely a sacrifice/peace lock] |
+| 7 | The attacker's peace-time sacrifice runs: `ai::logic::SacrificeModifierQuery::IsPeaceTimeActive` `00661c30` (`NSacrifice::System+0xc`) tests the player's sacrifice modifier flag 10 (`+0x28`) `> 0` [known]; flag 10 is the own-sacrifice effect type 10 `Effect_PeaceTime` (`docs/sim/military.md` §3.5) [inferred] |
 | 5, 1, 6, 3, 7 | From the target's own state, `NVillage::Military::GetAttackTargetState` `0055fd90`: still under construction → 5; not in proximity zone 2 → 1; an unoccupied military building → 6; already under attack (a fight is bound) → 3; the owner's slot flag → 7 [known]. "Proximity zone" is [TODO] |
 | 0 / 8 | `Military_IsEnemyTerritoryInRange` (below) is true: 0 if `Military_CountAttackersByKind` finds any soldier, else 8 ("no soldiers") [known] |
 | 2, 4, 1 | Otherwise the sea reason from `Military_IsHarborWithinBuildingRange` `00574f70`: route but no ship → 2; ship busy → 4; no route, or no harbour in range → 1 [known] |
@@ -194,7 +194,7 @@ So soldiers always walk to **whichever harbour the ship is heading for**. The sh
 - State 3 runs the `LeaveMap` movie (`NMovie::LeaveMap::Update` `00776bd0`) [known]:
   1. It starts `MoveToHome`.
   2. When `MoveToHome::Start` finds no home it can reach, the movie starts **Stray** (aimless wandering) instead.
-  3. After each stray walk a soldier loses 1 health (`Livepoints_Damage` `0065dc20`) and `MoveToHome` is tried again.
+  3. After each stray walk a soldier loses 1 health (`NSettlers::Livepoints::Damage` `0065dc20`) and `MoveToHome` is tried again.
      Other settlers retry up to 26 times.
   4. The movie ends when the soldier's health reaches 0.
 - When the movie ends, `NSettlers::Settler::Update` `00656ec0` puts a settler within 2 cells of a home building into
@@ -205,7 +205,7 @@ So soldiers always walk to **whichever harbour the ship is heading for**. The sh
 **Crossing water on foot: sea streets** [known]. A ship route is also a street (type 3) of the street network, built
 and removed by `NavyShipRoute::UpdateSeaStreet` `005b71d0`. It exists only while `IsStreetValidForPlayer` `005b6d80`
 holds: **both end harbours belong to the player and the player has a ship on the route**. Settlers, soldiers going home
-included, walk over it and wait at the harbour flag for a ship (`NavyCargo_AssignWaitingSettlers` `005bd270`).
+included, walk over it and wait at the harbour flag for a ship (`ai::navy::NavyCargo::AssignWaitingSettlers` `005bd270`).
 
 **Harbour ownership** [known]: a harbour belongs to whoever owns its flag. `Harbor::AttachFlag` `005b49f0` copies the
 flag's owner and refreshes the sea streets of its routes. When the flag goes, `005b5370` (via
@@ -409,7 +409,7 @@ A pair counts only if **its own route has a ship for these soldiers**, by the ch
   ship of the route's sea street. The game's idle-ship search skips it, because a route takes one ship per player
   [live 2026-10-08: such a ship made every attack over its route count only the target's landmass]. It is taken
   **whatever it is doing**, so a fight never depends on when the ship is free (maintainer's rule):
-  - passengers assigned to board it are released (`NavyCargo_UnassignPendingSettlers` `005bd3b0`);
+  - passengers assigned to board it are released (`ai::navy::NavyCargo::UnassignPendingSettlers` `005bd3b0`);
   - its mission starts (`NNavy::Military::Activate` `005b9cd0`; it stays linked to its route) and the fight is linked;
   - ship state 0: `Ship::Update` `005bb500` starts a mission only from 0 (→ 5), and a route ship cycles through 1-3
     [live 2026-10-08: left in 1, the mission never ran and the ship stayed stuck];
@@ -426,7 +426,17 @@ A pair counts only if **its own route has a ship for these soldiers**, by the ch
   sending them anywhere; a ship under way stays where it stopped (still reading movement state 4, AtHarbor), out of
   every idle-ship search [live 2026-10-08: a defending ship stopped at sea after its harbour fell]. The mod sends such
   a stranded ship (state 0, no route, stopped mid-voyage) home with `Ship::ReturnToOwnHarbor`;
-- an idle ship found at H2's exit, when P has no ship on the route. Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
+- an idle ship found at H2's exit, when P has no ship on the route;
+- failing that, P's nearest ship serving **another** sea street (same water body as H2's exit, hex distance). Idle
+  ships have no route, and every idle ship puts itself on a sea street that has none (`sim/navy.md` §3.8,
+  `FindOwnRouteForShip` takes the first such exit in order), so a player with no more ships than sea streets has no
+  idle ship: of a harbour with two routes and one ship, only the route the ship went to could carry a fight. The
+  ship is taken as above, except that it leaves its street (`NavyLink_UnlinkMovementRoute` `0053c3f0`; the street
+  goes while it has no ship) and is linked to the route like an idle ship (`NavyLink_LinkMilitaryRoute`). After the
+  mission it goes back to the street it served, unless the player has another ship there by then
+  [TODO, live: not tested in the game].
+
+Of the usable pairs the one with the smallest **d(target, H1) + d(H2, building)** below
 24 wins. Counting and sending use the same search, so a building is counted only with soldiers its ship can actually
 take. A blocked route falls back to the next-best pair and its ship.
 
@@ -560,7 +570,7 @@ of the mission still in that fight out of it (`0053cfe0`), ashore or aboard. The
 after its soldiers have left the fight, but `Ship::Update` also ends it when the ship's route is cut (a harbour of it
 changes hands). Soldiers still fighting ashore are then pulled out mid-strike; the fight can lose its last members and
 be deleted, and a soldier finishing its strike reads a null fight (`NMovie::Fight::TryApplyStrike` →
-`Fight::ComputeSoldierStrikeValue`, crash at `005721b1`; or `Fight::OnSoldierEvent_BySide`, crash at `005711cb`). The
+`Fight::ComputeSoldierStrikeValue`, crash at `005721b1`; or `Fight::OpposingSideHasEngageableSoldierFor`, crash at `005711cb`). The
 unmodded game has the same path (an attacker's home harbour taken mid-attack). The mod hooks `Military::Finish`: the
 mission's soldiers ashore and still in its fight are unlinked from the ship first (`NavyLink_UnlinkMilitarySoldier`),
 so they fight on without a ship.
@@ -571,7 +581,7 @@ the fight before it boards (`Soldier::Update` `006594a0` state 7 calls `SoldierF
 (`Fight::RemoveSoldier`, then the soldier's `fightState.fightRef` is cleared) and leaves `inFight` set. When such a
 soldier is deleted, `SoldierFightState::Destruct` `0065c080` sees `inFight` and calls `ReleaseAll` `0065bfe0`, which
 passes the null result of `ReferenceFight::Get` to `Fight::RemoveSoldier` (crash at `005719e3`). A ship deleted with
-an active mission does exactly this: `Ship::dtor` ends the mission, then `NavyCargo_dtor` `005bd7f0` deletes the
+an active mission does exactly this: `Ship::dtor` ends the mission, then `ai::navy::NavyCargo::dtor` `005bd7f0` deletes the
 settlers aboard. The crash dump has this stack; that the soldier was on its way to the fight is `[inferred]`. The
 unmodded game has the same path; ShipLostOnDefeat makes it common. In its `Military::Finish` hook the mod lets the
 mission's soldiers who are aboard and marked leave the fight after the game's `Finish`, as the game's state `0x2d`
@@ -580,7 +590,7 @@ does (`SoldierFightState::LeaveFight` `0065be90`). In the game `[TODO]`.
 A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `NNavy::Ship::dtor` `005baf20` ends an
 active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
 just leaving it: `MilitaryFightList_Update` deletes an inactive fight the same tick, and a garrison soldier still in
-state `0xF` then reads it (`Fight::OnSoldierEvent_BySide` on a null fight) [live 2026-10-09: crash at `005711cb`].
+state `0xF` then reads it (`Fight::OpposingSideHasEngageableSoldierFor` on a null fight) [live 2026-10-09: crash at `005711cb`].
 
 What the mod keeps about ships (lent route ships with their route, defence holds with their landing, pickup and
 invasion timers) is dropped in its hook on `NNavy::Ship::dtor`, so a ship deleted on any path (§5) leaves nothing
@@ -625,7 +635,7 @@ everything is restored. For each position found, the land the founding needs is 
 - the footprint;
 - the street path, ends included, with the 6 neighbours of each of its cells.
 
-The street search is the game's: the navy's `StreetPlanner` search object, set up as `Generic_SetLink4C` `00776160`
+The street search is the game's: the navy's `StreetPlanner` search object, set up as `NLogic::AStarStreet::SetSearchParams` `00776160`
 would (player, type 0, the path so far, no street to cross). Its fields are restored afterwards. The claim writes
 those cells and runs `OnTerritoryChangedAt`. It removes the enemy's harbour flag at once with
 `NNet::System::RemoveFlag` `00665c10`, as the next tick would. Then it runs the game's state 6, with

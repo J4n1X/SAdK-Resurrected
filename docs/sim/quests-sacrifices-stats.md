@@ -88,7 +88,7 @@ S 0065f9b0:
 
 | Offset | Type | Field | Meaning |
 |---|---|---|---|
-| +0x04 | bool | `initialized` | set by `SacrificeSystem_Init` S 0065f4b0 and `Load`, cleared by `SacrificeSystem_Reset` S 0065f4d0 |
+| +0x04 | bool | `initialized` | set by `NSacrifice::System::Init` S 0065f4b0 and `Load`, cleared by `NSacrifice::System::Reset` S 0065f4d0 |
 | +0x05 | bool | `paused` | set while a cinematic plays; `Update` does nothing while set |
 | +0x08 | u32 | `pauseStartTick` | logic tick at which the pause began |
 | +0x0c | `SacrificeModifierQuery` | | accessor object bound to the table at +0x18; the readers of properties-data.md §3.9 go through it |
@@ -251,7 +251,7 @@ S 005b1980, S 005b1ab0, S 005af580..005af790, S 005b1be0:
 - `q_isValid(i)` → `kind != 2`; `q_isVisible`, `q_isFinished`, `q_isFailed` → the flag.
 - `finished` and `failed` are independent bits: nothing clears one when the other is set.
 
-The messages go to `PlayerTable_FindLocalPlayer` S 005bdda0 (the first **active** player entry of kind 2, else
+The messages go to `ai::player::PlayerTable::FindLocalPlayer` S 005bdda0 (the first **active** player entry of kind 2, else
 entry 0), so on every machine of a network match only that machine's own player gets them `[known]`.
 
 #### 3.1.3 What the simulation reads
@@ -259,9 +259,9 @@ entry 0), so on every machine of a network match only that machine's own player 
 Two predicates over the 40 slots, used only in victory mode 5 (scenario; players-victory.md §3.6) `[known]`
 S 00535d70:
 
-- `GameQuery_AreAllMainQuestsFinished` S 0052da20: false as soon as one slot has `kind == 0` and
+- `ai::game::GameQuery::AreAllMainQuestsFinished` S 0052da20: false as soon as one slot has `kind == 0` and
   `finished == false`; true otherwise, so a table without main quests counts as finished.
-- `GameQuery_IsAnyMainQuestFailed` S 0052da60: true as soon as one slot has `kind == 0` and `failed == true`.
+- `ai::game::GameQuery::IsAnyMainQuestFailed` S 0052da60: true as soon as one slot has `kind == 0` and `failed == true`.
 
 `VictoryCond_Update` evaluates them every tick, after the common winner test, only while the local player is
 neither a declared winner nor in a victory state other than 0, in this order `[known]` S 00535d70:
@@ -345,17 +345,17 @@ S 00560e80:
 ```
 
 Per logic tick, for every **finished** building of working mode 9 (`NVillage::Building::Update` S 0055e2f0 calls
-it only when both construction remainders are <= 0), `VillageSacrifice_Update` S 00561940 `[known]`:
+it only when both construction remainders are <= 0), `ai::village::VillageSacrifice::Update` S 00561940 `[known]`:
 
 1. `state == 0`: if the building's **output stock** holds no good at all (its map has no entry; an entry is
    erased when its count reaches 0, S 00539f00): `state = 2`, `sacrificeDefId = -1`.
 2. `state == 3` and the building type is of the automatic class (below) and `CheckCanStart() == 0`:
-   `VillageSacrifice_Start` (§3.2.4) with the `targetPlayer` currently stored (-1 unless a command set it).
+   `ai::village::VillageSacrifice::Start` (§3.2.4) with the `targetPlayer` currently stored (-1 unless a command set it).
 
 The **automatic class** is the predicate S 00532960 on the building type: `constructionTime < 1` and not (all of
 `depot` +0x54, `casern` +0xf1 and the property byte +0xf5 set) `[known]`, i.e. a type that cannot be built by
 the player and is not the castle `[inferred]`; the names of the three bytes are those of village-buildings.md
-§2.1. `VillageSacrifice_Update` tests the same three fields inline. Among the four sacrifice building types of
+§2.1. `ai::village::VillageSacrifice::Update` tests the same three fields inline. Among the four sacrifice building types of
 the shipped data this is `sacrificeOlympicFlame` (`bp_setConstructionTime(sacrificeOlympicFlame, -1)`) `[known]`
 data. Buildings of the other three types start only on a start command (player, AI or script).
 
@@ -425,7 +425,7 @@ lua-runtime.md §2.3) when there is none or when the player index is >= 8 or ina
 Code 0 does not require `state == 3`; with `sacrificeDefId != -1` the state is 3 in every reachable case
 `[inferred]` (states 1 and 0 are excluded by codes 2 and 4, and state 2 always has id -1).
 
-`VillageSacrifice_Start` S 005615e0, in this order `[known]`:
+`ai::village::VillageSacrifice::Start` S 005615e0, in this order `[known]`:
 
 1. callback "order ended" (slot +0xb4) for the building;
 2. messages of type 4, without position:
@@ -448,7 +448,7 @@ Code 0 does not require `state == 3`; with `sacrificeDefId != -1` the state is 3
 4. `targetPlayer = -1`; the building's **input stock is cleared** (the cost goods are consumed here, all at
    once); `state = 1`.
 
-`VillageSacrifice_Start` tests nothing itself; its four callers test `CheckCanStart() == 0` first. The target
+`ai::village::VillageSacrifice::Start` tests nothing itself; its four callers test `CheckCanStart() == 0` first. The target
 index is not validated by the command executor S 007825b0 (game-commands.md, `0x20026`) nor by `Start`. With
 `def.target == 1` an index outside 0..7 is an out-of-bounds access `[known]` S 005c00e0, S 005bdd50:
 `PlayerMessages_SendToPlayer` computes the player entry as `table + index * 0xf0` without a range test and
@@ -511,7 +511,7 @@ target's table `[inferred]`; no shipped definition combines them (all three `exp
 
 #### 3.2.7 While it runs: one-shot effects
 
-Per tick, for every running sacrifice, `Sacrifice_UpdateTimedEffects` S 00660960 `[known]`:
+Per tick, for every running sacrifice, `ai::logic::Sacrifice::UpdateTimedEffects` S 00660960 `[known]`:
 
 ```
 elapsed  = float(u32(tickCounter - startTick))
@@ -559,7 +559,7 @@ chosen at the start), and `FunctionGoodExchange` is always `Target_Owner` `[know
 #### 3.2.8 Expiry, abort, cancel
 
 Per tick, per player record, `SacrificePlayerData::UpdateSacrifices` S 006621f0 walks the list in order
-`[known]`: `Sacrifice_UpdateTimedEffects`, then `Sacrifice_IsExpired` (`u32(tickCounter - startTick) >=
+`[known]`: `ai::logic::Sacrifice::UpdateTimedEffects`, then `ai::logic::Sacrifice::IsExpired` (`u32(tickCounter - startTick) >=
 u32(def.duration)`); an expired sacrifice is removed and the walk continues with the element that moved into its
 place.
 
@@ -585,9 +585,9 @@ Callers `[known]`:
 
 - natural expiry (above);
 - **abort** — command `0x20025` on a building in state 1, allowed only when `def.abortable`:
-  `VillageSacrifice_AbortActive` S 00560d70 removes the sacrifice, then sets `sacrificeDefId = -1` and
+  `ai::village::VillageSacrifice::AbortActive` S 00560d70 removes the sacrifice, then sets `sacrificeDefId = -1` and
   `state = 2`. The building is ready again at once, the cost is not refunded, and the cool-down still starts;
-- **destruction of the building**: `VillageSacrifice_dtor` S 00560cf0 removes a still-referenced sacrifice.
+- **destruction of the building**: `ai::village::VillageSacrifice::dtor` S 00560cf0 removes a still-referenced sacrifice.
 - **change of owner**: `NVillage::System::TransferBuildingOwnership` S 0055a210 (soldier capture S 00571af0;
   `ConquerBuilding` S 0055a890, reached from `TransferAllBuildingsOfPlayer` and Lua
   `logic.vi_changePlayerOfBuilding`) does not move the building: it removes the old one
@@ -608,7 +608,7 @@ therefore answered with `!Sacrifice expired!` only when the abort command execut
 pass `[inferred]`; in every other case the message of a marked building comes from its removal.
 
 **Cancelling an order** (command `0x20025` in another state; allowed when something is ordered, `state != 0` and
-the building type is not of the automatic class) → `VillageSacrifice_CancelOrder` S 00560e80 `[known]`: clear
+the building type is not of the automatic class) → `ai::village::VillageSacrifice::CancelOrder` S 00560e80 `[known]`: clear
 the request list, move the whole input stock into the output stock, `state = 0`, callback slot +0xb4. The
 delivered goods are thus returned to the economy through the building's output, and the building becomes ready
 only when they have been carried away (§3.2.2 step 1). No cool-down starts, and `sacrificeDefId` keeps its value
@@ -644,11 +644,11 @@ costs no goods `[known]` (S 0065fae0 touches no stock).
 - While it runs, the building cannot take an order (code 5 of §3.2.3); other sacrifice buildings of the player
   can.
 - Completion, per tick `SacrificeResearch::Update` S 0065ff00 `[known]`: when `running` and
-  `u32(tickCounter - startTick) >= u32(def.researchDuration)` → `SacrificeResearch_Complete` S 0065fde0: message
+  `u32(tickCounter - startTick) >= u32(def.researchDuration)` → `ai::logic::SacrificeResearch::Complete` S 0065fde0: message
   `!Sacrifice Researched` (type 4, arg = the definition's name, at the building) to the building's owner;
   insert `{def.id, tickCounter}` into `researched` (the map's unique insert); callback "research ended"
   (slot +0xac); `running = false`; unlink.
-- Cancel (command `0x20028`) `SacrificeResearch_Cancel` S 0065fbd0 `[known]`: callback slot +0xac,
+- Cancel (command `0x20028`) `ai::logic::SacrificeResearch::Cancel` S 0065fbd0 `[known]`: callback slot +0xac,
   `running = false`, unlink. Nothing is recorded; a later research starts from 0.
 - Destruction of the building: `NVillage::Building::dtor` S 0055ce70 calls the unlink S 0053be30 when the
   building's research reference is set (id at `Building +0x130` != -1). The unlink clears the reference and
@@ -679,7 +679,7 @@ ticks through a cinematic and are settled in the first update after it `[known]`
 | Function | Address | Effect |
 |---|---|---|
 | `logic.vi_orderSacrifice(player, x, y, defId)` | S 005aeda0 | on the player's sacrifice building found at or nearest to the cell: `CanOrder(defId)` → `Order(defId, false)` |
-| `logic.vi_startSacrifice(player, x, y, target)` | S 005aec70 | same building lookup; `target` must pass the binding's player-argument check; `CheckCanStart() == 0` → `targetPlayer = target`, `VillageSacrifice_Start` |
+| `logic.vi_startSacrifice(player, x, y, target)` | S 005aec70 | same building lookup; `target` must pass the binding's player-argument check; `CheckCanStart() == 0` → `targetPlayer = target`, `ai::village::VillageSacrifice::Start` |
 | `logic.pl_getSacrificeState(player, defId)` | S 005b0210 | delivered fraction of an ordered sacrifice (§3.2.3), or no result |
 | `logic.pl_sacrificeStarted(player, defId)` | S 005b0340 | true if the player owns a **running** sacrifice of that definition |
 | `logic.pl_sacrificeStartedOnContinent(player, defId, x, y)` | S 005b0430 | true if such a sacrifice's building stands on the continent of the cell; no result otherwise |
@@ -755,7 +755,7 @@ appear only in network matches.
 #### 3.4.2 Opening
 
 Per tick, only while `enabled`, for every chest in vector order that is **not yet open**
-(`LogicChestSystem_Update` S 0052d660, `LogicChest::UpdateOpening` S 00539520) `[known]`:
+(`ai::logic::LogicChestSystem::Update` S 0052d660, `LogicChest::UpdateOpening` S 00539520) `[known]`:
 
 ```
 cellOwner = territory owner of the chest's cell            // -1 = nobody
@@ -771,7 +771,7 @@ chest.ownerPlayer = cellOwner
 ```
 
 A chest is **open** when `ownerPlayer != -1` and `openProgressTicks >= GameConfig.chestOwningTime`
-(`LogicChest_IsOpenable` S 00539210). `chestOwningTime` is 3000 ticks (compiled default; no shipped script sets
+(`ai::logic::LogicChest::IsOpenable` S 00539210). `chestOwningTime` is 3000 ticks (compiled default; no shipped script sets
 it). On the tick a chest becomes open, in this order `[known]`:
 
 1. the system's observers are called with the chest (below);
@@ -782,7 +782,7 @@ it). On the tick a chest becomes open, in this order `[known]`:
 
 An open chest is never updated again and is never removed: it stays on the map with the open model, keeps its
 grid bit, and its `ownerPlayer` no longer follows the territory `[known]` (the only remover is
-`LogicChestSystem_Reset` S 0052d360). The owning time must be served without interruption by **one** owner:
+`ai::logic::LogicChestSystem::Reset` S 0052d360). The owning time must be served without interruption by **one** owner:
 any change of the cell's owner, including to nobody, resets the counter.
 
 #### 3.4.3 Content
@@ -858,7 +858,7 @@ to this system: it is a Lua routine that places goods into depots on a tick coun
   by hand with `FindNear...` and their own distance.
 - `SendLetterToPlayer(player, text)`: a message of type 8 made with the two-text constructor, `text2` empty
   (`Messages::AddWithText2` S 005c2440).
-- Lifetime: every logic tick `Player_Update` subtracts the **frame time in seconds** from `timeRemaining` of
+- Lifetime: every logic tick `ai::player::Player::Update` subtracts the **frame time in seconds** from `timeRemaining` of
   every message of every active player; the message HUD of the local player removes messages whose
   `timeRemaining <= 0` (`RemoveExpired`, called from `nMenu::Messages::Update`). The lists of the other players
   are aged but only pruned on the machine where that player is local `[inferred]` (the only caller of
@@ -869,7 +869,7 @@ to this system: it is a Lua routine that places goods into depots on a tick coun
 #### 3.6.2 Catalogue: which event raises which message
 
 Type 1 military, 2 geologist, 3 economy, 4 sacrifice, 5 chest, 6 navy, 7 miscellaneous, 8 letter. "R" = sent
-with `SendOrRefreshToPlayer` (or the equivalent code in `Player_Update`); rows that say "no such message
+with `SendOrRefreshToPlayer` (or the equivalent code in `ai::player::Player::Update`); rows that say "no such message
 exists" call a finder first and `SendToPlayer` only when it finds nothing. When the finder does find one, the
 catapult-hit, mine-search and geologist rows reset its `timeRemaining` to 600 (the same effect as "R"); the
 lost-territory and expedition rows leave it untouched. Text key, type, recipient, `arg` and
@@ -944,13 +944,13 @@ Per logic tick, inside `NLogic::System::Update` (the full list is logic-core.md 
 | Step | Call | Work of this document |
 |---|---|---|
 | 2 | `NComm_Manager::AdvanceNetTick` | executes player commands: sacrifice order / start / abort / research (`0x20024`..`0x20028`) |
-| 4 | `Player_Update` per active player | message timers; every 22 ticks the low-stock warnings |
-| 6 | `NVillage::System::Update` | per sacrifice building `VillageSacrifice_Update`: state 0 → 2, automatic start |
+| 4 | `ai::player::Player::Update` per active player | message timers; every 22 ticks the low-stock warnings |
+| 6 | `NVillage::System::Update` | per sacrifice building `ai::village::VillageSacrifice::Update`: state 0 → 2, automatic start |
 | 15 | `Statistics::Update` | only if initialised; tick 0 reset; phases 0..4 of every 600 ticks |
 | 16 | `NAI::System::Tick` | computer players order, research and start sacrifices (every 647 ticks) |
 | 17 | `NSacrifice::System::Update` | unless paused: for player 0..7: (a) each running sacrifice in list order: one-shot effects, then expiry and removal; (b) erase finished cool-downs; (c) complete the research |
 | 18 | `LogicSpawnSystem::Update(tick)` | spawn triggers in vector order |
-| 19 | `LogicChestSystem_Update` | unless disabled: opening progress in vector order |
+| 19 | `ai::logic::LogicChestSystem::Update` | unless disabled: opening progress in vector order |
 | 20 | `VictoryCond_Update` | victory quest (slot 0), scenario predicates |
 | last | map script `onLogicTick(tick)` | the script's quest evaluation (`logic.q_*`, `logic.vi_*`) |
 
@@ -966,7 +966,7 @@ Order facts that follow `[inferred]`:
   erased at once.
 - The modifier tables change only inside `StartSacrifice` and `RemoveSacrifice` (and once per player record in
   `Load`): a start happens in steps 2, 6, 16 or the script step; a removal in step 2 (abort), step 17 (expiry)
-  or in whichever step deletes the sacrifice building (`VillageSacrifice_dtor`, reached from
+  or in whichever step deletes the sacrifice building (`ai::village::VillageSacrifice::dtor`, reached from
   `NVillage::System::RemoveBuilding` S 00559db0: the village update of step 6, a command, a capture in the
   military step, a script) — never between two systems that read them within a step.
 - Step 6 skips `Building::Update` for a building whose `markedOutsideTerritory` byte is set and removes that
@@ -978,7 +978,7 @@ Per frame: nothing of the simulation. The HUD prunes expired messages and redraw
 bar and statistics from the objects above.
 
 At world creation (`InitSubsystems` S 00527f70): statistics `Init` (eight `PlayerStatistics`), `Quests::Reset`,
-`SacrificeSystem_Init` (eight player records bound to their indices), chest system initialised and the village
+`NSacrifice::System::Init` (eight player records bound to their indices), chest system initialised and the village
 subscribed to chest openings, spawn system `[known]`. Afterwards `Game_LoadWorldFromDescriptor` S 005ac770
 runs the chest distribution (§3.4.1) after the map file is loaded and the players are created, when the map
 type is one that starts a new game (S 0052c270: map types 0, 1, 2, 100 and 102) and the NComm game
@@ -1101,7 +1101,7 @@ S 0065f650, S 00662b40, S 00662ba0:
 - The building side is saved with the building, only for working mode 9 (village-buildings.md §7):
   `"VillageSacrifice"` v0: i32 state; ref active sacrifice; i32 sacrificeDefId (S 00560c30, S 00560df0); then
   the building's research reference (S 0055c470) `[known]`.
-- Post-load (`SacrificeSystem_PostLoad` S 0065f540), per player `[known]`: every running sacrifice resolves its
+- Post-load (`NSacrifice::System::PostLoad` S 0065f540), per player `[known]`: every running sacrifice resolves its
   building reference and raises "sacrifice started" (slot +0xa0) so the scene and HUD rebuild; a running
   research resolves its building and raises "research started" (slot +0xa8). The territory toggle is not
   replayed; the territory grid is saved.
@@ -1139,7 +1139,7 @@ S 00539360, S 005393e0:
 
 `Load` resets the system first when it is initialised. Loading a chest does not set the grid bit; the grid is
 saved with the map. Post-load raises "chest added" for every chest in vector order (S 0052d2c0); the scene
-picks the open or closed model from `LogicChest_IsOpenable`.
+picks the open or closed model from `ai::logic::LogicChest::IsOpenable`.
 
 **Spawn points** — in the **map** part (so present in a map file and in a save) `[known]` S 0052cb70,
 S 0052cf90, S 00538ea0:
@@ -1264,7 +1264,7 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 2 | `[TODO]` Whether `logic.pl_changePlayer` (S 005ad4e0 → `NLogic::System::TransferPlayerAssets`) moves sacrifice buildings through `TransferBuildingOwnership` like the paths of §3.2.8, and which stocks `ConquerBuilding` S 0055a890 carries into the new building | static: read `TransferPlayerAssets` and S 0055a890 |
 | 3 | Answered (§3.4): a kind-0 chest's `ClaimChestResult` has no effect inside the match beyond the log line; the observer lists `RefereeServerConnection +0x38 / +0x44` have no subscriber | static: the list argument of every `ObserverList::Subscribe` S 00458860 call |
 | 4 | Answered (§3.2.7, effect 1001): the building's own worker carries the output stock to the building's flag, one plain ware per walk (`BringGoodOut`, lowest good id first); `ChooseNextWork` tests the stock first and, for working mode 9, has nothing else to start, so the test repeats every tick. State 0 ends on the first building update with an empty output stock (total units 0). From the flag the wares are free packages. The four sacrifice building types share the rule (mode 9, a worker, no `depot` flag) | static: S 0065d660, S 0065cc40, S 0077c510, S 0055b120, S 0055b1b0, S 0065d7f0, S 00561940; `buildings.lua` |
-| 5 | `[TODO]` Which player the two letter senders address: both pass the index of the player entry the game screen holds (`menu.createLetter` S 005da720 reads it at active screen +0xfff4; `nMenu::Game::ShowCommMessageAsLetter` S 005eb120 through its own screen pointer), while the autosave notice S 0078b040 uses `PlayerTable_FindLocalPlayer` `[known]`. Not established: that the screen's player is always the local player | static: the writer of the game screen's player pointer (+0xfff4) |
+| 5 | `[TODO]` Which player the two letter senders address: both pass the index of the player entry the game screen holds (`menu.createLetter` S 005da720 reads it at active screen +0xfff4; `nMenu::Game::ShowCommMessageAsLetter` S 005eb120 through its own screen pointer), while the autosave notice S 0078b040 uses `ai::player::PlayerTable::FindLocalPlayer` `[known]`. Not established: that the screen's player is always the local player | static: the writer of the game screen's player pointer (+0xfff4) |
 | 6 | `[TODO]` Whether a cinematic, and with it the sacrifice pause, can run in a network match | logic-core.md open question 9 |
 | 7 | Answered: effect 1003 sets every soldier settler of the owner to full life points and, for every occupied building of the owner in the casern list, empties the map of remembered life points (`SettlerSpawn +0x10`). A stocked soldier that leaves afterwards finds no remembered value and keeps the full value it is created with (village-buildings.md §3.11) | static: S 00660270, S 00564c40, S 00564c90, S 00564d90 |
 ---
@@ -1277,41 +1277,41 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00536200 / 005363f0 | `NLogic::Quests::ctor` / `Reset` | 40 slots; all unused |
 | 00536430 / 00536330 | `Quests::SetQuest` / `Quest::Init` | fill a slot |
 | 00536310 / 00536390 | `Quests::ClearQuestSlot` / `Quest::SetText` | free a slot; progress text |
-| 0052da20 / 0052da60 | `GameQuery_AreAllMainQuestsFinished` / `IsAnyMainQuestFailed` | scenario predicates |
+| 0052da20 / 0052da60 | `ai::game::GameQuery::AreAllMainQuestsFinished` / `IsAnyMainQuestFailed` | scenario predicates |
 | 0053a8b0 / 0053a730 / 0053a750 | `VictoryCond_ActivateQuest` / `SetQuestFinished` / `SetQuestFailed` | victory quest in slot 0 |
 | 005b1670, 005b1850, 005b1980, 005b1ab0, 005b1be0 | Lua `q_add`, `q_finish`, `q_reset`, `q_failed`, `q_updateInfo` | bindings with messages |
 | 005af580..005af790 | Lua `q_remove`, `q_hide`, `q_isVisible`, `q_isFailed`, `q_isFinished`, `q_isValid` | bindings |
 | 00535ef0 / 00535f40, 00536000 / 00536090 | `Quests::Store` / `Load`, `Quest::Store` / `Load` | save |
 | **Sacrifice system** | | |
-| 0065f9b0 / 0065f4b0 / 0065f4d0 | `NSacrifice::System::ctor` / `SacrificeSystem_Init` / `SacrificeSystem_Reset` | life cycle |
+| 0065f9b0 / 0065f4b0 / 0065f4d0 | `NSacrifice::System::ctor` / `NSacrifice::System::Init` / `NSacrifice::System::Reset` | life cycle |
 | 0065f4f0 | `NSacrifice::System::Update` | per tick, skipped while paused |
 | 00662c50 | `SacrificePlayerData::Update` | sacrifices, cool-downs, research of one player |
 | 006621f0 | `SacrificePlayerData::UpdateSacrifices` | one-shots, expiry |
-| 00660960 / 00660500 | `Sacrifice_UpdateTimedEffects` / `Sacrifice::ApplyEffect` | one-shot effects |
+| 00660960 / 00660500 | `ai::logic::Sacrifice::UpdateTimedEffects` / `Sacrifice::ApplyEffect` | one-shot effects |
 | 0065ffc0, 00660270, 00660190, 00660100, 00660020, 00660360 | give goods, heal, reveal buildings, reveal harbors, reveal map, sink ships | the six actions |
-| 00660050 / 00660070 / 00660090 | `Sacrifice_IsExpired` / `GetRemainingTicks` / `GetProgress` | timing |
+| 00660050 / 00660070 / 00660090 | `ai::logic::Sacrifice::IsExpired` / `GetRemainingTicks` / `GetProgress` | timing |
 | 0065f5a0 / 006624f0 / 00661850 | `System::StartSacrifice` / `SacrificePlayerData::StartSacrifice` / `Sacrifice::ctor` | start |
 | 0065f5c0 / 006620a0 | `System::RemoveSacrifice` / `SacrificePlayerData::RemoveSacrifice` | end |
 | 00662fb0 / 00661ec0 / 00663630 | `RecomputeModifiers` / `ApplySacrificesToAllPlayers` / `SacrificeModifiers::ApplySacrifice` | modifier rebuild |
 | 00661cf0 / 00661d60 | `StartToggleEffects` / `StopToggleEffects` | territory recomputation for effect 14 |
 | 00662860 / 00662660 / 00662720 / 006626a0 | regenerations add / contains / remove expired / progress | cool-down |
-| 0065fae0 / 0065ff00 / 0065fde0 / 0065fbd0 / 0065fb80 / 0065fb40 | `SacrificeResearch::Start` / `SacrificeResearch::Update` / `SacrificeResearch_Complete` / `SacrificeResearch_Cancel` / `SacrificeResearch::IsAtBuilding` / `SacrificeResearch_GetProgress` | research |
+| 0065fae0 / 0065ff00 / 0065fde0 / 0065fbd0 / 0065fb80 / 0065fb40 | `SacrificeResearch::Start` / `SacrificeResearch::Update` / `ai::logic::SacrificeResearch::Complete` / `ai::logic::SacrificeResearch::Cancel` / `SacrificeResearch::IsAtBuilding` / `ai::logic::SacrificeResearch::GetProgress` | research |
 | 0065f550 / 0065f610 / 00661ff0 | `PauseForCinematic` / `ResumeAfterCinematic` / `ShiftStartTicks` | cinematic pause |
 | 00662040 / 00661f50 / 00662c70 | `HasSacrificeOfDef` / `FindSacrificeById` / `CollectIncomingSacrifices` | queries |
-| 0065f500 / 0065f650 / 0065f540 | `System::Store` / `Load` / `SacrificeSystem_PostLoad` | save |
+| 0065f500 / 0065f650 / 0065f540 | `System::Store` / `Load` / `NSacrifice::System::PostLoad` | save |
 | 005a9db0 / 005273d0 | `GameFile_LoadLogic` / `NLogic::System::PostLoad` | version gates of the logic part; post-load order (sacrifices, chests, spawn points) |
 | 00662b40 / 00662ba0, 00661dd0 / 00662390 | `SacrificePlayerData::Store` / `Load`, `StoreSacrifices` / `LoadSacrifices` | save |
 | 00661050 / 00661990, 0065fc10 / 0065fcf0 | `Sacrifice::Store` / `Load`, `SacrificeResearch::Store` / `Load` | save |
 | 006625b0 / 006627e0, 006628b0 / 006629e0, 00663670 / 006636a0 | regenerations, dependencies, free tickets `Store` / `Load` | save |
 | **Sacrifice building** | | |
-| 00560bd0 / 00560cf0 | `VillageSacrifice::ctor` / `VillageSacrifice_dtor` | component |
-| 00561940 | `VillageSacrifice_Update` | state 0 → 2, automatic start |
+| 00560bd0 / 00560cf0 | `VillageSacrifice::ctor` / `ai::village::VillageSacrifice::dtor` | component |
+| 00561940 | `ai::village::VillageSacrifice::Update` | state 0 → 2, automatic start |
 | 00561240 / 00561380 / 00561410 | `CheckCanOrder` / `CanOrder` / `Order` | ordering |
-| 00560f20 / 005615e0 | `CheckCanStart` / `VillageSacrifice_Start` | starting |
+| 00560f20 / 005615e0 | `CheckCanStart` / `ai::village::VillageSacrifice::Start` | starting |
 | 00561870 | `VillageSacrifice::OnExpired` | end of the running sacrifice |
-| 00560ed0 / 00561050 / 00560d70 / 00560e80 | `VillageSacrifice::GetAbortOrCancelBlockReason` / `VillageSacrifice::CanAbortOrCancel` / `VillageSacrifice_AbortActive` / `VillageSacrifice_CancelOrder` | abort and cancel |
+| 00560ed0 / 00561050 / 00560d70 / 00560e80 | `VillageSacrifice::GetAbortOrCancelBlockReason` / `VillageSacrifice::CanAbortOrCancel` / `ai::village::VillageSacrifice::AbortActive` / `ai::village::VillageSacrifice::CancelOrder` | abort and cancel |
 | 005610c0 / 00561130 / 00561150 | `GetResearchState` / `CanStartResearch` / `StartResearch` | research gate |
-| 005613a0 | `VillageSacrifice_GetCostProgress` | delivered fraction |
+| 005613a0 | `ai::village::VillageSacrifice::GetCostProgress` | delivered fraction |
 | 00532960 | building type predicate | automatic class |
 | 00560c30 / 00560df0 / 00560c80 | `StoreSavegame` / `Load` / `StoreForChecksum` | save, checksum |
 | 0055a210 / 00559db0 / 0055d4e0 | `NVillage::System::TransferBuildingOwnership` / `RemoveBuilding` / `Building::ctor_Transfer` | owner change replaces the building and its sacrifice component |
@@ -1330,13 +1330,13 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00537110 / 00537150 | `ProductivityItem::Store` / `Load` | save of one productivity map value |
 | **Chests** | | |
 | 0052d560 / 00539240 / 0052d110 | `LogicChestSystem::AddChest` / `LogicChest::ctor` / `LogicChest_ClearCellForChest` | creation |
-| 0052d660 / 00539520 / 00539210 | `LogicChestSystem_Update` / `LogicChest::UpdateOpening` / `LogicChest_IsOpenable` | opening |
+| 0052d660 / 00539520 / 00539210 | `ai::logic::LogicChestSystem::Update` / `LogicChest::UpdateOpening` / `ai::logic::LogicChest::IsOpenable` | opening |
 | 005587c0 / 005579a0 | `NVillage::System::AddGoodsToPlayerStoreBuilding` / `FindPlayerBuildingWithDefFlags` | kind-1 content |
 | 00782a60 | `Referee_OnChestOpened_SendClaimChest` | kind-0 claim |
 | 00775dd0 / 00775ca0 / 00775d60 | `Game_DistributeChestsForNetworkMatch` and its two helpers | network placement |
 | 005ad740 / 0052e710 | Lua `map_createChest` / `Map_CanPlaceChestAt` | script and debug creation |
-| 0052d090 / 0052d360 | `LogicChestSystem::Enable` / `LogicChestSystem_Reset` | cinematic, teardown |
-| 0052d200 / 0052d600 / 0052d2c0, 00539360 / 005393e0 | system `Save` / `Load` / `_PostLoad`, chest `Store` / `Load` | save |
+| 0052d090 / 0052d360 | `LogicChestSystem::Enable` / `ai::logic::LogicChestSystem::Reset` | cinematic, teardown |
+| 0052d200 / 0052d600 / 0052d2c0, 00539360 / 005393e0 | system `Save` / `Load` / `PostLoad`, chest `Store` / `Load` | save |
 | 006819e0 / 00680c80 / 00681aa0 | `S2CG::Scene::OnChestCreated` / `OnChestOpened` / `OnChestRemoved` | models |
 | **Spawn points** | | |
 | 0052ccc0 | `LogicSpawnSystem::Update` | trigger |
@@ -1344,7 +1344,7 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 0052c990 / 0052cf50 / 0052ce80 | `LogicSpawn_CreateFromProperty` / `AddSpawn` / `RemoveSpawnAt` | creation, removal |
 | 00538e10 / 00538e60 | `Spawn::PlaceAt` / `RemoveFromMap` | cell, grid bit, id |
 | 0052cae0 / 00539060 / 0052ca70 | `FindAnimalSpawnInRange` / `SpawnAnimal::CanProvideGood` / `FindSpawnAt` | queries |
-| 0052cb70 / 0052cf90 / 0052cd70, 00538ea0 / 00538ed0 | system `Save` / `Load` / `_PostLoad`, spawn `Store` / `Load` | save |
+| 0052cb70 / 0052cf90 / 0052cd70, 00538ea0 / 00538ed0 | system `Save` / `Load` / `PostLoad`, spawn `Store` / `Load` | save |
 | **Messages** | | |
 | 005c00e0 / 005c0120 / 005c0270 / 005c05b0 | `PlayerMessages_SendToPlayer` / `SendToAllExcept` / `SendOrRefreshToPlayer` / `SendLetterToPlayer` | senders |
 | 005c01b0 / 005c01f0, 005c1fd0 / 005c1e40 | `FindNearForPlayer` / `FindNearWithArgForPlayer`, `Messages::FindMatching` / `FindMatchingWithArg` | duplicate search |

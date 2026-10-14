@@ -1,64 +1,71 @@
 # SADK.exe — proposed labels (apply in Ghidra)
 
-> **⚠️ Predates the magazine-build re-map.** Every `FUN_<addr>` / `DAT_<addr>` below is an
-> **old-build VA** (the no-CD/dump base); the clean 2014 magazine build shifted these addresses.
-> The logic/struct-offsets still transfer, but for current addresses use **`docs/SOURCEMAP.md`** as
-> the firmer reference. Treat this list as historical RE notes, not live addresses.
+> Addresses in the tables of this first part (down to "Notes") are `sadk_noav.exe` addresses, the
+> same build as **`docs/SOURCEMAP.md`**. The "Name in Ghidra" column is the name the function or
+> global carries in the Ghidra project. The dated sections further down are the record of the day in
+> their heading: they name their program in their headings and keep the names of that day.
+>
+> The class these notes call `LobbyManager` is the RTTI class `LobbyComm::System` (struct
+> `/LobbyComm/System`, 0x5a8 bytes, vtable `0x7dacb0`); the global `g_pLobbyManager`, the enum
+> `LobbyManagerState` and the four static functions `LobbyManager_GetInstance` / `_HasInstance` /
+> `_CreateInstance` / `_DestroyInstance` keep their names. `LobbyVillageScreen` is
+> `LobbyMenu::AvatarScreen`; `LobbyVillageServerList` / `LobbyServerList` is `LobbyComm::ServerList`.
 
-From tracing the greyed **"Suche Server…" / Enter-Village** button. Addresses are
-virtual (the `FUN_<addr>` name). Confidence: **H** = string/file-name confirmed,
-**M** = inferred from clear logic, **L** = plausible, verify before trusting.
+From tracing the greyed **"Suche Server…" / Enter-Village** button. Confidence: **H** =
+string/file-name confirmed, **M** = inferred from clear logic, **L** = plausible, verify before
+trusting.
 
 ## Functions
 
-| Address | Proposed name | Conf | Evidence |
-|---------|---------------|------|----------|
-| `FUN_00439e80` | `LobbyVillageScreen::UpdateEnterButton` | H | Sets enter button to `!ENTER_VILLAGE_BUTTON` (live) or `!LOBBY_LOADING_SERVERS` (greyed); computes enabled state. |
-| `FUN_0043a580` | `LobbyVillageScreen::RefreshView` (SetMode/tab) | M | Mutates mode field `+0x1e8` 18×, refreshes the 5 tab/button widgets + enter-button text. NOT the network enter action. |
-| `FUN_0043ab10` | `LobbyVillageScreen::OnVillageConnectFailed` | H | Shows `!COULDNOT_CONNECT_TO_VILLAGE` / `!ERROR`; runs when server-list lookup for the selected room fails. |
-| `FUN_00462bc0` | `LobbyManager::GetStateName` | H | switch over `this+0x57c` → `"LobbyManagerState: ..."` strings (the lobby state enum). |
-| `FUN_00463750` | `LobbyManager::CreateVillageServerConnection` | H | Literal `LobbyComm::System::CreateVillageServerConnection`, from `LobbyManager.cpp`. Opens the village connection at `this+0x540`. |
-| `FUN_00468d80` | `LobbyVillageServerList::FindByRoomId` | M | Searches the entry vector (`this+0x70..0x78`), matches `entry+0x30 == key`, returns index or -1. |
-| `FUN_0046b250` | `LobbyManager::GetSelectedVillageServer` | L | Returns `*(this+0x80)` (the village server handle/id used as the default connect target). |
-| `FUN_00472040` | `*::IsField98Set` (enable-cond #2) | L | Returns `*(this+0x98) != 0`; generic getter — confirm what `+0x1ec` object is. |
-| `FUN_00437680` | `LobbyVillageScreen::OnLeaveVillage` | M | References `!LEAVE_VILLAGE` / `!LEAVE_VILLAGE_QUESTION`. |
-| `thunk @ 0x4682d0` (`thunk_FUN_01375b50`) | `LobbyVillageServerList::IsListReady` (predicate) | L | The predicate that flips the button text (false → "Loading Servers"). **Unrecovered jump table** — see notes. |
+| Address | Proposed name | Name in Ghidra | Conf | Evidence |
+|---------|---------------|----------------|------|----------|
+| `0x00439f30` | `LobbyVillageScreen::UpdateEnterButton` | `LobbyMenu::AvatarScreen::Update` | H | Sets enter button to `!ENTER_VILLAGE_BUTTON` (live) or `!LOBBY_LOADING_SERVERS` (greyed); computes enabled state. |
+| `0x0043a630` | `LobbyVillageScreen::RefreshView` (SetMode/tab) | `LobbyMenu::AvatarScreen::SetViewMode` | M | Sets the mode field `+0x1e8` (0 create, 1 select, 2 entering village), refreshes the dialogs, buttons and the enter-button text. NOT the network enter action. |
+| `0x0043abc0` | `LobbyVillageScreen::OnVillageConnectFailed` | `LobbyMenu::AvatarScreen::OnStartGameClicked_EnterVillage` | H | Click handler of the enter button: picks a village server and starts the enter; shows `!COULDNOT_CONNECT_TO_VILLAGE` / `!ERROR` when no server can be selected. |
+| `0x00462a00` | `LobbyManager::GetStateName` | `LobbyComm::System::GetStateName` | H | switch over `this+0x57c` → `"LobbyManagerState: ..."` strings (the lobby state enum). |
+| `0x00463850` | `LobbyManager::CreateVillageServerConnection` | `LobbyComm::System::CreateVillageServerConnection` | H | Literal `LobbyComm::System::CreateVillageServerConnection`, from `LobbyManager.cpp`. Initialises the village connection at `this+0x540`. |
+| `0x00469010` | `LobbyVillageServerList::FindByRoomId` | `LobbyComm::ServerList::FindBestVillageServer` | M | Walks the village entry vector (`this+0x74..0x78`), matches `entry+0x30 == protocol`, picks by load, returns the server id or -1. |
+| `0x004683d0` | `LobbyManager::GetSelectedVillageServer` | `Generic_GetDword_80` (a folded getter shared with unrelated classes) | H | Returns `*(this+0x80)` with `this` = the ServerList at `LobbyComm::System+0x54` (the village server id used as the default connect target). |
+| `0x00472270` | `*::IsField98Set` (enable-cond #2) | `LobbyComm::CharacterManager::HasSelectedCharacter` | M | Returns `*(this+0x98) != 0`; the `+0x1ec` object is the CharacterManager. |
+| `0x00437760` | `LobbyVillageScreen::OnLeaveVillage` | `LobbyMenu::WorldScreen::HandleButtonClicks` | M | References `!LEAVE_VILLAGE` / `!LEAVE_VILLAGE_QUESTION`. |
+| `0x00468560` | `LobbyVillageServerList::IsListReady` (predicate) | `LobbyComm::ServerList::HasJoinableServerForProtocol` | H | The predicate that flips the button text (false → "Loading Servers"): a village server with `+0x30 == protocol`, load below 90 % and the joinable byte `+0x35` set. |
 
 ## Globals
 
-| Address | Proposed name | Conf | Evidence |
-|---------|---------------|------|----------|
-| `DAT_0087d580` | `g_SelectedVillageRoomId` | M | Compared against `serverEntry+0x30` in every list filter (38017, 44083/116, 44250/258); assigned at 41512, 42321. The selected room/LobbyId the village list is filtered by. |
-| `DAT_012f161c` | `g_pVillageListReadyFn` (jumptable slot) | L | Indirect target called by `thunk_FUN_01375b50`. Only read, never written in the dump → set via the unrecovered jump table at `0x4682d0`. |
+| Address | Proposed name | Name in Ghidra | Conf | Evidence |
+|---------|---------------|----------------|------|----------|
+| `0x0087aed8` | `g_SelectedVillageRoomId` | `g_ClientProtocolVersion` | H | Compared against `serverEntry+0x30` in every list filter; static value 1000. The protocol version the village list is filtered by. |
+| `[TODO]` not located in `sadk_noav.exe` | `g_pVillageListReadyFn` (jumptable slot) | – | L | `AvatarScreen::Update` calls the list-ready predicate `0x00468560` directly; no indirect slot. |
 
 ## Struct field offsets (set these as struct members in Ghidra)
 
-**LobbyVillageScreen** (the `this` of `FUN_00439e80` / `FUN_0043ab10`):
-| Off | Meaning | Conf |
-|-----|---------|------|
-| `+0x1e8` | view mode / selected tab (int; enable needs `== 1`) | M |
-| `+0x1ec` | ptr → sub-object, enable needs `*(it+0x98) != 0` | M |
-| `+0x1f0` | ptr → `LobbyVillageServerList` | M |
-| `+0x204..0x214` | UI widget ptrs (enter button + tab buttons) | M |
-| `+0x218` | byte: idle/ready-to-connect (1 = idle; failure handler resets to 1) | L |
-| `+0x21c` | byte: busy/guard (proceed only when `== 0`) | M |
-| `+0x254` | (inside `+0x204`) the Enter-Village button widget | M |
+**`LobbyMenu::AvatarScreen`** (`/LobbyMenu/AvatarScreen`, 0x220; the `this` of `0x00439f30` / `0x0043abc0`):
+| Off | Ghidra field | Meaning | Conf |
+|-----|--------------|---------|------|
+| `+0x1e8` | `viewMode` | 0 create character, 1 select character, 2 entering village (enable needs `== 1`) | H |
+| `+0x1ec` | `pCharacterManager` | `LobbyComm::CharacterManager*`; enable needs its selected character id (`+0x98`) `!= 0` | H |
+| `+0x1f0` | `pServerList` | `LobbyComm::ServerList*` (`LobbyComm::System+0x54`) | H |
+| `+0x204..0x214` | `pStartGameButton`, `pBackButton`, `pNameEdit`, `pResetPositionLabel`, `pResetLoginPositionButton` | UI widget pointers | H |
+| `+0x218` | `bButtonsEnabled` | enable gate of the buttons | M |
+| `+0x21c` | `bCodersRule` | XML attribute `CodersRule`: developer mode with a manual village-server pick (the enter path proceeds without the dialog only when it is 0) | H |
+| `+0x254` | – | (inside the widget at `+0x204`) the caption text object of the enter button | M |
 
-**LobbyManager** (`this` of `FUN_00463750` / `GetStateName`):
+**`LobbyComm::System`** (`/LobbyComm/System`, 0x5a8; `this` of `0x00463850` / `GetStateName`; full table: `docs/types.md` §1.2):
 | Off | Meaning | Conf |
 |-----|---------|------|
-| `+0x50` | lobby comm / socket object | M |
+| `+0x50` | `pConnectionManager`: tincat3 `CommLayer::ConnectionManager*` | H |
 | `+0x540` | village server connection object | H |
 | `+0x57c` | state enum (see `LobbyManagerState` below) | H |
-| `+0xd4` | selected village server handle/id (`*(+0x54 +0x80)`) | L |
+| `+0xd4` | selected village server id (`serverList.selectedVillageServerId`, ServerList `+0x80`) | H |
 
-**ServerListEntry** (elements of `LobbyVillageServerList`):
+**`LobbyComm::VillageServerInfo`** (0x38; the elements of the village vector of `LobbyComm::ServerList`):
 | Off | Meaning | Conf |
 |-----|---------|------|
-| `+0x30` | RoomId / LobbyId (filtered against `g_SelectedVillageRoomId`) | M |
-| `+0x34` | flag (checked `== 0` in some filters) | L |
+| `+0x30` | `roomKey`: compared with `g_ClientProtocolVersion` | M |
+| `+0x34` | `blockFlag`: the entry is left out of the village list when it is not 0 | M |
+| `+0x35` | `isValid` | M |
 
-## LobbyManagerState enum (value at `LobbyManager+0x57c`)
+## LobbyManagerState enum (value at `LobbyComm::System+0x57c`)
 
 ```
 1 Disconnected   2 Authorizing   3 Authorized   4 CheckingVersion
@@ -71,49 +78,51 @@ virtual (the `FUN_<addr>` name). Confidence: **H** = string/file-name confirmed,
 
 | Address | Name / type | Note |
 |---------|-------------|------|
-| `004626f0` | `LobbyManager::GetState` | `return this->state` (+0x57c). |
-| `00462700` | `LobbyManager::SetState` | `if(state==12) return; state=arg` — latches on ConnectionLost. |
-| `00503da0` | (EnterVillage action) | sole caller of `CreateVillageServerConnection`; passes -1 → uses selected server. |
-| `00468140` | `LobbyVillageServerList::HasServerSelected` | `selected(+0x80) != -1`. |
-| `007dc51c` (data) | `g_dwInvalidVillageServerId` | the -1 "no selection" sentinel. |
-| enum | `LobbyManagerState` | created, 12 values. |
-| struct | `LobbyManager` (0x580) | fields pComm+0x50, selectedVillageServer+0xd4, pVillageConnection+0x540, state+0x57c. |
-| struct | `LobbyVillageScreen` (0x21d) | viewMode+0x1e8, pField98Owner+0x1ec, pServerList+0x1f0, pButtonContainer+0x204, pWidget1-4, idleFlag+0x218, busyGuard+0x21c. |
+| `00462530` | `LobbyComm::System::GetState` | `return this->state` (+0x57c). |
+| `00462540` | `LobbyComm::System::SetState` | `if(state==12) return; state=arg` — latches on ConnectionLost. |
+| `00503f50` | `Lobby::CLobbyClient::EnterVillage` | sole caller of `CreateVillageServerConnection`; passes -1 → uses selected server. |
+| `004683b0` | `LobbyComm::ServerList::HasSelectedVillageServer` | `selected(+0x80) != -1`; `this` is the ServerList. |
+| `007db51c` (data) | `DAT_007db51c` (proposed `g_dwInvalidVillageServerId`) | the -1 "no selection" sentinel. |
+| enum | `LobbyManagerState` | 13 values (0 Init .. 12 ConnectionLost). |
+| struct | `/LobbyComm/System` (0x5a8 = the allocation) | fields pConnectionManager+0x50, serverList+0x54 (selected village server at +0xd4), serverMessages+0x100, characterManager+0x140, postOffice+0x2f8, properties+0x3bc, pVillageConnection+0x540, pGameServerConnection+0x544, state+0x57c. |
+| struct | `/LobbyMenu/AvatarScreen` (0x220) | viewMode+0x1e8, pCharacterManager+0x1ec, pServerList+0x1f0, pStartGameButton+0x204, bButtonsEnabled+0x218, bCodersRule+0x21c. |
 
-Login-sequence state writers (set literals 1→7): `FUN_00462fe0` `004632f0` `00463910`
-`00464b90` `00464c00` (+ readers `00464910` `00470f10`). `EnteringVillage(8)` is set via
-`SetState(8)` (no inline constant) — caller still TBD.
+Login-sequence state writers (set literals 1→7): `004630e0` (`Login`) `004633f0` (`CreateUser`)
+`00463a10` (`OnLoggedIn`) `00464e70` (`OnVersionChecked_State4to5`) `00464ee0` (`StatePump_Tick`)
+(+ readers `00464bf0` `OnLoggedOut`, `00471110` `VillageServerConnection::TickInWorld`).
+`EnteringVillage(8)` is set via `SetState(8)` in `VillageServerConnection::OnUserCommLoggedIn`
+`004704e0`.
 
 ## Connection classes (s9) — applied + saved in Ghidra
 
-The lobby uses 5 `LobbyBaseConnection` subclasses (Connect@0x48d730 shared). Names below are
-applied in the project.
+The lobby uses four `LobbyComm::BaseConnection` subclasses (Village, UserComm, Referee,
+GameServer). Names below are the names in the project.
 
 | Address | Name | Conf |
 |---------|------|------|
-| `0x48d730` | `LobbyBaseConnection::Connect` (→ comm `vtable[0x1c]`(port,ip,x)) | H |
-| `0x48d8b0` / `0x48d9d0` / `0x48dc20` | `LobbyBaseConnection::On{LoggedIn,LoginFailed,Disconnected}` | H |
-| `0x47ed90` | `UserCommConnection::Initialize` (chat/UC conn = LobbyUserCommConnection.cpp) | H |
-| `0x47fb40` | `UserCommConnection::OpenCommunication` (opens UC via comm `vtable[0x10]`(handle)) | H |
-| `0x47fca0` | `UserCommConnection::JoinChannel` | H |
-| `0x47ef50/0x47f040/0x47f130/0x47f220/0x47f310/0x47f400` | `UserCommConnection::On{LoggedIn,LoginFailed,LoggedOut,Disconnected,ReceivedData,ChatChannelListReceived}` | H |
-| `0x48e650` | `GameServerConnection::OnLoggedIn` (LobbyGameServerConnection.cpp) | H |
-| `0x462fe0` | `LobbyManager::Login` | H |
-| `0x463910` | `LobbyManager::OnLoggedIn` (sets chatServerHandle +0x548 = login param_2) | H |
-| `0x464740` | `LobbyManager::OnLoginFailed` | H |
-| `0x4626c0` | `LobbyManager_GetChatServerHandle` (returns +0x548) | H |
+| `0x48dfa0` | `LobbyComm::BaseConnection::SendMessage` (→ transport `vtable[0x1c]` Send; older label `LobbyBaseConnection::Connect`) | H |
+| `0x48e050` / `0x48e170` / `0x48e3c0` | `LobbyComm::BaseConnection::On{LoggedIn,LoginFailed,Disconnected}` | H |
+| `0x47f160` | `UserCommConnection::Initialize` (chat/UC conn = LobbyUserCommConnection.cpp) | H |
+| `0x47ff10` | `UserCommConnection::OpenCommunication` (opens UC via transport `vtable[0x10]`(handle)) | H |
+| `0x480070` | `UserCommConnection::JoinChannel` | H |
+| `0x47f320/0x47f410/0x47f500/0x47f5f0/0x47f6e0/0x47f7d0` | `UserCommConnection::On{LoggedIn,LoginFailed,LoggedOut,Disconnected,ReceivedData}` and `ChatChannelListReceived` | H |
+| `0x48edf0` | `GameServerConnection::OnLoggedIn` (LobbyGameServerConnection.cpp) | H |
+| `0x4630e0` | `LobbyComm::System::Login` | H |
+| `0x463a10` | `LobbyComm::System::OnLoggedIn` (sets chatServerHandle +0x548 = its serverHandle argument) | H |
+| `0x464a20` | `LobbyComm::System::OnLoginFailed` | H |
+| `0x462500` | `LobbyComm::System::GetChatServerHandle` (returns +0x548) | H |
 
-vtables: UserComm `0x7dded8`, GameServer `0x7dfafc`, Village `0x7dc8e0`. `LobbyManager+0x548`
-= chat-server handle (set at login).
+vtables: UserComm `0x7dcecc`, GameServer `0x7deaf0`, Village `0x7db8d4`, Referee `0x7dc1b0`.
+`LobbyComm::System+0x548` = chat-server handle (set at login).
 
-## Notes / next in Ghidra
+## Notes
 
-- **Recover the jump table at `0x4682d0`** (the `thunk_FUN_01375b50` body — Ghidra warned
-  "Could not recover jumptable. Too many branches"). Once recovered, `g_pVillageListReadyFn`
-  resolves and confirms the "list ready" predicate. This is the cleanest way to verify the
-  text gate.
-- The actual button **click → enter** wiring (button widget → `CreateVillageServerConnection`)
-  wasn't traced; start from the widget at `LobbyVillageScreen+0x254` / the input handler.
+- The "list ready" predicate of the text gate is `LobbyComm::ServerList::HasJoinableServerForProtocol`
+  `0x468560`, called directly by `AvatarScreen::Update`.
+- The button **click → enter** wiring: `AvatarScreen::OnStartGameClicked_EnterVillage` `0x43abc0` →
+  `Lobby::CLobby` vtbl `+0x80` (`RequestEnterVillage` `0x4f5070`) → `Lobby::CLobbyClient::EnterVillage`
+  `0x503f50` → `LobbyComm::System::CreateVillageServerConnection` `0x463850`. The enter button widget is
+  `AvatarScreen+0x204`; its caption text object is at `+0x254` of the widget.
 
 ## Match-start screens & game-server-request chain (2026-06-17) — applied + saved in Ghidra
 
@@ -1315,3 +1324,34 @@ Type changes (undefined bytes replaced in place, struct sizes unchanged): `Lobby
 `[known]`, `+0x554` `AvatarProxy *localAvatar` `[inferred]`; `NComm::EventGameInformation` `+0x22f` `uint gameSeed`
 `[known]`, `+0x237` `uint settingsCrc` `[inferred]` name. Findings: `docs/message-catalog.md`, 0xDB6 RegisterGame
 ("The wager on the client", "ERefereeResult") and 0xDC0 FinishGame.
+
+## 2026-10-14 — PhysX character controller (`NxCharacter.dll`)
+
+`NxCharacter.dll` (the game's `bin` folder, 143,360 bytes, image base `0x10000000`) is the repository program
+`/NXCHARACTER.DLL`; RTTI names its classes (`CharacterControllerManager`, `Controller`, `CapsuleController`,
+`BoxController`, `SweptCapsule`, ...). Applied and checked in as version 2. The repository also holds a second,
+unnamed import of the same file, `/NxCharacter.dll` (added 2026-10-14), to be deleted.
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x1000d240` | `FUN_1000d240` | `CharacterControllerManager_createController` | manager vtable `0x1001a498` slot 2; `desc+0xc` 0 → box (0xa8 bytes), 1 → capsule (0xa0) |
+| `0x1000d350` | `FUN_1000d350` | `Controller_ctor` | stores `Controller::vftable`; copies the description, `desc+0x38` → `+0x20` |
+| `0x10001e60` | `FUN_10001e60` | `CapsuleController_ctor` | stores `CapsuleController::vftable`; builds an `NxCapsuleShapeDesc` |
+| `0x1000ba70` | `FUN_1000ba70` | `Controller_Move` | creates the sweep test at `+0x28`, gathers the other controllers' volumes, calls `MoveCharacter` (twice when the steep-slope flag is set) |
+| `0x1000a630` | `FUN_1000a630` | `SweepTest_MoveCharacter` | up / sideways / down sweeps; writes `+0xc4` 0 then 1 (plate comment) |
+| `0x10006fe0` | `FUN_10006fe0` | `SweepTest_DoSweepTest` | collide-and-slide loop; the only caller of both hit callbacks |
+| `0x1000cda0` | `FUN_1000cda0` | `FindTouchedGeometry` | scene slot `0x154` overlap query with `activeGroups`; per shape type a touched-geometry record |
+| `0x1000c270` | `FUN_1000c270` | `TouchedGeometry_AddMeshShape` | mesh shape: triangles in the box (shape slot `0xa0`), record type 2 |
+| `0x10005360` | `FUN_10005360` | `SweptVolume_SweepTouchedGeometry` | dispatch table `0x1001e170` [volume type × 6 geometry types] |
+| `0x1000b3e0` | `FUN_1000b3e0` | `SweepCapsuleVsMesh` | capsule row, geometry type 2 of that table |
+| `0x1000cc30` | `FUN_1000cc30` | `Controller_ShapeHitCallback` | `if (ctrl[+0x20]) callback->vtbl[0](&hit)` (plate comment) |
+| `0x1000c220` | `FUN_1000c220` | `Controller_ControllerHitCallback` | `if (ctrl[+0x20]) callback->vtbl[1](&hit)` |
+
+Findings: `docs/sim/lobby-extras.md` §3.3 ("Inside `NxCharacter.dll`"), §10 #1 and #10.
+
+`sadk_noav.exe`, same day: the controller hit report.
+
+| Address | Old name | New name | Evidence |
+|---|---|---|---|
+| `0x0087cebc` | `g_NxUserControllerHitReport` | `g_LobbyControllerHitReport` | applied; holds vtable `0x007e7754` (`.?AVControllerHitReport@Lobby@@`) in the image and in the running game |
+| `0x007ce930` | `dynamic_initializer_for_g_NxUserControllerHitReport` | `dynamic_atexit_destructor_for_g_LobbyControllerHitReport` | applied; registered with `atexit` by `FUN_007c01c0`; stores the base vtable `0x007e763c` at exit; plate comment applied |

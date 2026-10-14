@@ -303,7 +303,9 @@ Coordinate systems: **[known]**
 
   Odd rows are shifted half a cell toward +x (see the fine centre above), so with `y` growing downward the
   directions are 0 = east, 1 = north-east, 2 = north-west, 3 = west, 4 = south-west, 5 = south-east; `d` and
-  `(d + 3) % 6` are opposite. **[inferred]** (screen orientation of +y is not established here.) The tables
+  `(d + 3) % 6` are opposite. **[inferred]** These compass names are not screen directions: on screen, camera
+  unrotated, direction 1 points to the lower side, slightly left (about south-south-west), not to the lower
+  right neighbour; a farm at anchor (62, 88) had its door flag at (62, 87) **[live, 2026-10-14]**. The tables
   also hold entries 6 and 7 = `(0, +2)` and `(0, -2)` for both parities **[known]**; settler code does not
   use them.
 - The settler code uses direction **1** for "from the building cell to the cell in front of the door" (the
@@ -407,7 +409,7 @@ storehouse or barracks". **[inferred]**
 Called first by every class `Update`: **[known]**
 
 1. `animation.Tick()`.
-2. `SettlerMovement_Update(movement)` (3.8).
+2. `ai::settlers::SettlerMovement::Update(movement)` (3.8).
 3. By state:
    - **0**: if `leaveBuilding.Update()` reports finished → `state = 1`.
    - **3**: if `leaveMap.Update()` reports finished: find the owner's building nearest to the current cell with
@@ -444,7 +446,7 @@ building and ship, and deletes the movement object; `Worker` removes itself from
 
 ### 3.4 Going home (`NMovie::LeaveMap`, state 3)
 
-`Start` (S 00776d00): discard a held package; `SettlerMovement_CancelRoute` if a street route is active
+`Start` (S 00776d00): discard a held package; `ai::settlers::SettlerMovement::CancelRoute` if a street route is active
 (`StreetPath.active`, `movement +0x80`) or the settler is queued at a flag or aboard a ship (a free or fine
 walk is left running; step 0x0f waits for it); clear a set look-at position; `step = 0x0f`;
 `strayRetries = 0`. **[known]**
@@ -582,7 +584,11 @@ Per-mode handling of the remaining states. In every row "stamp" means `lastWorkT
 State 0x24, mode 4 (S 0065d7f0): let `g = BuildingProperty +0xec producedSettler`. If `g == -1` or the building
 cannot supply `g` → `RestOrIdleOutside()`. Otherwise, only when the building's `spawnCooldown == 0`:
 `SpawnSettlerOfGood(g)` and add 1 of `g` to the owner's statistics; the worker stays in 0x24 (so it keeps
-releasing one settler per cooldown until the stock cannot supply another). **[known]**
+releasing one settler per cooldown until the stock cannot supply another). **[known]** Observed over 1,520 ticks
+of a developed game: 8 workers entered 0x24; two released one settler on their first tick in it, stayed one more
+tick and went to Rest (0x23), every 390 ticks; the other six spent one tick in 0x24 without a release and went to
+Rest. With one unit in stock per production cycle that is one release, then rest; a building with several units in
+stock was not seen. **[live, 2026-10-14]**
 
 State 0x24, mode 10: if `producedSettler != -1`: remove entry 0 of the building's goods list (`bp_setGoods`: good
 and amount, `Stock::RemoveEntry`) from its stock and spawn an animal of the id `producedSettler` at the building
@@ -617,7 +623,7 @@ which then starts the work movie. **[inferred]**
 If `tick - lastWorkTick > gameConfig +0x58` (unsigned compare; default 600, no Lua setter found) and the worker
 is not at the idle position → start `IdleOutside` (state 0x0c). Otherwise start `Rest` (state 0x23). **[known]**
 
-`Rest::Start` (S 0077b6d0) sets, through `SlotTable_GetIntF` (S 00661bf0) and S 00663410 (disassembly):
+`Rest::Start` (S 0077b6d0) sets, through `ai::logic::SacrificeModifierQuery::GetScaledBuildingTimeE0` (S 00661bf0) and S 00663410 (disassembly):
 **[known]**
 
 ```
@@ -646,7 +652,7 @@ a constant is quoted.
 **`GoToWorkingPlace`** (`Start` S 00779e70, `Update` S 00779f20): step 2 = `MoveToWorkingPlace`: a street walk
 (`SettlerMovement::StartStreetMoveTo`) to the owner's virtual target cell — for a worker the cell of the
 workplace's flag. When it ends: if the settler is not exactly at its stop distance from the route target
-(`SettlerMovement_IsAtStopDistance`, S 006572f0: `HexDistance(routeTarget, cell) == streetStopDistance`, so
+(`ai::settlers::SettlerMovement::IsAtStopDistance`, S 006572f0: `HexDistance(routeTarget, cell) == streetStopDistance`, so
 with no stop distance: standing on the target) the movie is finished; otherwise step 3 = `EnterBuilding`,
 finished when that is. **[known]**
 
@@ -807,7 +813,7 @@ remaining route at the next flag and trim the walked part behind the previous fl
 #### 3.6.2 Street carrier (S 0065b200)
 
 Terms: `pkg` = carried or chosen package (`Settler +0x30`); `pkg.next` = the package's next routing cell
-(`TransportMovement_GetNextWaypoint(pkg +0x20)`, x = -1 when none); "next hop on my street" = `pkg.next` is in
+(`ai::transport::TransportMovement::GetNextWaypoint(pkg +0x20)`, x = -1 when none); "next hop on my street" = `pkg.next` is in
 the street's cell list (`Street +0x18`); `pkg.flag` = cell of the flag the package lies on (`pkg +0x48` reference,
 `+0x28`). **[known]**
 
@@ -890,7 +896,7 @@ How the street computes it is in [`streets-transport.md`](streets-transport.md).
 
 **`GoToPackageTarget`** (S 0077a260, S 0077a2f0): `Start` needs a valid package; target = `pkg.next`; fails if
 that cell is not on the carrier's street; street-walk to it (step 0x16); then, if a street path is active and
-the carrier's cell is on its street, `SettlerMovement_CancelRoute` (3.8.5). **[known]**
+the carrier's cell is on its street, `ai::settlers::SettlerMovement::CancelRoute` (3.8.5). **[known]**
 - Step 0x16, on arrival: if a stop distance was set, clear it and go to step 0x14; else finished. While walking
   on its own street it looks up the owner's flag on the rough mover's final target (`movement +0x38`): no flag,
   or the flag can take the package → clear a set stop distance; the flag cannot take it → set stop distance 1,
@@ -1045,7 +1051,7 @@ obstacle test. Fails only when the target is outside the fine grid. **[known]**
 
 #### 3.8.5 Street routes (`StartStreetMoveTo`, S 00657f50)
 
-Stop any move, path mode 2, `routeTarget = cell`, then `SettlerMovement_AdvanceStreetRoute` (S 00657b80), which
+Stop any move, path mode 2, `routeTarget = cell`, then `ai::settlers::SettlerMovement::AdvanceStreetRoute` (S 00657b80), which
 is also called every time a leg ends. `StartStreetMoveTo` returns its result, except that a settler already
 standing on `cell` always gets true (when the route call returned false, `routeTarget` is first reset to `-1`
 and the path mode to 0). `AdvanceStreetRoute`: **[known]**
@@ -1054,7 +1060,7 @@ and the path mode to 0). `AdvanceStreetRoute`: **[known]**
    slot 1 agrees and a flag is on the cell → queue at that flag (link into the flag's waiter list) and return
    true. Else return false (route over).
 2. Else, unless `streetStopDistance != 0` and `hexDistance(cell, routeTarget) == streetStopDistance`:
-   - `SettlerMovement_PlanStreetRoute` (S 00657360) → `nextFlag`, `nextWaypoint` (below).
+   - `ai::settlers::SettlerMovement::PlanStreetRoute` (S 00657360) → `nextFlag`, `nextWaypoint` (below).
    - If a flag is on the current cell and has a valid reference at `Flag +0x17c`, and `nextFlag` is set, and the
      flag at `nextFlag` passes the same test, and the shortest link between the two flags is a street with a
      valid reference at `Street +0xe8`: queue at the current flag; return true. `Flag +0x17c` is the id-hi
@@ -1095,8 +1101,8 @@ when it connects the two flags, else the shortest link (`NNet::Flag::FindShortes
 bit (`GridStates & 0x2`); with `noReplanAtFlags` set, additionally no flag of the owner on that cell. A street
 that is torn up under a walker therefore stops it at the last intact cell. **[known]**
 
-`SettlerMovement_CancelRoute` (S 006583d0): when neither queued nor aboard, set `routeEndRequested` and the
-rough "stop after this step" byte (`movement +0xc1`); while queued or aboard, `SettlerMovement_Abort`. `Abort`
+`ai::settlers::SettlerMovement::CancelRoute` (S 006583d0): when neither queued nor aboard, set `routeEndRequested` and the
+rough "stop after this step" byte (`movement +0xc1`); while queued or aboard, `ai::settlers::SettlerMovement::Abort`. `Abort`
 (S 00658070) stops the mover; if queued, leaves the flag queue and, with a valid ship reference, the ship's
 cargo list; clears a set stop distance, `streetMode`, `routeEndRequested` and `renderDirty`. **[known]**
 
@@ -1104,7 +1110,7 @@ Stop distance: `SetStopDistance(n)` (S 00657640) writes `streetStopDistance` in 
 `stopDistance` as well when the next flag is the route target), else the base `stopDistance`. `ClearStopDistance`
 (S 00657680) zeroes the same fields. **[known]**
 
-#### 3.8.6 Per-tick settler movement and queueing at a flag (`SettlerMovement_Update`, S 00658140)
+#### 3.8.6 Per-tick settler movement and queueing at a flag (`ai::settlers::SettlerMovement::Update`, S 00658140)
 
 Not queued (`waitFlag` invalid) and not aboard, while moving: **[known]**
 
@@ -1143,7 +1149,7 @@ mode 2, `AdvanceStreetRoute`). With no harbour it puts the settler on the first 
 the ship's cell (the neighbour in direction 4, then stepping in directions 0, 1, 2, 3, 4); if none of the six
 is walkable the position is not changed; the street route is not restarted in this branch. **[known]**
 
-`SettlerMovement_IsBusy` (S 00657570) = queued at a flag, or aboard, or `progress >= 0`. **[known]**
+`ai::settlers::SettlerMovement::IsBusy` (S 00657570) = queued at a flag, or aboard, or `progress >= 0`. **[known]**
 
 ### 3.9 Constructor
 
@@ -1241,14 +1247,14 @@ queued game commands (see [`logic-core.md`](logic-core.md)), street planners, pl
 call it). **[known]** The frame time fed into the tick accumulator is multiplied by a user-profile factor
 (`UserProfile +0x24`) and the system's `speedFactor`, so 10 ticks per second holds when both are 1.0.
 **[inferred]** A scaled frame time above 5.0 seconds is replaced by one tick interval; ticks run only while the
-`NComm` manager is in state 4 and `NComm_Manager_CanAdvanceTick` allows the next one; the statistics step is
+`NComm` manager is in state 4 and `NComm_Manager::CanAdvanceTick` allows the next one; the statistics step is
 skipped while the statistics object is not initialised. **[known]** The tick body is skipped (but the tick
 time still advances) while the edit object reports batch editing. **[known]**
 
 `NSettlers::System::Update` (S 00654ce0) processes the lists in the order **Soldier, Constructor, Worker,
 Specialist, Carrier, NPC**, each list front to back (3.3). **[known]**
 
-Per settler and tick: `Animation::Tick` → `SettlerMovement_Update` → base state handling → class state machine,
+Per settler and tick: `Animation::Tick` → `ai::settlers::SettlerMovement::Update` → base state handling → class state machine,
 which calls the `Update` of the one active top-level movie, which may start the next sub-movie in the same tick.
 A movie started in a tick is first updated in the next tick. **[inferred]** (every `Update` read here returns
 right after starting a sub-movie; not checked for all movies).
@@ -1375,8 +1381,8 @@ How the flags and factors are computed from running sacrifices is in [`military.
 Stream primitives (virtual slots of the stream): `+0x40` open write section(tag), `+0x3c` open read section →
 version, `+0x14` open read section (version not used by the caller), `+0x58`/`+0x2c` byte,
 `+0x5c`/`+0x30` int, `+0x64`/`+0x38` uint,
-`+0x4c`/`+0x20` float. A cell or fine position is written as a pair by `PatternCursor_Serialize` /
-`ElevationCursor_Serialize`. **[known]** The `+0x58`/`+0x2c` primitive is the bool writer / reader: on file
+`+0x4c`/`+0x20` float. A cell or fine position is written as a pair by `ai::map::MapPos::Store` /
+`ai::map::FinePos::Store`. **[known]** The `+0x58`/`+0x2c` primitive is the bool writer / reader: on file
 streams it transfers 4 bytes (S 00780520, S 00780490), only the checksum stream feeds 1 byte; "byte" in the
 lists below names the field, not its width in the file (see [`save-format.md`](save-format.md)).
 
@@ -1503,7 +1509,7 @@ others open the section without using it. **[known]**
 
 Recomputed after load (`PostLoad`): references are resolved by unique id; `Worker::PostLoad` (S 0065cac0)
 re-applies the dig-cell reservation (not stored) and re-registers with the renderer; `Carrier::PostLoad`
-(S 0065af50) re-registers and re-announces its street. **[known]** `SettlerMovement_PostLoad` (S 00657960,
+(S 0065af50) re-registers and re-announces its street. **[known]** `ai::settlers::SettlerMovement::PostLoad` (S 00657960,
 called from the base `PostLoad` S 00656840): when the interpolator progress is `<= 0` it clears
 `routeEndRequested`; otherwise it sets `renderDirty`, and for path mode 2 with `routeTarget.x == -1` copies
 the rough mover's final target (`+0x38/+0x3c`) into `routeTarget`. **[known]**
@@ -1546,7 +1552,7 @@ worker's `lastWorkTick`. **[known]**
 - **Iteration order.** Type lists in the order Soldier, Constructor, Worker, Specialist, Carrier, NPC; inside a
   list creation order; erase preserves order (3.3). Lookups by unique search the lists in the order Worker,
   Constructor, Carrier, Specialist, Soldier, NPC (S 006546b0). **[known]**
-- **Phase offsets.** Periodic checks are spread with the settler's unique id: `(tick + idLo) % 20` (carrier
+- **Phase offsets.** Periodic checks are spread with the settler's unique id: `(tick + unique.idLo) % 20` (carrier
   looks for a package), `% 10` and `% 200` (carrier at a full flag), `% 23` (replan while parked at a flag).
   Unique ids must therefore be assigned in the same order as the original. **[known]**
 - **Floating point.** Movement progress, step rate, carry-over and the action timer are 32-bit floats advanced
@@ -1596,12 +1602,12 @@ worker's `lastWorkTick`. **[known]**
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Does a worker in state 0x24 (mode 4) really stay there releasing settlers until supply ends, and how fast? | observation in the running game (casern, oxen breeding): count settlers released per 10 ticks |
+| 1 | Answered (§3.5.2): a worker stays in state 0x24 only while the stock can supply; with one unit per production cycle it releases one settler on its first tick in 0x24, stays one more tick and goes to Rest (0x23), in the observed buildings every 390 ticks. A building with several units in stock was not seen [live, 2026-10-14] | — |
 | 2 | Answered (§3.8.1, movie timer): 17 or 18 ticks per flat cell (18 for the first cell of a walk), 21 / 22 at slope factor 0.8, 28 / 29 at 0.6; 4 ticks per pick-up or put-down phase | live 2026-10-12: hook on `Settler::Update` S 00656ec0 |
 | 3 | Answered (§3.10): yes, it re-centres and stays; the fall-through and the shared `Update` S 00777c50 decide it. Not observable with the shipped data: the three calls of `se_moveNPCTo` / `se_moveNPCToFine` (C05.lua, C06.lua) are commented out | static: S 0065ddf0, S 0065e010, vftable slots S 008345d4 and S 00834534 |
 | 4 | Street swap of two carriers at a full flag (3.6.2): does it occur in play and does it resolve the jam? | observation: two crossing streets with full flags, watch the carriers' street references every 200 ticks |
 | 5 | The return of a blocked street carrier's good after 360 attempts (§3.6.2) is not observed. Measured: attempts every 10th tick after an initial run, `!flag blocked` at the 180th attempt (about 150 to 165 s at speed 1); the limit does not apply to a carrier without a street (S 0065ad70) | observation: a street carrier at a flag that stays full for more than 3,600 ticks |
-| 6 | Screen orientation of the hex directions (is +y down, i.e. is direction 1 the lower right neighbour?) | observation, or static: the cell → world transform of the renderer |
+| 6 | Answered (§2.9): direction 1 points to the screen's lower side, slightly left (about south-south-west) with the camera unrotated; it is not the lower right neighbour [live, 2026-10-14] | — |
 | 7 | Classes of the sub-movies that section 7 names only by offset (`GoMining +0x40`, `GoHunting +0x2c` / `+0x40`, `BringGoodHome +0x18`, `BringGoodToWorkingPlace +0x30`, `BringGoodOut +0x2c` / `+0x34`, `MoveToShip +0x0c`) | static: the constructor of each package (which sub-constructor runs at the offset) |
 | 8 | Floats in the soldier part of the checksum data (section 8) | static: the `Store` of the members written by `Soldier::StoreUntagged` S 00658c30 |
 
@@ -1619,7 +1625,7 @@ worker's `lastWorkTick`. **[known]**
 | 00654270 | `StoreSettlerVector` | per-list save |
 | 00654490 / 00654300 | `System::StoreUntagged` / `StoreUntaggedSettlerVector` | checksum data, per list |
 | 00656b90 / 006579e0 | `Settler::StoreUntagged` / `SettlerMovement::StoreUntagged` | checksum data of one settler |
-| 006576d0 / 006577e0 / 00657960 | `SettlerMovement::Store` / `Load` / `SettlerMovement_PostLoad` | movement save format, load fix-ups |
+| 006576d0 / 006577e0 / 00657960 | `SettlerMovement::Store` / `Load` / `ai::settlers::SettlerMovement::PostLoad` | movement save format, load fix-ups |
 | 00773010 / 00773280 | `ai::movement::Movement::Store` / `Load` | base movement save format |
 | 0077dee0 / 0064b9c0 | `NMovie::Package::Store` / empty function | step id; `Store` and `Load` of the movies that save nothing |
 | 0053bf50 | `Settler_LinkDestinationReference` | sets the home reference `Settler +0xd8` |
@@ -1643,12 +1649,12 @@ worker's `lastWorkTick`. **[known]**
 | 0065ea20 / 0065e1d0 / 0065e770 | `Constructor::Update` / building / ship routines | builder |
 | 0065eec0 | `NSettlers::Specialist::Update` | scholar |
 | 0065ddf0 | `NSettlers::NPC::Update` | scripted NPC |
-| 00658140 | `SettlerMovement_Update` | per-tick movement, flag queue |
-| 00657b80 | `SettlerMovement_AdvanceStreetRoute` | next street leg / queue at flag |
-| 00657360 | `SettlerMovement_PlanStreetRoute` | plan one leg |
+| 00658140 | `ai::settlers::SettlerMovement::Update` | per-tick movement, flag queue |
+| 00657b80 | `ai::settlers::SettlerMovement::AdvanceStreetRoute` | next street leg / queue at flag |
+| 00657360 | `ai::settlers::SettlerMovement::PlanStreetRoute` | plan one leg |
 | 00657f50 / 00658000 / 006574d0 | `SettlerMovement::StartStreetMoveTo` / `MoveToCell` / `MoveToFinePos` | the three ways to walk |
-| 00657570 | `SettlerMovement_IsBusy` | busy test |
-| 00658070 / 006583d0 | `SettlerMovement_Abort` / `CancelRoute` | stopping |
+| 00657570 | `ai::settlers::SettlerMovement::IsBusy` | busy test |
+| 00658070 / 006583d0 | `ai::settlers::SettlerMovement::Abort` / `CancelRoute` | stopping |
 | 006571e0 | `SettlerMovement::BeginWaitAtFlag` | enter flag queue |
 | 007730e0 | `Movement_Update` | composite mover tick |
 | 00773a40 / 00773ec0 | `NMovement::Rough::BeginStep` / `Fine::BeginStep` | speed formula |
@@ -1699,8 +1705,8 @@ worker's `lastWorkTick`. **[known]**
 | 0077a0c0 | (unnamed) | `GoToPackageTarget` waits and `pkg +0x104 > 360` |
 | 005b7b40 / 0077a0f0 / 0077a150 / 0064ef60 | street swap helpers | target test, free partner, loaded partner, set next hop |
 | 0053d2b0 / 0053d2d0 | link / unlink carrier and sending building | `Carrier +0x1c0` |
-| 00661bf0 / 00663410 | `SlotTable_GetIntF` / rest time scale | `Rest` duration |
-| 00661b60 / 00663390 | `SlotTable_CallScale` / production time scale | `ProduceGood` duration |
+| 00661bf0 / 00663410 | `ai::logic::SacrificeModifierQuery::GetScaledBuildingTimeE0` / rest time scale | `Rest` duration |
+| 00661b60 / 00663390 | `ai::logic::SacrificeModifierQuery::GetProductionTime` / production time scale | `ProduceGood` duration |
 | 00661c50 / 00663450 | `GetEntryWithModifiers` / `ApplyAmountDoubling` | harvest count |
 | 00774a00 | `NMovement::Interpolator::SyncValue` | progress = carry-over |
 | 00675000 | `ai::map::MapPos::StepDirection` | hex direction tables |

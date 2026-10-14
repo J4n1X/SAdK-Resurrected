@@ -72,7 +72,7 @@ On the wire a GUID embedded in an event is written as its **0x14 raw bytes, vfta
 
 Fields this subsystem owns. The tick fields `+0x24..+0x4d` and the config block are specified in
 `docs/sim/logic-core.md` §2.9 and only listed here. Initial values: constructor S 0040a530 and
-`NComm_Manager_ResetSession` S 0040a810 (run by `Shutdown(false)`) [known].
+`NComm_Manager::ResetSession` S 0040a810 (run by `Shutdown(false)`) [known].
 
 | Offset | Type | Meaning | Reset value |
 |---|---|---|---|
@@ -582,7 +582,7 @@ Kick reasons in this function set: `!VERSION MISMATCH`, `!CHECKSUM MISMATCH`, `!
 
 ### 3.7 Per-tick exchange (messages 1001 and 1002)
 
-The gate `NComm_Manager_CanAdvanceTick` S 004088b0 and the step `NComm_Manager::AdvanceNetTick` S 00411990 are
+The gate `NComm_Manager::CanAdvanceTick` S 004088b0 and the step `NComm_Manager::AdvanceNetTick` S 00411990 are
 specified in `docs/sim/logic-core.md` §3.2; the pseudocode there matches the code. As a protocol, for net tick
 `N` (S = logic ticks per net tick):
 
@@ -969,9 +969,11 @@ not be the shipped values (a second file next to it, `network - Copy.ini`, has t
 [known, both files]. The integer keys are read with `GetPrivateProfileIntA`, the float keys and `url` with
 `GetPrivateProfileStringA` (floats through `atof`), so a missing key or section yields the fallback column
 [known, S 0041ede0]. The examined `network.ini` starts with a UTF-8 byte order mark (`EF BB BF`) directly before
-`[Basics]`; [inferred] the profile API then does not recognise that first section line, and the effective
-`gamePort` is the fallback 5479, not 5478. [TODO] not established: the value at manager `+0x360` in the running
-game (one read settles it). A remake's reader should strip the mark.
+`[Basics] gamePort = 5478`, and a second `[Basics]` section further down has `gamePort=5479`. `GetPrivateProfileIntA`,
+called in the game process on test files, does not find a section whose line follows the mark directly (it
+yields the fallback), and with duplicate sections it takes the first one it finds [live, 2026-10-14]. So the
+first section of the install's file is hidden and the effective `gamePort` is 5479, from the second section or
+the fallback (both 5479), not 5478 [live, 2026-10-14]. A remake's reader should strip the mark.
 
 Code constants [known]: TinCat module id `0x27d9`; message types 1000..1003; package magics `0x5332`, `0x4b38`;
 six slots; initial net tick length 4 (1 offline); package and checksum history of 5 net ticks (S 00411990); leave
@@ -1116,8 +1118,9 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
 7. Whether the transient checksum-count mismatch around a leave is visible to the player. Observation in a
    running three-player match. Answered (§3.10): a clean leave of a non-host yields two 0x2002B commands on
    the host, one from the lockstep 0x3000b and one from the disconnect.
-8. Whether `gamePort` of a `network.ini` that starts with a UTF-8 byte order mark is read or falls back to 5479
-   (§6). One read of manager `+0x360` in the running game.
+8. Answered (§6): a section line directly behind a UTF-8 byte order mark is not found by
+   `GetPrivateProfileIntA`, so the install's first `[Basics] gamePort = 5478` is hidden and the effective
+   `gamePort` is 5479 (second section or fallback) [live, 2026-10-14].
 
 ---
 
@@ -1125,8 +1128,8 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
 
 | Address | Name | Role |
 |---|---|---|
-| 0040a530 | NComm_Manager_ctor | initial values, generates the local GUID |
-| 0040a810 | NComm_Manager_ResetSession | reset of all session fields |
+| 0040a530 | NComm_Manager::ctor | initial values, generates the local GUID |
+| 0040a810 | NComm_Manager::ResetSession | reset of all session fields |
 | 0040a9a0 | NComm_Manager::StartUpNetwork | role, transport creation, state 0 → 1 |
 | 0040ad60 | NComm_Manager::ConnectAndJoin | connect, send 0x30001, state 1 → 2 |
 | 0040b170 | NComm_Manager::BeginGameStarting | state 2 → 3 |
@@ -1139,7 +1142,7 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
 | 0040fd80 | NComm_Manager::BroadcastEvent | one event as message 1000 to all, plus local |
 | 00408b10 | NComm_Manager::QueueGameCommand | command into the outgoing package (or at once offline) |
 | 004089c0 | NComm_Manager::SendEventUserChecksum | restart the outgoing package with 0x30009 |
-| 004088b0 | NComm_Manager_CanAdvanceTick | lockstep gate |
+| 004088b0 | NComm_Manager::CanAdvanceTick | lockstep gate |
 | 00411990 | NComm_Manager::AdvanceNetTick | net tick boundary: execute, exchange, compare |
 | 00410530 | NComm_Manager::ExecuteEventPackage | deserialise and dispatch a package |
 | 0040e0d0 | NComm_Manager::AddClientGameEventsToServerGameEvents | host: message 1001 into the collected list |
@@ -1185,7 +1188,7 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
 | 0040a390 / 0041ede0 | NComm_NetworkConfig_InitDefaults / LoadFromIni | `network.ini` |
 | 00428110 | ai::net::S2TftpManager::OnReceive | file transfer entry (message 1003) |
 | 00427140 | ai::net::S2TftpManager::RequestFile | start or queue a download |
-| 00782a50 | NComm_BeginGameRunningForward | game listener start slot |
+| 00782a50 | nGame::System::BeginGameRunningForward | game listener start slot |
 | 005eed00 | nMenu::Game::OnEnter | state 3, sinks, GameLoaded |
 | 006009b0 | nMenu::Requester::Update | quit: leave event and wait |
 | 00457a00 | LobbyMenu::SetupGameDialog::Update | room: StartLoading trigger |

@@ -2,7 +2,7 @@
 
 Start here after `CLAUDE.md` + `HARNESS.md`. The short, durable state of the project: what is established, what
 is open, and where each is written down. `[PROVEN]` = binary address + live evidence; everything else is
-`[TODO]` / `[inferred]` and labelled. Last full revision: 2026-10-12.
+`[TODO]` / `[inferred]` and labelled. Last full revision: 2026-10-12; map figures and map quality 2026-10-13.
 
 ---
 
@@ -44,22 +44,25 @@ Per-feature status is the table in `CLAUDE.md`; the evidence is in the docs name
 Ports of the server: 7070 lobby, 7071 chat, **5477 village**, 5481 referee, 7072 / 7073 host bridge. 5479 is the
 game port of a *hosting client* (`network.ini` `gamePort`), not a server port.
 
-## How complete the map is (measured 2026-10-12, `sadk_noav.exe` version 65, `tincat3.dll` version 11)
+## How complete the map is (measured 2026-10-13, `sadk_noav.exe` version 71, `tincat3.dll` version 16)
 
 | | |
 |---|---|
-| Functions with a name | about 30,000 of 31,349; about 12,000 of them are compiler-generated exception funclets |
-| Functions that still carry an open reason, shared generic bodies excluded | 256 in `sadk_noav.exe` (2,509 before the day's passes), 33 in `tincat3.dll` (270) |
-| of those in `sadk_noav.exe` | owning class not determined 121 · open point in the plate 116 · failed writer operation 58 · in a vtable but not in its class 22 · unnamed 13 |
-| Shared generic (ICF-folded) bodies, named by shape | about 600; not a gap |
-| Mechanical checks (`Verify.java`) | stack clean-up mismatches 3 · placeholder types in prototypes 17 (`tincat3.dll` 1) |
-| Undefined struct bytes | concentrated in the UI classes: `nMenu` about 330 K, `nUi` 53 K, `Lobby` 41 K, `LobbyMenu` about 26 K after the dialog base class was embedded |
+| Functions with a name | `sadk_noav.exe` 30,443 of 31,183; the 740 without one are compiler-generated (713 exception funclets, 27 CRT internals). `tincat3.dll` 1,733 of 1,733 |
+| Functions that still carry an open reason | 0 in both programs (2,509 and 270 on the morning of 2026-10-12; 256 and 33 on the morning of 2026-10-13) |
+| Bodies the linker folded for unrelated classes (tag `ICF_SHARED`) | 210 and 30. Each has its users measured (vftable owners, receiver type at every call site) and named in its plate; it has no owning class |
+| Methods entered through a secondary vftable (tag `FACE_THIS`) | 666 and 5. Their `this` is an offset pointer into the class struct, so the decompile shows the class's own field names (`ADJ(this)->field`) |
+| Mechanical checks (`Verify.java`) | no finding: stack clean-up, placeholder types, vftable owners, duplicate field names. 23 allocation-size findings are read and listed as base-class or temporary constructors in `mapping/work/verify_reviewed.json` |
+| Undefined struct bytes | 11,413 of 1,142,408 in `sadk_noav.exe` (1 %; 417,758 = 36 % on the morning of 2026-10-13), 714 of 29,188 in `tincat3.dll`. What is left is alignment padding and bytes no code touches |
 | Specifications for the remake | `docs/sim/`: 36 documents, about 45,700 lines, index and reliability figures in `docs/sim/README.md` (residual error after the checks about 1-2 %: 19 wrong in 1,532 sampled claims) |
 
-The mapping pipeline is `mapping/` (README, AGENT_GUIDE, `work/p5/runs.json` for the history). Since 2026-10-12 its writer
-no longer protects hand-made names, fields or types (`PROTECT_PRIOR = false`): evidence decides. What four passes
-could not settle carries a `[TODO]` in the function's plate that names the observation in the running game that
-would decide it.
+The mapping pipeline is `mapping/` (README, AGENT_GUIDE, `work/p5/runs.json` for the history; the gap closure of
+2026-10-13 is `work/gaps_20261013/`, with its report in `GAP_CLOSURE.md`). Its writer does not protect hand-made
+names, fields or types (`PROTECT_PRIOR = false`): evidence decides. Layout and ownership questions are settled from
+measurements, not from reading alone: `RefUsers.java` (which vftables and callers use a function), `ReceiverTypes.java`
+(the type a method is called on, at every call site), `StructEvidence.java` (member objects and base classes from
+constructor calls, typed accesses to undefined struct bytes), `DumpHierarchy.java` (RTTI bases, vftable slots), with
+`bin/owners.py` and `bin/struct_fill.py` turning them into change files.
 
 ## Open work
 
@@ -100,25 +103,25 @@ would decide it.
   `docs/live-session-queue.md`. Mail, buddies, whispers, the shops and per-match server mods work in live play
   (maintainer, 2026-10-12).
 - The checklist of open protocol statements a session can settle: `docs/live-session-queue.md`.
+- `Lobby::IPhysicObj` slots 2, 6 and 8 have no caller in the binary (hook 005210c0 and 00523430 in the village, then
+  walk, jump, sit at a minigame table, use reset-position). The other live checks of the gap closure were settled by
+  reading (`mapping/work/gaps_20261013/live_checks.md`).
 - Matches of three or more players: the maintainer has no third tester, so three-player behaviour (leave notice,
   team wagers, a third player in a save) rests on static evidence for now.
 - Everything in `lua-surface.md`, `data-loading.md` and `navy-and-military.md`; the mods `oscursor`, `nopreview`,
   `navalcombatfix` in the game.
 
 ### Map quality (`HARNESS.md` §6, `decomp/RE_PRACTICES.md`)
-- Vtable-base audit for `ServerList` (`0x7dbf8c`), `GameServerInfo`, `UserCommConnection`, `GameServerConnection`:
-  read base − 4 (the RTTI pointer) to find the true first slot. `VillageServerConnection` was off by 0xc before
-  this check.
-- `AvatarProxy` inherits `ActorProxy : IActor`, an interface shared by several hierarchies: not bound yet.
-- `LobbyVillageScreen`: its struct types `this` for both `LobbyVillageScreen_*` and `AvatarScreen_*` functions.
-  Open: are they one class?
-- `LobbyManager`: the purpose of the observer list `+0x34` (subscribed with a no-op, never fired).
-- `ServerList::FindBestVillageServer` S 00469010 and `WorldScreen::PopulateSelectServerMenu` S 004375a0 iterate
-  `VillageServerInfo` rows through locals typed `GameServerInfo`; retype them in the typing sweep.
-- `UList` (tincat3.dll) is 24 bytes: every manager embeds it at 24-byte spacing. It had been grown to 68, which
-  stopped about a tenth of tincat3.dll from decompiling; repaired 2026-10-12.
-- `docs/SOURCEMAP.md` sections 1–2 still carry addresses of the dump-base build; reconcile them to `sadk_noav.exe`.
-- Typing sweep by subsystem, lobby classes first.
+The gap closure of 2026-10-13 left no function with an open reason and no `Verify.java` finding; its record and the
+list of what stays open are in `mapping/work/gaps_20261013/GAP_CLOSURE.md`. In short:
+- `LobbyManager` is the RTTI class `LobbyComm::System` (1448 bytes). The global `g_pLobbyManager`, the enum
+  `LobbyManagerState` and four static functions keep the old word.
+- A method that runs on a secondary base pointer has an offset-pointer `this` (tag `FACE_THIS`); the decompile shows
+  `ADJ(this)->field`. There are no mirror structs any more.
+- Left for static work: about 40 Global functions named `<Class>_<Method>` whose receiver no call site types,
+  `_TestDefaultLanguage` (needs custom storage), `NxControllerDesc` +8, empty namespaces after class merges, and the
+  argument name of `OpenUserComm` / `OpenCommunication` (`chatServerHandle`, but the callers pass a character id).
+- `UList` (tincat3.dll) is 24 bytes; every CommLayer manager struct matches its allocation size.
 
 ## Lessons that keep paying
 
@@ -127,6 +130,12 @@ would decide it.
 - **One writer per struct.** Removing or adding a field in a packed struct shifts every later offset, so parallel
   agents editing one struct corrupt each other. Fan out read-only analysis; apply struct edits serially, with
   `recreate_struct` for a whole-struct rebuild.
+- **Measure, then read.** Who owns a method and what a struct holds are measurable: the classes whose vftable
+  holds a function, the receiver type at every call site, the constructor that runs on this+offset, the width of
+  every access to an undefined byte (`mapping/scripts/RefUsers.java`, `ReceiverTypes.java`, `StructEvidence.java`).
+  On 2026-10-13 that settled in minutes what four reading passes had left open, and reading agents only got what
+  the measurement could not decide. A measurement can be wrong in a systematic way (a method that runs on a
+  secondary base pointer shifts every offset it shows), so sample its output against the code before applying it.
 - **Class hygiene.** `set_function_this_type` can create a bare Global twin of an RTTI class; the procedure and
   script are in `decomp/RE_PRACTICES.md`, "Class hygiene".
 - **Map before mod code.** A mod uses only mapped fields: Ghidra → check in → re-export `sadkmod/sourcemap/` →

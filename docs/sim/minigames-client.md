@@ -360,6 +360,9 @@ of that:
 - **Top-up at the table** (`MinigameDialog::OpenSetStackDialog`) [known] S 00461470: minimum = `limitMin`,
   maximum = avatar money in the table's currency - the local seat's `accnt`, initial = 10 x `limitMin`
   clamped to that maximum (`limitMin` itself if 10 x overflows). Ok sends 222 Amount with the value (§5.1).
+  With `accnt` = the account balance the Dice table's "Konto" top-up offered 0; with `accnt` = 0 the seat
+  read 0 (`GetLocalSeatAccnt` S 00471930), the dialog offered the avatar's play money (`AvatarProxy +0xd4` =
+  103,181 on a play-money table) and the top-up worked [live, 2026-10-14].
   When the top-up button is offered (it then has opacity 1 and the headline is replaced):
   - Dice: local stack == 0 (headline `!MGCOMMON_NOMONEY`) [known] S 00447950;
   - Poker: the local seat is in no pot's `eligibleMask` and `stack + street wager < limitMin` (headline
@@ -679,7 +682,10 @@ When the gate is closed the highlights are cleared and the selection is dropped 
 
 The 8 squares of the side's home column are offered: square = `row * 8 + (0 for seat 0, 7 for seat 1)`. A
 left click on one of them sends 402 PlaceKing with `posy` = row; a click on any other square only plays the
-click sound; without a click the square under the mouse is hover-highlighted [known] S 005260f0.
+click sound; without a click the square under the mouse is hover-highlighted [known] S 005260f0. With the
+stub, the king is the only piece offered and it can only be put on the home column; while placement runs the
+client draws it on one of the far fields of the board, not on the chosen square, until the pawns are placed
+when the phase ends [live, 2026-10-14].
 
 #### 3.5.4 Move generation (phases 4, 5; client-enforced)
 
@@ -805,11 +811,12 @@ the same 0xD9 states as everyone in the zone: all boards are animated for every 
 seated or not. An observer is not seated, so 303 is dropped and every non-local rule above applies with
 `localSeat == -1`.
 
-[TODO] not established: what calls `SetObserving(true)`. No direct or decompiled indirect call with a true
-argument was found in the lobby code (0042xxxx..0052xxxx); the three ways the world screen reacts to a table
-(action codes 12..15, `message-catalog.md`) all open the matchmaking dialog. To settle: a breakpoint on
-S 005238e0 in the running game while clicking occupied tables, or a search of the instruction bytes for
-calls through vtable offset +0x10 on a `MiniGameProxy+0x20` pointer.
+Nothing in ordinary play starts observing: walking in the village, sitting down at a Dice table twice,
+playing rounds and standing up never called `SetObserving` S 005238e0 [live, 2026-10-14]. No direct or
+decompiled indirect call with a true argument was found in the lobby code (0042xxxx..0052xxxx); the three ways
+the world screen reacts to a table (action codes 12..15, `message-catalog.md`) all open the matchmaking dialog
+[known]. [inferred] observer mode is unreachable in the shipped client; a call through vtable offset +0x10 on a
+`MiniGameProxy+0x20` pointer that the search does not see is not excluded.
 
 Sounds of a table (`PlaySound`, `PlaySoundAt`) are played only if the local avatar is at no table or at this
 one [known] S 00523720.
@@ -1063,17 +1070,17 @@ the server does not drive.
 
 | # | Game | Client | Server | Effect |
 |---|---|---|---|---|
-| 1 | all | top-up maximum = avatar money - seat `accnt` (S 00461470) | sends `accnt` = the whole account balance (`_balance`) | if the avatar money shown to the client equals that balance, the maximum is 0 and the top-up dialog cannot offer an amount [inferred]; what `accnt` meant originally is open (§11) |
+| 1 | all | top-up maximum = avatar money - seat `accnt` (S 00461470) | sends `accnt` = 0 for Dice, Poker and Pawn Chess (`_seat_accnt`); the stake is taken off the wallet when the player sits down | compatible: the dialog offers the avatar's money and the top-up works; with the balance as `accnt` (the earlier stub) it offered 0 [live, 2026-10-14]. What the original server sent is not known (§11) |
 | 2 | Dice | no timer in phases 2..4; throw animation ends at 1 s, result animation at 3 s | roll timeout 20 s, throw 4 s, result 4 s | compatible; server times are longer than needed |
 | 3 | Dice | sends 221 in every object step that sees the left-button release (S 00524420, §5.2); no latch of its own | accepts the first in phase 2, drops the rest | compatible |
 | 4 | Dice | headline in phase 4 shows the gross return as "won" | books `stack - bets + payout` at the end of phase 4 | compatible; the "lost" texts never appear |
 | 5 | Poker | shows `amount / winners` per winner for every pot | gives the odd chips to the first winner after the button | the log can differ from the booked stacks by the remainder |
-| 6 | Poker | 302 consumes the local turn until `crntplyr`, `phase` or `round` changes (S 00489340) | "back in" (enbl 0) during the own turn is answered with an unchanged state | the player has no buttons for the rest of that turn and is timed out [inferred] |
+| 6 | Poker | 302 consumes the local turn until `crntplyr`, `phase` or `round` changes (S 00489340) | a sit-out (enbl 1) during the own turn is answered at once by acting for the player (check when possible, otherwise fold), and a player sitting out when a hand is dealt is not dealt in | the turn is over before "back in" (enbl 0) arrives, so the client case (back in during the own turn with the state unchanged: no buttons for the rest of that turn) cannot arise with this server [live, 2026-10-14]; open for a server that leaves the turn running |
 | 7 | Poker | phases 2, 3, 4, 7 exist as values without behaviour | uses 1, 5, 6, 8, 9 only | none visible; the original use of the other values is open |
 | 8 | Poker | per-player bit 14 is stored, no reader found | never sets it | none visible |
-| 9 | Pawn Chess | phase 3 shows piece index 0 only (S 00525f20) | pieces 0..7 are side 0's home column by row; the king is the piece on the chosen row | during seat 1's placement the client shows side 0's row-0 piece, which is the king only if row 0 was chosen [inferred] |
+| 9 | Pawn Chess | phase 3 shows piece index 0 only (S 00525f20) | pieces 0..7 are side 0's home column by row; the king is the piece on the chosen row | during placement the client draws the king on one of the far fields of the board, not on the chosen square, until the pawns are placed when the phase ends [live, 2026-10-14]; that the piece drawn is side 0's row-0 piece is [inferred] |
 | 10 | Pawn Chess | announces checkmate from bits 0x02 / 0x20 | sets only check (0x01 / 0x10) and winner (0x04 / 0x40) | the `!MGCHESS_CHECKMATE` line never appears |
-| 11 | Pawn Chess | movable pieces in check: king + marked pawn; a king cannot be clicked onto an attacked neighbour (§3.5.4, S 00525b70); no other test for leaving the king attacked | generator `legal_moves` lets the king step onto attacked squares; ends the game on mate or when the side has no legal move | the server accepts king moves the client can never send; a position in which the server counts only such moves as legal leaves the player without a usable move and no game end [inferred] |
+| 11 | Pawn Chess | movable pieces in check: king + marked pawn; a king cannot be clicked onto an attacked neighbour (§3.5.4, S 00525b70); no other test for leaving the king attacked | generator `legal_moves` lets the king step onto attacked squares; ends the game on mate or when the side has no legal move | the server accepts king moves the client can never send; a position in which the server counts only such moves as legal leaves the player without a usable move and no game end [inferred]. In check, every legal move that ended the check was accepted, king or pawn [live, 2026-10-14]; the inferred dead position was not reached |
 | 12 | Pawn Chess | observers are possible in principle (§3.6) | two seats, no spectators | none |
 | 13 | all | observer mode exists (§3.6) | no message or state for it; nothing needed | none |
 
@@ -1081,11 +1088,12 @@ the server does not drive.
 
 ## 11. Open questions
 
-1. **What starts observing.** `SetObserving(true)` has no located caller (§3.6). Settle: breakpoint on
-   S 005238e0 in the running game, or a byte search for indirect calls through table-client vtable +0x10.
-2. **Meaning of `accnt`.** The client only subtracts it from the avatar's money for the top-up maximum. Settle
-   in the running game: sit at a Dice table with known money, hook S 00461470, compare the dialog's maximum
-   for `accnt` = 0, = the buy-in, = the balance.
+1. **What starts observing.** Answered (§3.6): nothing in ordinary play; walking, sitting down at a Dice table,
+   playing and standing up never call `SetObserving` S 005238e0 [live, 2026-10-14]. Left: an indirect call
+   through table-client vtable +0x10 that no path of play reaches.
+2. **Meaning of `accnt`.** Answered (§3.2): the client uses it only as the amount of the avatar's money not to
+   offer again at the table; available = avatar money − `accnt` (0 with the balance as `accnt`, the avatar's
+   money with 0) [live, 2026-10-14]. What the original server sent is not knowable without its capture.
 3. **The two unnamed dwords at `MiniGamePokerProxy` +0x538 / +0x53c.** Zeroed by the constructor S 00489dd0;
    no other access to these two fields appears in the decompiled code [known] search over all functions.
    [inferred] unused. An access through a raw pointer into the object would not show in that search.
@@ -1102,9 +1110,10 @@ the server does not drive.
    constructor, by the click that picks the pawn and by `SendCapture` [known] S 00489f60, S 0048a420,
    S 00489fd0; no table state resets it. Whether the original server ever passed the turn while a capture
    was pending is not knowable. Running game: let the server time a player out with a pawn picked and
-   confirm that the board stays dead afterwards.
+   confirm that the board stays dead afterwards. The stub has no input timeout for Pawn Chess, so the case
+   cannot arise with it [live, 2026-10-14]; it needs a server with a timeout.
 8. **Dice board looks**: the roller marker, the curve of tween mode 3 and the events behind the bet-field
-   flag bits 0x02 and 0x08 (§6). Static: `CGfxObjMiniGameDice_Board::DrawRenderItem` S 00517110 (the part
+   flag bits 0x02 and 0x08 (§6). Static: `CGfxObjMiniGameDice_Board::Render` S 00517110 (the part
    before the field loop), `ai::lobbygfx::FloatTween::Evaluate`, the writers of the bet-field flag byte.
 9. **Definition of the particle effects `MGDice_Won` / `MGDice_Smoke`** (§6). Static: the particle system's
    effect lookup by name.
@@ -1180,4 +1189,4 @@ value 8, which fits [known] S 00471490, S 00471b70.
 | S 0044aa90 / 0044abb0 / 0044acc0 / 0044adb0 | `LogPreflop` / `LogFlop` / `LogTurn` / `LogRiver` | street log lines |
 | S 00448490 / 004482f0 / 00448010 | `AppendCardText` / `GetCardRankText` / `UpdateCommunityCardSprites` | card notation, rank key, card pictures |
 | S 00517920 / 00515780 / 00512d70 | Dice / Poker / Pawn Chess board constructors | model keys and locator names |
-| S 00517110 | `CGfxObjMiniGameDice_Board::DrawRenderItem` | bet-field brightness |
+| S 00517110 | `CGfxObjMiniGameDice_Board::Render` | bet-field brightness |

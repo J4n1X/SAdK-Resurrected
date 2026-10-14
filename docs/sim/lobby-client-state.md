@@ -1,12 +1,12 @@
 # Lobby client state: managers, proxies and observers behind the wire
 
 Everything the client keeps in memory about the online lobby, and every transition of that state:
-`LobbyManager` and its state machine, the five connections, the character manager and its action
+`LobbyComm::System` and its state machine, the five connections, the character manager and its action
 queue, the actor proxies, mail, buddies, chat channels, the server list, the observer lists and the
 `LobbyMessage` bit stream.
 
 **Conventions.** `S 00xxxxxx` is an address in `sadk_noav.exe`, `T 10xxxxxx` one in `tincat3.dll`.
-Offsets such as `LM+0x57c` are relative to the named object (`LM` = `LobbyManager`, `VSC` =
+Offsets such as `LM+0x57c` are relative to the named object (`LM` = `LobbyComm::System`, the lobby manager, `VSC` =
 `VillageServerConnection`, `UCC` = `UserCommConnection`, `CM` = `CharacterManager`, `PO` =
 `PostOffice`, `SL` = `ServerList`). Tags: **[known]** = read in the decompiled code at the address
 given, or in the named data file; **[inferred]** = one step of reasoning from that, or taken from
@@ -35,7 +35,7 @@ Wire layouts are **not** repeated here. They are in:
 The lobby client is a set of state holders that sit between the TinCat network library and the
 lobby user interface:
 
-- `LobbyManager` owns the comm layer and all other objects, and runs the login state machine.
+- `LobbyComm::System` owns the comm layer and all other objects, and runs the login state machine.
 - Four *managers* wrap one TinCat interface each and keep the answers: `ServerList`,
   `ServerMessages` (message of the day), `Properties`, `CharacterManager`, `PostOffice`.
 - Five *connections* (`BaseConnection` and four subclasses) each bind one TinCat transport.
@@ -58,7 +58,7 @@ The whole layer is absent when the game is started with `-nolobby` (`app-shell.m
 ### 2.1 Ownership
 
 ```
-LobbyManager (singleton g_pLobbyManager S 00885890, 0x5a8 bytes, RTTI LobbyComm::System)
+LobbyComm::System (singleton g_pLobbyManager S 00885890, 0x5a8 bytes)
  ├─ +0x4c  tincat3 CommLayer            ├─ +0x50  tincat3 ConnectionManager
  ├─ +0x54  ServerList            (embedded)   village servers, hosted games, referee assign
  ├─ +0x100 ServerMessages        (embedded)   message of the day
@@ -80,7 +80,7 @@ LobbyManager (singleton g_pLobbyManager S 00885890, 0x5a8 bytes, RTTI LobbyComm:
 connections are created once in the constructor and live until shutdown; a "connection exists"
 below means "has a transport bound" (§2.5).
 
-### 2.2 `LobbyManager`
+### 2.2 `LobbyComm::System`
 
 | Offset | Type | Field | Written by | Tag |
 |---|---|---|---|---|
@@ -102,7 +102,7 @@ below means "has a transport bound" (§2.5).
 | +0x588 | i32 | referee retry timer, milliseconds | S 004625d0 sets 60000; pump counts down | [known] |
 | +0x58c | std::string | e-mail address waiting to be sent after a registration | `CreateUser` S 004633f0 in state 1, before the request is issued (it stays stored when the library refuses the request); cleared by the pump | [known] |
 
-The `LobbyManager` object is also the `CommLayer::IConnectionCallback` of the ConnectionManager.
+The `LobbyComm::System` object is also the `CommLayer::IConnectionCallback` of the ConnectionManager.
 Its vtable (S 007dacb0) slots 1 to 6 are `OnLoggedIn`, `OnLoginFailed`, `OnLoggedOut`,
 `OnConnectionLost`, `DispatchInboundToConnection`, `OnStatisticsConnectionReceived` [known,
 `types.md` §1.2]. A connection is identified in these callbacks by its transport object pointer:
@@ -188,7 +188,7 @@ without a transport; otherwise it finalises the message if needed and calls
 | **Lobby** | none: owned by tincat3; managers use CommLayer interfaces | `Login` / `CreateUser` (state 1 only) | disconnect | NETMSG 204 or 203 | tincat3 managers → observer callbacks of §2.9 to §2.13 |
 | **User comm (chat)** | `UserCommConnection`, `LM+0x3d8` | pump, state 5 → 6; again right after a chat connection loss | lobby logout; chat connection loss | `OpenCommunication(id)`: transport `Login(id, 0)` when the village is entered | tincat3 `ChatChannelManager` → `IChatChannelObserver` callbacks; the raw-data slot is an empty stub (S 0047f6e0) and the inbound dispatcher S 00462760 routes only to the village, game server and referee connections |
 | **Village** | `VillageServerConnection`, `LM+0x540` | `CreateVillageServerConnection(serverId)` S 00463850 | village logout, login failure or loss (`Destroy`) | transport `Login(characterId, 0)` after chat login | `HandleMessage` S 00470a90 |
-| **Game server** | `GameServerConnection`, `LM+0x544` | [TODO] no caller of its `Initialize` (S 0048eda0) is in the decompiled code | – | – | no-op slot |
+| **Game server** | `GameServerConnection`, `LM+0x544` | [TODO] no caller of its `Initialize` (S 0048eda0) is in the decompiled code; not called while hosting [live, 2026-10-14] | – | – | no-op slot |
 | **Referee** | `RefereeServerConnection`, `LM+0x490` | pump, state ≥ 6, once a referee server id is latched | referee logout; a different referee id; lobby logout | `Login(localPermId)` at match start (`MATCH_START.md`) | `OnReceive` S 0047b090 |
 
 [known] for every cell with an address in §3. The chat connection is bound with the results of
@@ -198,14 +198,15 @@ come from `ConnectionManager vtbl+0x38(serverId)` (result 0 or 0xCD accepted) th
 
 `GameServerConnection::OnLoggedIn` S 0048edf0 would start the peer-to-peer network
 (`NComm_Manager::StartUpNetwork(3)`, `ConnectAndJoin`) without firing the logged-in list [known];
-whether this path is ever taken is [TODO] (§10).
+hosting a room and leaving it called neither `Initialize` S 0048eda0 nor `OnLoggedIn` [live, 2026-10-14];
+whether joining a room takes this path is [TODO] (§10).
 
 ### 2.6 `VillageServerConnection` (0x280 bytes)
 
 | Offset | Type | Field | Initial | Tag |
 |---|---|---|---|---|
 | +0x38 … +0x14c | 24 observer lists | world events (§2.19) | empty | [known] ctor S 0046eee0 |
-| +0x158 | ptr | owning `LobbyManager` | ctor arg | [known] |
+| +0x158 | ptr | owning `LobbyComm::System` | ctor arg | [known] |
 | +0x15c | i32 | village server id | −1 | [known] S 0046dac0 |
 | +0x160 | u32 | `ServerPerm` from EnterWorld: the perm id under which the village server itself speaks in chat | 0 | [known] S 0046f670 |
 | +0x164 | std::map&lt;u8, u32&gt; | chat channel per zone key (§3.12) | empty | [known] |
@@ -520,7 +521,7 @@ callback may subscribe or unsubscribe [known] S 00458860, S 00464300; `types.md`
 
 The subscriber column lists every `Subscribe` call found in the decompiled code.
 
-**`LobbyManager`**
+**`LobbyComm::System`**
 
 | List | Fired when (arguments) | Subscribers |
 |---|---|---|
@@ -574,6 +575,10 @@ The subscriber column lists every `Subscribe` call found in the decompiled code.
 Fire sites: S 0046f8c0, S 0046fc10, S 00471d10, S 00471c40, S 0046f380, S 0046f510, S 0046fd10,
 S 0046f4d0, S 0046f4f0, S 0046fde0, S 0046f9b0, S 0046fab0, S 0046f670, S 0046f620, S 004706b0,
 S 00470990, S 00470a10. Subscriptions: S 00503d00, S 004351a0, S 004389d0.
+
+The three "never" lists (`LM+0x34` above, `VSC+0x110`, `VSC+0x14c`) did not fire through a login, a village
+entry and exit, a hosted room and a lost lobby connection, with both notify bodies (S 00464300, S 0045f620) and
+the subscriber S 005037a0 hooked [live, 2026-10-14].
 
 **`UserCommConnection`**
 
@@ -629,7 +634,7 @@ changed flag [inferred].
 ### 3.1 The state machine
 
 `SetState(new)` S 00462540 does nothing when the state is 12; only the village connection calls it.
-`LobbyManager`'s own handlers write the field directly [known].
+`LobbyComm::System`'s own handlers write the field directly [known].
 
 | From | To | Trigger | Code |
 |---|---|---|---|
@@ -737,7 +742,7 @@ with an error leaves bit 2 clear for ever: the client stays in state 6 [inferred
    id must be in the character map, else the selection becomes 0) and a village server
    (`ServerList::SelectVillageServer(id)`, §3.13), then calls `CLobby::RequestEnterVillage(reset
    position)` → `CLobbyClient::EnterVillage` S 00503f50 [known].
-2. `LobbyManager::CreateVillageServerConnection(-1)` S 00463850: only when the village connection
+2. `LobbyComm::System::CreateVillageServerConnection(-1)` S 00463850: only when the village connection
    has no transport; −1 means the selected village server. Registers the server id with the
    ConnectionManager, gets the transport, `InitializeForServer(transport, serverId)` S 0046dac0
    (stores the id at `VSC+0x15c`). Failures are logged only [known].
@@ -753,14 +758,14 @@ with an error leaves bit 2 clear for ever: the client stays in state 6 [inferred
    2. find `avatarId` with `CharacterManager::FindCharacter` S 004721b0, which needs the character
       list to be **valid** and the id to be in the character map; otherwise log, fire `VSC+0x10`
       with −1 and stop;
-   3. `LobbyManager::SetLocalAvatar(character)` S 004626c0: delete the previous local avatar, make
+   3. `LobbyComm::System::SetLocalAvatar(character)` S 004626c0: delete the previous local avatar, make
       a **copy** of the character's `AvatarProxy` (0xe0), clear its 3D object pointer, insert it in
       the avatar map;
    4. village transport `Login(avatarId, 0)`; a non-zero result is logged and fires `VSC+0x10`;
    5. `SetState(8)`; `LM+0x54c = avatarId`. Steps 5.4 and 5.5 run even when the login call failed.
 6. Chat login failed → `OnUserCommLoginFailed` S 00470660: unsubscribe both, fire `VSC+0x10` with
    −1 [known].
-7. Village login callback → `LobbyManager::OnLoggedIn` (village branch): fire `VSC+0x04`; store the
+7. Village login callback → `LobbyComm::System::OnLoggedIn` (village branch): fire `VSC+0x04`; store the
    selected village server id in `LM+0x550`; clear the keep-list flag `SL+0xa0` [known] S 00463a10.
 8. The server pushes **1000 EnterWorld** → `HandleEnterWorld` S 0046f670 [known]:
    1. `SetState(9)`;
@@ -849,7 +854,7 @@ With a server that answers, a ping goes out about every 120 s (30 + 90); without
      `Logout()`.
 4. Chat logged out → `OnUserCommLoggedOut` S 0046db30: unsubscribe the three chat delegates,
    village transport `Logout()` [known].
-5. Village logged out → `LobbyManager::OnLoggedOut` (village branch) S 00464bf0 [known]:
+5. Village logged out → `LobbyComm::System::OnLoggedOut` (village branch) S 00464bf0 [known]:
    1. `VSC::HandleLoggedOut` S 00470e20: delete all minigame tables (firing `+0x74`), delete the
       local avatar, delete all NPCs (firing `+0x44`), delete all avatars (firing `+0xb0`) and empty
       the eight deques, clear the zone map and the world name, current zone = 0x0F, `ServerPerm` =
@@ -1419,7 +1424,9 @@ of a writer on that path.
 if the character is not in the map the selection becomes 0, the chat login is made with the
 account id, and the entry fails with `There is no avatar with that id` (§3.4 step 5.2). The same
 failure follows when the list is still not valid at the moment the chat login completes
-[inferred].
+[inferred]. After a two-player match the return worked: in state 11 the transition from mode 1 to 3 called
+`SelectCharacter(100000)` S 00472200 8 ms after it began, and the village was entered again [live, 2026-10-14];
+the order against the character list (message 60) was not compared.
 
 **Village switch** (`CLobbyClient::RequestReenterVillage` S 00503560) [known]: the world screen's
 server menu (S 00437760) or the village server dialog opened from the world screen (S 00440690,
@@ -1440,7 +1447,7 @@ shown and the re-enter state is cleared [known] S 00503800, S 00503f50.
 ### 4.1 On start
 
 `CApplicationEx::Initialize` (`app-shell.md` §3.3 step 11), unless `-nolobby`: create the
-`LobbyManager` (constructor of §2.1), then `Initialize` S 004643d0 in this order [known]:
+`LobbyComm::System` (constructor of §2.1), then `Initialize` S 004643d0 in this order [known]:
 
 1. load `ItemsClient.txt` into the item database; on failure stop (state stays 0);
 2. `TinCat_CreateCommLayer(0, 0x26B6, 5, "<log dir>\commLayer.log")`: connection manager type 0
@@ -1459,12 +1466,12 @@ its constructor T 10018660.
 `CharacterManager`, `PostOffice` and the chat connection are attached later, on the 5 → 6
 transition (§3.3).
 
-### 4.2 Per frame: `LobbyManager::StatePump_Tick` S 00464ee0
+### 4.2 Per frame: `LobbyComm::System::StatePump_Tick` S 00464ee0
 
 Called once per frame from `CLobbyClient::Update` S 00503fc0 (its only caller is
 `CLobby::Tick` S 004fb230) while the 3D lobby runs, and from `CApplicationEx::FrameTick_InGame`
 S 004018e0 (main menu and match) when the menu system's "world active" flag is clear or no lobby
-object exists, provided a `LobbyManager` exists [known]. Order inside one call [known]:
+object exists, provided a `LobbyComm::System` exists [known]. Order inside one call [known]:
 
 1. `CommLayer vtbl+0x54`: the library's tick (`CommLayer::Update` T 10018630). All callbacks of
    §3 (login results, list records, village and referee messages) run inside this call
@@ -1515,12 +1522,12 @@ gets callbacks). Layouts: `message-catalog.md`, sections "Lobby connection", "Se
 
 | Purpose | Client sends | Client handles | Owner |
 |---|---|---|---|
-| login / registration | 204 / 203 (after the session set-up of `message-catalog.md`, "Login sequence at a glance") | login callbacks | `LobbyManager` |
+| login / registration | 204 / 203 (after the session set-up of `message-catalog.md`, "Login sequence at a glance") | login callbacks | `LobbyComm::System` |
 | version check | 161 PropertyGet (1, 1) | 162 PropertyData | `Properties` |
 | message of the day | 105 | 106 (a 42 does not complete the request) | `ServerMessages` |
 | chat server address | 189 (type 2) | 192 | tincat3 (`HandlerUserComm` T 10027630) |
 | server list | 171 (type 4, then type 5), 172 | 170 rows + 42, later 170 pushes | `ServerList` |
-| referee assignment | 189 (type 4, subtype 4) | 170 as assign answer, or an error result | `ServerList` → `LobbyManager` |
+| referee assignment | 189 (type 4, subtype 4) | 170 as assign answer, or an error result | `ServerList` → `LobbyComm::System` |
 | hosted game | create / update / remove (`match-setup-room.md` §5.1) | results | `ServerList` |
 | character list | 55 | 60 rows + 42 | `CharacterManager` |
 | create / delete character | 86 / 94 | 153 / 42 | `CharacterManager` |
@@ -1712,12 +1719,12 @@ from the player's install; the remake must not ship it) and the text keys of §6
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Is `GameServerConnection` (`LM+0x544`) ever bound to a transport? Its `OnLoggedIn` S 0048edf0 starts the peer-to-peer network, but statically nothing binds it: the only reference to `Initialize` S 0048eda0 is its vtable slot S 007deaf4; `LM+0x544` is used only by the constructor, the destructor and the five connection callbacks of `LobbyManager`, none of which calls that slot; the manager has no accessor for the field [inferred: a search of the decompiled code] | live: hook S 0048eda0 while hosting and joining |
+| 1 | Is `GameServerConnection` (`LM+0x544`) ever bound to a transport? Its `OnLoggedIn` S 0048edf0 starts the peer-to-peer network, but statically nothing binds it: the only reference to `Initialize` S 0048eda0 is its vtable slot S 007deaf4; `LM+0x544` is used only by the constructor, the destructor and the five connection callbacks of `LobbyComm::System`, none of which calls that slot; the manager has no accessor for the field [inferred: a search of the decompiled code]. Hosting a room and leaving it called neither `Initialize` nor `OnLoggedIn` [live, 2026-10-14]; joining was not part of that run | live: hook S 0048eda0 while joining |
 | 2 | Meaning of the four bools of `ChatChannelInfo` (`+0x24 … +0x27`) | static read of the tincat3 channel descriptor builder (which message field feeds descriptor `+0x14`, `+0x18`, `+0x1c`, `+0x20`) |
 | 3 | Answered: nothing consumes `VSC+0xd4` (inventory changed), `+0x134` and `+0x140` (shop buy / sell result). `ObserverList::Subscribe` S 00458860 is the only subscribe function; its calls on the village connection are in S 00503d00 and S 004351a0 and name none of the three lists | static: the list argument of every call of S 00458860 |
 | 4 | Who fills the event deques `VSC+0x1fc` and `VSC+0x210` and subscribes to `+0xec` / `+0xf8`? | static: search for pushes on those two offsets program-wide |
-| 5 | `LM+0x34`, `VSC+0x110` and `VSC+0x14c` never fire in the decompiled code. Dead, or fired through a path the decompiler lost? | live: hook the subscribers (S 005037a0 for `VSC+0x110`) across login, village entry, leave, match start and connection loss |
-| 6 | After a match, is the character list back before `SelectCharacter(LM+0x54c)` runs (§3.17)? If not, the automatic re-entry fails | live: order of the 60 rows and of `ProcessModeTransition` S 004f5950 after a match |
+| 5 | Answered (§2.19): `LM+0x34`, `VSC+0x110` and `VSC+0x14c` never fire in the decompiled code, and hooks on both `ObserverList_NotifyAll` bodies (S 00464300, S 0045f620) and on the subscriber S 005037a0 saw no call for them through a login, a village entry and exit, a hosted room and a lost lobby connection [live, 2026-10-14]. A match start was not in that window | — |
+| 6 | Answered (§3.17): after a two-player match `ProcessModeTransition` S 004f5950 went from mode 1 to 3 in state 11, called `SelectCharacter(100000)` 8 ms later and the village was entered again [live, 2026-10-14]; the order against the character list (message 60) was not compared | — |
 | 7 | Transport states other than 0, 2, 8, 9: exact meaning of 1, 3, 4, 5 | static read of the tincat3 connection classes (`message-catalog.md` lists the login steps) |
 | 8 | Under which conditions does the tincat3 send of a list refresh return an error (§3.3 describes what the client does then)? | static: the failure codes of T 1002dd00 and of the ignore-list sender in the tincat3 user manager |
 | 9 | Tokens 3 and 4 of `ItemsClient.txt` (always 4 and 1): token 4 (`ItemInfo+0x44`) ≥ 1 is enough to make an item valid (S 0048b100); no reader of token 3 (`+0x3c`) was looked for. Stack size and a validity count? | live: an item file with other values, then stack, split and sell (`docs/live-session-queue.md`) |
@@ -1729,20 +1736,20 @@ from the player's install; the remake must not ship it) and the text keys of §6
 | Address | Name | Role |
 |---|---|---|
 | S 00464280 | `LobbyManager_CreateInstance` | creates the singleton (0x5a8 bytes) |
-| S 00463fd0 | `LobbyManager::ctor` | builds every manager, connection and map |
-| S 004643d0 | `LobbyManager::Initialize` | item database, comm layer, manager attachment, state 1 |
-| S 00462f70 | `LobbyManager::Destroy` | shutdown, state 0 |
-| S 004630e0 / S 004633f0 | `LobbyManager::Login` / `CreateUser` | start of a session (state 1 → 2) |
-| S 00463710 | `LobbyManager::Logout` | disconnect all |
-| S 00464ee0 | `LobbyManager::StatePump_Tick` | the per-frame pump and state machine |
-| S 00464e70 | `LobbyManager::OnVersionChecked_State4to5` | version check result |
-| S 00463a10 / S 00464a20 / S 00464bf0 / S 004647e0 | `LobbyManager::OnLoggedIn` / `OnLoginFailed` / `OnLoggedOut` / `OnConnectionLost` | connection events, routed per connection |
-| S 00462760 | `LobbyManager::DispatchInboundToConnection` | raw data to village, game-server or referee connection |
-| S 00462540 / S 00462a00 | `LobbyManager::SetState` / `GetStateName` | state latch; the state names |
-| S 00463850 | `LobbyManager::CreateVillageServerConnection` | binds the village transport |
+| S 00463fd0 | `LobbyComm::System::ctor` | builds every manager, connection and map |
+| S 004643d0 | `LobbyComm::System::Initialize` | item database, comm layer, manager attachment, state 1 |
+| S 00462f70 | `LobbyComm::System::Destroy` | shutdown, state 0 |
+| S 004630e0 / S 004633f0 | `LobbyComm::System::Login` / `CreateUser` | start of a session (state 1 → 2) |
+| S 00463710 | `LobbyComm::System::Logout` | disconnect all |
+| S 00464ee0 | `LobbyComm::System::StatePump_Tick` | the per-frame pump and state machine |
+| S 00464e70 | `LobbyComm::System::OnVersionChecked_State4to5` | version check result |
+| S 00463a10 / S 00464a20 / S 00464bf0 / S 004647e0 | `LobbyComm::System::OnLoggedIn` / `OnLoginFailed` / `OnLoggedOut` / `OnConnectionLost` | connection events, routed per connection |
+| S 00462760 | `LobbyComm::System::DispatchInboundToConnection` | raw data to village, game-server or referee connection |
+| S 00462540 / S 00462a00 | `LobbyComm::System::SetState` / `GetStateName` | state latch; the state names |
+| S 00463850 | `LobbyComm::System::CreateVillageServerConnection` | binds the village transport |
 | S 00462910 / S 004625d0 | `InitRefereeServerConnection` / `SetRefereeServerAddress` | referee transport; referee id and 60 s timer |
 | S 004626c0 / S 00462570 | `SetLocalAvatar` / `ClearLocalAvatar` | local avatar proxy |
-| S 00462440 | `LobbyManager::ResetSubManagers` | reset of five managers before a login |
+| S 00462440 | `LobbyComm::System::ResetSubManagers` | reset of five managers before a login |
 | S 0048dd80 … S 0048e3c0 | `BaseConnection::*` | transport binding, send, the four event lists |
 | S 0048dce0 / S 0048dd00 | `BaseConnection::IsLoggedIn` / `IsConnectionPending` | transport state tests |
 | S 0048ee90 / S 0048eea0 / S 0048eeb0 | `ASyncAction::IsBusy` / `TryBeginBusy` / `TryEndBusy` | the busy flag |

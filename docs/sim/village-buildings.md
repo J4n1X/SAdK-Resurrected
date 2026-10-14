@@ -151,16 +151,19 @@ direction 5 (SE), from there direction 0 (E). Directions are those of
 
 | off | field | meaning |
 |---|---|---|
-| +0x04 | `vector<Building*>` all buildings | **insertion order**; this is the update and save order |
-| +0x14 | `map<Unique, Building*>` | lookup by unique id |
-| +0x20 / +0x30 | vector + map | buildings whose type has `depot` |
-| +0x3c / +0x4c | vector + map | `territoryBuilding` |
-| +0x58 / +0x68 | vector + map | `catapult` |
-| +0x74 / +0x84 | vector + map | `casern` |
-| +0x90 | `map<Unique, Remains*>` | ruins |
-| +0x9c / +0xac | vector + map | `workingMode == 9` |
-| +0xb8 | `OrderSystem*` | settler orders (§2.6) |
-| +0xbc | byte | saved and loaded first; [TODO] meaning not established |
+| +0x04 | `buildings`: `vector<Building*>`, all buildings | **insertion order**; this is the update and save order |
+| +0x14 | `buildingsByUnique`: `map<Unique, Building*>` | lookup by unique id |
+| +0x20 / +0x30 | `depotBuildings` / `depotBuildingsByUnique`: vector + map | buildings whose type has `depot` |
+| +0x3c / +0x4c | `territoryBuildings` / `territoryBuildingsByUnique`: vector + map | `territoryBuilding` |
+| +0x58 / +0x68 | `catapultBuildings` / `catapultBuildingsByUnique`: vector + map | `catapult` |
+| +0x74 / +0x84 | `casernBuildings` / `casernBuildingsByUnique`: vector + map | `casern` |
+| +0x90 | `remainsByUnique`: `map<Unique, Remains*>` | ruins |
+| +0x9c / +0xac | `sacrificeBuildings` / `sacrificeBuildingsByUnique`: vector + map | `workingMode == 9` |
+| +0xb8 | `orderSystem`: `OrderSystem*` | settler orders (§2.6) |
+| +0xbc | `flagBC`: byte | saved and loaded first; [TODO] meaning not established |
+
+Each vector is a 16-byte MSVC `std::vector` member (first / last / end at +4 / +8 / +0xc of the member) and each
+map a 12-byte `std::map` member (head node at +4, size at +8) [known] S 005592c0.
 
 A building is in every category list its type flags select (`IndexBuilding` S 00559940, `UnindexBuilding`
 S 00558f80) [known].
@@ -176,7 +179,7 @@ S 00558f80) [known].
 | +0x20 | `posX`, `posY` | int, int | anchor cell |
 | +0x28 | `ticker` | `NLogic::Ticker` | period 100, counter starts at 0; `Tick()` returns true when the counter equals the period and resets it, else increments: true on every 101st call (S 00775480); gates the worker request (§3.6) |
 | +0x34 | `variantKey` | int | tribe id of the owner at placement; key of the per-tribe maps of the type |
-| +0x38 | – | int | saved, always 0 in the code read; [TODO] no reader found |
+| +0x38 | `reserved38` | int | reserved: the three constructors store 0 (S 0055c93b, S 0055d576, S 0055da15), `Load` reads it from the save (S 0055d33d), the two store functions write it (S 0055c4f6, S 0055c6fe); no other instruction of the program accesses it [known, instruction search for the displacement 0x38]. 0 in a running game unless a loaded save carries another value |
 | +0x3c | `depot` | `Depot*` | stock and ware requests (§2.5) |
 | +0x40 | `workers` | `Workers*` | up to 10 worker references, `workerCount` at +8 (§3.18) |
 | +0x44 | `construction` | `Construction*` | §2.4 |
@@ -258,7 +261,7 @@ iteration in S 005594e0).
 | +0x08 | building reference | requesting building |
 | +0x28 | ship reference | requesting ship / expedition |
 | +0x48 | `goodId` | settler good wanted (a good whose type is Settler) |
-| +0x4c | `needOrdinal` | creation tick (`Need` field); lower = older |
+| +0x4c | `tick` | logic tick at which the order was created (field of the `NLogic::Need` base, `Need::Init` S 007756f0); lower = older |
 | +0x50 | `unique` | id of the order |
 | +0x60 | flag reference | requesting flag (specialists) |
 | +0x80 | street reference | requesting street (carriers) |
@@ -370,7 +373,10 @@ to the command router:
       [known]. Data values: `DoorOffsetWest` = 3, `DoorOffsetNorthWest` = 4, `DoorOffsetNorthEast` = 5, i.e.
       the step directions that [../map-format.md](../map-format.md) §5.1 labels W, SW and SE. The game's names
       and that table's compass labels disagree about which way y points; the numbers are what counts.
-      Direction 4 is the opposite of direction 1 (the flag side) [inferred];
+      Direction 4 is the opposite of direction 1 (the flag side) [inferred]. On screen, camera unrotated,
+      direction 1 points to the building's bottom side, slightly left (about south-south-west): every entrance
+      is centred on the bottom side, and a `farmBav` placed at anchor (62, 88) had its entrance flag at
+      (62, 87) [live, 2026-10-14]. Neither the compass labels nor the data names describe screen directions;
    3. block the footprint in the map (`Blocking`: grid bit 0x1 on the anchor, grid bit 0x100 on every footprint
       cell that is inside the map, S 00566e10, S 00673cf0, S 00673da0);
    4. `Bulldozing::Begin(type)` (§3.3), which ends by starting the construction (§3.4);
@@ -378,7 +384,7 @@ to the command router:
       activate the territory source, complete the construction at once, then: `workerLimit > 0` → spawn the
       worker inside; else if `territoryBuilding`: `depot` → fill the initial stock (`Depot::AddInitialStock`
       S 0055b020: the map's initial goods for the tribe, plus the tribe's `tp_addBonusResources` list,
-      `TribeProperty+0x90`, when `Player_IsStateDefault(owner)`; the table of who qualifies is in
+      `TribeProperty+0x90`, when `ai::player::Player::IsStateDefault(owner)`; the table of who qualifies is in
       [players-victory.md](players-victory.md) §3.4), not `depot` → spawn one soldier of kind 0;
       otherwise (normal play) only `TerritoryUpdater::ActivateIfOccupied`;
    6. types with `territoryBuilding && depot` (the headquarters): switch off both soldier-training slots and
@@ -404,9 +410,10 @@ to the command router:
   The test is for the exact value 4, so a large military type (0x44, the fortresses) is not included.
 - Then `Construction::StartWithType(type)`.
 
-Levelling is instantaneous at placement. `cfg_setBulldozeTime` (55) is not read here; [TODO] not established:
-where `GameConfig+0x14` is read (the builder's levelling animation is a candidate). Field xrefs on the
-`GameConfig` block would settle it.
+Levelling is instantaneous at placement: the builder goes straight to building and the ground is level at once;
+there is no levelling phase [live, 2026-10-14]. `cfg_setBulldozeTime` (55) is not read here, and a read
+watchpoint on `GameConfig+0x14` saw no read in 45 s of play with 8 new construction sites [live, 2026-10-14].
+[TODO] that it is never read: field xrefs on the `GameConfig` block would make it [known].
 
 ### 3.4 Construction
 
@@ -666,7 +673,7 @@ storage building supplies to a request leave it differently, with a carrier spaw
 **Input stock keeping** [known]:
 
 - `RequestAllInputs` (S 00565a70): skipped when slot 0 is empty, and for mines whose owner fails
-  `Player_IsStateNotDefault` (§3.8). `casern` types hand over to the soldier-training component here, before
+  `ai::player::Player::IsStateNotDefault` (§3.8). `casern` types hand over to the soldier-training component here, before
   the next test. Then skipped when `ignoreGoodCosts` is set or the recipe is empty. First input of type 3:
   for every alternative of that first entry, request up to `stockLimit` (unscaled); further recipe entries
   are not looked at. Otherwise for every recipe entry request up to `GetHpScaledStockLimit()`.
@@ -688,16 +695,16 @@ product slots move any units of the recipe goods from the output stock back to t
 
 ### 3.8 Mines (`size == 8 && workingMode == 6`) [known] S 00565bd0, S 005657c0, S 00565a70
 
-- "Must eat" = the owner's sacrifice modifier flag 7 is not 1 **and** `Player_IsStateNotDefault(owner)`.
+- "Must eat" = the owner's sacrifice modifier flag 7 is not 1 **and** `ai::player::Player::IsStateNotDefault(owner)`.
   Flag 7 (modifier block +0x1c, S 00663430) is `Effect_MinerNeedNoFood`; it is 0 by default (S 006634f0) and
   set to 1 by an own effect of that type (S 006630b0) [known].
-- `Player_IsStateNotDefault` (S 005be330) [known]: player kind (+8) 1 → `state != 3`; any other kind →
+- `ai::player::Player::IsStateNotDefault` (S 005be330) [known]: player kind (+8) 1 → `state != 3`; any other kind →
   `state != 0`. Kind 1 is a computer player and `state` (+0xec) is the match's start-resources level (0 high,
   1 medium, 2 low, 3 campaign only), the same for every player ([players-victory.md](players-victory.md)
   §2, §3.4). So with start resources "high" the mines of human players work without food and request none; a
   computer player's mines do so only at level 3 [known: `Player.state` is written by `Player::Init` S 005bea90
   from the descriptor's start-resources value (`CreatePlayer` call in S 005abb60) and by the load code only].
-- Input requests are filed only when `Player_IsStateNotDefault(owner)`.
+- Input requests are filed only when `ai::player::Player::IsStateNotDefault(owner)`.
 - A cycle can start when a resource cell is linked (`fieldConnection != −1`) and not (must eat and the total
   input stock count is below the first recipe amount).
 - At cycle start inputs are consumed only when the mine must eat.
@@ -848,10 +855,10 @@ output stock has the good; else `SettlerSpawn::CanSupplyGood` (stock has the goo
 
 | category | rule |
 |---|---|
-| 3 | among orders whose building's entrance flag is in the node's goods network (entry 0): highest `(now − order.needOrdinal) − 10 × units of the good in that building's output stock`; a later order replaces the pick only when strictly greater; S 00652ab0, S 00651330 |
+| 3 | among orders whose building's entrance flag is in the node's goods network (entry 0): highest `(now − order.tick) − 10 × units of the good in that building's output stock`; a later order replaces the pick only when strictly greater; S 00652ab0, S 00651330 |
 | 1 | among orders at that flag whose military building is in proximity zone 2: the one whose slot-0 value (float at military order slot +0x2c) is **highest**; a later order replaces the pick only when strictly greater |
 | 2 | same with proximity zone 1 |
-| 0, 4, 5, 6 | the order with the smallest `needOrdinal` (oldest) whose target flag is in the node's network; ties keep the earlier vector element |
+| 0, 4, 5, 6 | the order with the smallest `tick` (oldest) whose target flag is in the node's network; ties keep the earlier vector element |
 
 "At that flag" / "in the node's network" is the id compare of §2.6: entry 0 of the flag's id array for
 categories 0, 3, 4, 5, 6 (S 005691f0, S 00651330), entry 1 for categories 1 and 2 (S 00569290) [known].
@@ -929,7 +936,7 @@ and removes a **source**.
   [known]. S 00538d10 is called when a sacrifice with an effect of type 14 starts
   (`SacrificePlayerData::StartToggleEffects` S 00661cf0, `enable = 1`) and when it is removed
   (`StopToggleEffects` S 00661d60, `enable = 0`), once per such effect. It first has the map recompute all
-  territory (`MapModifier_RecalcTerritoryAll` S 00672f10 → `NMap::Territory::RecalcAll(anchor of the player's
+  territory (`ai::map::MapModifier::RecalcTerritoryAll` S 00672f10 → `NMap::Territory::RecalcAll(anchor of the player's
   first building in the building vector, enable)`, then `MapModifier::RefreshTerritoryAll`), and only for
   `enable = 1` calls `RefreshTerritoryForPlayer` [known]. `RecalcAll` (S 0067a3b0) does not keep radii: it
   collects the sources anew from the buildings (`Territory_CollectSources` S 0067a030 with origin (0, 0) and
@@ -1070,7 +1077,7 @@ stock of the finished tower [known: live 2026-10-12].
 
 `NLogic::System::Update` (S 00527070) calls `NVillage::System::Update` once per **logic tick** [known]. A tick
 runs only while the game is not in batch editing mode. Order of one tick [known]: tick counter + 1; the 8
-street planners; `PlayerTable_UpdateAll`; then, inside one map-update batch, **`NVillage::System::Update`**
+street planners; `ai::player::PlayerTable::UpdateAll`; then, inside one map-update batch, **`NVillage::System::Update`**
 and `NNet::System::Update`; then `NSettlers`, `NTransport`, `NResources`, `NDoodads`, `NMilitary`, navy,
 statistics (if initialised), AI, sacrifice, spawn system, chests, victory conditions; after that the map
 script's logic-tick callback (only when the caller of `Update` passes its second argument non-zero). The
@@ -1263,7 +1270,7 @@ ints), byte/bool, float. Each component is an `IStoreable` with Store (vtable +4
 
 1. tag `VillageBuilding` (versions 0..2), unique, position;
 2. ticker; depot; workers; deposit reference; animal reference; construction; production; blocking;
-3. int +0x38; int `variantKey`; entrance flag reference; settler spawn; field connection; territory updater;
+3. int +0x38 (`reserved38`, §2.3); int `variantKey`; entrance flag reference; settler spawn; field connection; territory updater;
    bulldozing; order container; byte `initialInputsRequested`;
 4. military — only if `territoryBuilding`;
 5. good flags; int `tickCounter`; int `resourceSearchCounter`;
@@ -1390,9 +1397,9 @@ references go through untagged variants, the other components through their norm
 | # | question | what would settle it |
 |---|---|---|
 | 1 | Answered (§3.8): at start-resources level "high" the mines of a human player work without food and request none; a computer player's mines do so only at level 3 | static: S 005be330, S 00565bd0, S 005657c0, S 00565a70, S 005bea90, S 005abb60 |
-| 2 | Which screen direction step directions 1 and 4 are (the data calls 4 "NorthWest", map-format calls it SW) | observation of a farm's door |
-| 3 | Where `cfg_setBulldozeTime` (`GameConfig+0x14`) is consumed; whether a builder plays a levelling phase before phase 1 | field xrefs on the `GameConfig` block; observation |
-| 4 | `System+0xbc`, `Building+0x38`, `Depot+0x08`: meaning. In the decompiled bodies that use the typed fields, `Building+0x38` is touched only by the three constructors (0) and the save, load and checksum code; `System+0xbc` only by the constructor (0), `Store` and `Load`; `Depot+0x08` by the constructor (0), the placement and transfer constructors (true), `Save` and `Load` | field xrefs / data-flow in Ghidra |
+| 2 | Answered (§3.2): direction 1 (the entrance flag) points to the building's bottom side, slightly left (about south-south-west) on an unrotated screen; it is not the lower-right neighbour, and neither the data names (`DoorOffsetNorthWest` = 4) nor map-format's compass labels are screen directions [live, 2026-10-14] | — |
+| 3 | Where `cfg_setBulldozeTime` (`GameConfig+0x14`) is consumed. Answered (§3.3): no builder plays a levelling phase, and no read of `+0x14` was seen in 45 s with 8 new sites [live, 2026-10-14]; "never read" is still to be made [known] | field xrefs on the `GameConfig` block |
+| 4 | `System+0xbc`, `Depot+0x08`: meaning. In the decompiled bodies that use the typed fields, `System+0xbc` is touched only by the constructor (0), `Store` and `Load`; `Depot+0x08` by the constructor (0), the placement and transfer constructors (true), `Save` and `Load`. `Building+0x38` is answered (§2.3): a reserved field, written 0 by the three constructors and otherwise only saved, loaded and checksummed; a reimplementation keeps it in the save and checksum layouts and gives it no behaviour | field xrefs / data-flow in Ghidra |
 | 5 | Iterator "served" bytes other than category 1 (+0x10, +0x12..+0x16): a reader outside the iterator's own functions and `OrderSystem::Update` (none inside, §8) | raw-offset xrefs to `OrderSystem+0x3f0..+0x3f6` |
 | 6 | The tests inside `NResources::System::FindHuntableAnimalAt` (which animals count as huntable at a cell, §3.9) | static read of that function |
 | 7 | Answered (§3.5, §3.4): the two messages are not posted after a countdown that started above 0 (the building is removed in the tick of the last decrement, the 300th building update after the command); a paused site never disappears by itself | static: S 005609b0, S 0055a640, S 00560890, S 0055fc10; users of `Construction +0x78` |
@@ -1442,7 +1449,7 @@ references go through untagged variants, the other components through their norm
 | S 0055b8b0 / 0055b910 / 0055b970 / 0055b990 | `Hitpoints::OnChanged` / `Update` / `ApplyDamage` / `RescaleToTypeMax` | |
 | S 005670c0 / 005671a0 / 00567590 / 005672c0 / 00567320 | `Upgrade::GetBlockReason` / `Start` / `Update` / `Complete` / `Cancel` | |
 | S 005653d0 / 00565350 / 00565300 | `TerritoryUpdater::ActivateIfOccupied` / `Activate` / `Refresh` | territory source |
-| S 00563f40 / 00563cc0 | `BuildingOrderingComp_Update` / `SyncGoodRequests` | storage stock keeping |
+| S 00563f40 / 00563cc0 | `ai::village::BuildingOrderingComp::Update` / `SyncGoodRequests` | storage stock keeping |
 | S 00564360 / 00564780 / 00564eb0 / 00564f40 / 00564520 | `SettlerSpawn` consume / update / entered / release all / accept | stored settlers |
 | S 005626c0 | `NVillage::OrderSystem::Update` | settler order matching |
 | S 00562280 / 00562440 / 005624f0 | `OrderSystem_FindSupplierBuilding` / `_CanBuildingSupply` / `_SpawnSettlerForOrder` | |

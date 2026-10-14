@@ -218,7 +218,7 @@ struct layout; setters in `lua-surface.md`:
 | +0xc0 | enemyExclusions (vector of player index) | `logic.ai_forbidAttackingPlayer` / `ai_allowAttackingPlayer` | `Player::IsEnemy` |
 | +0xd0 | bEnabled | cleared when the headquarters is lost | whole `Player::Update` |
 
-`Player::IsEnemy(p)` = not in `enemyExclusions` and the game's `Player_IsEnemyOf` [inferred] S 00583620. Adding
+`Player::IsEnemy(p)` = not in `enemyExclusions` and the game's `ai::player::Player::IsEnemyOf` [inferred] S 00583620. Adding
 an exclusion also sets the flag byte for that player in the game player's military settings [inferred]
 S 00584840.
 
@@ -655,7 +655,7 @@ Three request producers post an **ExpansionTarget** `{kind, x, y, time}` each; `
 | 4 | AttackExecution fallback (§3.12) | 1 (towards) | an enemy building that is too strong |
 
 - If no source is selected: take the open request with the **oldest timestamp** among the four (sources tested
-  in the order 1, 2, 3, 4; strict comparison) [inferred] `Generic_KeepBestCandidate` S 00590f80.
+  in the order 1, 2, 3, 4; strict comparison) [inferred] `NAI::ExpansionSystem::ConsiderCandidate` S 00590f80.
 - Else, on the next round, promote the candidate to the **current target**, which
   `MilitaryBuildingCreation` consumes.
 - When the military building order succeeds or fails, the source is told: ResourceSystem halves / increments
@@ -875,7 +875,7 @@ stocked soldiers of both kinds, `v` = the player's current garrison fraction for
 - `S > territory / 128`: `x = min(v * 4.167, 4.0)`; near := clamp(x, 0.25, 1.0); medium :=
   min(0.3 * x, 1.0).
 
-The writes go through `MilitarySettings_SetValue(pMilitary, idx, value)` S 005c0980, which stores
+The writes go through `NPlayer::Military::SetDistanceAllocationFactor(pMilitary, idx, value)` S 005c0980, which stores
 `pMilitary + 8 + idx * 4`; idx 2 = near, idx 1 = medium, the same fields the human sets with the commands
 0x20013 / 0x20014 (`game-commands.md`) [known]. The far-zone fraction (idx 0) is never written by the AI. Because
 the new medium value is `0.3 x` a multiple of the old one, the first case shrinks it by 0.8 per application

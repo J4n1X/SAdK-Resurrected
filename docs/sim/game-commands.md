@@ -108,19 +108,21 @@ bytes themselves. The reader allocates the byte count unchecked (S 0041fd80) [kn
 - Map cells are two i32 (x, y).
 - Building types, goods and sacrifices are their numeric property ids.
 
-### 2.4 Local selection (`Selection`, 0xdc bytes, `g_pGameSystem->selection`) [known, Ghidra struct]
+### 2.4 Local selection (`ai::game::Selection`, 0xe0 bytes, `g_pGameSystem->selection`) [known, Ghidra struct; `operator new(0xe0)` in `NLogic::System::ctor` S 00528360]
 
-Not simulation state, but the source of most command targets.
+Not simulation state, but the source of most command targets. The six targets are embedded `NLogic::Reference*`
+members of 0x20 bytes each; the 64-bit id of a reference is at +0x10 (low) and +0x14 (high) of the member
+[known] S 00535630.
 
 | Offset | Field |
 |---|---|
-| +0x04 | kind: 0 None, 1 Building, 2 Flag, 3 Settler, 4 Street, 5 Ship, 6 ShipRoute |
-| +0x18 | settler id (lo, hi) |
-| +0x28 | building reference; its id at +0x38 / +0x3c |
-| +0x58 | flag id (lo, hi) |
-| +0x78 | street id (lo, hi) |
-| +0x88 | ship reference (0x20 bytes) |
-| +0xa8 | ship route reference (0x20 bytes; its id at +0xb8 / +0xbc) |
+| +0x04 | `kind`: 0 None, 1 Building, 2 Flag, 3 Settler, 4 Street, 5 Ship, 6 ShipRoute |
+| +0x08 | `settler` (`ReferenceSettler`); its id at +0x18 / +0x1c |
+| +0x28 | `building` (`ReferenceBuilding`); its id at +0x38 / +0x3c |
+| +0x48 | `flag` (`ReferenceFlag`); its id at +0x58 / +0x5c |
+| +0x68 | `street` (`ReferenceStreet`); its id at +0x78 / +0x7c |
+| +0x88 | `ship` (`ReferenceShip`) |
+| +0xa8 | `shipRoute` (`ReferenceShipRoute`); its id at +0xb8 / +0xbc |
 
 ### 2.5 Per-player state changed by settings commands
 
@@ -166,8 +168,13 @@ command that is applied differently on two machines is therefore detected at the
 ### 2.6 The per-player street planner
 
 `NLogic::System` holds 8 `ai::logic::StreetPlanner` objects, one per player index (`streetPlanners[8]`) [known,
-S 00527070 loops 8]. A planner (0x10 bytes): +0 active, +4 `NLogic::AStarStreet*` search, +8 state, +0xc
-construction object (`NNet::StreetConstructorStreet` in the simulation) [inferred]. The construction object owns the
+S 00527070 loops 8]. A planner (0x10 bytes): +0 active, +4 `NLogic::AStarStreet*` `search`, +8 state, +0xc
+`constructor`, the street constructor it drives, held through the interface `NNet::IStreetConstructorStreet` (ten
+virtual slots: `Begin`, `Cancel`, `IsActive`, `AddPoints`, `IsValid`, `CanComplete`, `GetPath`, `GetOwner`,
+`GetStreetType`, `IsPointsOnly`) [known] S 00663790. The interface has two implementations:
+`NNet::StreetConstructorStreet` (vftable S 007f87b8) builds a real street and is the one of the eight planners
+here, of the computer player and of the navy; `NNet::StreetConstructorPoints` (S 007f87e4) only records points
+and is the one of the two planners of the street build mode [known]. A `StreetConstructorStreet` owns the
 id of a real, unfinished street in the street net [known, S 00668830].
 
 Planner state (+8) [known from the writers S 006636e0, S 00663a00, S 00663ba0, S 00663bf0, S 00663740]:
@@ -202,7 +209,9 @@ a valid id), 3 AddPoints S 006688d0, 4 IsValid S 00668750, 5 CanComplete S 00668
      shutdown latch is set, or a reconnect is in progress, or the session is in state 3 (waiting for the start), or
      it is in state 4 (in match) and the last logic tick ran more than 2.0 s ago (or never);
    - in net mode 0 (offline) the event is **executed at once**, inside the UI call, through
-     `DispatchEventLocal` S 0040fd50;
+     `DispatchEventLocal` S 0040fd50 (seen for `SendCreateFlag` S 00780e10: `QueueGameCommand` →
+     `DispatchEventLocal` → `HandleGameCommand` → `HandleCreateFlag`, all in the same tick and before the send
+     returned [live, 2026-10-14]);
    - otherwise it is serialised and appended to the outgoing tick package of the local machine (`manager+0x54`).
    The two events the manager queues itself (`0x2002B`, and the session event `0x3000D`) are appended to the
    outgoing package directly and do not pass the hanging test [known, S 0040e560, S 00410f70, S 004109b0; the
@@ -290,10 +299,12 @@ of every logic tick**, before any subsystem is updated. There:
 So a command queued while the net tick number is `T` is collected at the boundary `T`, broadcast at boundary
 `T+1` and **executed at boundary `T+2`**, at the very start of that logic tick, on every machine. The delay is
 between `2L` and `3L` logic ticks, i.e. 0.8 to 1.2 s at the initial network setting (`L` = 4, speed 1) [inferred
-from the steps above]. Offline the pipeline still runs (with
+from the steps above]. `L` adapts: in a two-player match over a LAN it read 1 or 2, and commands ran 240-310 ms
+(3 logic ticks) after queueing at `L` = 1 and 440-540 ms (5-6 logic ticks) at `L` = 2 [live, 2026-10-14]
+([logic-core.md](logic-core.md) §3.2). Offline the pipeline still runs (with
 empty packages) but commands bypass it (§3.1).
 
-The simulation may not start a logic tick unless `NComm_Manager_CanAdvanceTick` S 004088b0 allows: inside a net
+The simulation may not start a logic tick unless `NComm_Manager::CanAdvanceTick` S 004088b0 allows: inside a net
 tick always; at a boundary the host (net modes 0, 2, 4, and not while the reconnect state is 1) needs the collected
 package for `T-1` to contain a part from each of the 6 session slots whose net id is not `0xEFFFFFEE` (only once
 `T ≥ startTick + 1`), and everyone needs the received package for `T-2` to exist with at least one event block
@@ -513,7 +524,7 @@ waypoint, the flag is "street type = 2"). Executor `HandleBuildStreet` S 00783e1
    cancelled (removed from the net; `TakePath` S 00663ba0, final state 4) and the path is handed to
    `NNet::System::BuildStreet(player, path, street type)`, which creates the finished street [known];
 6. in every case, for the local sender with an open placement mode that is still valid, the mode is refreshed
-   (`StreetBuildMode_OnPlannerCommand`).
+   (`ai::game::StreetBuildMode::OnPlannerCommand`).
 The search costs and the rules of a valid street cell belong to the street net subsystem.
 
 **`0x20007` GE_Street_CancelConstruction** — `EventBase`, no payload. Sender `SendCancelStreetCommand` S 00781df0
@@ -583,8 +594,14 @@ with the current slider values and the edited priority list, whether or not they
 defaults). No sender exists in this build [known: no caller builds the id].
 
 **`0x20017` GE_Military_ToggleIgnoreDistance** — `Event1Integer`: flag index. Executor S 00782390: toggles the
-bool at `Military+0x14+index`. No bounds check. No sender exists in this build. The index is the index of
-another player: a set flag removes that player's buildings from the sender's enemy-distance measure (§2.5).
+bool at `Military+0x14+index` (`NPlayer::Military::ToggleFlag` S 005c0990). No bounds check. No sender exists in
+this build: the constant `0x20017` occurs once in the whole image, at S 00422e31 in the event-name table
+(`NComm_InitEventTypeNameMap` S 00421bd0), and the dispatcher reaches the case through a jump table, so no HUD
+control and no other code builds the event [inferred, byte search of the image]. The index is the index of
+another player: a set flag removes that player's buildings from the sender's enemy-distance measure (§2.5). The
+computer player sets the same flags directly (`Military::SetFlag` S 005c09b0), not through the command. The
+executor changes simulation state, so a client that stays in step with original peers must still execute the
+command when a peer's command stream contains it.
 
 #### Goods
 
@@ -642,7 +659,7 @@ S 005be970; lock category 1 = sacrifices, set by the Lua menu lock/unlock functi
 **`0x20026` GE_Sacrifice_StartOrdered** — `EventInt64_1Integer`: building id, target player index. Senders: action
 22 for a sacrifice with target kind 0 (`Target_Owner` in the data; the value is the owner's own index), else the
 target chooser `SacrificeTargetPanel::OnChildClicked` S 00626c20 with the chosen player. Executor S 007825b0:
-`CheckCanStart` S 00560f20 = 0 → component +0x0c = target, `VillageSacrifice_Start` S 005615e0, in this order
+`CheckCanStart` S 00560f20 = 0 → component +0x0c = target, `ai::village::VillageSacrifice::Start` S 005615e0, in this order
 [known]: a village callback; for target kind 1 two messages to the target player (`!Player started a sacrifice
 against you!`, `!A Sacrifice is targeted at you!`); for target kind 0 the component's target is **overwritten
 with the owner's index**, whatever the payload said, and, if a test on the definition passes (S 00556540, not
@@ -656,8 +673,8 @@ of the order check). The target index itself is
 not validated [known].
 
 **`0x20025` GE_Sacrifice_AbortSacrifice** — `EventInt64`: building id. Sender: action 23. Executor S 00782660:
-`CanAbortOrCancel` S 00561050 → state 1: `VillageSacrifice_AbortActive` S 00560d70 (the active sacrifice is removed, nothing
-ordered, state 2); else `VillageSacrifice_CancelOrder` S 00560e80 (demand cleared, delivered goods moved back to the output store,
+`CanAbortOrCancel` S 00561050 → state 1: `ai::village::VillageSacrifice::AbortActive` S 00560d70 (the active sacrifice is removed, nothing
+ordered, state 2); else `ai::village::VillageSacrifice::CancelOrder` S 00560e80 (demand cleared, delivered goods moved back to the output store,
 state 0). Allowed when: state 1 and the active sacrifice's definition is abortable (`sf_setAbortable`); or
 something is ordered, state is not 0, and the building type is not of the "not player-buildable" class.
 
@@ -676,7 +693,7 @@ no longer counts as researching [known]. The sacrifice
 id is not validated (not that it needs research, nor that it is not yet researched) [known].
 
 **`0x20028` GE_Sacrifice_AbortResearch** — `EventInt64`: building id. Sender: action 21. Executor S 007827a0: if
-the owner's research is running → `SacrificeResearch_Cancel` S 0065fbd0 (raises the research-cancelled callback,
+the owner's research is running → `ai::logic::SacrificeResearch::Cancel` S 0065fbd0 (raises the research-cancelled callback,
 running = false, unlinks the research building). The test is "running", not "running at this building": the
 command cancels the owner's research whichever sacrifice building it names [known].
 
@@ -875,7 +892,7 @@ goods distribution panel (`0x2001F`), sacrifice buttons (`0x20024`, `0x20027`), 
   notification, and `ComputeChecksum`.
 - To the menus: `Send*` functions, `BeginStreetBuildMode` S 00784220, `GetActiveStreetBuildMode` S 00783490,
   `EndCinematic` S 00782bb0. `EndStreetBuildMode` S 00783430 is called only by the executors of `0x20004` and
-  `0x20006` and by the placement mode itself (`StreetBuildMode::Cancel`, `StreetBuildMode_OnPlannerCommand`)
+  `0x20006` and by the placement mode itself (`StreetBuildMode::Cancel`, `ai::game::StreetBuildMode::OnPlannerCommand`)
   [known from the caller lists].
 - Commands raise no event of their own; effects are seen through the simulation's callbacks (e.g. upgrade
   started / cancelled, sacrifice callbacks). `0x20004` writes the log line
@@ -961,7 +978,8 @@ net ticks; 6 session slots; 8 street planners.
   simulation state: `DontWantToLose` records the map as completed in the user profile, `ThatsANiceView`
   switches the camera view mode between 0 and 2) [known for the mode test and the calls; the callees' bodies
   were not read].
-- Offline, commands run inside the UI call between two logic ticks, not at a tick boundary. This is deterministic
+- Offline, commands run inside the UI call between two logic ticks, not at a tick boundary [live, 2026-10-14:
+  a flag command ran inside `SendCreateFlag`, in the tick it was issued]. This is deterministic
   for a single machine but means an offline session cannot be replayed from tick-stamped commands without
   recording the tick at which each ran.
 - Checksum (`ComputeChecksum` S 00784080): an `NCore::CRCStream` over, in this order: logic random generator,
@@ -992,7 +1010,7 @@ net ticks; 6 session slots; 8 street planners.
   modifiers) is not. A machine on which `0x20026` started a sacrifice with different parameters, or on which
   `0x20028` did not stop the research, keeps a matching checksum until an effect of the sacrifice changes a
   hashed subsystem (goods, soldiers, buildings) [inferred]. The target player index of `0x20026` is such a
-  value: it is used and reset by `VillageSacrifice_Start` and never hashed. A remake that wants earlier
+  value: it is used and reset by `ai::village::VillageSacrifice::Start` and never hashed. A remake that wants earlier
   detection can add the sacrifice system to its own checksum; this changes nothing in play.
 - The street planners' own fields (state, search object) are not hashed [known from the call list]; their only
   simulation effect is the unfinished street.
@@ -1036,7 +1054,7 @@ net ticks; 6 session slots; 8 street planners.
 | 00408b10 | `NComm_Manager::QueueGameCommand` | entry of every command (drop / run now / queue) |
 | 00408860 | `NComm_Manager::IsGameHanging` | input gate |
 | 00411990 | `NComm_Manager::AdvanceNetTick` | net tick, package exchange, execution point |
-| 004088b0 | `NComm_Manager_CanAdvanceTick` | lockstep gate |
+| 004088b0 | `NComm_Manager::CanAdvanceTick` | lockstep gate |
 | 00410530 | `NComm_Manager::ExecuteEventPackage` | runs the events of a package |
 | 0040e560 | `NComm_Manager::HandleEvent` | session events; `0x20023` side effect; queues `0x2002B` |
 | 004089c0 | `NComm_Manager::SendEventUserChecksum` | begins the next outgoing package |

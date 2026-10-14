@@ -80,7 +80,7 @@ listed [known] S 00607d20 unless tagged.
 
 | Offset | Type | Field | Meaning |
 |---|---|---|---|
-| +0xc00 | ptr | `cursorFace` | face pointer of the game screen `nMenu::Game`; `Game = cursorFace - 0x20`. `Game + 0xffe8` → `nGame::System` with the cursor cell at +0x24 (x), +0x28 (y) and the cursor fine position at +0x2c; `Game + 0xfff4` → the local player [inferred from use] |
+| +0xc00 | ptr | `showParent` (member of the base `nMenu::Overlapped`, stored by `Overlapped::OnShow`, cleared by `OnHide`) | the parent desktop the dialog was shown on: the `nUi::Desktop` face of the game screen `nMenu::Game`; `Game = showParent - 0x20`. `Game + 0xffe8` → `nGame::System` with the cursor cell at +0x24 (x), +0x28 (y) and the cursor fine position at +0x2c; `Game + 0xfff4` → the local player [inferred from use] |
 | +0xc08 | `nUi::Edit` | `filenameEdit` | map name for save and load; initial text = `MapInfo + 0x24` (map name) |
 | +0xf38 | `nUi::Button` | `saveMapButton` | label `!Save Map`; enabled only while the name is not empty |
 | +0x13a0 | `nUi::Button` | `loadMapButton` | label `!Load Map` |
@@ -623,6 +623,12 @@ therefore **not part of the exported map** [inferred from the section list and t
 
 A failed write is not reported ([save-format.md](save-format.md) §3.1).
 
+**The file must already exist** [known: S 007805d0, S 006e3fd0, S 006ef8a0; live 2026-10-12]. On close the
+stream resolves its `[data]\...` path through the start-up file index, which knows only files that existed when
+the game started: an unknown file name resolves to the empty string, `CreateFileA("")` fails, and nothing is
+written. With an empty `data\game\maps\campaignMaps\<name>.s2m` created before start-up the save writes the
+map into it (530,513 bytes in the test); saving under the name of a shipped map overwrites that map.
+
 **Load** [known] S 00609130: `nGame_File_load(1, name, suspend = true)` S 005ab180
 ([save-format.md](save-format.md) §3.4) replaces the running world by the map `campaignMaps\<name>.s2m`; then
 the dialog closes. Nothing is recomputed at load ([../map-format.md](../map-format.md) §5.5).
@@ -773,9 +779,17 @@ float `%f` (parsed with `atof`); ranges `$%d$%d` and `$%f$%f`. The range formatt
 minimum and maximum as float32 for every type and converts to integer for `%d`; an int variable's bounds were
 stored as integers (§2.5), so its `CREATE` carries their bit patterns read as floats and truncated (0 for small
 positive bounds) and not the bounds themselves [inferred from the decompile of S 0067c960 and S 005c6180; the
-load instruction settles it]. A client is dropped when `recv` returns 0 or an error. A reference client is `tools/cvar_client.py`. The repository records one live attempt with the patched
-executable (2026-10-07: connection refused, [../BINARY_PATCHES.md](../BINARY_PATCHES.md)); the server has not
-been seen running.
+load instruction settles it]. A client is dropped when `recv` returns 0 or an error. A reference client is `tools/cvar_client.py`; its `set` command splits at spaces, so a name with spaces needs
+`raw CHANGE$<group>$<name>$<value>`.
+
+**Seen running** [live, 2026-10-14], without the patched executable: `CVarRemoteServer::ctor` S 0067e690 called
+in the running game on a 0x760-byte block from `operator new` S 006f2524 opens its listen socket
+(`0.0.0.0:1234 LISTENING`), is reachable from the LAN and sends `APP$DefaultApp`; with its pointer written into
+the holder `g_pCVarServer` S 0088ca58, CVars constructed afterwards register (the `Lobby` and `CharSelection`
+groups, 16 variables). A CVar constructed before the server exists stays unregistered; calling `RegisterVar`
+S 0067c760 with its `RemoteCVarEntry` (`CVar +0x38`) registers it. `CHANGE` from the client sets the variable
+(the lobby physics switches, [lobby-extras.md](lobby-extras.md) §6.1). Why the patched executable of
+[../BINARY_PATCHES.md](../BINARY_PATCHES.md) did not start the server is [TODO].
 
 **Native toggle window** `ai::debug::DebugToggleWindow` [known for the functions S 005c5840..005c5ce0]: a
 window with categories (group names) of entries (bool checkbox, int, float) under a critical section. Nothing
@@ -961,7 +975,7 @@ resource step 2 and cap 7, the generator's bands and percentages (§3.11), CVar 
 | 4 | Whether anything sets `NLogic::Edit.flags[0..2]`: no call of slot 12 exists in the decompiled image, so the free-fly camera's test of flag 1 (§2.1) never passes through that path | live: watch the three bytes `Edit + 5..7` |
 | 5 | Whether map set-up or scripts set `batchEditing` by a path the static search does not see. Every use of the `Edit` accessor S 00695ea0 and of the typed field `System + 0x38` was read: slot 0 is called only by the editor's Buildings tool (S 00604dd0); the noise generator's sink (§2.6) is the one untyped holder left | live: watch the byte `Edit + 4` during a match start; static: the sink argument in the `CMapRenderer` constructor S 006890f0 |
 | 6 | The noise functions behind terrain modes 2 and 3 (`FBMNoise::GetValue` S 006b1760, `MultiFractalNoise::GetValue` S 006b1800), `PerlinNoise::GetValue`, and the meaning of the 8 noise parameters | static read of the three functions; low priority, unreachable code |
-| 7 | Whether the CVar server works when its gate is forced (bind, `APP$` name, thread safety). Between the gate and the listening socket there is no other condition (first `RemoteCVarEntry` constructor during static initialisation → S 0067cba0 → S 0067c6d0 → S 0067e690 → S 0067cc10); failures are only printed with `wprintf`. A refused connection means no listener | live test with the patched executable; check `netstat` for port 1234 first, then `tools/cvar_client.py` |
+| 7 | Answered (§3.13): the server works when created at run time: `CVarRemoteServer::ctor` S 0067e690 listens on 0.0.0.0:1234, answers `APP$DefaultApp`, registers CVars constructed afterwards (earlier ones through `RegisterVar` S 0067c760) and applies `CHANGE` [live, 2026-10-14]. Still open: why the patched executable (gate byte S 0088ca50 forced) did not start it, and thread safety | live: the patched executable with a breakpoint on S 0067c6d0 and S 0067e690 |
 | 8 | The resource-type argument of the three `AddResourceAtCell` calls in the `infoMap` pass (fish below 20, water in the two bands from 3000 to 9000): the decompile assigns the id to a register and passes a stack address (§3.11) | disassembly of S 006033d0 at the three call sites |
 
 ---
@@ -1014,8 +1028,8 @@ resource step 2 and cap 7, the generator's bands and percentages (§3.11), CVar 
 | 00532180 / 005321c0 | `MapUpdateBatch_Begin` / `MapUpdateBatch_End` | map-update batch (counter - 1 / + 1, flush when > 0) |
 | 006010f0 | `MapEditor_AddResourceAtCell` | mode 7: `AddResourceAtCell(cell, &type, 2)` |
 | 00605c60 | `ai::editor::EditorSetting::ConstructNamed` | new scatter preset: size 7, +0x40 = argument |
-| 00557780 | `Generic_IsZero_005576e0` | `Village_CheckBuildingPlacement(...) == 0`, the form the Buildings tool calls |
-| 007663f0 | `Listbox_Iface4_Update` | per-frame list update: sets the "row clicked this frame" byte |
+| 00557780 | `Village_CanPlaceBuilding` | `Village_CheckBuildingPlacement(...) == 0`, the form the Buildings tool calls |
+| 007663f0 | `nUi::Listbox::Update` | per-frame list update: sets the "row clicked this frame" byte |
 | 00786ae0 | `nGame::Camera::UpdateFreeFlyMode` | reader of `Edit` flag 1 (slot 11) |
 | 00695ea0 | `Generic_GetDword_38` | accessor of `NLogic::System + 0x38` (the `Edit` object) |
 | 00494000 / 00493500 / 004bdc60 | `UiResourceManager::GetOrLoadTexture` / `UiResourceManager_LoadGfxTexture` / `ai::ui::ResourcePath::ctor` | texture by name → `[data]\gfx\<name>.dds` |
