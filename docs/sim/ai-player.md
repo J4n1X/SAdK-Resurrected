@@ -1039,6 +1039,8 @@ comparison S 0059ee80 is false (weighted own `score` not above 1.5 x the weighte
 the score is replaced by `specialDefenseFactor` (+0x98, default 0.1). The factor read is index
 `0 + 2 * 1` = `factor(Defense, Own)` (0.5 in every shipped profile) [known] S 0059ea50, S 00555d10, S 0054b8a0.
 `factor(Attack, Enemy)` (+0x38) has no reader among the three callers of the getter [inferred].
+In one observed attack on a computer player the watch wrote 0.862, `StartAttack` replaced it with the player
+setting 0.5, and `DispatchDefenders` S 00576400 read 0.5 [live, 2026-10-12].
 
 **Every 127 ticks, each watch once** (`AiAttackWatch_Evaluate`) [known] S 0059b2f0: when the fight is running,
 has a target and the target building still belongs to the defender, compute the live strength ratio
@@ -1204,6 +1206,15 @@ random, start ready ones.
 
 All period tests are unsigned (`t` is a u32). The order step of row 7 computes `t % profile.constructionTicker`
 without a guard, so a profile with `ai_setConstructionTicker(0)` divides by zero [known] S 00592210.
+
+Observed cadences [live, 2026-10-12, developed save with five computer players, ticks 53,306 to 55,001]:
+`NAI::System::Tick` S 00581a30 ran every tick (one object); `MilitaryLimiter::Update` S 00597c80 on three
+objects, each every 53 ticks (31 of 31 intervals); `LockSmith::Update` S 0058d130 on three objects, each every
+337 ticks (4 of 4), 5 ticks apart from each other (the `playerIndex * 5` offset); `AttackExecution::Update`
+S 005a0dd0 at intervals of 141 ticks (6 of 7) and once 1,269 = 9 x 141, so it does not run on every 141-tick
+step; `AiStreetPlan::PlanPath` S 005a96b0 in groups of three calls 5 ticks apart, the groups 37 ticks apart
+(the StreetRouteOptimizer, one call per computer player; 169 calls). Build order and the free tool were not
+watched.
 
 The limiter at position 6 uses `t` as its clock, so `attackLimiterDelay` is in ticks (2400 = 4 minutes at
 speed 1) [known] S 00597c80. It does nothing while `attackLimiterDelay == 0` (the constructor default). It is
@@ -1621,7 +1632,7 @@ through the owner pointer from another module is not excluded].
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Does the AI behave as specified in a real match (attack cadence, build order, free tool, the randomised street routes) | observation in the running game: hooks on the functions of §11 (`System::Tick`, `MilitaryLimiter::Update`, `AttackExecution::Update`, `LockSmith::Update`, the street `PlanPath`) |
+| 1 | Answered for the cadences (§4, after the period table): `System::Tick` every tick, `MilitaryLimiter` every 53, `LockSmith` every 337 (players 5 ticks apart), `AttackExecution` on 141-tick steps but not on every one, street `PlanPath` every 37 per player [live, 2026-10-12]. Open: build order and the free tool in a real match | observation in the running game: build order and LockSmith's free tool |
 | 2 | Answered (§3.13): the defence fraction the AI computes on attack-watch creation is never effective; `StartAttack` S 00576500 replaces it with the player setting in its next statement, every fight is created there, and `DispatchDefenders` reads the field 10 ticks later | static: S 00576500, S 0053cf50, S 00570760, S 00573c30, S 005715a0 |
 | 3 | Answered (§2.3): the cell demolish trigger is never armed. No code arms it and no shipped file carries AI cells (33 `.s2m` maps, map part only; no `.a2m`, no `.aav`) | static: callers of S 005a7960 (S 005949e0, S 00594a70, S 00594b20, S 005a6fe0), S 005a7940, S 005a78e0, S 005a9fa0 / S 005a9ec0; file list of the data tree |
 | 4 | [TODO] `ScoreSite` details: the fallback supplier when no building type produces a good; the names of map state bits 5 and 17 and of the construction-map flags 2 and 4 (§3.6) | static read of S 00557fe0; the cell state word in `map-resources.md` / `../map-format.md`; `ConstructionMap::GetCellFlags` |

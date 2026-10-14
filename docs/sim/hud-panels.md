@@ -344,7 +344,8 @@ drawn.
 
 Nothing is rebuilt when no player is shown. [inferred] When players are shown but none has more than one
 sample, `max` keeps its start value (the smallest i32), so the labels show 0; the curves keep whatever points
-they had.
+they had. In the first minute of a free game the graph lists only the own player (the enemy is not spotted yet)
+and shows no data; by the end of a match it shows curves [live, 2026-10-12, maintainer].
 
 Category change (`SetStatisticCategory` S 00642d60): the 8 point lists are emptied and the index stored; the
 caller then refreshes [known]. A player row's toggle button writes `graphEnabled[playerId]` and refreshes
@@ -416,7 +417,9 @@ bldSpread.x, bldOffset.y + line × bldSpread.y)`, starting a new line after `num
 (`techtreeBavarian`, `techtreeEgyptian`, `techtreeScots`: 1024 × 1024 pictures `techtree_bavaria.dds`,
 `techtree_egypt.dds`, `techtree_scots.dds`, all `visible="false"` in the XML). They are children of `tab3`,
 the fourth tab page (`tabButton3`, `!TECHTREE`), which exists because the XML sets `count="4"` (§2.1). The
-tab buttons are `!STATISTIC`, `!INVENTORY`, `!BUILDINGS`, `!TECHTREE` [known: code and data].
+tab buttons are `!STATISTIC`, `!INVENTORY`, `!BUILDINGS`, `!TECHTREE` [known: code and data]. The tab opens
+like the other three and shows a text-only tree, with different colours for products, end products and
+buildings [live, 2026-10-12, maintainer].
 
 `StatsBuilding::Refresh` S 00643f60 [known]:
 
@@ -829,6 +832,8 @@ statistics panel with leave-on-close; closing
 it leaves the match [known] S 0061ff50, S 006217f0. So a defeated player sees the final statistics (all tabs,
 with the "spotted" restriction of §3.1.4 still applied) and then leaves; the simulation of the others goes on
 without that client's input ([network-session.md](network-session.md) for the "user leaves" event).
+While the `Defeat` dialog is open the camera can still be moved [live, 2026-10-12, maintainer]; whether selection
+works and whether the explored area changes is [TODO] (the player in that test had no building left).
 
 After a win (`Victory`) or a completed free map (`Report`), `btContinue` opens the statistics **without**
 leave-on-close, so the player can close it and play on [known] S 0061ff50.
@@ -1074,10 +1079,10 @@ survives from one match to the next inside one program run depends on the object
 |---|---|---|
 | 1 | Exact meaning of the three lists / flags in the trend query (§3.2.2): the order list at `village.orderSystem`, the transport list at +0x448, worker slot +0x28 | static read of the element classes and of the worker vftable |
 | 2 | Second half of `OverlayBuilding::UpdateFromBuilding`: soldier counts, hit-point bar, name colour of military buildings, `exclamation0..2`, the flag that hides the missing-material icons (§3.6.1) | disassembly read of S 006403c0 from 0x00640533 on |
-| 3 | Whether the tech tree tab (page 3, created by `SetTabCount(4)` at XML load, §2.1) is laid out and switched like the other three | observation in the game |
-| 4 | What a defeated player can still do while the `Defeat` dialog is open (camera, selection), and whether the exploration mask changes for a defeated player (§3.10, §9) | observation in the game; read of the defeat path of the victory tick |
+| 3 | Answered (§3.1): the tech tree tab opens like the other three and shows a text-only tree [live, 2026-10-12] | — |
+| 4 | What a defeated player can still do while the `Defeat` dialog is open: the camera moves [live, 2026-10-12]; open: selection, and whether the exploration mask changes for a defeated player (§3.10, §9) | observation in the game; read of the defeat path of the victory tick |
 | 5 | Whether attackable enemy buildings get a marker of their own (§3.6.2) | observation in the game |
-| 6 | Whether the players graph really shows nothing useful when every shown player has ≤ 1 sample (first minute) | observation in the game |
+| 6 | Answered (§3.1): in the first minute the graph lists only the own player and shows no data [live, 2026-10-12] | — |
 | 7 | State that survives from one match to the next in one program run: the message filter bytes, the minimap zoom and pan, the chat log (§7) | read of the combo box mark function and `OnFilterButtonToggled` S 005f8e80; of `Picture::LoadFromXml` and where the HUD layout is reloaded; of the `ChatSystem` attach / detach functions |
 | 8 | Whether the shipped scripts add their minimap quest symbols again after a load (§7) | read of the campaign scripts' load hooks |
 | 9 | Whether the scene call of `MiniMap::RefreshMapTexture` S 005f1070 (scene slot +0x78 with 512, 512) renders terrain only or also objects (§4) | read of the scene's vftable slot +0x78 |

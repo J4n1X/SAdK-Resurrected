@@ -289,6 +289,13 @@ cleared: `NVillage::TerritoryUpdater` has no deactivation, its territory source 
 destructor (S 00565270), so the emptied building keeps its territory, keeps wanting 0, and can be attacked
 (target state 3 does not apply) [inferred from the functions of that class: ctor, dtor, `Refresh`, `Activate`,
 `ActivateIfOccupied`, `Store`, `Load`].
+Observed [live, 2026-10-12, developed save]: with the default fractions written into the local player's
+`NPlayer::Military` (0.1 / 0.3 / 1.0, defence 0.5), seven occupied buildings kept returning wanted size 0 over
+127 allocation passes and kept an empty garrison vector (`Military +0x10` = `+0x14`); the buildings go on
+existing. On screen (maintainer) with those defaults: no soldier stays in the guard hut, one stays in the guard
+tower and one in the fortress. Their capacities were not read, so which capacity limit separates 0 from 1 is not
+measured, and the border of an emptied building was not watched. The computer players' fractions in that save
+were the constructor defaults for three of them and 0.1 / 1.0 / 1.0 and 0.1 / 0.24 / 0.8 for the other two.
 
 **Allocation pass** (`NMilitary::Allocation::Update` S 00574a00), every 21st tick (countdown 20), over the
 territory buildings in list order. A building takes part when it is not `depot` type, finished (the two floats
@@ -402,7 +409,8 @@ is an `NLogic::ReferenceSoldier`, written only by `LinkPairedSoldier` S 006587e0
 exists only for a good whose settler type is 3 (`NSettlers::System::CreateSettler` S 00656500; `Jobs.lua` gives
 all 16 soldier goods `settlerType_Soldier`), and 3 never equals 0 or 1 [inferred; the comparison of two
 different fields looks like a slip in the original code]. Data that sets a `soldierType` of 3 would make the
-test true.
+test true. In play S 00658df0 returned 0 on all 31,676 calls between ticks 53,306 and 124,149 of a developed
+save [live, 2026-10-12].
 When the order matching finds **no supplier** for a kind-exchange order (category 4), it releases the waiting
 wrong-kind soldier of the selected order from the building if `cooldownTicks == 0`, and sets
 `cooldownTicks = 10` (`OrderSystem::Update` S 005626c0 → `Military::ReleaseSoldier` S 0055fc40) [known]. So
@@ -1408,14 +1416,14 @@ of §2.3 are hashed with the player (`players-victory.md`).
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | The code makes an occupied building whose wanted size is 0 dismiss all its soldiers and keep its territory (§3.2). Does the running game show this? | observation in the game: a far guard house (capacity 2..4) with default sliders; watch the garrison and the border |
-| 2 | Answered (§3.3): `Soldier::IsPairedSettlerTypeEqualSoldierType` (settler type compared with soldier kind) is always false with the shipped data, so `ReplaceSoldiers` S 00560110 never skips a wounded soldier because of it and `ExchangeWrongKindSoldiers` S 00560190 never reaches its unlink call [inferred]. Not observed in the running game | static: S 00658df0, S 006587e0, S 00656500; `Jobs.lua` |
+| 1 | Answered for the garrison (§3.2): an occupied building whose wanted size is 0 is emptied and goes on existing; with the default sliders the guard hut keeps no soldier, the guard tower and the fortress one [live, 2026-10-12]. Open: whether the emptied building's border stays, and the capacities that separate 0 from 1 | observation in the game: a far guard house (capacity 2..4) with default sliders; watch the border; read the capacities |
+| 2 | Answered (§3.3): `Soldier::IsPairedSettlerTypeEqualSoldierType` (settler type compared with soldier kind) is always false with the shipped data, so `ReplaceSoldiers` S 00560110 never skips a wounded soldier because of it and `ExchangeWrongKindSoldiers` S 00560190 never reaches its unlink call [inferred]; 31,676 calls in play all returned 0 [live, 2026-10-12] | static: S 00658df0, S 006587e0, S 00656500; `Jobs.lua` |
 | 3 | Meaning of `MilitaryConfig+0x108/+0x10c`, `SoldierFightState+4`, `Catapult+0x1c`: [TODO] not established, no reader found in the functions read | field xrefs / data-flow in Ghidra over the whole binary |
 | 4 | Answered (§3.2): index -1 in `Soldiers::GetSoldierObject` ends the process (exit code 0xC000000D), and play can reach it: all present soldiers bound to an attack during its 10-tick start countdown, wanted size below the garrison, an allocation pass in that window. Not observed in the running game | static: S 00574a00, S 00566220, S 00658f90, S 005751e0, S 006594a0 (state 0xc), S 006f26de; observation: lower the garrison slider, then at once attack with all soldiers of that building |
 | 5 | What `Player+0x18` holds, the argument of `!Castle was destroyed!` (§5) | the `Player` layout / its constructor |
 | 6 | `Military_IsTargetReachable`, `Military_ShouldAttackBySea` and the reach factor are specified in `../navy-and-military.md` §2..§3 and were not re-derived for this document beyond the falloff 12 / 24, the cache key and the 111-tick flush | static read of S 00575dc0 and its callees against that document |
 | 7 | `ai::military::MilitaryBuildingRanking` and the computer player's use of attack watch and fight history | belongs to `ai-player.md` |
-| 8 | Answered (§3.5.1 state 0xf, §3.6.2 rule 2): yes. A waiting soldier unbinds in the first tick in which the opposing list has no soldier with `leftFight == 0` and the defender list has had a member; the building is captured by an attacker already in the fight (0x29 → 0xd). With no attacker outside nobody captures [inferred] | static: S 006594a0 case 0xf, S 005711c0, S 00571140, S 00570980 |
+| 8 | Answered (§3.5.1 state 0xf, §3.6.2 rule 2): yes. A waiting soldier unbinds in the first tick in which the opposing list has no soldier with `leftFight == 0` and the defender list has had a member; the building is captured by an attacker already in the fight (0x29 → 0xd). With no attacker outside nobody captures [inferred]. In play the attack dialog does not let the player send more soldiers than can fight at once, so the case does not arise from the dialog [live, maintainer, 2026-10-12] | static: S 006594a0 case 0xf, S 005711c0, S 00571140, S 00570980 |
 
 ## 11. Function reference
 

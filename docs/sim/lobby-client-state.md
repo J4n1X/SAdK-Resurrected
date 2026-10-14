@@ -1727,7 +1727,7 @@ from the player's install; the remake must not ship it) and the text keys of §6
 | 6 | Answered (§3.17): after a two-player match `ProcessModeTransition` S 004f5950 went from mode 1 to 3 in state 11, called `SelectCharacter(100000)` 8 ms later and the village was entered again [live, 2026-10-14]; the order against the character list (message 60) was not compared | — |
 | 7 | Transport states other than 0, 2, 8, 9: exact meaning of 1, 3, 4, 5 | static read of the tincat3 connection classes (`message-catalog.md` lists the login steps) |
 | 8 | Under which conditions does the tincat3 send of a list refresh return an error (§3.3 describes what the client does then)? | static: the failure codes of T 1002dd00 and of the ignore-list sender in the tincat3 user manager |
-| 9 | Tokens 3 and 4 of `ItemsClient.txt` (always 4 and 1): token 4 (`ItemInfo+0x44`) ≥ 1 is enough to make an item valid (S 0048b100); no reader of token 3 (`+0x3c`) was looked for. Stack size and a validity count? | live: an item file with other values, then stack, split and sell (`docs/live-session-queue.md`) |
+| 9 | Tokens 3 and 4 of `ItemsClient.txt` (always 4 and 1): token 4 (`ItemInfo+0x44`) ≥ 1 is enough to make an item valid (S 0048b100), its only reader; token 3 (`+0x3c`) is stored and copied and has no reader (users of both fields: S 0048b120, S 0048b200, S 0048b2e0, the loader S 0048bfd0, S 0048b100) [known]. Stack size and a validity count? | live: an item file with other values, then stack, split and sell (`docs/live-session-queue.md`) |
 
 ---
 

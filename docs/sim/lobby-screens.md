@@ -1498,8 +1498,10 @@ room dialog exists) [known]; its use is in [network-session.md](network-session.
    Which offset component feeds the edge-arrow angle: the disassembly of S 0045fd30 around the `acos` call.
 6. **Hall-of-fame web texture**: the class behind +0xb68 (navigate vtbl+0x1c, scroll vtbl+0x18, extent
    vtbl+0x14) is not identified.
-7. **NPC with more than one action**, and the matchmaker NPC that does nothing when clicked: open in
-   `../village-and-character-protocol.md` §5.2; needs an observation in the running game.
+7. **NPC with more than one action**, and the matchmaker NPC: answered in
+   `../village-and-character-protocol.md` §5.2. An NPC with two or three actions cannot run any of them
+   (its buttons are hidden and no automatic dispatch happens) [known; live, 2026-10-12]; the matchmaker
+   NPC opens `MiniGameMatchMakingDialog` on selection [live, 2026-10-12].
 8. **Colour component order**: the chat line colours (§3.10) and the drag icon tint (§4) are four floats
    passed to `nUi`; that they are r, g, b, a is [inferred] from the layouts' `color="1 1 1 1"` and from red
    being the plausible "cannot drop" tint. Settle: the consumer in `nUi::Shape::DrawAtNaturalSize` /

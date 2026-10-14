@@ -248,7 +248,12 @@ builder idle; `g_pMapEditor = this`.
    so the HUD is hidden while the editor is shown [inferred: the root's own vftable was not read]; and a write
    of **180.0** to the float at
    (`nGame::System + 0x2d0`) + 0x2c, the camera's distance scale
-   ([camera-input-cutscenes.md](camera-input-cutscenes.md) §3.13; `OnHide` restores 70.0 [known] S 00602000);
+   ([camera-input-cutscenes.md](camera-input-cutscenes.md) §3.13; `OnHide` restores 70.0 [known] S 00602000).
+   The camera stands 2.5 times further out while the editor is shown (`+0x2c` read 70.0 in a match and 180.0 with
+   the editor open [live, 2026-10-12]); at a zoom step above the game's own maximum 4 (an install whose `zoomMax`
+   is 6.0, [camera-input-cutscenes.md](camera-input-cutscenes.md) §2.1) the whole world view lies in the distance
+   haze and shows one light blue colour; writing 70.0 back with the editor open brings the world back
+   [live, 2026-10-12, screenshots];
 6. base `Overlapped::OnShow`; title `Debug`;
 7. lay out the widgets top-down from pixel (50, 30) with a row height of 28 pixels: name edit, `!Save Map`,
    `!Load Map`, `!Overview Map`, mode combo with the 19 items of §2.3, element list (11 rows);
@@ -278,6 +283,8 @@ builder idle; `g_pMapEditor = this`.
       face, §2.2) and on the dialog's own face at +0x20; showing moves it back to (0, 0) and calls
       `SetVisible(1)` (slot +0x24) on both [known for the own face, vftable S 007f06ac slots 9 / 10 = S 004a1090 /
       S 004a1130; inferred for the game screen's face, whose vftable was not read]. This step does not depend on the `nMenu::System + 0x0a` test.
+      Hiding blanks the whole screen, so the game screen's face carries the world view as well, not only the HUD
+      [live, 2026-10-12]; whether a second Enter restores it is [TODO].
 
 Because steps 6.1 test levels, a tool is applied **once per rendered frame while the button stays down**
 [known: `GameAction` vftable S 007dec84 slots 13 / 15 = S 004910a0 / S 004910d0 forward virtual key 1 / 2 with
@@ -366,7 +373,7 @@ needs `sel` does nothing while no entry is selected [known] S 00604dd0.
 
 | Mode | Left button | Right button |
 |---|---|---|
-| 1 Start Positions | if `C` is not yet a start position: append it to `MapInfo` start positions (`MapInfo + 0x04`) | erase the first start position equal to `C` |
+| 1 Start Positions | if `C` is not yet a start position: append it to `MapInfo` start positions (`MapInfo + 0x04`) | erase the first start position equal to `C`; **crashes on a cell that is not a start position** (below) |
 | 2 Trees, 3 Stones | if `GameQuery::CanPlaceDepositAt(C, property(sel))` (§3.10): `NResources::System::CreateDeposit(&sel, C, true)` | if a deposit lies on `C`: `RemoveResourceAt(C)` |
 | 4 Patterns | pattern brush with `sel` (§3.5) | pattern brush with `pattern_meadow` 0xBFE4E8E3 |
 | 5 Elevations | elevation brush, direction +1 (§3.5) | elevation brush, direction -1 |
@@ -387,6 +394,20 @@ needs `sel` does nothing while no entry is selected [known] S 00604dd0.
 
 `Map_IsCellWalkable` S 0052df20: none of the grid bits 0x1, 0x4, 0x40, 0x100, 0x400
 ([../map-format.md](../map-format.md) §5.4).
+
+**Start Positions, right button, on a cell that is not a start position** [known; live 2026-10-12: crash log
+`EXCEPTION_ACCESS_VIOLATION` at S 00674f20]: the erase goes through `Stl_VectorMapPos_EraseValue` S 00674ed0,
+which searches the vector for the position and then shifts the following entries down without testing "not
+found": the shift loop starts at `end + 8` and runs until it leaves mapped memory, which ends the process. The
+function's other caller is `NAI::Player::AllowHarborPosition` S 005824c0 (the first is
+`NLogic::MapInfo::RemoveStartPosition` S 005294d0), so a map script's `logic.ai_allowHarborPosition` with a
+position that was never forbidden ends the process the same way.
+
+**Seen working** [live, 2026-10-12, dialog opened through the debugger, §10 Q1]: the Buildings tool with both
+buttons and list entries 3 and 35, the Elevations tool with both buttons (17,549 tool calls), and mode 11 Tools
+with entry 2 (`Infomap`), all without a fault (`HandleToolClick` S 00604dd0 hooked). The unreachable button 3
+branch (mode 5 smoothing brush, §3.5) works when a debugger hook after `Update` S 00609130 calls it for the
+middle mouse button (3,202 calls without a fault).
 
 **Buildings, left button** [known]: only if no building is found at `C` (`FindBuildingAtOrNearest(C, 0)`).
 Let `ok = (Village_CheckBuildingPlacement(localPlayer, &sel, C) == 0)` S 005576e0 (0 = the type is not locked for
@@ -627,11 +648,16 @@ A failed write is not reported ([save-format.md](save-format.md) §3.1).
 stream resolves its `[data]\...` path through the start-up file index, which knows only files that existed when
 the game started: an unknown file name resolves to the empty string, `CreateFileA("")` fails, and nothing is
 written. With an empty `data\game\maps\campaignMaps\<name>.s2m` created before start-up the save writes the
-map into it (530,513 bytes in the test); saving under the name of a shipped map overwrites that map.
+map into it (530,513 bytes in the test); saving under the name of a shipped map overwrites that map. After the
+save the running world is black: buildings, streets, settlers, ships and the per-player exploration grids are
+gone (step 3) [live, 2026-10-12]. A map exported this way starts as a new free game [live, 2026-10-12].
 
 **Load** [known] S 00609130: `nGame_File_load(1, name, suspend = true)` S 005ab180
 ([save-format.md](save-format.md) §3.4) replaces the running world by the map `campaignMaps\<name>.s2m`; then
-the dialog closes. Nothing is recomputed at load ([../map-format.md](../map-format.md) §5.5).
+the dialog closes. Nothing is recomputed at load ([../map-format.md](../map-format.md) §5.5). The name edit starts
+with the running world's map name; pressing `!Load Map` ended the game [live, 2026-10-12]. [inferred] the cause is
+the same path resolution: a name with no file resolves to the empty path, which is passed to
+`File_ReadAndDecrypt`.
 
 ### 3.10 Placement and validity rules used by the editor
 
@@ -969,11 +995,11 @@ resource step 2 and cap 7, the generator's bands and percentages (§3.11), CVar 
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Answered: nothing in the shipped build opens the `Debug` dialog. Every call of the four functions that reach a dialog slot by index passes a constant, and none activates slot 1 (`ActivateScreenById`: 4, 6; `ToggleScreen`: 2, 7, 5, 0, 3); slot 1 is only tested by `Game::Update` and `Game::Draw`; the typed field `System + 0x14` has no reader; the Lua libraries have no opener. Left: a load through an untyped pointer | static: S 005d97a0, S 005ea960, S 005d95f0, S 005d97e0 and their call sites (S 005dfef0, S 005e27c0, S 005eb310, S 005dd5e0, S 005eb180, S 005efea0, S 005eae90, S 005e3810, S 005efdd0) |
-| 2 | Does the editor work when opened (widgets, cursor, tools), and is `GameFile_Save(1, …)` able to write into the install's `campaignMaps` folder? | observation in the running game after opening the dialog through the debugger |
+| 1 | Answered: nothing in the shipped build opens the `Debug` dialog. Every call of the four functions that reach a dialog slot by index passes a constant, and none activates slot 1 (`ActivateScreenById`: 4, 6; `ToggleScreen`: 2, 7, 5, 0, 3); slot 1 is only tested by `Game::Update` and `Game::Draw`; the typed field `System + 0x14` has no reader; the Lua libraries have no opener. Left: a load through an untyped pointer. Opened by the debugger with `nMenu::Game::ToggleScreen(game, 1)` S 005ea960 on the main thread in an offline match, the dialog shows a menu for placing objects and runs: `Update` S 00609130 once per frame, `toolMode` (+0x65c0) 6, `panelShown` (+0x65c4) 1, combo selection 6, list selection -1, `Scene + 0x710` 0 (the state `OnShow` leaves), the logic ticking on [live, 2026-10-12] | static: S 005d97a0, S 005ea960, S 005d95f0, S 005d97e0 and their call sites (S 005dfef0, S 005e27c0, S 005eb310, S 005dd5e0, S 005eb180, S 005efea0, S 005eae90, S 005e3810, S 005efdd0) |
+| 2 | Partly answered: opened through the debugger the editor runs; the Buildings, Elevations and Tools modes work and the Start Positions tool's right button crashes on a non-start cell (§3.4); `GameFile_Save(1, …)` writes only into a `campaignMaps` file that existed at start-up (§3.9) [live, 2026-10-12]. Open: the other tools, the `editor` Lua library, whether a second Enter restores the view | observation in the running game after opening the dialog through the debugger |
 | 3 | What the scene byte `Scene + 0x710` gates (cleared while the editor is shown, §3.1 step 3). Typed users: the constructor (1), `SetFlag710` S 00680110, and `RenderPreviewTexture` S 00681300, which saves, clears and restores it around the scene's `Update` and `Render`; `Scene::Update` S 006805e0 does not test it, so the reader is below `Render` | static: raw reads of `[scene + 0x710]` in the render path; live: a read watch on the byte for one frame |
-| 4 | Whether anything sets `NLogic::Edit.flags[0..2]`: no call of slot 12 exists in the decompiled image, so the free-fly camera's test of flag 1 (§2.1) never passes through that path | live: watch the three bytes `Edit + 5..7` |
-| 5 | Whether map set-up or scripts set `batchEditing` by a path the static search does not see. Every use of the `Edit` accessor S 00695ea0 and of the typed field `System + 0x38` was read: slot 0 is called only by the editor's Buildings tool (S 00604dd0); the noise generator's sink (§2.6) is the one untyped holder left | live: watch the byte `Edit + 4` during a match start; static: the sink argument in the `CMapRenderer` constructor S 006890f0 |
+| 4 | Whether anything sets `NLogic::Edit.flags[0..2]`: no call of slot 12 exists in the decompiled image, so the free-fly camera's test of flag 1 (§2.1) never passes through that path. In a free game with ships the three bytes read 0 [live, 2026-10-12] | live: watch the three bytes `Edit + 5..7` with a write watch |
+| 5 | Whether map set-up or scripts set `batchEditing` by a path the static search does not see. Every use of the `Edit` accessor S 00695ea0 and of the typed field `System + 0x38` was read: slot 0 is called only by the editor's Buildings tool (S 00604dd0); the noise generator's sink (§2.6) is the one untyped holder left. In a running free game (a loaded save with ships) `SetBatchEditing` S 00538a60 was not called and `Edit + 4` read 0 [live, 2026-10-12] | live: watch the byte `Edit + 4` during a match start; static: the sink argument in the `CMapRenderer` constructor S 006890f0 |
 | 6 | The noise functions behind terrain modes 2 and 3 (`FBMNoise::GetValue` S 006b1760, `MultiFractalNoise::GetValue` S 006b1800), `PerlinNoise::GetValue`, and the meaning of the 8 noise parameters | static read of the three functions; low priority, unreachable code |
 | 7 | Answered (§3.13): the server works when created at run time: `CVarRemoteServer::ctor` S 0067e690 listens on 0.0.0.0:1234, answers `APP$DefaultApp`, registers CVars constructed afterwards (earlier ones through `RegisterVar` S 0067c760) and applies `CHANGE` [live, 2026-10-14]. Still open: why the patched executable (gate byte S 0088ca50 forced) did not start it, and thread safety | live: the patched executable with a breakpoint on S 0067c6d0 and S 0067e690 |
 | 8 | The resource-type argument of the three `AddResourceAtCell` calls in the `infoMap` pass (fish below 20, water in the two bands from 3000 to 9000): the decompile assigns the id to a register and passes a stack address (§3.11) | disassembly of S 006033d0 at the three call sites |

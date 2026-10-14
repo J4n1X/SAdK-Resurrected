@@ -103,7 +103,8 @@ A single global `ai::math::RandomGenerator` (8 bytes) at S 00889b08 plus a flag 
 
 The static initialiser S 007c07d0 constructs the generator with seed constant **0x5432ACE0** [known]. That value has
 13 set bits, so the balancing step of `SetSeed` (§3.3) leaves it unchanged, and `seed` = `state` = 0x5432ACE0 after
-the static initialiser [inferred, computed]. The only code that references the generator is the static initialiser
+the static initialiser [inferred, computed]; the generator read 0x5432ACE0 when a new world appeared
+[live, 2026-10-12]. The only code that references the generator is the static initialiser
 (and its exit-time destructor S 007ceb00), `LogicRandom_SetUp`, `_Next`, `_Save`, `_Load` and `_Checksum`; `seed`
 has no direct reference of its own, so its only writers are the static initialiser and the 8-byte read in
 `LogicRandom_Load` [known, cross references of S 00889b08 and S 00889b0c].
@@ -285,7 +286,8 @@ Constants and inputs:
 - `tickInterval` = float at `GameConfig + 4` = **0.1 s** (§6).
 
 Resulting **logic tick rate: 10 ticks per second of real time at speed 1, 20 at speed 2, 30 at speed 3**
-[inferred from the constants above]. All simulation durations in the data are therefore in units of 0.1 s of
+[inferred from the constants above; measured offline at speeds 1, 2 and 3, with manager `+0x3c` and `+0x34`
+reading 1 / 2 / 3, live, 2026-10-12]. All simulation durations in the data are therefore in units of 0.1 s of
 normal-speed time when they are tick counts (for example `cfg_setChestOwningTime` default 3000 ticks = 300 s).
 
 Properties of the loop a reimplementation must keep:
@@ -300,7 +302,8 @@ Properties of the loop a reimplementation must keep:
   `NLogic::Edit::SetBatchEditing` S 00538a60), ticks are
   consumed (`nextTickTime` advances) but no tick counter increment, network tick or subsystem update happens, and
   the Lua hook is skipped [known].
-- **Tick numbers.** The first executed tick has `tickCounter == 0` [known: −1 at construction, pre-increment].
+- **Tick numbers.** The first executed tick has `tickCounter == 0` [known: −1 at construction, pre-increment;
+  the counter read −1 when a new world appeared, live, 2026-10-12].
 - The FPU control word is set to 24-bit (single) precision with `_controlfp(0x9001f, 0xffff)` then
   `_controlfp(0x20000, 0x30000)` immediately before every `Update` call S 0057b9b0, S 004018e0 [known].
 
@@ -319,7 +322,8 @@ real-time length of a net tick stays the same [inferred]. The receiver does no r
 paused [known]. Otherwise, and only while the in-game screen is open and no cinematic is open [known],
 `nMenu::Game::SetPaused` S 005ea9b0 saves `UserProfile + 0x24`, sets it to 0.0 and pauses
 all sounds; unpausing restores the saved speed, raised to at least 1.0 [known]. With speed 0 the frame delta is 0
-and no tick becomes due [inferred].
+and no tick becomes due [inferred]: no tick ran during a 10 s pause, and manager `+0x3c` kept its value 3, so
+the pause does not go through the manager's speed field [live, 2026-10-12].
 
 ### 3.2 Coupling to the network tick
 
@@ -440,7 +444,11 @@ Consequences [inferred from the two functions]:
   `OnChar` S 005eb180 swallow the input (except the pause key `p`), and `nMenu::Game::Draw` S 005efdd0 draws the
   hang notice whose text `GetHangReason` S 0040d260 builds (waiting for start, waiting for packets, waiting for a
   named user, reconnect phase). Because the test only looks at the time of the last tick, it is also true in an
-  offline game that has been paused (or stopped by the options panel) for more than 2 s [inferred].
+  offline game that has been paused (or stopped by the options panel) for more than 2 s [inferred]. In an
+  offline game paused for some time `IsGameHanging` returned true (1,462 of 25,935 calls, the first at tick 1014),
+  while `GetHangReason` was not called once and no command reached `QueueGameCommand` S 00408b10: nothing can be
+  built while paused, because the input is swallowed before a command is made, and no hang notice text is built
+  [live, 2026-10-12].
 - A package only counts as "arrived" when it holds at least one event block. Every peer's package contains at least
   its checksum event each net tick, which is what keeps the gate open in an idle game [inferred].
 
@@ -764,7 +772,7 @@ event **0x30009** (`NComm::EventUserChecksum`, class signature 0x55555050) [know
 | source net id | u32 | local net id (no event if it is 0xEFFFFFEE) |
 | player slot | i32 | slot of the local GUID |
 | tick | u32 | manager +0x2c at the time of the call (equal to the new net tick number when called from `AdvanceNetTick`; the header uses the function argument instead) |
-| checksum | u32 | `ComputeChecksum()`; 0 in mode 0 |
+| checksum | u32 | `ComputeChecksum()`; 0 in mode 0 (offline the function is not called at all: a hook on S 00784080 saw no call in a whole free game [live, 2026-10-12]) |
 | GUID | NetGUID (4 × u32) | local player GUID |
 
 The event is only appended when the transport exists, the local net id is not 0xEFFFFFEE, the manager state is 2, 3
@@ -1035,7 +1043,11 @@ inside this section only if `v < 4`; game script if `v > 1`; quests if `v > 2`; 
 
 **Logic random generator** S 005389c0 / 00538a20: section tag `Logic Random` (version 0, S 007c07f0; the load does
 not read the version), the `initialised` byte, then 8 raw bytes (`state` u32, `seed` u32) [known]. Loading restores
-both, so a loaded game continues the exact sequence.
+both, so a loaded game continues the exact sequence. A load first builds a new world (tick counter −1, generator
+at its start state 0x5432ACE0), then restores the tick counter (the tick of the save) and after it the generator:
+a game saved with state 1661135933 at tick 2328 entered `LogicRandom_Load` with the start state and the tick
+already set, and left it with state 1661135933; the seed word S 00889b0c stayed 0x5432ACE0. The game speed is not
+restored: a game saved at speed 3 ran at speed 1 after the load [live, 2026-10-12].
 
 **`NLogic::Stock`** S 00539850 / 00539fa0: section tag `Stock` (current version 1, S 007c09e0); byte `flag04`; u32
 entry count; per entry u32 good id, u32 count, in ascending good id order. Load: if the object's `flag04` was set,
@@ -1168,7 +1180,7 @@ without game script, quests and sacrifices into a text stream [known].
 | 8 | Is `Stock::changeStamp` read anywhere? No access outside `NLogic::Stock` shows up through the typed field; a raw-offset read (stock +0x18) is not excluded. | Xrefs by offset on the users of `NLogic::Stock`. |
 | 9 | Can a cinematic (which blends the user game speed and sets `cinematicActive`, both local) run during a network match? | Static read of the callers of `nMenu::Cinematic::OnShow` S 005fbd30 (Lua quest functions) against the network mode; or a network match on a map whose script starts a cinematic. |
 | 10 | Do the render-side managers called from `S2CG::Scene::SyncLogicTick` S 00680550 write anything the simulation reads? | Static read of the five manager functions (render documentation). |
-| 11 | Does an offline game really show the hang notice and drop commands after 2 s of pause (§3.2 `IsGameHanging`)? | Observation: pause an offline game for a few seconds and issue a build command. |
+| 11 | Answered (§3.2): in a paused offline game `IsGameHanging` is true, the build input is swallowed before any command reaches `QueueGameCommand`, and `GetHangReason` is never called, so no hang notice text is built [live, 2026-10-12] | — |
 
 ---
 

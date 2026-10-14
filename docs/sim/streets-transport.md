@@ -867,6 +867,10 @@ and any attach, detach or carrier unlink at the flag resets the announcement [in
 goods with a low rank number. The function is also used by other settlers that carry a package to a flag, e.g.
 production workers (`NMovie::WaitForFreeFlag::Update` S 00777be0, [inferred] called every tick while the worker
 waits inside; `PutDownPackage`; `MoveOnMapToWorkingPlace`; `MoveAwayFromDeposit`) [known caller list].
+In play a workshop whose flag is full stops with the finished product and its worker puts it on the flag when a
+place becomes free (maintainer, 2026-10-12); the product's package is tried every tick (one increment of
+`blockedCount` per tick, `ticket` + 14 per tick for a rank-5 good) and is not discarded at 360: one product waited
+more than 7,000 ticks [live, 2026-10-12, hook on S 006513b0].
 
 **Exchange.** `CanSwapPackagesAtFlag(carried, partner, flag)` S 0064d120 [known]: true if both are the same good;
 true if the flag is not full for the carried good; otherwise true only if the partner is the only package on its
@@ -874,6 +878,10 @@ stack. `FindBestSwapPackageOnFlag(flag, nextFlag, carried)` S 0064d2f0: among th
 `CanSwapPackagesAtFlag`, await pickup and have `nextFlag` as next waypoint: `rank(good)`, `+50` if `nextFlag` is
 full for the good; lowest below 100 wins. `FindSwapPackageAtStreetEnd` S 0064d750 applies it with `nextFlag` = the
 other end of the carrier's street.
+In normal play the exchange is common [live, 2026-10-12, developed save]: `CanSwapPackagesAtFlag` ran 17,218 times
+and `FindSwapPackageAtStreetEnd` 8,286 times in 1,700 ticks; over a longer run 255 of 5,216 searches found a
+package, and one player's jams at full flags resolved after at most 261 attempts. The set-up of §10 Q4 (two
+crossing streets with full flags) was not built.
 
 **Drop start** (`CarrierBeginDropAtFlag` S 0064d410) and **drop hand-over** (`PutDownCarriedPackage` S 0064d590)
 [known], condensed:
@@ -1417,7 +1425,7 @@ disappears without being booked when there is no such building.
 |---|---|---|
 | 1 | Answered (§3.8, "Losing the job"): the street keeps the carrier in its slot, stays usable and orders nobody until the carrier object is destroyed. Open: which situations make `WaitForPackage` end without a package (displaced and off-centre, or the walk back to `mid` cannot start) | static: S 00656740, S 005657b0, S 00776d00, S 0053ca80 / S 0053cb40 (callers), S 00668e10. For the open part: a hook of S 00656740 logging caller, cell and fine position over a long run |
 | 2 | Answered (§3.7): yes; the street stays usable through slot 2, orders nobody, and the second carrier works without reading slot 1 | static: S 00668ce0, S 00668e10, S 0065b200 |
-| 3 | Fate of a package that was attached to a flag but fits on no stack (§3.9; reachable only through the two attach paths without a stack test: `CarrierBeginDropAtFlag` moving a package registered on another flag, and `PutDownCarriedPackage` for a settler that is not a Carrier) | static: follow such a package through `PackageNeedSystem::Update`, `NeedSystem::Update` and the flag destructor; or observe a worker putting a product on a flag with 12 packages |
+| 3 | Fate of a package that was attached to a flag but fits on no stack (§3.9; reachable only through the two attach paths without a stack test: `CarrierBeginDropAtFlag` moving a package registered on another flag, and `PutDownCarriedPackage` for a settler that is not a Carrier) | static: follow such a package through `PackageNeedSystem::Update`, `NeedSystem::Update` and the flag destructor. A production worker at a full flag does not reach it: he keeps the product until a place is free [live, 2026-10-12] |
 | 4 | After a street swap of two second carriers on streets without first carrier the end flags keep different kind-0 ids (§3.5): does it happen in play, and how long is the street skipped by goods routing? | observe two neighbouring upgraded streets that both lost their first carrier, with a blocked flag between them |
 | 5 | Can a player own a package of a good that is not in his priority list (a ware outside his tribe's `tp_addGood` list, or after a `0x20021` list that omits goods)? Such a good has rank 0 and is carried first (§3.8, §6) | static: the package creators for captured buildings, chests and script goods (`village-buildings.md`, `military.md`); or observation |
 | 6 | Which entry of the building type's goods list is index 0, the second argument of `GetEntryWithModifiers` in the worker product rule (§3.9; the index goes to `BuildingProperty::GetGoods`, S 00661c50) | owner `village-buildings.md` §3.7: the writers of that list |

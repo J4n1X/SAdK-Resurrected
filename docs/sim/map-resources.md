@@ -938,7 +938,10 @@ when all were taken.
    references and **erases** the animal if its state is 5, 7, 8 or 9. An animal still in state 4 is kept and stays
    in state 4: unreserved and huntable again, but it never roams again [inferred: `Update` has no case 4 and the
    only state reset, S 00541ad0 (state 2 if the step progress is >= 0, else 0), is reached with `erase = false`,
-   which only the destructor passes].
+   which only the destructor passes]. Observed [live, 2026-10-12]: of four aborts in a developed save, the animal
+   in state 5 was erased (state 9); the three in state 4 kept state 4 with their idle counter frozen and did not
+   move, one for more than 9,500 ticks, and two of them were later taken and killed by another hunter (within
+   1,800 and 3,400 ticks).
 
 With the shipped data each animal type yields one good per tribe that has an entry, so the first pickup already
 moves the animal to state 8 [inferred from `animals.lua`].
@@ -1369,7 +1372,7 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | Answered (§3.9): a planter never plants while the flood fill through walkable, explored cells runs empty before it has 11 candidates and before it visits a cell farther than radius + 4; the search returns false, draws no random number and `GoAfforest::Start` creates nothing. With 11 or more plantable cells inside a small reachable area he plants | static: S 00778f30, S 0077e660, S 0077e5c0, S 00779330, S 0077bcb0 (vftable S 0083457c slot +0xc) |
-| 2 | Whether an animal that was linked by a hunter (state 4) and then released by an aborted hunt stands still for the rest of the match (§3.10, step 6) | observation in the running game: destroy a hunter's hut while the hunter walks to the animal, then watch the animal |
+| 2 | Answered (§3.10, step 6): an animal in state 4 at an aborted hunt stays in state 4 with a frozen counter and stands still, but stays huntable, so another hunter can take and kill it [live, 2026-10-12] | — |
 | 3 | Answered (§3.10, state 2): the idle counter after a walk is `(int)((tick/10 - timeStamp) * idleTimeFactor * 10)`, three times the walk's ticks with the shipped factor; the animal idles `counter + 1` ticks | disassembly S 0054231f..0054235e; live 2026-10-12 (400 arrivals) |
 | 4 | Answered (§3.10): yes. The exploration test of the hunter's search reads `Animal +0x38`, the movement's target cell (the cell of the last arrival while the animal is at rest); the roam search does not look at exploration, so such destinations occur | static: S 00542c40, S 005418e0, S 00772b00 |
 | 5 | [TODO] Whether anything reads `DepositProperty.elevationSize` (+0x50) or `GoodProperty + 0x51` (`gp_enableFields`). In the cached decompile the typed field `elevationSize` appears only in the constructor S 005553d0 and the setter S 0054e100, and `GoodProperty` has a setter for +0x51 (S 005549e0) but, unlike +0x50, no getter next to it; no one-line getter of a byte at +0x51 exists at all. Both look unused [inferred] | static: instruction search for untyped reads of +0x50 on a `DepositProperty*` and of +0x51 on a `GoodProperty*` |

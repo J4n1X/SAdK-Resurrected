@@ -629,6 +629,13 @@ unknown.
 Verified: the shore-bit and continent recomputations use exactly dirs 0..5 and match every sample;
 all 615 ship-route path steps are single steps under this table.
 
+The names are labels of the grid, not screen directions: with the camera
+unrotated, direction 1 (a building's entrance flag) points to the screen's lower side, slightly left (about
+south-south-west on screen) [live, 2026-10-14: a farm at anchor (62, 88) has its entrance flag at (62, 87); every
+building's entrance is centred on its bottom side, maintainer]. The data names of the door offsets
+(`DoorOffsetNorthWest` = direction 4) do not describe screen directions either
+([sim/village-buildings.md](sim/village-buildings.md)).
+
 - Hex rings/spirals: one step in dir 4, then dirs 0..5 with r steps each
   (`ai::map::CliffMarker::CountCliffEdgeCellsInRadius2` 0067bbd0, `FloodFillContinent` 00678d70).
 - **Exception: harbor exit/dock offsets are plain `(x+dx, y+dy)` without parity correction** (§6.3).

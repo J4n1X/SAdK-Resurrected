@@ -521,6 +521,12 @@ when a random draw `% 100` is below a value of the AI property; [ai-player.md](a
 of `Military::Update` (soldier exchange, promotion, the `!Building is not connected` message every 600 counted
 ticks) is in [military.md](military.md) §3.3.
 
+Observed [live, 2026-10-12]: demolishing a guard house away from enemy territory removed it at once, with no
+message and no call of `StartDestroyCountdown` or `NotifyDestruction`; over 70,000 ticks of a developed save
+`StartDestroyCountdown` ran twice (the AI) and `NotifyDestruction` never. A military building demolished while
+under attack takes about 30 s at speed 1 to go (maintainer, from play), the 300 ticks above. The countdown length
+and the removal tick were not captured by a hook.
+
 The UI offers the action only when `GetDestroyBlockReason()` is 0 [known] S 0055cd40: 1 = headquarters type
 (`depot && casern && territoryBuilding`); 3 = `constructionTime < 1` and not a headquarters type; 2 = in a
 fight with the countdown already running; 0 = allowed. The command executor tests none of these except the
@@ -720,7 +726,8 @@ product slots move any units of the recipe goods from the output stock back to t
   gives `min(n, 8) − 1` products to the mine linked to it (the first use of an amount above 8 sets it to 7;
   1000 never runs out) [known] S 00674650, S 00674e70, S 0055c860, S 00565f80. A mine consumes once per
   cycle: `Working::Update` switches on the working mode 0..3 only and a mine's mode is 6 [known] S 0077ebf0.
-  `AddResourceAtCell` S 006745e0 caps a cell at 7, so an amount above 8 can only come from a map file. Owner
+  In play 85 of 85 cycles that emptied a cell delivered nothing and 403 of 403 others delivered one product
+  [live, 2026-10-12; no cell above 7 and no unlimited cell occurred]. `AddResourceAtCell` S 006745e0 caps a cell at 7, so an amount above 8 can only come from a map file. Owner
   of the amounts: [map-resources.md](map-resources.md).
 
 ### 3.9 Resource searches [known]

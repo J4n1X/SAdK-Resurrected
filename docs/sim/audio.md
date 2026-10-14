@@ -482,9 +482,13 @@ If the game screen is not open: `StopMusic`, `PlayMusicGroup(musicSoundIds[index
 | `Lobby_PlayZoneMusic` S 004f5430 | 5, 6, 0 | lobby camera zone changes: zone 0 → 5 (outside), zones 1..3 → 6 (inside), other → 0 |
 | `nMenu::Game::OnEnter`, `Book::OnHide`, quit, shutdown | stop | |
 
-[TODO] not established: who plays indices 2 (`music_won`) and 3 (`music_lost`). No direct caller of
-`nMenu::System::PlayMusic` passes them and no other code references the two ids; settle by breaking on S 005d9f60
-at the end of a won and a lost match.
+Indices 2 (`music_won`) and 3 (`music_lost`) are never played. No direct caller of `nMenu::System::PlayMusic`
+passes them and no other code references the two ids [known]; with S 005d9f60 hooked, a won free game
+(`DeclareWinner(0)`) and a lost one made no `PlayMusic` call from the end of the match until the next load or the
+return to the menu, and no jingle was heard [live, 2026-10-12]. A sound effect plays when the end dialog opens
+(the same one on a win and a loss, as far as the maintainer remembers). Leaving a match through the menu calls
+`PlayMusic(0)` twice within 6 ms [live, 2026-10-12]. The maintainer takes the two unused jingles for a remnant of
+the 10th Anniversary game [TODO] not checked.
 
 ### 3.7 Volumes, ducking, pause, mute
 
@@ -875,7 +879,7 @@ Converter output:
 |---|---|---|
 | 1 | Answered (§3.4, outcome of step 4): on a processor with SSE2 the fade-out never frees the channel (`targetVolume` becomes −2147483648.0); without SSE2 it does. To hear once: a map with more than four ambient sound ids | static: S 0056bab0, S 0056d2e0, S 006f2af0, S 0056fda0 |
 | 2 | Answered (§3.2): in a match the device camera is the `nGame::Camera`, `target − eye` is its look direction of length 1, and the listener sits `0.8 * (eye.y − h)` units down the view line | static: S 00784f70, S 00784f90; live 2026-10-12 |
-| 3 | Who plays `music_won` and `music_lost` (menu indices 2, 3). The five callers of `nMenu::System::PlayMusic` pass only the constants 0, 1, 4, 5, 6, and `PlayMusicGroup` / `SetForcedGroup` have no other caller that could pass the two ids [known], so by the static call graph the two jingles are never started [inferred] | live: break on S 005d9f60 at the end of a won and a lost match; static: readers of `nMenu::System + 0x90` / `+0x94` outside `PlayMusic` |
+| 3 | Answered (§3.6): `music_won` and `music_lost` (menu indices 2, 3) are never played: the five callers of `nMenu::System::PlayMusic` pass only the constants 0, 1, 4, 5, 6 [known], and no `PlayMusic` call followed a won or a lost free game [live, 2026-10-12] | — |
 | 4 | Answered (§3.1): `FSOUND_LOOP_BIDI` on the music streams loops forward; `maintheme.ogg` restarts cleanly [live, maintainer, 2026-10-14] | — |
 | 5 | What reads the `nGame::Sound` byte +4 (`nGame::System + 0x614`; set by `BuildWorld`, cleared by `nGame::System::Shutdown`). The two observer slots do not test it: they test `SoundSystem.enabled` only [known] | static: accesses to `nGame::System + 0x614` |
 | 6 | Callers of `Building::SetHidden` (what hides a building and so silences its door and collapse sounds), and subclass overrides of slot 1 (§3.9) | static: the slot 0 and slot 1 entries of the `S2CG::Building` subclass vftables and their call sites |

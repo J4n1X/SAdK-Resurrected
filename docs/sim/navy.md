@@ -303,7 +303,9 @@ In `ctor_UnderConstruction`, `Construction::SetBuildPosition` zeroes both work v
 (vftable S 007e7c28, S 00538c90) returns the byte at `Edit + 4`, the flag that slot 0
 (`Edit::SetBatchEditing` S 00538a60) sets and whose clearing flushes the map modifier's pending dirty
 rectangles [known]. So a ship-building site placed while a batch edit is open yields a finished ship at once
-[inferred]; which callers open a batch edit (slot 0 is only called virtually) is [TODO].
+[inferred]; which callers open a batch edit (slot 0 is only called virtually) is [TODO]. In a free game with
+ships `SetBatchEditing` was not called and `Edit +4..+7` read 0 [live, 2026-10-12], so in a match a new ship is
+built normally.
 
 **Deletion paths** [known]: state 7 in `System::Update` (§4); `System::EraseShipByUnique` S 005b3890 (script
 `na_destroyShip`, ownership transfer, the debug menu, and the destructor of a building's construction record
@@ -1173,7 +1175,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Which callers set the `NLogic::Edit` batch-editing byte (slot 0, S 00538a60), i.e. when a new ship is finished at once (§3.2) | cross-references to the vtable slot offset on the `Edit` object (editor tools, map load); breakpoint on S 00538a60 in the game |
+| 1 | Which callers set the `NLogic::Edit` batch-editing byte (slot 0, S 00538a60), i.e. when a new ship is finished at once (§3.2). Not in a running match: no call, `Edit +4..+7` = 0 [live, 2026-10-12]; the editor and map load remain | cross-references to the vtable slot offset on the `Edit` object (editor tools, map load); breakpoint on S 00538a60 in the game |
 | 2 | Whether `ShipConfig.size` is reached through a raw offset that the search of §2.10 misses | data-flow search for readers of `PropertiesDb + 0x68` followed by `+ 0x10` in the disassembly |
 | 3 | Answered (§3.1 rule 3): the null write is not reached through the game's own rules (one ship per player and route, `MoveToHarbor` only to ends of the own route, `ClearRoute` releases the docking position). A sea attack next to an own ship of the same route sends nothing by sea (`SendSoldiersBySea` S 00575510). Not covered: a save edited by hand, data with fewer than two docking positions per exit | static: S 005b97f0 and its five callers, S 005b9340, S 005b7050, S 005b4c50, S 005b3450, S 005b6d30, S 00575510 |
 | 4 | Answered (§3.4, §3.8): an anchored idle ship takes an own-to-own route on another water body (the continent test of S 005b4c50 compares the ship's cell with itself), and its first crossing starts with one straight step from its cell to `path[n-2]` | static: S 005b4c50 (disassembly), S 005bab60, S 005b99d0, S 005bdb30, S 005bd900, S 00772c50, S 005436d0, S 007728d0 |

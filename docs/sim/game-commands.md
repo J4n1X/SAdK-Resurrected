@@ -261,10 +261,10 @@ Constants and counters [known unless tagged]:
   after a reconnect, see below) [known]. In `TinCatNetwork` (vftable S 007d58f4) `lat` is slot +0x8c
   S 00419a50, the largest value any user record reports as its maximum sample, capped at 1000, and the quality
   level is slot +0x60 S 004198e0, the smallest value of a per-user field (list node +0x3c), starting from 3:
-  it is never above 3, so with this transport one of the three multipliers always applies [known]. [TODO] not
-  established: the unit of the samples and what sets the per-user level (static read of
-  `TinCatNetwork::UIS_AddPingSample` S 0041d610 and the writers of the level field); the offline transport's
-  slots were not read.
+  it is never above 3, so with this transport one of the three multipliers always applies [known]. The samples
+  are milliseconds of a full round trip (`GetTickCount()` at the reply minus the value the request carried;
+  `docs/sim/logic-core.md` §10 Q2) [known]. [TODO] not established: what sets the per-user level (the writers
+  of the level field); the offline transport's slots were not read.
 
 `NLogic::System::Update` S 00527070 calls `NComm_Manager::AdvanceNetTick(logicTick)` S 00411990 as the **first step
 of every logic tick**, before any subsystem is updated. There:
@@ -949,7 +949,9 @@ net ticks; 6 session slots; 8 street planners.
   net's `NNet::System::PostLoad` S 006654f0 calls the post-load of every flag and street and then removes
   (`RemoveStreet`) every street whose start or end flag reference (id high dword at street +0x4c / +0x6c) is
   not a valid id [known]. An unfinished street has no end flag, so it is removed there [inferred: the end
-  reference of an unfinished street was not read]; the result in the running game is an open question (§10).
+  reference of an unfinished street was not read]. In the running game the street mode survives opening the
+  menu and its dialogs (nothing is placed until the street ends in a flag); after loading a save made in that
+  state the street mode is gone and no street or stub exists [live, 2026-10-12].
 - The game speed factor and the NComm `speedUp` are session values, not in a save. `speedUp` is 1 after every
   NComm session reset (S 0040a810); the global speed factor is set to 1.0 when the game screen builds its HUD
   (`nMenu::Game::SetupHud` S 005ed700; the write lies inside the function's `uiSuppressed == 0` block, so it
@@ -1038,11 +1040,11 @@ net ticks; 6 session slots; 8 street planners.
 | Question | Settled by |
 |---|---|
 | Answered (§3.4, `0x20023`): the speed button is shown and usable in a network match; nothing hides `btSpeed` and the click test has no net-mode condition | static: S 005efea0, S 005ed700, `menuingame.xml` |
-| Unit of the latency samples and what sets the per-user quality level in the net tick adaptation (§3.2) | `TinCatNetwork::UIS_AddPingSample` S 0041d610 only stores the value its caller passes (newest first, at most 2 per user); static read of `cb_Ping_Received` S 0041d910 and of the writers of the level field |
+| What sets the per-user quality level in the net tick adaptation (§3.2). Answered: the latency samples are milliseconds of a full round trip (`logic-core.md` §10 Q2) | `TinCatNetwork::UIS_AddPingSample` S 0041d610 only stores the value its caller passes (newest first, at most 2 per user); static read of `cb_Ping_Received` S 0041d910 and of the writers of the level field |
 | Do all machines clear their package lists at the same net tick in a reconnect (§3.2) | static read of the reconnect state machine in S 00410f70; or observe: issue commands just before a host loss and compare the worlds after the rejoin |
 | Does a forged `0x2000D` against an own or allied target find attackers. `GetAvailableAttackers` S 00575dc0 has no owner or diplomacy test of its own [known]: it returns 0 only when the source building cannot provide attackers, is bound to another fight, has a reach factor of 0 or below, has no available soldier, or the target is not reachable | static read of `Military_GetAttackReachFactor` and `Military_IsTargetReachable`, the two callees that could still exclude such a target (`docs/sim/military.md` §3.5) |
 | Meaning of the second float (+0x08) of a distribution entry (§7) | static read of `ArrangementBase::PickNext` S 005c30c0 |
-| Is an unfinished street that was in a save really removed on load (§7) | observe: save while a street is being placed, load, and look for the street stub at the start flag; static: the end flag reference of a street made by `CreateStreetAtFlag` |
+| Answered (§7): an unfinished street in a save is gone after the load, with no stub at the start flag [live, 2026-10-12] | — |
 | Is the old building's research reference (+0x12c) cleared when `0x20027` moves the research (§3.4) | cannot be produced with the UI of this build; static read of the readers of building +0x12c |
 | Answered (`village-buildings.md` §3.5): the building is removed in the tick in which the countdown is decremented to 0, by the test that follows `Building::Update` in the same loop iteration; the two messages are not posted at all unless the countdown started at 0 | static: S 0055a640, S 005609b0 |
 

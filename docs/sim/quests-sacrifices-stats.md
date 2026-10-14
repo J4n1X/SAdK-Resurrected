@@ -798,7 +798,12 @@ Observers of the opening `[known]`:
 - `Referee_OnChestOpened_SendClaimChest` S 00782a60 (subscribed in `nGame::System::BuildScene`): for a chest of
   **kind 0** whose opener is not a player of kind 1 and has a slot in the NComm game information, send the
   referee message `ClaimChest` (0xDAC) with the game id, the map GUID, the opener's avatar id and
-  `contentValue` as chest id. Every machine of the match sends it (no local-player test) `[inferred]`.
+  `contentValue` as chest id. Every machine of the match sends it (no local-player test): in a two-player
+  match both clients sent `ClaimChest` in the same moment, both naming the opener as actor `[live, 2026-10-14]`.
+  Each client draws `contentValue` from its own `GameSeed` (0xDB8): with the same seed on both clients the four
+  chests held identical values, with different seeds the same four cells held different values and the two
+  claims carried different chest ids, without a desync `[live, 2026-10-14]`. A server therefore has to send every
+  client of a match the same `GameSeed` for the claims to name one chest.
 
 A kind-0 chest changes **nothing in the simulation** when it opens `[known]`: the observer of kind 1 ignores it
 and the referee observer only sends. What the opener receives is decided by the lobby server; the
@@ -1197,7 +1202,7 @@ every spawn (S 0052cd70).
   comparison `elapsed >= threshold * duration` for thresholds 0 and 1.
 - **Spawn phase** depends on the unique id assigned when the spawn was placed in the editor, stored in the map
   file. A converter must keep those ids, or animal spawns fire on other ticks and the random stream shifts.
-- **`ClaimChest`** is sent by every machine for every opened kind-0 chest `[inferred]` (§3.4.3), so a server
+- **`ClaimChest`** is sent by every machine for every opened kind-0 chest `[live, 2026-10-14]` (§3.4.3), so a server
   receives one claim per connected machine for the same chest id.
 
 ---

@@ -602,10 +602,12 @@ Additional rules of the panel:
   Enter and a double click on a row confirm (S 0060d3f0, S 0060d420).
 - **Message box answer** (S 0060d5b0) [known]: only result 0 (yes) acts. Pending action 0: fade out, save under
   the edit box text. Pending action 1: delete `<save folder><marked row>.aav`, mark the list dirty.
-- **Overwrite after a delete prompt** [inferred]: the overwrite prompt (S 0060d000) shows the box with
+- **Overwrite after a delete prompt** [known]: the overwrite prompt (S 0060d000) shows the box with
   `!Overwrite file?` / `!Save` and does not write the pending action, and `MessageBox2::Show` S 0062c0d0 resets
   only the result. After a delete prompt in the same panel instance the action is still 1, so "yes" on an
-  overwrite prompt deletes the marked row instead of saving. [TODO] not confirmed in the running game.
+  overwrite prompt deletes the marked row instead of saving; Save has to be pressed again to write the file
+  [live, 2026-10-12: Delete answered No, then Yes on the overwrite prompt deleted that save; three `Confirm` calls
+  and two box answers recorded].
 - **Load hand-over** (S 0060dd30) [known]: a non-empty chosen name → fade out (0.2 s), `System::SetPendingMapPath`,
   clear the name.
 
@@ -1064,7 +1066,7 @@ simulation state while a match runs, with these boundaries:
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | The slot contents when a row chooses the position of a closed row are answered in §3.4 (a lower row stays on its own index; a higher row is copied and can exist twice). Open: what the duplicated player looks like in the match | running game: free game in which row 2 chooses the position of a closed row 1 |
-| 2 | Overwrite prompt after a delete prompt deletes instead of saving (§3.6) | running game: in one save panel press Delete, answer No, then save over an existing name and answer Yes |
+| 2 | Answered (§3.6): after a delete prompt the overwrite prompt's "yes" deletes the save instead of writing it [live, 2026-10-12] | — |
 | 3 | Whether a credits line's alpha factor above 1 is clamped (§3.8) | static: `nUi::Text::SetColor` S 004b3ce0 and the text draw |
 | 4 | Whether the activate-main latch (`Main +0x228`) or the `Info` gate (`Overlapped +0xbfc`) is ever set through a pointer the byte search cannot see (§2.1, §3.11). Also searched: no `LEA` forms the address of either byte in a function of the two classes (the `LEA` hits with displacement 0x228 and 0xbfc belong to other classes), and the only store to `+0xbfc` in `Overlapped` is the constructor's 0 (S 0062e5ee). Left: a store through a register computed elsewhere | running game: write watch on the two bytes while using the main menu and dragging a dialog's title bar |
 

@@ -563,7 +563,9 @@ The window procedure calls `nUi::Root::HandleInputEvent(type, arg1, arg2)`:
    click latch, return 1).
 
 Consequences: hotkeys are character codes, so they depend on the keyboard layout and shift state (`hotkey="s"`
-does not fire for `S`) [inferred]; a text field with focus consumes characters before they become hotkeys; Esc
+does not fire for `S`) [live, 2026-10-12: the letter hotkeys work neither with Caps Lock on nor with Shift held;
+`HandleHotkey` S 0049ffc0 handled code 115 (`s`) and never code 83 (`S`)]; space (`btInfoMap1`) works with Shift
+and Caps Lock, since the character code of space does not change [live, 2026-10-12]; a text field with focus consumes characters before they become hotkeys; Esc
 and Enter work as hotkeys because `WM_CHAR` delivers 27 and 13.
 
 #### 3.3.2 Mouse-over [inferred] S 004a1b00
@@ -634,7 +636,7 @@ listed in the code's string references; shipped values in §6]:
 | `btStatistics` | round button | | | toggles `StatisticPanel` (§3.8.1) |
 | `miniMap`, `miniMapBorder` | `MiniMap` | bottom right, 188 × 188, round mask | §3.8.5 | |
 | `btQuests` (in `miniMapBorder`) | round button | | | toggles the quest log |
-| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene |
+| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene; in that mode the ground shows what can be built where (flag, small, medium, large building, harbour, nothing) and no overlay is hidden [live, 2026-10-12, maintainer] |
 | `btInfoMap2`, `btInfoMap3` | round buttons | | | toggle overlay layers 0 and 1 of the `OverlayPanel` (§3.8.6) |
 | `btSpeed` with pictures `x2`, `x3` | round button | | `x2` visible at speed 2, `x3` at speed 3 | **`0x20023` GE_Logic_SpeedUp** via `SendCycleGameSpeedCommand` |
 | `btOptions` | round button | | | shows `OptionsPanel` |
@@ -1456,9 +1458,9 @@ reads the icon grid parameters from `actionbuttons`.
 | 2 | Exact attribute semantics of Slider, Slider2, SliderEx, StackedSlider, ListBox2, Graph, TextScroller, EditEx | static read of each `LoadFromXml` and `Update` (§3.1.9) |
 | 3 | Text markup grammar of `TextBlock` (`<r g b a>`, `<right>`, `<c>`, others) | static read of `nUi::TextBlock` layout / draw |
 | 4 | Meaning of building property +0x3c = 8 and of the owner test behind selection kinds 0xb / 0xf; of property +0xb0 (taken as "catapult" from the box it selects) and +0xf5 / +0x54 (minimap colours, depot soldier tab) | static read of the `BuildingProperty` loader ([properties-data.md](properties-data.md)) |
-| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060) | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0; or observation in the game |
+| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12] | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0 |
 | 6 | The condition under which a right click in street placement steps back instead of cancelling | static read of S `Unk_Member10_Vslot2ThenVslot5` and `ai::game::StreetBuildMode` |
-| 7 | Whether hotkeys really fail with Caps Lock / Shift (character-code comparison) | observation in the game |
+| 7 | Answered (§3.3.1): the letter hotkeys fail with Caps Lock or Shift (character-code comparison) [live, 2026-10-12] | — |
 | 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
 | 9 | The Root virtual slot +0x84 called after the tree update in `nMenu::System::Update` (§4) | read of the `nUi::Root` vftable |
 | 10 | Reader of `Good_NotAvailable` / `Good_MovingToConstructionSite` in `iconconfig.xml`; what names `uiTip.dds` (§6) | string search in the binary |

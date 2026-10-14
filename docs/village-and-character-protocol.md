@@ -500,8 +500,8 @@ is ignored (first wins) [inferred].
 | 0 | `+0x00` u32 | item id | [known] |
 | 1 | `+0x04` string | name (text key, e.g. `!LOBBY_ITEM_CROWN`) | [known] |
 | 2 | `+0x20` string | description (text key) | [known] |
-| 3 | `+0x3c` u32 | always 4 in the shipped file; no reader found; meaning [TODO] | [known] offset |
-| 4 | `+0x44` int | always 1 in the shipped file; ≥ 1 makes the item valid (below); meaning [TODO] | [known] offset |
+| 3 | `+0x3c` u32 | always 4 in the shipped file; stored and copied, no reader (S 0048b120, S 0048b200, S 0048b2e0, S 0048bfd0) [known]; meaning [TODO] | [known] offset |
+| 4 | `+0x44` int | always 1 in the shipped file; ≥ 1 makes the item valid (below), its only reader `ItemInfo::IsValid` S 0048b100 [known]; meaning [TODO] | [known] offset |
 | 5 | `+0x40` u32 | equipment slot mask (below) | [known] |
 | 6 | `+0x48` string | mesh name | [known] |
 | 7 | `+0x64` string | icon name, resolved through `itemicons.txt` (plain text, 6 tokens, loader S 00430ae0) | [known] |
@@ -518,10 +518,11 @@ is ignored (first wins) [inferred].
   never fails: an id outside the file returns the shared placeholder `g_InvalidItemInfo`
   S 00885978 (id 0, name `!INVALID_ITEM_NAME`, mesh `InvalidItemMesh`, icon `InvalidItemIcon`, all
   numbers 0), which is not valid, fits no equipment container and gets the `InvalidIcon` shape
-  (S 0042f670). [known] One path does not return cleanly: with a shop open, hovering an inventory
-  slot that holds such an id reaches `GetShopSellPriceByItemId` S 0046d6d0, which calls
-  `_invalid_parameter_noinfo` and then reads one entry past the end of the stock vector
-  (S 0046d73e..0046d7dd). [known] On an avatar an unknown `itmid` shows nothing:
+  (S 0042f670). [known] One path does not return cleanly: `GetShopSellPriceByItemId` S 0046d6d0,
+  called with such an id while a shop is open, fails its checked-iterator test before the read past
+  the end of the stock vector (S 0046d73e..0046d7dd) and calls `_invalid_parameter_noinfo`, which ends
+  the process with exit code 0xC000000D, since no invalid-parameter handler is installed (S 006f26de,
+  S 006f25e2). [known] On an avatar an unknown `itmid` shows nothing:
   `CGfxObjAvatar::SyncEquipmentSlot` S 00507f60 attaches only a valid item and clears a slot that
   showed one before. [known] In the backpack an unknown id (99) draws an empty slot, hovering it with a shop
   open shows nothing and the process keeps running [live, 2026-10-14], so the hover does not reach the
@@ -697,7 +698,9 @@ walker (`lobby/sadk_lobby/npcs.py`).
 
 Selecting an NPC copies its `act` list into the world screen's three action slot codes. An NPC
 whose only action sits in slot 0 runs that action at the moment it is selected, and the selection
-then returns to the own avatar. [known, S 00437760] Most actions are local (matchmaking dialog,
+then returns to the own avatar. [known, S 00437760] Selecting a trader set the slots to `[11, 0, 0]`,
+`DispatchSlotAction(0)` ran about 30 ms later, `SendOpenShop` returned 1, the server answered OpenShop
+with 3601, the shop opened and the slots went back to `[8, 9, 0]` [live, 2026-10-12]. Most actions are local (matchmaking dialog,
 host/list games, hall of fame, mailbox, tailor); only **OpenShop** puts a village message on the
 wire (§6.1), and codes 7 and 8 send through the PostOffice and the server list. [known, S 00434230]
 
@@ -725,8 +728,9 @@ The chain, read in Ghidra on 2026-10-08 [known statically]:
   S 004f5e00). After that the click latches of the three buttons dispatch slot 0 / 1 / 2, with no test
   of what is selected. [known] Consequences: the automatic dispatch is the only path for an NPC's codes; an
   NPC with two or three actions gets no automatic dispatch and its buttons are hidden, so none of its
-  actions can be run and `actcnt` is effectively 0 or 1 for a working NPC [known; live 2026-10-12 for a
-  two-action NPC]. A shop action in slot 0 next to a second action therefore sends no 0x2E10. In the scene-object path
+  actions can be run and `actcnt` is effectively 0 or 1 for a working NPC [known]. Selecting the two-action
+  NPC "Herold Hartmut" set the slots to `[9, 8, 0]`; no `DispatchSlotAction` call followed and nothing
+  happened on screen [live, 2026-10-12]. A shop action in slot 0 next to a second action therefore sends no 0x2E10. In the scene-object path
   `selectedObject` (`+0x3630`) is 0 (S 00434047), and code 11 reads it without a null check.
 - `WorldScreen::DispatchSlotAction` S 00434230 runs the code. Codes 2-6 call
   `MiniGameMatchMakingDialog::Open(true, tavernId = code - 2, table 0xFF, mode 0 = search, 0)` S 00444cb0
@@ -743,15 +747,15 @@ The chain, read in Ghidra on 2026-10-08 [known statically]:
   object (`CLobby` vtbl+0xe4 S 004f53d0 → `CGfxObjAvatar::ShowChatText` S 005079b0): a text containing
   `/word` is tried as an emote (lower-cased; no bubble if the emote plays), otherwise it becomes the
   speech bubble for (length + 10) × 75 ms; and (b) into chat tab 0 as
-  `[<NPC name>] <!LOBBY_CHAT_FROM> : <text>`, whether or not the bubble is shown. [known statically;
-  not seen live]
+  `[<NPC name>] <!LOBBY_CHAT_FROM> : <text>`, whether or not the bubble is shown. [known] In play the
+  traders (11), the matchmaker (3) and the hall of fame NPC (10) spoke, the tailor (17) and the others
+  did not [live, 2026-10-12].
 
-**Open: the matchmaker NPC does nothing when clicked** (maintainer, live). [TODO] Established: a
-one-action matchmaker NPC (code 2..6) is dispatched on selection exactly like a shop NPC (sound,
-CLobby vtbl+0xd4, `MiniGameMatchMakingDialog::Open` in search mode), and nothing in that path depends
-on a button or touches the network, so the stub's log cannot show where it stops. Not established:
-what CLobby vtbl+0xd4 (S 004fad00) does and what `Open` S 00444cb0 requires; whether
-`DispatchSlotAction` is reached at all in the live case (`docs/live-session-queue.md`).
+**The matchmaker NPC.** A one-action matchmaker NPC (code 2..6) is dispatched on selection like a shop
+NPC. Selecting the stub's matchmaker set the slots to `[3, 0, 0]`; `DispatchSlotAction(0)` ran, then
+`CLobby::SetSelectionEnabled(0)` (CLobby vtbl+0xd4) and `MiniGameMatchMakingDialog::Open(show 1, gameKind 1,
+tableIndex 255, mode 0)`; selection was enabled again 4 s later, and the NPC spoke [live, 2026-10-12]. So the
+dialog opens; the earlier observation that the matchmaker does nothing does not hold for this NPC record.
 
 ---
 
@@ -780,9 +784,12 @@ client                                              server
   0xC1E) and stats (0xC81) so the UI shows the new state. [inferred; no client request asks for
   them]
 - `act 11` becomes slot code 11 unchanged (S 0047b200) and is dispatched on selection when it is the
-  NPC's only action, in slot 0 (§5.2). [known] A live click on 2026-08-02 put nothing on the wire;
-  that observation is unexplained [TODO]: statically nothing else gates the send, and a record with
-  more than one `act`, or with 11 not in slot 0, would send nothing. [inferred]
+  NPC's only action, in slot 0 (§5.2). [known; live, 2026-10-12] A live click on 2026-08-02 put nothing
+  on the wire; that observation is unexplained [TODO]: statically nothing else gates the send, and a record
+  with more than one `act`, or with 11 not in slot 0, sends nothing (§5.2) [known].
+- The `ShopName` string of 0xE11 is stored at `ShopDialog +0xb5c` by `SetShop` S 0045d580 and never
+  displayed; the title on screen comes from the dialog's layout file, so its encoding does not matter
+  [known].
 - The 0xE11 dispatch looks at the message id only, not the category (S 00470a90). `ShopDialog::SetShop`
   S 0045d580 refuses, silently, only when the dialog is already visible for another NPC or ShopID.
   [known]
@@ -797,8 +804,10 @@ client                                              server
   QTY 1. Closing the dialog sends nothing. [known]
 
 **Stub:** `dispatch._ECONOMY_HANDLERS` routes 0x2E10 / 0x2E1A / 0x2E24 to `economy.handle_open_shop` /
-`handle_buy` / `handle_sell`; the wire layouts match. It credits a different sell amount than the
-client shows (`mapping/work/protocol_gaps/stub_differences.md`).
+`handle_buy` / `handle_sell`; the wire layouts match. For an item the open shop lists it credits the stock's
+Sell value, the amount the client shows (item 23: 75, the stock's Sell = 150 // 2, `GetShopSellPriceByItemId`
+[live, 2026-10-12]); for an item that shop does not list it credits base value // 2, while the client shows
+base value × SellMod (`docs/message-catalog.md` 0xE24).
 
 ### 6.2 Inventory (client-initiated, no dedicated reply)
 
@@ -925,15 +934,15 @@ match-start chain; S 0046ec50, S 0046bde0]
 
 1. Which id reaches the server in the village 213 token when `char_id ≠ perm_id`, and what the
    village login expects there (§2.3).
-2. Why a live click on an `act = 11` NPC sent nothing on 2026-08-02 (§6.1); whether an action button
-   can fire for an NPC with more than one action (§5.2).
+2. Why a live click on an `act = 11` NPC sent nothing on 2026-08-02 (§6.1). (Answered: an NPC with more
+   than one action cannot run any of them, §5.2.)
 3. The index of the stats, active-items and inventory blocks inside the 6-part character blob
    (§1.4).
 4. Tribe value range: the select icons use 0–2, the model path clamps to 1–5 (§2.2, §4.3).
-5. What a 1001 for the own id does to the locally controlled avatar beyond style, items and stats
-   (§4.1).
-6. Whether a re-sent 1004 moves the visible NPC (§5.1); why the matchmaker NPC does nothing (§5.2).
-   (The `npcidx` → model table is settled, §5.)
+5. (Answered, §4.1: a 1001 for the own id pushes no movement sample; the avatar neither moves nor
+   vanishes, and the new look is shown.)
+6. (Answered: a re-sent 1004 changes the label but does not move the model, §5.1; the matchmaker NPC
+   opens its dialog, §5.2. The `npcidx` → model table is settled, §5.)
 7. The minigame request/reply pairing and the exact table-state layouts per game, beyond the board
    facts (§6.4).
 8. Any timeout in EnteringVillage (8) or LeavingVillage (10).

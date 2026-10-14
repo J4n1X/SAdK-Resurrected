@@ -1365,7 +1365,10 @@ The code asks for `lighteeading`, the file spells `lightheading`: the attribute 
 reader S 006e7b20 leaves its output untouched on a miss, and the output variable still holds the elevation just
 read. So the heading of every day-time key equals its elevation (50 in the install) and the file's
 `lightheading` is never used [known] S 00684130: both reads use the same output variable, and the key's
-heading is stored from it directly after the failed read.
+heading is stored from it directly after the failed read. Read in a running match: all nine keys have heading =
+elevation = 50, and the hour stayed 12.0 over 4,367 ticks; `CEnviromentMgr::Update` S 00683d50 runs once per
+frame and `GetDaytime` S 00684a20 is not called [live, 2026-10-12]; the time of day does not change in play
+(maintainer).
 
 When `[data]\settings\daytimes.bin` exists it is loaded instead of the XML (u32 count, then the raw 0x4c-byte
 records, S 00684510); otherwise the XML is parsed and the same layout is written to that path (S 00684690)
@@ -1512,7 +1515,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 8 | Who enables the radial vertex alpha of terrain patches (`TerrainDrawBatch +0x64`) | static: writers of the byte |
 | 9 | Per-LOD vertex counts of the terrain draw batch (§3.3) | static: the builder of the tables at `TerrainDrawBatch +0x74`, `+0x80` |
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
-| 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known] | static: readers of the day-time keys and of `EnvData` |
+| 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
 | 12 | Argument of the buoy bobbing sine of the territory border (§3.8) | static: disassembly of S 006b2ae0 |
 | 13 | Selection marker styles (UV rectangles, colours) and build icon atlas layout | static: `SelectionMarker::UpdateDecal`, `ConstructionMapRenderer::AddCellsInRect` |
 | 14 | Mapping of the `<Water>` attributes to the texture matrix globals; whether anything reads `<Water color>` (§6.1) | static: S 006a93c0 with S 006a65a0; xrefs of the string `color` near the water globals |

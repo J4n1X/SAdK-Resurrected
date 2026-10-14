@@ -205,11 +205,11 @@ The session description is specified in `docs/sim/network-session.md` §2.5 and 
 | winCondition | +0x225 | 1 destroy all enemies · 2 conquer · 3 coin; drop-down index + 1. 0 (endless) cannot be chosen in the room | S 00454ad0; `lobbySetupGameDialog.xml` `WinCondition` `string0..2` |
 | startResources | +0x226 | 0 high · 1 medium · 2 low; drop-down index | `StartResources` `string0..2` |
 | fogOfWar | +0x227 | 0 enabled · 1 disabled; drop-down index | `FogOfWar` `string0..1` |
-| fetchMapFromHost | +0x228 | always 0 | S 00454ad0, S 0046aaa0 |
-| mapFileType | +0x229 | the map type under which `GameFile_LoadMapInfo` found the map (`MapInfo +0x1d0`); 0 for every map the picker offers [inferred: the picker lists type 0 only] | S 00454ad0, S 005aaa30 |
+| fetchMapFromHost | +0x228 | always 0 in the game; the assetshare mod's hook of `SetGameSettings` passes 1 for every online host (read 1 for two stock maps with the mod active [live, 2026-10-12]) | S 00454ad0, S 0046aaa0; `lobby/mods/assetshare` |
+| mapFileType | +0x229 | the map type under which `GameFile_LoadMapInfo` found the map (`MapInfo +0x1d0`): a map found in `freeGameMaps` keeps the `mapType` stored in its own `MapInfo` (0 in every shipped map); the function overwrites it only on a fallback, 3 for a file in the Documents folder, 10 for a `.sav` [known, `docs/live-checks/2026-10-12_read-from-code.md`]. The assetshare mod passes 3 for every online host (read 3 for two stock maps [live, 2026-10-12]); without it a stock map gives 0 | S 00454ad0, S 005aaa30 |
 | gameId | +0x22a | the lobby server id of the game; 0 until the create answer arrived | S 00457f90, S 0040c320 |
 | rankedGame | +0x22e | 0 / 1; drop-down index (`!No`, `!Yes`) | `RankedGame` `string0..1` |
-| wager | +0x233 | 0 .. the host's gold at the time of choosing | S 00457d50, S 00457900 |
+| wager | +0x233 | 0 .. the host's gold at the time of choosing; a wager set through the bet button read 100356 with the host's gold (`AvatarProxy +0xd0`) at 100357, and `settingsCrc` (+0x237) changed with the map and with the wager [live, 2026-10-12]. Whether the stake dialog stops at the host's gold was not seen (the maintainer's impression with a balance of about 100,000 was "unlimited") | S 00457d50, S 00457900 |
 | passwordMd5 | +0x23b | MD5 of the password text; all zero = none, also stored for the empty text; host only (not on the wire) | S 00413c60; `docs/sim/network-session.md` §3.5 |
 
 Slot values the room produces [known]:

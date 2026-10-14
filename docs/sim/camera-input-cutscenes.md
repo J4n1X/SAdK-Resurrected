@@ -824,7 +824,10 @@ offline play ([game-commands.md](game-commands.md) §8).
   calls `SetVisible` or a fade-in [known: decompiled image]. In the decompiled
   code of the whole binary the five icon members are touched only by the screen's constructor, destructor, `SetupHud` and `DestroyHudWidgets` S 005ea650: nothing reads a click from
   them, and nothing writes camera modes 3 or 4 (§2.2) [inferred]
-  ([../subsystems.md](../subsystems.md) §5).
+  ([../subsystems.md](../subsystems.md) §5). In a running match all five have `visible` = 0 [live, 2026-10-12].
+  Shown by a debugger call of slot 9 (`SetVisible(true)`, `+0x24`) on the five icons (`nMenu::Game +0xb338`,
+  `+0xb730`, `+0xbb28`, `+0xc480`, `+0xc878`) and on the HUD root (`+0x968`), their visible byte (`+0x14d`) went
+  to 1; they appear in the top right of the screen and clicking each does nothing [live, 2026-10-12].
 - **Debug toggles** [known]: four toggle buttons (AI, harbour, flag, military; S 0061aa90, S 0061a290,
   S 006197a0, S 00617f30) are polled every frame in `nMenu::Game::Update`, and their overlays are drawn by
   `nMenu::Game::Draw` S 005efdd0. While the AI toggle is on, the characters `r`, `m`, `i`, `c` switch between

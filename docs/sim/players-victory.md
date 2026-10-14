@@ -87,7 +87,10 @@ binding `menu.setPlayerColor(index, r, g, b)` (S 005d9e00, the only other code t
 data: (0.01, 0.1, 0.60), (0.60, 0, 0), (0.20, 0.50, 0), (0.75, 0.46, 0.05), (0.65, 0.65, 0.65),
 (0.29, 0.29, 0.29), (0.45, 0, 0.35), (0.20, 0.60, 0.60) — dark blue, dark red, green, ochre, light grey, dark
 grey, purple, teal `[inferred]` names. So the colours in a running game are the `menu.cfg` values `[inferred]`
-(that the chunk runs before any match: `docs/lua-surface.md`).
+(that the chunk runs before any match: `docs/lua-surface.md`). In a running match the table read exactly these
+`menu.cfg` values, and the player on entry 3 showed yellow-orange on screen (entry 4 near white, entry 5 dark
+grey), which fits red, green, blue, alpha (the reverse order would make entry 3 blue) `[live, 2026-10-12]`; the
+on-screen colours of entries 0, 1 and 6 were not compared.
 
 ### 2.3 `ai::game::VictoryConditions` (0x12c bytes, member `NLogic::System.victoryConditions`)
 
@@ -559,6 +562,24 @@ In order `[known]`:
 
 `DeclareWinner` is called from exactly two places, both in §3.6 `[known]`.
 
+Observed in free games with two sides of two (`IsEnemyOf` matrix read live) `[live, 2026-10-12]`:
+
+- Mode 1, sides {0 human, 1} and {2, 3}: after `HandleCommand_2002B(2)` the castle was gone and `state[2] = 1`,
+  `stateTime[2]` = that tick; players 0 and 1 then showed `enemyCount 2, enemiesWithoutHQ 1` and no winner while
+  player 3 kept its castle. Unused slots 4..7 had state 1 from the start. After `HandleCommand_2002B(3)`:
+  `state[3] = 1` in that tick and exactly one `DeclareWinner(0)`; then `won = 1,1`, `state[0] = state[1] = 0`,
+  `stateTime[0]` = the tick, `stateTime[1] = 0`, and no second call for index 1.
+- Mode 1, own side {0, 1} eliminated: one `DeclareWinner(2)` in the tick of the second removal; one tick later
+  `state = 1,1,0,0`, `won = 0,0,1,1`, `stateTime = 246,146,246,0`. Eliminated players keep state 1 (they are not
+  moved to state 2).
+- Mode 1, interleaved sides {0, 2} and {1, 3}: one `DeclareWinner(1)`; `state = 1,0,1,0`, `won = 0,1,0,1`,
+  `stateTime = 277,277,177,0`. The logic kept ticking after the local player's elimination and the declaration.
+- Mode 0, own side eliminated: `state[1]` and `state[0]` became 1, `won[]` stayed 0 for all, no `DeclareWinner`.
+
+So the named winner is the lowest index of the winning side (not of a team list), the allies get only the `won`
+flag, and the tick goes only to index w. Not observed: a network match in which the lower index of the winning
+side is on the remote machine, i.e. which avatar each client then puts into `FinishGame` `[TODO]`.
+
 ### 3.8 Leaving and giving up
 
 - **Lockstep command 0x2002B "player left game"** — `nGame::System::HandleCommand_2002B(playerIndex)` S 00782910:
@@ -569,7 +590,8 @@ In order `[known]`:
   - `NComm_Manager::HandleEvent` S 0040e560, session event 0x3000B "user left": if this machine is the host and
     the network mode (`+0x3c8`) is 1..4 (`NComm_Manager_IsRole1to4` S 004083e0), it creates 0x2002B with the
     leaver's player index and appends it to the outgoing tick package (run at once when the manager's `nMode`
-    is 0). In network mode 0 (offline) no 0x2002B is created.
+    is 0). In network mode 0 (offline) no 0x2002B is created: leaving a free game through the menu made no
+    `HandleCommand_2002B` call `[live, 2026-10-12]`.
   - `NComm_Manager::Process_MainLoop` S 00410f70, reconnect state 2 ("host waiting on clients to join"): once
     all human slots have rejoined or the wait timer (`+4`) has run out, every human slot of the six NComm slots
     that is still not filled is reset and gets a 0x2002B with its player index.
@@ -607,7 +629,9 @@ In order `[known]`:
   `Requester_SendRefereeGiveUpGame` nor `RefereeServerConnection::GiveUpGame` S 00479ab0 has a "sent" latch
   `[known]`. So on the step-1 path the subscription and the 0xDD4 message are repeated on every frame for as
   long as the requester keeps being updated in the confirmed state `[inferred]`; what ends it is the main-screen
-  activation in one of the two callbacks (§10).
+  activation in one of the two callbacks. With the stub answering at once, one give-up sent `GiveUpGame` three
+  times within 5 ms, each answered `[live, 2026-10-12]`. In a two-player match the remaining player's game then
+  declares itself the winner: 1.8 s after the give-up its `FinishGame` named its own avatar `[live, 2026-10-12]`.
   For "exit to desktop" it writes the autosave under the same condition, logs out of the referee and the lobby
   and requests the quit; no `GiveUpGame` is sent on that path.
   The simulation has no "give up" state and the menu path creates no lockstep command: the leaver's castle is
@@ -1087,10 +1111,10 @@ to ticks.
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | `[TODO]` After a player's last castle is removed in a network match, do the remaining machines show the `!DEFEAT` letter and does the victory quest of mode 1 advance on the next tick? (§3.6.1, §3.8) | game observation with two clients: one leaves through the menu; watch the other's messages and quest 0 |
-| 2 | `[TODO]` In an offline match (network mode 0) nothing creates command 0x2002B (§3.8); confirm that leaving through the menu simply ends the match with no castle removed | game observation; or a hook on S 00782910 while leaving an offline match |
-| 3 | `[TODO]` How many `GiveUpGame` (0xDD4) messages a give-up sends: no latch exists in the sending path (§3.8), so the count depends on when the requester stops being updated (whether the main-screen activation in the result callbacks S 006005c0 / S 00600690 does that, and what happens if the referee never answers) | static read of `AppState_ActivateMainScreen` and of the dialog update loop of `nMenu::System`; or a capture of the referee connection while giving up |
+| 2 | Answered (§3.8): leaving an offline match through the menu makes no `HandleCommand_2002B` call, so no castle is removed `[live, 2026-10-12]` | — |
+| 3 | Answered for a referee that answers at once (§3.8): three `GiveUpGame` within 5 ms, each answered `[live, 2026-10-12]`. Open: no latch exists in the sending path (§3.8), so the count depends on when the requester stops being updated (whether the main-screen activation in the result callbacks S 006005c0 / S 00600690 does that, and what happens if the referee never answers) | static read of `AppState_ActivateMainScreen` and of the dialog update loop of `nMenu::System`; or a capture of the referee connection while giving up |
 | 4 | Answered: with start resources "high" the mines of a human player work without food (`village-buildings.md` §3.8) | static: S 005be330 and its three callers in `NVillage::Production`; `Player.state` set in S 005bea90 |
-| 5 | `[TODO]` Is the component order of the colour table at S 0087ead8 red, green, blue, alpha? (§2.2) | a consumer of `ai::player::Player::GetColorEntry` S 005be2c0 that hands the four floats to a named colour setter; or game observation of the eight player colours |
+| 5 | Answered (§2.2): the component order of the colour table at S 0087ead8 is red, green, blue, alpha, and the values in a running match are those of `menu.cfg` `[live, 2026-10-12]` | — |
 | 6 | `[TODO]` A reader of lock map 2 ("sacrifices made available") that does not go through `IsLocked` (§3.10) | cross-references to the map subscript S 005bf670 with `Player +0x7c` |
 | 7 | `[TODO]` Whether any code writes `GameLoadDescriptor +0x24` (start-position shuffle) without the setter S 005a9b10 (§3.4). The free-game combo handler S 005e8200 does not (it calls the setters of `+0x20`, `+0x28` and `+0x244` only) | search for writes to the descriptor at `+0x24` in the free-game panel's start function |
 | 8 | Answered (§7): after loading a save in which a side had already won, the win is declared again in the first tick and the victory dialog shows again; no victory state is stored. Open: the second `FinishGame` in a lobby match (same code path, not observed online) | static: S 00535d70, S 005357c0, S 005275c0; live 2026-10-12 |

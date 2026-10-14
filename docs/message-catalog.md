@@ -2056,7 +2056,10 @@ NComm slot, nothing is sent. [inferred, boards #447/#2368]
   GiveUpGame, or its referee connection closed. A wager is paid only then, and only when every FinishGame names
   the same registered player: each other player pays it the wager. No gold moves when the reports disagree,
   nobody names a winner, or the match has more than two players (the server does not know the teams, and the
-  one named winner's allies are not listed). [offline-tested, `lobby/tests/test_wagers.py`; in the game: TODO]
+  one named winner's allies are not listed). [offline-tested, `lobby/tests/test_wagers.py`] In a two-player
+  match with wager 357 player 100000 gave up, 1.8 s later the remaining player's game sent FinishGame naming
+  itself (100001), and the server moved 357 gold from 100000 to 100001 and kept both chat notices for the next
+  village entry [live, 2026-10-12]. More than two players: [TODO].
 
 #### 0xDC1 (3521) FinishGameAcknowledge — referee -> C
 **Contract.** GameID 32, Result 32. Handler S 0047a810. 0 -> log. Non-zero -> list +0x74
@@ -2086,7 +2089,9 @@ re-sent every frame until answered (S 006008b0). [inferred, board #680]
   Both outcomes run the same exit: referee logout, then the main screen. [inferred]
 - Tolerate repeats. [inferred]
 - The stub answers every `0xDD4` with `0xDD5`, Result 0. [PROVEN: server log 2026-10-10, match 107; the client
-  did resend it, two frames 14 ms apart]
+  did resend it, two frames 14 ms apart] In match 100 the client sent it three times within 5 ms, each answered
+  [live, 2026-10-12]. In a two-player match the give-up makes the other player's game declare victory: its
+  FinishGame naming itself followed 1.8 s later [live, 2026-10-12].
 
 **Open decisions.**
 - **H20** Record the give-up as a loss. This is server-side ranking policy, and the client does not care.
@@ -2155,7 +2160,9 @@ There is no Result field. AvatarID ≠ 0 -> list +0x38 (chestId, avatarId, &text
 AvatarID 0 -> list +0x44. [known] The push order was verified at disasm 0047a2b0. [known]
 
 **Open decisions.** Under H22, which AvatarID wins the chest. The client accepts any non-zero AvatarID
-for success and 0 for failure. Text is free; its display use was not traced. Default: the opener's
+for success and 0 for failure. Text is free and never shown: the lists +0x38 / +0x44 have no subscriber
+(every call of `ObserverList::Subscribe` S 00458860 enumerated), so the result only writes the log line in
+`ClaimChestResultReceived` S 0047a160, with no HUD message or sound [known]. Default: the opener's
 AvatarID (the claim's ActorID, the same in every client's claim), empty text.
 
 ### Match start: the full chain (who waits for whom)
@@ -2779,8 +2786,10 @@ client) is true; otherwise it tests and clears the latch and, when codes[0] != 0
 and codes[2] == 0, calls `DispatchSlotAction(0)` and then CLobby vtbl+0xc0 (`SelectLocalAvatar`
 S 004f5e00). So the request is sent once per selection of a shop NPC whose only action, in slot 0, is
 11. Nothing on the path checks distance, gold or dialog state. For an NPC selection the three
-action buttons are set to `LobbyAction_None` every frame; whether a button click can still dispatch
-for an NPC with more than one action is not established [TODO]. Code 11 dereferences
+action buttons are set to `LobbyAction_None` and hidden (button vtbl+0x24(0) = `SetVisible(0)`), and a
+hidden button cannot latch a click, so an NPC with more than one action cannot dispatch any of them
+[known; `docs/village-and-character-protocol.md` §5.2]. Selecting a one-action trader dispatched slot 0
+about 30 ms later and `SendOpenShop` returned 1; the server answered with 0xE11 [live, 2026-10-12]. Code 11 dereferences
 `selectedObject` without a null check, and the scene-object path sets it to 0 (S 00434047) [known].
 
 **Required server behaviour.**
@@ -2789,7 +2798,7 @@ for an NPC with more than one action is not established [TODO]. Code 11 derefere
   with 0xE11. An NPC id that is not a shop gets no answer.
 - A live shop-NPC click put nothing on the wire on 2026-08-02. Unexplained [TODO] and superseded by
   the wired handler: statically nothing gates the send beyond the conditions above. An NPC record
-  with more than one `act`, or with 11 not in slot 0, would send nothing [inferred].
+  with more than one `act`, or with 11 not in slot 0, sends nothing [known].
 
 **Open decisions.**
 - **V25** NPC id -> shop mapping. Any. Default one shop per shop NPC.
@@ -2875,7 +2884,8 @@ following entries do not change.
 | 1 | ShopID | 32 | |
 | 2 | Result | 1 (bool) | true = success [inferred] |
 
-No connection state change; observers +0x134 get (ShopID, Result) [known].
+No connection state change; observers +0x134 get (ShopID, Result) [known]. The list has no subscriber
+(no call of `ObserverList::Subscribe` S 00458860 names it), so the client shows nothing on a result [known].
 
 **Required server behaviour.**
 - One per 0xE1A [inferred]. Stub: `economy.result_body`, same layout.
@@ -2909,9 +2919,11 @@ interessiert") [live, 2026-10-14]. Closing the dialog sends nothing
 
 **Required server behaviour.**
 - Reply with 0xE25, plus 3102 and 3201 on success [inferred].
-- Stub: `economy.handle_sell` reads the same layout and answers 0xE25. Stub differs: it credits
-  `int((price // 2) * 0.9)` for every item, not the amount the client showed (crown, base 250: shown
-  125 at the listing shop and 225 at the other, credited 112).
+- Stub: `economy.handle_sell` reads the same layout and answers 0xE25. It credits the open shop's stock
+  Sell value for an item that shop lists, the amount the client shows (item 23 at the listing shop: the
+  client computed 75, the stock's Sell = 150 // 2, in `GetShopSellPriceByItemId` [live, 2026-10-12]), and
+  base value // 2 for an item it does not list. Stub differs there: the client shows trunc(base value x
+  SellMod); the client's value at a shop that does not list the item was not captured [TODO].
 
 **Open decisions.**
 - **V30** sell price. The client does not dictate the credited amount, but it shows the player one:
@@ -2927,7 +2939,8 @@ interessiert") [live, 2026-10-14]. Closing the dialog sends nothing
 | 1 | ShopID | 32 | |
 | 2 | Result | 1 (bool) | true = success [inferred] |
 
-Observers +0x140 get (ShopID, Result) [known].
+Observers +0x140 get (ShopID, Result) [known]; the list has no subscriber, so the client shows nothing on
+a result [known] (S 00458860, all calls enumerated).
 
 **Required server behaviour.**
 - One per 0xE24 [inferred]. Stub: `economy.result_body`, same layout.
@@ -3748,7 +3761,7 @@ appended to the cache). **No ticket check and no ticket release** [known].
 | 1 | delivery_target | UNLONG | rec+4 [known] |
 | 2 | message_id | UNLONG | rec+0; mail identity [known] |
 | 3 | creator | UNLONG | rec+8; sender perm id, name resolved via CharacterManager [known] |
-| 4 | creation_time | UNLONG | rec+0xc [known] (T 10024e43) -> Mail+0x2c (S 0048cce0, S 0048ced0); copied only, no reader found in the Mail / PostOffice / Mailbox / NameRequest functions [inferred]; unit not constrained by the client [TODO] |
+| 4 | creation_time | UNLONG | rec+0xc [known] (T 10024e43) -> Mail+0x2c (S 0048cce0, S 0048ced0); copied only, no other reader in the 61 functions of the mail and post-office classes [known]; unit not constrained by the client [TODO] |
 | 5 | title | STRING 128 | rec+0x10 [known] |
 | 6 | status | UNBYTE | read with GetLBOOL: nonzero = read, 0 = unread [known] |
 | 7 | message_text | MEMBLOCK | read twice: NUL-terminated heap copy (rec+0x18) and ptr/len (rec+0x1c/+0x20) [known: push operands 10024e8a / 10024edc] |
@@ -4221,7 +4234,8 @@ untested into `property_mask` (T 1002efec) and writes name, mail, banned, active
 the mask is; `cipher` is skipped when the password is NULL (T 1002ee35), and NULL data arguments give
 a zeroed 24-byte block of six sizes (T 1002efaa) [known]. So with mask 8 the accompanying active 1,
 banned 0, empty name and empty data are placeholders, not changes. No other caller of the vftable
-slot (UserManager +0x20, T 1005154c) was found in sadk_noav.exe [inferred].
+slot (UserManager +0x20, T 1005154c) exists in sadk_noav.exe [known: all uses of `pUserComm` are S 00472b30,
+S 00472f00, S 00473460, S 00476390, and only S 00476390 calls `+0x20`].
 
 **Required server behaviour.** Result(42) -> UserManager clear busy + observer 0x0c -> SADK
 UserObserverListener::UpdateResultReceived S 00473e90 [known]. Stub acks [PROVEN as handler
@@ -4337,8 +4351,9 @@ is ignored [known].
 pass-through: it always writes char_id, name and data (six sub-blocks, or six zero sizes when the
 data arguments are NULL) and copies its fifth argument untested into `property_mask` (T 1001668c)
 [known]. Its only reference is the CharacterManager vftable slot +0x1c (T 1004e94c); no call through
-that slot was found in sadk_noav.exe, and `ProcessActions` S 00476390 uses slots +0x0c, +0x10, +0x14
-and +0x20 only, so this client is not known to send 90 [inferred].
+that slot exists in sadk_noav.exe: the client calls slots +0x04, +0x08, +0x0c, +0x10, +0x14 and +0x20 of
+the interface only (all uses of `CharacterManager.pCharacterComm`: S 00473460, S 00472b30, S 00476390), so this
+client never sends 90 [known].
 
 **Required server behaviour.** Result(42) -> clear busy + notify (errorcode, ticket data) [known].
 Stub acks and persists [PROVEN as handler].
@@ -4774,7 +4789,7 @@ the client handles and the stub ignores or only logs.
 | 3100 / 3101 / 3102 | not implemented | item state for the owner | inventory and equipment never update | S 0046e660, S 0046e6f0, S 0046e780 |
 | 3600 OpenShop / 3601 ShopInventoryData | wire matches (`economy.handle_open_shop` answers 0x2E10 with 0xE11); stale comments in `dispatch.py` and `village.py` still say a click sends nothing; a non-shop NPC id gets no answer | 0xE11 as the reply to 0xE10 with the same NPCID | none on the wire; comments only | S 0046ddf0, S 004706b0, S 0047b200 |
 | 3610 / 3620 and 3611 / 3621 | wire matches (`economy.handle_buy`, `handle_sell`, `result_body`); ShopID is not compared with the opened shop; QTY > 1 honoured | 0xE1B / 0xE25 plus 3102 and 3201; the client sends the ShopID of its last 0xE11 and QTY 1 | a buy with a stale ShopID is honoured; no effect with the real client | S 0046c400, S 0046c510, S 00470990, S 00470a10 |
-| 3620 ShopSell price | credits `int((price // 2) * 0.9)` for every item | the amount the client shows: stock Sell if the open shop lists the item, else trunc(base value x SellMod) | the player is paid a different amount than the confirm box states [known] | S 0046d800, S 0044e271 |
+| 3620 ShopSell price | credits the stock Sell value for an item the open shop lists (matches [live, 2026-10-12]); base value // 2 for an item it does not list | the amount the client shows: stock Sell if the open shop lists the item, else trunc(base value x SellMod) | at a shop that does not list the item the player may be paid another amount than the confirm box states [inferred] | S 0046d800, S 0044e271 |
 | 4000 ChatCommand | logged and dropped | nothing required | none | S 0046cbf0 |
 | Minigames (2001, 209, 204, 222, 220, 221, 300-302, 400-403; 216-220, 303) | client actions logged and dropped; server messages not implemented | the table protocol (0xDA, 0xD9, 0xD8, 0xDB, 0xDC, 0x12F) | no minigames | S 0046cf20, S 0046f380, S 00471720 |
 | 150 AddPrivateMessage | default Result(42) | AddResult(153) | the first send leaks the ticket; all later mail sends and the PostOffice queue stall [known] | T 1002677c entry 0x96 -> T 10028fc0 |
