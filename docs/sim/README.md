@@ -6,7 +6,9 @@ from the game's data files, what a save holds, and what must be deterministic. T
 (`sadk_noav.exe`, `tincat3.dll`) and the game's data, and are the groundwork for a remake in the Godot engine that
 reads the player's own install and ships no original data. The remake's simulation is written in C# (Godot .NET), as
 a library that runs without Godot; mods are loaded as assemblies and can patch any of its methods (Harmony), so core
-systems such as pathfinding stay moddable. Presentation, UI and tools use Godot.
+systems such as pathfinding stay moddable. Presentation, UI and tools use Godot. The layout of that code (the base
+game as a mod, type registry, components, commands, determinism rules) is fixed in
+[`../remake-architecture.md`](../remake-architecture.md).
 
 ## How to read them
 
