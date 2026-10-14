@@ -65,6 +65,8 @@ these documents, 85 of them doable by one player).
 | [`lua-runtime.md`](lua-runtime.md): Lua runtime: what a reimplementation must reproduce | 844 | 69 / 19 / 3 | 49 checked, 0 wrong |
 | [`formats-inventory.md`](formats-inventory.md): File formats and assets: inventory and conversion targets | 1215 | 94 / 29 / 14 | 40 checked, 0 wrong |
 | [`rendering.md`](rendering.md): Rendering and scene: what the player sees | 1603 | 156 / 107 / 18 | 40 checked, 1 wrong |
+| [`particles.md`](particles.md): Particle effects: the `.pfx` format, simulation, drawing and who starts them | 956 | 90 / 22 / 7 | written 2026-10-14, not checked yet |
+| [`ambient-swarms.md`](ambient-swarms.md): Ambient swarms (birds, fish, bugs): dormant in this build, the code as it would run | 756 | 92 / 19 / 3 | written 2026-10-14, not checked yet |
 | [`animation-models.md`](animation-models.md): Models, skeletons and animation at runtime | 1435 | 178 / 42 / 11 | 40 checked, 1 wrong |
 | [`ingame-ui.md`](ingame-ui.md): In-game user interface: HUD, menus, selection and actions | 1550 | 87 / 90 / 11 | 46 checked, 1 wrong |
 | [`audio.md`](audio.md): Audio: sound effects, ambience and music | 970 | 94 / 8 / 6 | 40 checked, 0 wrong |

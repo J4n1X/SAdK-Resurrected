@@ -481,9 +481,11 @@ of the aliased pattern's record, the UV scales, `type`, material and `transition
 
 **Optional radial alpha.** When `TerrainDrawBatch +0x64` is set, the vertex colour alpha of every patch (solid
 ones too) becomes `d2` (flag bit 1 clear) or `1 - d2` (flag bit 1 set) with
-`d2 = ((x-b.x)^2 + (z-b.z)^2) * s^2` [known] S 006bd940. [TODO] not established: who sets `+0x64`; a static read
-of the writers of that byte would settle it (candidate: the fixed-function path, whose
-`TERRAIN_TRANSITION_2TEX` state block in `shared.inc` takes alpha from the vertex colour).
+`d2 = ((x-b.x)^2 + (z-b.z)^2) * s^2` [known] S 006bd940. `+0x64` (`lowShaderLevel`) is set by
+`TerrainDrawBatch::BeginFrame` S 006bd460 at the start of every terrain draw to `effective shader level < 2`
+[known], so the radial alpha exists only below shader level 2, for the fixed-function path whose
+`TERRAIN_TRANSITION_2TEX` state block in `shared.inc` takes alpha from the vertex colour; the shader path never
+uses it.
 
 **Level of detail and stitching** [known] S 006b55e0 (disassembly), S 0068a4a0, S 006bd940; the `eye` line is
 read from a decompile with lost stack variables [inferred]. Per visible block:
@@ -570,8 +572,15 @@ rgba *= saturate(shadow + 0.8)             // shadowed techniques
 rgb *= overlay.a ;  a += 1 - overlay.a     // unexplored water is opaque black
 ```
 
-`texMatrix0/1`: rotation by `tex0Rot` / `tex1Rot` and a translation `time * phaseSpeed` [inferred] S 006a65a0
-(which global holds which XML value is not traced; [TODO] read S 006a93c0). Blend `SrcAlpha / InvSrcAlpha`.
+**Quirk (presentation only): the reflection warps up close.** `reflectionNoise * N.xz` is added to the projective
+coordinates before `tex2Dproj` divides by `w`, so the shift on screen grows as one over the depth: about twelve times
+larger at 5 units than at the usual 60 [known, file; arithmetic]. The remake may cap it.
+
+`texMatrix0/1` are rewritten every frame by `WorldRenderer::UpdateWaterAnimation` S 006a65a0 [known]: rows
+`(cos a, sin a)`, `(-sin a, cos a)` and the translation row `(t * k0, t * k1)`, with `t` the accumulated frame time;
+there is no scale term, so `tex0Scale` / `tex1Scale` do not enter these matrices. That `a` is `tex0Rot` / `tex1Rot`
+and `k` is `phaseSpeed0` / `phaseSpeed1` is [inferred]: the angles reach the `sin` and `cos` calls on the FPU stack,
+and which global the parser S 006a93c0 fills from which key is [TODO]. Blend `SrcAlpha / InvSrcAlpha`.
 The preset (`WaterProperty`) is chosen per map by the index at `MapInfo +0x1cc` when the map renderer is
 initialised for a map [known] S 006883e0 (the save version that carries the field: `docs/sim/save-format.md`);
 out-of-range indices fall back to 0 [known] S 006a66e0.
@@ -600,9 +609,11 @@ constants appear as `g_waterHazeMin 0.05`, `g_waterHazeMax 7.0`, `g_waterHazeAbs
 visible terrain; texture `caustics.tga` is a strip of 16 frames; `frame = floor(frac(t * 0.2) * 16)`, cross-faded
 with the previous frame by `frac`; UV = world xz `* 0.05 * 0.8`, u additionally `/ 16`; intensity 0.7, modulated
 by `1 - sin(.4x + sin t) * sin(.4y + sin t) * sin(.4z + sin t)` and by `1 - saturate(depth * 0.15)`, zero where
-`depth <= 0.1`, with `depth = 100 - y` as written in the shader. With that term the factor
-`1 - saturate(depth * 0.15)` is 0 for every vertex below `y = 93.3`, so the pass as shipped adds nothing to the
-picture [inferred from the file]; a remake can leave it out.
+`depth <= 0.1`, with `depth = 100 - y` as written in the shader. The pass draws the terrain draw batch, whose
+vertex positions are world positions (`TerrainMesh::UpdateVertexPositions` S 006bec70 through
+`TerrainGrid::VertexToWorldPos`: height times `g_MapHeightScale`, 0.001, so `y` lies between about -3 and 30)
+[known]. So the factor `1 - saturate(depth * 0.15)` is 0 for every terrain vertex (it is above 0 only for
+`y > 93.3`) and the additive pass adds nothing to the picture [inferred: arithmetic]; a remake can leave it out.
 
 **Map border skirt** [inferred] S 006a7fa0, S 006a7400: for every edge block and the four corners one segment
 that extends the block 200 world units beyond the map edge and down to the minimum edge height; drawn first as
@@ -710,10 +721,123 @@ the decompile); read the disassembly of S 006b2ae0.
 `buildings.xml` `<Building name=..>`. Instance class by description: sacrifice building, catapult, farm
 (a `<Production>` child), else plain `Building`.
 
-**Assets per type** [inferred] S 006d4060, S 006d3880: `mesh` (KEX) with LOD files `<name>LOD0`, `LOD1`, ... as
-long as they exist, node `House`; `frame` = the construction frame mesh with its own texture; animations
-`DoorOpen`, `DoorClose`, `Working` with timed `<Sound>` / `<Particle>` events; bone `MILFLAG` = military flag
-anchor; nodes `FIRE_03`, `FIRE_06`, ... = fire points.
+**Assets per type** `BuildingDesc::LoadResources` S 006d4060, `BuildingDesc::LoadFromXml` S 006d3880 [known
+unless tagged]:
+
+- *Animated model.* The `mesh` file is also loaded as the type's animated model (`CAnimatedObject`, scale 1.0,
+  `BuildingDesc +0x5c`). Its skeleton holds the moving parts (`door`, `wheel`, ... bones), `MILFLAG`
+  (`BuildingDesc +0xbc`), the fire points `FIRE_%02d` and the `boneLink<i>` bones of `<Production>`. `DoorOpen`,
+  `DoorClose` and `Working` (`+0x80`, `+0x84`, `+0x88`, -1 when absent) are animation-only KEX files played on
+  that skeleton; the child elements of an animation element (`<Sound start name duration>`,
+  `<Particle start duration name slot offset>`) become timed events of that animation
+  (`EffectScriptMgr::LoadAnimEvents`).
+- *LOD meshes* (`BuildingDesc +0x54`, parts of 0x18 bytes): part 0 = the `mesh` file, part 1 = the path up to
+  its first `.` + `LOD0` + the rest, part 2 = `...LOD1...`, as long as the file exists (`.gr2` is read as
+  `.KEX`). Each part is one mesh of its file: the mesh named `House`, else the first mesh. Data: 36 of the 106
+  distinct `mesh` files have a `LOD0` file, none has `LOD1`; 97 have a `House` mesh, the other 9 (the 3 ruins
+  and 6 houses) are read from their first mesh [known, data]. The bounds `+0x64..+0x78` (and so `modelHeight`
+  below) are those of the last part loaded: every part writes the same field.
+- *Vertex layout* of the LOD and frame meshes (S 007fa138, entries {type, usage, index}) [known, bytes]:
+  POSITION float3, NORMAL float3, BLENDINDICES D3DCOLOR, TEXCOORD0, TEXCOORD1, TEXCOORD2 float2, i.e. the KEX
+  streams 0, 1, 13, 4, 5, 6 (`asset-formats.md` §2); the bone weights (12) and the vertex colour (3) are dropped,
+  absent streams stay zero [inferred: the vertex buffer is cleared before the fill, S 0076d3d0]. In all 443,169
+  house vertices the first bone index has the largest weight, and only 12 are not bound to one bone alone
+  [known, data].
+- *Materials* (`BuildingMaterial::Create` S 006d50e0), one per subset of a LOD mesh: texture usage
+  `DiffuseColor` → stage 0, `Self-Illumination` → stage 1 (the light map, the `*_L.dds` files); any other usage
+  (`Opacity`, in 45 of the 111 house materials) is logged and ignored. Path = the directory of `mesh` + the file
+  name after the last `\`. Materials with the same two paths are shared by all types. Data: 101 houses have one
+  material, five Egyptian houses two (two diffuse textures, one light map); every house except the three ruins
+  has a light map [known, data].
+- *Frame* (`frame`, `+0x9c`): loaded with `mergeAllMeshes` (`CMesh::LoadMergedFromKFile` S 0076d3d0,
+  `animation-models.md` §3.2): one subset per KEX mesh, in the order of the decimal mesh names `"0"`, `"1"`, ...
+  The subset count is the type's `stageCount` (`+0xa4`); `+0xa8` holds the running sum of the subsets' triangle
+  counts (`stageCount + 1` entries, entry 0 = 0). Texture (`+0xa0`) = the file of subset 0's first texture
+  entry, in the directory of `mesh`. Data: the 100 `frame` attributes name 80 files; in every one the meshes are
+  named `0 .. N-1` with one material each, N between 4 and 145, all with the texture
+  `PB_R_ConstructionSite01.dds` [known, data].
+- *Ground decal*: the mesh `GROUND` of the `mesh` file (103 of the 106 files; its material always names
+  `house_decal.dds`) [known, data]; drawing below.
+- *Defaults* (`BuildingDesc::ctor` S 006a0990): `enterDistance` 0.3, `leaveDistance` 0, `heading` -30, `lodBias`
+  and `lodScale` from the root. In the install only `Bavarian_Castle` sets `enterDistance` (0.2) and only
+  `Bavarian_Bakery` sets `lodBias` / `lodScale` (to the root values) [known, data].
+
+**Placement** S 006ac810, S 006aaab0 [known]: world matrix = rotation about Y by `heading` degrees
+(`* 0.017453292`) with translation `worldPos` = the centre vertex of the building's cell at its height
+(`TerrainGrid::CellToWorldPos` S 00687790). No type sets `heading`, so every building is turned by -30°.
+
+**Passes** `BuildingRenderer::Render` S 006a0ad0 [known for the order], all with `house_shader.fx` and the
+technique chosen by shadow level and quality (§6.3): pass `RenderFrame` draws the construction frames
+(S 006a0180), then the ruins (S 006a06d0); pass `RenderHouse` the buildings (S 006a0380); pass `RenderAddOns`
+the skinned add-ons (`SkinnedMeshRenderer`; the `<Production>` animals, §"Farm props"); then the military flags
+(`house_soldierflag.fx`). The shadow map pass `BuildingRenderer::RenderWithExternalEffect` S 006a0cc0 draws the
+same frames, ruins, buildings (with the same clip planes), add-ons and flags with the caller's depth effect.
+
+**Building shading** (`house_shader.fx`, pass `RenderHouse`: z test and write, no blending, alpha test `> 127`)
+[known, file]:
+
+```
+// vertex; b = BLENDINDICES.x, the first bone of the vertex (rigid, no weights)
+world = (position * INSTANCEMATRICES[b]) * WORLD                  // WORLD = identity in this pass
+N     = normal * (float3x3)INSTANCEMATRICES[b]                    // not normalised
+vcol  = saturate(dot(N, -L)) * lightColor
+uv0   = texcoord0 + 0.5 * texel(0)
+uv1   = texcoord1 + 0.5 * texel(1)
+uv2   = texcoord2 + 0.5 * texel(2) + (colorMapOffset, 0)
+// pixel
+D     = ambient.rgb + vcol.rgb * shadow       // CalcLight; shadow 1 or shadowIntensity, 4-tap PCF (1 tap: Low*)
+C     = tex0(uv0)                             // diffuse
+Lm    = tex1(uv1)                             // light map
+Cm    = tex2(uv2)                             // colour map
+rgb   = D * C.rgb * Cm.rgb
+rgb   = lerp(rgb, rgb * Lm.rgb, saturate(1.5 - D))       // per channel: the light map shows where D < 1.5
+a     = C.a                                              // alpha test
+CalcFOW(rgb)                                             // exploration, §3.7
+```
+
+`texel(n)` = `TEXTURE_ATTRIBUTES[n].zw` = `(1 / width, 1 / height)` of the texture on stage n
+(`world-objects-rendering.md` §3.11); samplers 0..2 are linear and wrapped. Buildings have no player colour; the
+file's `textureAtlasOffset` and `colorIndexScale` are used by no pass [known, file].
+
+Inputs per draw `BuildingRenderer::DrawInstance` S 0069fb10, S 006a0380 [known]: `WORLD` = identity; without a
+skeleton binding one instance matrix = the building's world matrix (`SetInstanceMatrices(world, 1)` S 004e8b30),
+with one the bone matrices of the type's animated model in the order of the LOD mesh's bone names
+(`MeshBoneBinding`, `Building +0x3c`, S 004e8ba0), which then carry the placement as well [inferred: `WORLD` is
+the identity]. On shader level 0 the vertices are skinned on the CPU instead (`CpuSkinVertices` S 0069f860,
+S 0088d999 = shader level != 0). Per subset: stage 0 = the material's diffuse texture, stage 1 = its light map
+(a material without one leaves the texture of the previous draw on stage 1; only the ruins lack one, and they
+are drawn in the frame pass); stage 2 = the colour map, bound once for the pass.
+
+**Colour variation** [known] S 0069fb10 (disassembly), S 006a0e60, S 006821b0:
+
+```
+colorMapOffset = (instanceId mod numVariations) * (1 / numVariations)      // unsigned modulo
+```
+
+`numVariations` = the root attribute (8; 1 without it, S 008819d0); the colour map = the root `colorMap`, default
+`[data]\buildings\colors.tga`. `instanceId` = the building's 1-based slot in the renderer's instance pool
+(`Building +0x10`): a removed building's slot goes to a free list, and a new building takes the slot freed last,
+else a new slot at the end (S 006a2bf0, S 006a17a0). The index thus follows the creation order of the session
+and is no logic value. An upgrade's completion removes and re-adds the building (§3.2) and so keeps the slot and
+the variation [inferred: LIFO free list, `HandlePool_Free` not read]. (The object created in S 006ac810 and
+named "variant" is the LOD mesh's bone binding, rebuilt by S 006aa9d0 when the LOD changes; the LOD index at
+`Building +0x38`.)
+
+`colors.tga` is 64 x 256 RGB, 8 column blocks of 8 texels (the variations) by 32 row bands of 8 texels
+[known, file]. The third texture coordinate set of a house (KEX stream 6, `TEXCOORD2`) picks a texel in block 0;
+it is constant over most meshes and mostly points at white rows (rows 0, 32..47 and 240..255 are white, rows
+88..239 black and unused). Sampled as the shader samples (bilinear, wrapped, half-texel offset), 102 of the 106
+house meshes get pure white in all 8 variations (among them the 11 meshes without that set, which sample (0, 0));
+only `PB_B_Spytower01` (greys 224..254),
+`PB_E_WoodcutterHut01` (slight warm tints), `PB_S_Smelter01` and `PB_S_Goldmine01` (one step per channel) vary
+[known, data, computed]. The shipped colour variation is therefore nearly invisible. The file is stored
+bottom-up and read with its origin flag honoured, as the D3DX loader does [inferred].
+
+**Frame and ruin shading** (pass `RenderFrame`: z test and write, no blending, no alpha test) [known, file]:
+`world = position * WORLD` (the building's world matrix, set per site),
+`rgb = (ambient + saturate(dot(N, -L)) * lightColor * shadow) * tex0(uv0).rgb`, `a = tex0.a` (no effect), then
+`CalcFOW`. No light map and no colour map. A ruin is drawn with its type's LOD part and its material's diffuse
+texture S 006a06d0.
 
 **Construction and upgrade display.** Inputs are the two floats `remainingA` (+0x70) and `remainingB` (+0x74) of
 the logic `NVillage::Construction` (1.0 at the start, 0 when done; `docs/sim/village-buildings.md`), taken from
@@ -728,39 +852,116 @@ the building's construction, or from its upgrade record while upgrading.
   stage = 0 while demolishing (demolishProgress >= 0) or when neither constructing nor upgrading
   ```
 
-  S 0088d998 is the building renderer's multi-stream capability flag [inferred from its mapped name]; a remake
-  has to pick one of the two forms. [TODO] not established: who sets S 0088d998 and on which devices.
-
-  The frame mesh is drawn with the subsets of that stage (`BuildingDesc +0xa8[stage]`)
-  S 006a0180 [inferred]. `stageCount` = `BuildingDesc +0xa4` of the building's description, or of the upgrade
-  target's description while upgrading [known] S 006aa1b0.
-- *Rising finished mesh* `Building::GetConstructionClipPlane` S 006aabe0 [known]: the finished mesh is drawn
-  clipped by a horizontal plane at
+  `stageCount` = `BuildingDesc +0xa4` of the building's type, or of the upgrade target's type while upgrading
+  [known] S 006aa1b0. S 0088d998 = `D3DCAPS9.MaxUserClipPlanes >= 2` (`CGraphicDevice +0x18`, written by
+  `DetermineDeviceCaps` S 004d3df0; the byte is refreshed every frame in S 0069ff70) [known]. Shader model 2
+  hardware offers 6 user clip planes, so on any device a remake targets the first form holds: the frame follows
+  the frame phase alone. The second form belongs to the fallback without clip planes, in which the rising
+  building (next items) is never drawn and the frame grows over both phases [inferred].
+- *Frame stages* `BuildingRenderer::RenderConstructionSites` S 006a0180 [known, disassembly]: every building of
+  the construction list (constructing or upgrading and not demolishing, rebuilt each frame in S 0069ff70) that is
+  not hidden and passes the frustum test gets one draw of the frame of its type, or of the upgrade target's type
+  while upgrading: one indexed triangle list from the frame's first index with
+  `primitiveCount = BuildingDesc +0xa8[stage]`, i.e. the subsets (KEX meshes) `"0" .. "stage - 1"` together;
+  stage 0 draws nothing. World matrix = the building's; texture = the frame texture on stage 0.
+- *Rising building* `BuildingRenderer::RenderInstances` S 006a0380, `Building::GetConstructionClipPlane`
+  S 006aabe0 [known, disassembly]: in pass `RenderHouse` a building under construction is drawn only when
+  S 0088d998 is set and `Building_HasClipProgress` S 006aae30 holds (`constrProgress > 0` or
+  `upgradeProgress > 0`). Such a draw, and both draws of an upgrade in its main phase, get a user clip plane and
+  the cull mode `D3DCULL_NONE`, so the open cut shows the inner faces; the other draws get the cull mode the pass
+  hands in.
 
   ```
-  p      = prev + (cur - prev) * (1 - (tTarget - now) * rate)        // or cur when no fade is pending
-  planeY = worldPos.y + (modelHeight - 0.1) * p / 0.9
+  p      = prev + (cur - prev) * (1 - (tNext - now) * rate)       // tNext >= 0; else p = cur. Not clamped.
+  planeY = worldPos.y + (modelHeight - 0.1) * p / 0.9            // 0.1 and 0.9 are float constants
+  construction:    normal (0, -1, 0) through (worldPos.x, planeY, worldPos.z)      keeps y <= planeY
+  upgrade, draw 1: the old type, normal (0, 1, 0)                                  keeps y >= planeY
+  upgrade, draw 2: the target type (BuildingDesc +0xb0 of the old type), mirrored plane, keeps y <= planeY,
+                   bone binding Building +0xf4 of the target's animated model
   ```
 
-  with `modelHeight = desc.maxY - desc.minY` (the upgrade target's description and the upgrade's own four
-  progress fields while upgrading), `now` = `timeInfo[1]`, and "no fade pending" = a negative `tTarget`.
-  Construction uses the negated global mesh normal as plane normal (keeps the part below the plane, the global
-  being the up vector [inferred]); an upgrade uses the normal itself for the old model, and the building is
-  drawn a second time with the mirrored plane and the new type S 006a0380 [inferred]. `rate` = 1 / the
-  property's speed value S 006ac810 [inferred].
-  [TODO] not established: which logic value feeds `cur` (`Building +constrProgress`); read S 006abcf0.
+  `modelHeight = maxY - minY` of the type's bounds (of the target type while upgrading); `now = timeInfo[1]`;
+  the up vector is the constant S 00882864 = (0, 1, 0) [known, bytes]; Direct3D keeps the points with
+  `dot(plane, p) >= 0`. Since `minY` is close to 0 (-0.23 .. 0 in the files measured) the cut reaches the roof
+  at about `p = 0.9` [inferred, data].
+- *The progress values* `Building::Update` S 006abcf0 (per logic tick: vftable slot +0x2c, §4.2),
+  `Building::ctor` S 006ac810 [known]:
+
+  | Field | Value |
+  |---|---|
+  | `constrProgress` +0xcc | `1 - construction.remainingA`, the main phase (the `cost` list); written every tick while the building is under construction; 1.0 for a building created finished |
+  | `constrProgressPrev` +0xc8 | `constrProgress` before that tick's write |
+  | `constrProgressTime` +0xd0 | `timeInfo[0]`, the time of the next tick, at that write; -1 until the first write |
+  | `constrProgressRate` +0xd4 | `1 / GameConfig.gameSpeed` = 1 / 0.1 s (`properties-data.md`) |
+  | `upgradeProgress` +0xe0, `Prev` +0xdc, `Time` +0xe4, `Rate` +0xe8 | the same from `1 - upgrade.construction.remainingA`, written every tick in which the building is not under construction and upgrading |
+
+  `p` therefore runs linearly from the previous tick's value to the new one within one tick and arrives when the
+  next tick is due; the plane stands still between the builder's strokes.
+- *What the player sees* [inferred from the rules above; clip planes present]:
+  1. Placed (`remainingA = remainingB = 1`): stage 0, `constrProgress = 0`: no frame and no building; only the
+     ground decal (created with the instance) and, once goods arrive, the material pile.
+  2. Frame phase (`remainingB` falls): the frame meshes appear one by one in name order,
+     `stage = min(N, toInt(0.5 + (N + 1) * (1 - remainingB)))`; the whole frame stands from
+     `1 - remainingB >= (N - 0.5) / (N + 1)` on.
+  3. Main phase (`remainingA` falls): the whole frame, and inside it the building rising from the ground, cut at
+     `planeY`.
+  4. Done (both 0): the building leaves the construction list, so the frame vanishes and the building is drawn
+     whole without a plane; the material pile is removed on the next tick (S 006abcf0).
+
+  Upgrade: `BeginUpgrade` S 006ab5b0 (on "upgrade started", §3.2) replaces the ground decal by the target type's,
+  creates the target's animated model and bone binding and sets `upgrading`. The old building stays whole while
+  the target's frame grows (stages from the upgrade construction's `remainingB` and the target's
+  `stageCount`); in the main phase the old building is cut away from below while the target rises in its place,
+  both at the same `planeY`. On completion `Building::SetType` raises "building removed" with the building
+  flagged destroyed, so `LeavesRemains` is false and the instance is deleted without demolition, then "building
+  added" creates a finished instance of the new type [known] S 0055c110, S 006aa2b0, S 00681560. A cancel calls
+  `EndUpgrade` S 006ab710 (old decal back, target model dropped).
 - *Material pile* `BuildingScaffold` [inferred] S 006d82f0: item stacks for the goods in the construction stock,
   rebuilt when the stock's revision changes, laid out with the item stack layouts (§6.5).
-- *Ground decal*: every building and ruin has a `GROUND` decal from the building mesh
-  (`HouseDecalRenderer`, `house_decal.fx`) [inferred] S 006b4400.
 
-**Finished building shading** (`house_shader.fx`) [known, file lines]: diffuse x light map (`Texture1`,
-`texcoord1`) x colour variation map (`Texture2`, u offset `COLORMAP_OFFSET`); `<Buildings colorMap=..
-numVariations="8">` [known, file]. [TODO] not established: how the variation index is chosen per instance
-(the "variant object" created in S 006ac810).
+**Ground decal** `HouseDecalRenderer::AddDecal` S 006b4400, `GroundDecalMesh::Build` S 006da2a0 [known]: made
+with the instance (so also under construction; replaced on upgrade start and end) from the `GROUND` mesh of the
+type's `mesh` file: transformed by the building's world matrix, clipped against every terrain triangle under its
+bounds and laid on them, each vertex at the terrain height + 0.01. Ruins get their own (S 006d4e00 [inferred]).
+Shader `house_decal.fx` [known, file]: positions already in world space,
+`rgb = (ambient + saturate(dot(N, -L)) * lightColor * shadow) * tex.rgb`, `a = tex.a`, z test without z write,
+blending `srcAlpha, 1 - srcAlpha`, then `CalcFOW`. Texture `[data]\buildings\house_decal.dds` (string S 007fac60
+in the decal renderer's constructor) [inferred].
 
-**Level of detail** [inferred] S 0069ff70: from the distance to the near frustum plane with the type's `lodBias`
-and `lodScale`.
+**Door and work animations** S 006aa640, S 006aa3b0, S 006aa6f0, S 006abcf0 [known]: two playback slots on the
+building's instance of the type's animated model (created from `BuildingDesc +0x5c` in S 006ac810): slot 0 for
+the door clips, slot 1 for `Working`; neither starts while the building is under construction.
+
+- *Door*: `Building::TriggerWorkCycle` S 006aa640 (despite the name, the door trigger) sets
+  `doorCloseTime = now + 0.6` and, if the door is not open yet, plays `DoorOpen` on slot 0 and the 3D sound
+  0xE29EF893 (only when the building is visible). It runs when a settler passing the entrance gets beyond the
+  building's `enterDistance` or `leaveDistance` in its path progress, chosen by the pass direction S 006c73a0
+  (`CharacterSettler::UpdateBuildingEntrancePass` S 006c757b; positive direction → `enterDistance`, read as
+  going in [inferred]), and while a worker's work animation has a slot
+  override (`CharacterWorker::UpdateWorkplaceWork` S 006c89d4). The per-tick update plays `DoorClose` on slot 0
+  (sound 0x9C700243) once `now >= doorCloseTime`; every new trigger pushes that time back.
+- *Work*: `Building::PlayOneShotAnimation` S 006aa6f0 (vftable +0x38), called by `UpdateWorkplaceWork` while the
+  worker is at its workplace and no one-shot runs (a building whose property byte +0xb0 is set, the catapult,
+  restarts it at each new work start): `Working` on slot 1, started `workElapsed` into the clip [inferred: the
+  offset argument of the play call], at the worker's
+  speed factor (`Worker::GetWorkAnimSpeedFactor` when `ShouldSpeedUpWorkAnim`, else 1), stopped after the work
+  duration, which the per-tick update counts down by the tick length.
+- The `<Sound>` and `<Particle>` events of the clips fire as the clips play.
+
+**Level of detail** `BuildingRenderer::Update` S 0069ff70 (disassembly), S 0069fb10, S 006aa9d0 [known]:
+
+```
+d   = dot(nearPlane, centre of the building's world AABB)        // normalised plane: world units
+lod = toInt(0.05 * (1 - objectDetails) * (lodBias + lodScale * d) + 0.5)        // toInt truncates
+lod = clamp(lod, 0, lodPartCount - 1)
+```
+
+`nearPlane` = plane 4 of the scene frustum (`Frustum::ExtractFromViewProj` S 004d6de0, normalised by
+S 004d9ce0). `objectDetails` = the scene setting read through S 00695ee0: 0, 0.25, 0.5, 0.75, 1.0 for the
+quality presets 0..4 (S 00695860), 1.0 in the constructor. At the top preset the factor is 0 and every building
+uses part 0; otherwise part 1 (the `LOD0` file) starts at `d >= (10 / (1 - objectDetails) + 70) / 1.2` with the
+root values (66.7 world units at preset 0). A LOD change also rebuilds the bone binding. Frames and ruins have
+no distance LOD.
 
 **Demolition** [known] S 006ab840, S 006aaab0, S 006a1f20: started on removal when `LeavesRemains` holds
 (§3.2). Start: one-shot particle effect `DemolitionDust`, or `SmallDemolitionDust` when bit 0x4 of the building
@@ -783,30 +984,55 @@ private generator with the static seed 0x5432ace0 S 006ac510 [inferred].
 **Buff effects** [inferred] S 006abcf0: `ShipSpeedUp`, `BuildingArmor`, `WorkerPause` while the corresponding
 state holds.
 
-**Military flags** [known] S 006d2820, S 006d2d80: on buildings whose construction remainders are both <= 0
-and whose military component reports a flag, at the bone `BuildingDesc +0xbc` (`MILFLAG`), or without that bone
-at a point derived from the bounds (x = centre + 0.33 * size, z = centre - 0.55 * size; [inferred], the
-decompile of this part is garbled). 23 meshes in `[data]\buildings\`: 0 `MilitaryFlagInactive.KEX`,
-1..11 `MilitaryFlagSword00..10.KEX`, 12..22
-`MilitaryFlagBow00..10.KEX`.
+**Military flags** `CMilitaryFlagRenderer::DrawFlags` S 006d2820 (disassembly), S 006d2d80, S 006d2ec0 [known]:
+every building is registered on creation (S 006a2bf0); a flag is drawn for one that is not hidden, whose own
+construction remainders are both <= 0 and for which `Military::HasMilitaryFlag` S 0055fd00 holds (property
++0x94 > 0 and +0x98 != 0, or the three headquarters flags +0x54, +0xf1, +0xf5). World matrix = the node matrix
+of the bone `MILFLAG` (`BuildingDesc +0xbc`) of the building's animated model, or without that bone a rotation
+about Y by 90° with the translation `(centre.x + 0.33 * size.x, 0, centre.z - 0.55 * size.z)` of the type's
+bounds; then times the building's world matrix. 23 meshes in `[data]\buildings\`: 0 `MilitaryFlagInactive.KEX`,
+1..11 `MilitaryFlagSword00..10.KEX`, 12..22 `MilitaryFlagBow00..10.KEX`, packed into one vertex and index buffer
+(each draw starts after the summed counts of the meshes before it).
 
-- Mesh: 0 unless the building is occupied and its territory component is active; else `1 + n` (`+ 11` for the bow
-  set), with `n` = `NVillage::Military::GetFlagSoldierCount` S 0055fd40: the number of soldiers present in the
-  building, or for a building whose property has the three flags at +0x54, +0xf1 and +0xf5 set (the
-  headquarters-type depot [inferred]) the number of soldiers in its depot stock, capped at 10.
-- Texture: one of three (`MilitaryFlag1..3.dds` [inferred]); index 0 unless the building is a military building,
-  else `max(0, zone)` with `zone` = `NVillage::Military::GetProximityZoneA` S 0055fbb0 (a 0 / 1 / 2 class of the
-  value at `Military +0x5c`, -1 while the territory component is inactive; `docs/sim/military.md`).
-- Tinted with the owner's colour (`house_soldierflag.fx`).
+- Mesh: 0 unless the building is occupied and its territory component is active; else
+  `1 + n + (soldierKind != 0 ? 11 : 0)` with `soldierKind` = `Military +0x68` (0 sword, 1 bow; `military.md`
+  §2.4) [known, disassembly S 006d2a13..S 006d2a2b] and `n` = `NVillage::Military::GetFlagSoldierCount`
+  S 0055fd40: the number of soldiers present in the building, or for a building whose property has the three
+  flags at +0x54, +0xf1 and +0xf5 set (the headquarters-type depot [inferred]) the number of soldiers in its
+  depot stock, capped at 10.
+- Texture: `[data]\buildings\MilitaryFlag<i>.dds`, i = 1..3 (built as text in S 006d2ec0); index 0 unless the
+  building is a military building, else `max(0, zone)` with `zone` = `NVillage::Military::GetProximityZoneA`
+  S 0055fbb0 (a 0 / 1 / 2 class of the value at `Military +0x5c`, -1 while the territory component is inactive;
+  `docs/sim/military.md`). The meshes' own material name (`MilitaryFlag1.dds`) is not used.
+- Colour: `FLAG_COLOR` = the owner's player colour entry (`Player::GetColorEntry`).
+- Shader `house_soldierflag.fx` (z test and write, no blending, no alpha test) [known, file]:
 
-[TODO] not established: the value that selects the bow set (its read is lost in the decompile of S 006d2820;
-read the disassembly at the call of S 0055fd40).
+  ```
+  // vertex, model space (CalcBigFlagVertexPos)
+  s  = 0.14 * saturate(x*x + z*z - 0.02)
+  w  = WORLD._41 + WORLD._43 + 0.5*x + 0.5*y + TIMER.y
+  c  = 0.5 + 0.5 * cos(4 * w)
+  z -= s * c;   y += s * (1 - c);   then * WORLD
+  // pixel
+  base     = tex(uv0);  base.rgb = lerp(flagColor * 1.8, base.rgb, base.a)      // alpha 0 = owner colour
+  over     = tex(uv1);  rgb = lerp(base.rgb, over.rgb, over.a) * D;  a = 1;  CalcFOW
+  ```
+
+  `D` = `ambient + saturate(dot(N, -L)) * lightColor * shadow` as in the building shader. Both coordinate sets
+  read the same texture; the 22 soldier meshes share their first set and differ in the second (the emblem and
+  the count) and slightly in their positions [known, data].
+- The shadow map pass draws the flags with the pass `ShadowPassBigFlag` (S 006d2b60). The renderer also loads
+  `house_flag.fx` with `FLAG_COLOR` and `FLAG_TEXTURE_OFFSET`; none of its three draw functions (S 006d2ab0,
+  S 006d2b60, S 006d2820) uses that effect.
 
 **Farm props** S 006d5660: the first `visible` props of the `<Production>` child are shown, recomputed when
 the productivity changes; productivity = `Statistics::GetProductivity` of the building, 0 unless production is
 enabled and the building is occupied [known]; `visible = toInt(productivity * numModels + 0.5)` [inferred: the
 x87 part is not in the decompile, the formula is the one of the mapped comment]. Props sit at `location<i>`
-offsets or `boneLink<i>` bones [inferred].
+offsets or `boneLink<i>` bones [inferred]. They are skinned meshes of the `SkinnedMeshRenderer` that the farm
+instance receives (S 006a2bf0), drawn in pass `RenderAddOns` [inferred]: `house_shader.fx` `SkinShader`, four
+weighted bones (two in the `Low*` techniques), `rgb = D * tex0.rgb`, `a = tex0.a`, no alpha test, `CalcFOW`
+[known, file]; texture `<Production texture>`, mesh and skeleton at `<Production scale>` (S 006d4060).
 
 **Catapult** [inferred] S 006d6000..S 006d65c0: bones `ROTATE`, `ARM_ROTATE` and `BULLET_POS` [known, strings
 in S 006d65c0]; yaw interpolated toward the logic direction, arm angular speed 3.0.
@@ -828,18 +1054,18 @@ idx   = indexMap(uv)                      // point filtered
 D     = saturate(dot(N, -L)) * lightColor.a * shadow + ambient.a          // scalar light
 tap.x = saturate(idx.g * D) * colorIndexScale.x + atlasOffset.x           // luminance x light -> ramp column
 tap.y = idx.r * colorIndexScale.y + atlasOffset.y                         // red -> ramp row (material slot)
-color = palette(tap + halfTexel)
+color = palette(tap + halfTexel)                                          // bilinear
 rgb   = lerp(playerColor * idx.g * D * 2, color.rgb, idx.a)               // alpha 0 = player-coloured cloth
-rgb  += pow(saturate(dot(reflect, V)), 16) * idx.b                        // blue = specular mask
+rgb   = saturate(rgb + pow(saturate(dot(normalize(2*D*N + L), V)), 16) * idx.b)   // blue = specular mask
 ```
 
-The palette is a 1024 x 1024 atlas built at run time; each character owns a block and
-`COLOR_INDEX_SCALE = (15 / atlasWidth, 256 / atlasHeight)` [inferred] S 006910e0, S 00695130: a block is 16
-texels wide (shade) and 256 rows high. The rows come from `color_slots.xml`: `<Slot>` names (15),
-`<ColorRamp slot solid|texture rows>` ramps, `<ColorMap name>` with `<Material index slot>` rows [known, file
-structure]. When the creator passes no palette, a random one from the colour map table is taken S 00695490
-[inferred]. [TODO] not established: which random generator that is and how a block is filled from the ramps
-(S 006c9bc0, S 006c9d20).
+The palette is a 1024 x 1024 atlas built at run time; each character owns a 16 x 16 block (column = shade, row =
+slot) and `COLOR_INDEX_SCALE = (15 / 1024, 256 / 1024)` [known] S 006910e0, so a red byte k selects row k. The
+index maps store the 1-based `Material index` of `color_slots.xml` in R, and `Texture_DecrementIndexChannel`
+S 00692170 subtracts 1 at load [known]. Every settler gets a random palette (the only caller of S 00695490 passes
+none) [known]: one Park-Miller draw per slot from a static generator seeded `0x5432ace0`, the ramp copied
+reversed into its row. Construction, atlas and the full pixel formula: [`animation-models.md`](animation-models.md)
+§3.15.
 
 **Movement between ticks** [inferred] S 006c57b0.., [known] S 006805e0 for the factor: on each logic tick the
 movement component stores a previous and a target position (tile to tile, or a sample of the street's route
@@ -929,35 +1155,100 @@ Everything that is not a building, character, ship or animal is a *landscape ele
 (deposits), wheat fields, flags, harbor markers, gates, route buoys, doodads, chests, spawn markers. One
 `InstanceMeshRenderer` per element definition batches all its instances.
 
-**Placement** `MapObjLayer::AddInstance` S 0068dd40 [inferred]: at the cell's world position, with a random yaw in `rot`
-(two values: min, max), random scales in `scaleX`, `scaleY`, `scaleZ`, an optional `offset`, snapped to the
-ground or, with `alignOnWater`, to the water level. The random draws come from the static generator S 0088d4ec
-(§8) [known] S 0068dd40.
+**Which element** `MapObjLayer::SpawnLandscapeObject` S 00690240 [known]: the logic object's gfx name (deposit,
+doodad or spawn property `gfxName`, or a fixed name such as `z_harbor_00`) is compared exactly, case-sensitive, with
+the `name` of every element (a `SingleLandscapeObjects` definition first); a name that matches no element creates no
+instance and reports nothing.
+
+**Placement** `MapObjLayer::AddInstance` S 0068dd40 [known]: the vertex's world position; for kinds 1 (`flag`) and 9
+(`harbor`) a shift of 1.3 street widths (`<Street width>`) on z, toward -z when
+`((0x3434b6 - (u*u*0x4bd9 + 0x2e48d)*u) & 0x4b746f) / 3354521.0 <= 0.5` with `u = i*0x3a ^ i*0x74000`,
+`i = vy * vertexWidth + vx` (u32 arithmetic), else toward +z; plus the element's `offset`; a yaw
+`rotMin + r * (rotMax - rotMin)` from one draw and the scales `min + r * (max - min)` for x, y, z from three more,
+always, whatever the ranges; world = scale * rotationY(yaw) * translation (row vectors: scale in the model's axes);
+then the height sampled at that position (`TerrainGrid::SampleHeightAndNormal`), raised to the water level when at or
+below it if `alignOnWater`. `rot` is read as integer degrees and converted to radians at parse time (S 0068f200); the
+`type` strings give the kinds flag 1, tree 2, stone 3, wheatField 4, gate 5, routeBuoy 8, harbor 9 [known]. The draws
+`r` are `Math_Random_NextUnitFloat` S 006ec410, `(next % 1000001) / 1000000` rounded to float, of the Park-Miller
+generator S 0088d4ec seeded 0x5432ace0 at program start and never reseeded (§8). An element with `meshType="none"`
+(`z_harbor_00`) is placed and drawn without a mesh, so it takes its draws and shows nothing.
+
+**Creation order**, which fixes which draws an object gets [known] S 005273d0, S 005b3a90, S 0053ec60, S 00543f50,
+S 00683040, S 00682ec0: the map's objects reach the renderer through the logic callbacks of `NLogic::System::PostLoad`:
+the navy first (sea routes in stored order, each with its start buoy and, when both harbor ends are set, its end
+buoy; then the harbors in stored order), then the resources (deposits in stored order, those with growth above 0),
+then the doodads (the static, temporary and blocking maps, each in ascending id), then the spawn points. A gfx name
+without an element creates nothing and draws nothing. Because the generator carries on across maps, a second map in
+one session gets other yaws than the first [inferred].
 
 **Instance classes by `type`** [known, file] for the values, [inferred] for the classes: `tree` → `TreeInstance`,
 `stone` → `StoneInstance`, `wheatField` → `WheatInstance`, `gate` → `Stargate`, `routeBuoy` → `RouteBuoy`,
 `harbor` → `Harborplace`, `flag`, none → plain `InstanceMesh`.
 
 **Draw** [inferred] S 006b8ec0, S 0068d360: batches of `numInstances` per draw call with one matrix array upload;
-a batch breaks when the instance colour (`FLAG_COLOR`, the owner colour of flags) changes; `blendMode` 1 = alpha
-test and blend, 2 = blend only, else alpha test only; distance fade on the non-instanced path
-`alpha = 1 - (d^2 - start^2) / (end^2 - start^2)`. `shadowCast`, `shadowReceive`, `forceShadowPass`, `priority`,
-`transparent` per definition.
+a batch breaks when the instance colour (`FLAG_COLOR`, the owner colour of flags) changes; distance fade on the
+non-instanced path `alpha = 1 - (d^2 - start^2) / (end^2 - start^2)`. `shadowCast`, `shadowReceive`,
+`forceShadowPass` and `priority` per definition.
+
+**Blend modes** `MapObjLayer::RenderEntries` S 0068d360, `CGraphicDevice::SetAlphaBlend` S 004d4710 [known]; the
+alpha reference is 0.5 for all of them; blending always turns depth writes off:
+
+| `blendMode` | Alpha test | Blending | Other |
+|---|---|---|---|
+| 0 (default) | on | off | |
+| 1 | on | `SrcAlpha / InvSrcAlpha` | |
+| 2 | off | **additive** `SrcAlpha / One` | fog off for the draw and the per-instance path forced (`InstanceMeshRenderer::Render` S 006b8ec0) |
+
+`map_objects.xml` says the same in its header comment. The shipped mode-2 elements are glows and fog sheets
+(`fogHighland_00/01`, `lavafog1..4`, all with `doodads_shader.fx`): drawn opaquely they show as flat grey discs.
+
+**Culling** [known] S 004d3c20, S 0067eb20, S 006b8ec0: `CGraphicDevice::SetCullMode(id)` writes `id` to
+`D3DRS_CULLMODE` unchanged; the main view uses 2 (`D3DCULL_CW`, clockwise triangles dropped, so front faces are
+counter-clockwise on screen), the mirrored reflection view 3 (`D3DCULL_CCW`). `RenderEntries` sets it before
+`InstanceMeshRenderer::Render` begins the effect pass, so a pass that names its own `Cullmode` wins: of the shaders
+`map_objects.xml` uses, only `weed_shader.fx` draws both sides (`Cullmode = None` in all its passes); `duck`,
+`waterlily` and `waterplants` set `CW`, the default; everything else is one-sided [known, files].
+
+**Per-shader looks** [known, files `game/gfx/fx_20`]: a shader whose passes name their own render states overrides
+the element's blend mode, because `InstanceMeshRenderer::Render` begins the pass after `RenderEntries` set the states:
+`tree_shader2`, `tree_shader_winter`, `tree_shader_willow` and `weed_shader` blend with the alpha test at 127 and keep
+writing depth (`STATES_ZENABLE_ZWRITE_ABLEND_ATEST127`); `tree_shader` and `signs_shader` alpha-test without blending;
+`stone_shader` neither tests nor blends and adds `pow(saturate(dot(refl, V)), 16) * tex.a * tex` with
+`refl = normalize(2 * D * N + mainLight)` (`D` the lit colour, used as a vector as written), so its texture alpha is a
+specular mask; `rock_shader2` multiplies the whole light by the vertex colour. `rock_shader`, `rock_shader2`,
+`waterplants`, `waterlily` and `duck_shader` add the **water haze**: per vertex
+`a = saturate((y + hazeMax + 0.05) / hazeMax)` from the world height, `hazeColour = lerp(bottom, top, a - 0.3)`, per pixel
+`lerp(hazeColour, lit, a)`; `top` = (0.5, 0.5, 0.8) and `hazeMax` 5.5 in `rock_shader`, (0.3, 0.3, 0.8) and 7.0 in
+`rock_shader2`, (0, 0.8, 0.3) and 7.0 in the water shaders; `bottom` (0, 0, 0.05) in all.
+
+**`transparent`** [known] S 0068d360, S 0068d610: `RenderEntries` draws only the elements with `transparent` false;
+the ones with `transparent` true are drawn by `MapObjLayer::RenderClippedEntries`, with user clip plane 1 at the
+water height, so only their part above the water is drawn, in the step that draws objects and water
+(`CMapRenderer::RenderObjectsAndWater` S 006889d0).
 
 **Trees** `TreeInstance::UpdateAnimation` S 006dcb10 [inferred]: state 1 growing: with `g` = the resource's growth 0..1
 (`resource +0x18`), scale `(min(1, 3g), g, min(1, 3g))`; state 2 standing (growth ≥ 1): optional sway, a rotation
 about a horizontal axis by `amplitude * sin(phase)` while being felled at; state 3 falling: rotation about the
 same axis by a fading angle; state 4 fallen. Value changes are faded at rate 10 per second (one logic tick).
 Wind is in the vertex shader (`tree_shader*.fx`): `pos.x += s * sin(waveSpeed * m41 + t)`,
-`pos.z += s * cos(waveSpeed * m43 + t)`, `s = saturate(dot(pos, pos) * waveStrength) * m22` [known, file].
+`pos.z += s * cos(waveSpeed * m43 + t)`, `s = saturate(dot(pos, pos) * waveStrength) * m22` [known, file]. `waveSpeed` = 0.35 pi,
+`waveStrength` = 0.003 (`tree_shader_willow.fx`: 0.3 times that, and `pos.z += 0.12 * sin(pos.z * 8 + 2.6 t)` where
+`texcoord.y < -0.5` and `pos.y < 8`); `pos` is the model-space vertex with w = 1, before the instance matrix. The direct
+light of trees is multiplied by the vertex colour. Other vertex animations [known, files]: water plants
+(`pos.y += 0.12 sin(t) x`, `pos.x += 0.12 sin(t) y`), water lilies (world `y < 0.125`: `y += 0.11 sin((m41 + m43 + 2x) * 2
++ 2t)`), ducks (bobbing `0.07 sin(2z + 4t)` and circling with radius 4.5), ice floes (rocking by `0.6 * vertexColour.r`).
 
 **Wheat** `WheatInstance::UpdateAnimation` S 006dc590 [inferred]: Y scale = growth, faded the same way; state 2 = grown.
 
 **Deposits (level fade)** `MapObjLayer::AnimateMeshesAndLevelFades` S 0068d160 [inferred]: a counter 0..20 on the logic
 object (`+0x50`) lowers the instance by `level * extentY` (the pile shrinks into the ground), faded at rate 10.
 
-**Route buoy** S 006dba70 [inferred]: `y = waterHeight + 0.15 * sin(time * w + x + z * k)`. **Flags** wave in the vertex
-shader: `CalcFlagVertexPos` [known, `shared.inc`]:
+**Route buoy** `RouteBuoy::UpdateAnimation` S 006dba70 [known, disassembly]: `y = seaLevelHeight + 0.15 * sin(t * 0.45
+* pi + x + z * 143.5)` with `x`, `z` the buoy's world position and `t` the frame context's time (float S 007fccfc = pi,
+doubles S 007fc2d8 = 0.45, S 007fc2d0 = 143.5, S 007f9f80 = 0.15); the large factor on `z` puts neighbouring buoys out
+of step. Its fire emitter follows. **Flags** wave in the vertex
+shader (`flag_shader.fx`; `harborflag_shader.fx` computes the same strength and never applies it, so the harbor flag
+hangs still [known, file]): `CalcFlagVertexPos` [known, `shared.inc`]:
 `s = 0.33 * saturate(dot(p.xz, p.xz) - 0.02)`, `c = 0.5 + 0.5 * cos(4 * (m41 + m43 + p.x + p.y + t))`,
 `p.z += s * c`, `p.x += s * (1 - c)`.
 
@@ -993,24 +1284,26 @@ name filename>`).
 current world position to the logic target, flight time from the logic event's tick span, ballistic arc; model,
 tumble `rotation`, `flightPFX`, `impactPFX`, `impactSound` from `projectiles.xml`.
 
-**Particles** [inferred] S 00685bb0, S 004dfdc0: an effect name
+**Particles** [known] S 00685bb0, S 004dfdc0: an effect name
 maps to `[data]\scripts\effects\<name>.pfx`; emitters are culled, sorted back to front in depth buckets and drawn
 with `particle_shader.fx` from one atlas; one-shot emitters delete themselves when empty. *Effect movies*
 (`effectMovies.xml`: `<EffectMovie name>` with `<FX start particles link duration sound>`) are timed sequences of
-effects on named links of a building or character. [TODO] not established: the `.pfx` file layout
-(`ParticleEmitter` deserialiser, emitter virtual `+0xc`); a static read of that function settles it.
+effects on named links of a building or character. The file layout, the simulation, the drawing and the places
+that start effects: [`particles.md`](particles.md).
 
 **Resource hints** [known] S 0068b220, S 0068ac10, S 0068ad40: when the check time is reached and no candidate
-is pending, one random cell is drawn in every visible block that has pattern layers and whose maximum height is
-above the water level. A drawn cell that is explored by the viewing player and holds a ground resource (amount
-not 0) of `IronOre`, `Gold`, `Coal`, `Stone` or `Gemstones` becomes a candidate with the effect
-`Resource_<good name>`. With at least one candidate the next check follows after a random whole number of
-seconds in `ResourceFX minTime..maxTime`, with none after one in `minTime / 2..minTime`. The spawn step then
-plays the one-shot particle effect of one random candidate and clears the candidate list.
+is pending, one random cell is drawn in every visible block that is revealed (`TerrainCell +0xa0`, set by
+`RevealFromExploreMap` S 006b5f80) and whose maximum height is above the water level. A drawn cell that is
+explored by the viewing player and holds a ground resource (amount not 0) of the good that the name `IronOre`,
+`Gold`, `Coal`, `Stone` or `Gemstones` resolves to becomes a candidate with the effect `Resource_<good name>`;
+on the shipped maps that is gemstones only (`particles.md` §3.14). With at least one candidate the next check
+follows after a random whole number of seconds in `ResourceFX minTime..maxTime`, with none after one in
+`minTime / 2..minTime`. The spawn step then plays the one-shot particle effect of one random candidate and clears
+the candidate list.
 
-**Ambient swarms** [known, file] `flocks.xml`: `maxFlocks`, spawn interval, `<Bird>`, `<Fish>`, `<Bug>` with
-boids parameters (`Evade`, `Pack`, `MatchSpeed`); zones `flight`, `water`, `ground` derived from the grid states
-at load. Pure decoration.
+**Ambient swarms** [known] S 0069ab00: dormant in this build. Every `SwarmMgr` method tests a byte that only the
+constructor writes (0), and the per-swarm draw of the main and the shadow pass is an empty function, so no flock
+is ever built or drawn; `flocks.xml` is read and unused. The code as it would run: [`ambient-swarms.md`](ambient-swarms.md).
 
 ### 3.13 Light, fog, shadows, sky, post effects
 
@@ -1020,8 +1313,27 @@ direct term.
 
 **Environment values** [inferred] S 006ae3a0: an `EnvData` gives clear colour, ambient, light colour, fog start
 and end (linear distance fog) and shadow intensity; the light direction comes from `lightheading` and
-`lightelevation` (degrees) applied to a base vector; the shadow intensity is scaled by
-`clamp((|elevation| - 20°) / 20°, 0, 1)`.
+`lightelevation` (degrees): `Matrix44::RotationYawPitchRoll(heading, |elevation|, 0)` applied to the unit Z vector
+[known] S 006ae3a0, which with the Direct3D convention of that function gives the direction the light travels,
+`(cos e * sin h, -sin e, cos e * cos h)`, pointing down for a positive elevation [inferred]; the shadow intensity is
+scaled by `clamp((|elevation| - 20°) / 20°, 0, 1)`. The device stores the result through `SetInverseClampedFloat_15c` S 004f5120, which clamps its argument to
+0..1 and keeps **one minus** it (`CGraphicDevice +0x15c`) [known, disassembly]; that this value is the shaders'
+`g_ShadowIntensity` (`SHADOW_INTENSITY`), the factor of the direct light in shadow (`doShadow` in `shared.inc`:
+1 lit, `g_ShadowIntensity` shadowed), is [inferred] from the name and from `Scene` turning shadows off when
+`+0x15c >= 1.0` (§2.2). With the usual `shadowIntensity` 0.9 and an elevation of 40° or more, shadowed ground keeps
+a tenth of the direct light: the environment value is how dark shadows are, not how bright.
+
+**Light of objects** (`shared.inc` `CalcLight`, `mesh_shader.fx`, `doodads_shader.fx`, `tree_shader.fx`) [known,
+file]: per vertex `colour = saturate(dot(N, -mainLight)) * lightColor` (trees also times the vertex colour), per pixel
+`(ambient + colour * shadow) * texture`; the shader-1.1 paths compute `(ambient + colour) / 2`. The terrain uses the
+same sum per pixel with its normal map (§3.4). All of it is in gamma space.
+
+**Fog** [known] S 004d8f99, S 004d3ae0, S 004d3a80: `CGraphicDevice::SetDefaultStates` sets `D3DRS_FOGENABLE` 1,
+`FOGTABLEMODE` = `D3DFOG_LINEAR`, `FOGVERTEXMODE` = `D3DFOG_NONE` and the fog colour = the background colour; so it
+is per-pixel linear fog on view depth between the environment's fog start and end (`SetFogRange`), the shaders
+write no fog themselves. `RenderSkydome` and the reflection view enable it too (the Scene's fog flag +0x720), so a
+reflected object is fogged over the mirrored path's length, which includes twice the camera height, and the water
+in front of it is fogged again [inferred from the states; presentation only].
 
 **Local environment** `MapEnvData::Update` S 006ae700 [inferred]: per-map spheres; weight 1 inside
 `innerRadius`, linear to 0 at `outerRadius` (2D distance from the camera's ground focus point); weights are
@@ -1054,10 +1366,41 @@ Lookup [known, `shared.inc`]: `test = z / w + shadowScale.y`; lit if `test < dep
 2 x 2 taps bilinearly weighted (`SOFT_SHADOW`). `<Shadows scale="1.0" bias="-0.00325"/>` [known, file] feed the
 device values behind `g_ShadowScale` [inferred] S 0067edd0.
 
-**Sky** [inferred] S 006af490, S 00683e50: a parabolic dome `y = -(x^2 + z^2) / outer` of radius 5000 (outer
-5010), 64 x 64 quads, UV tiled 7 times, vertex alpha falling toward the rim; one or two skydome textures with a
-rotating texture matrix (`rotation`); sun and moon quads (`size`); `enviroment_shader.fx`. The skydome index
-comes from the map's `.bin`.
+**Sky** S 006af960, S 006af490, S 00683e50, S 006af260: one mesh "SkyPlane" built once by
+`SkyRenderer::BuildGeometry(inner 5000, outer 5010, n 64, texScale 7, 7, sunSize, moonSize)` [known; the values below
+from the disassembly of S 006af490, whose stack effects admit only this reading]:
+
+```
+span  = 2 * sqrt(outer^2 - inner^2)                    = 632.8 world units
+x     = col * span / n - span / 2,   z = row * span / n - span / 2        (col, row = 0..n)
+y     = -(x^2 + z^2) / outer                           (0 at the centre, -40 at the corners)
+alpha = 1 - ((c - col)^2 + (c - row)^2) / (n + 1)^2,   c = (n + 1) / 2   (0.5 at the corners)
+uv    = (7 * col / n, 7 * (1 - row / n))
+```
+
+followed by a sun and a moon quad (half sizes from `<Sun size>`, `<Moon size>`). The highest point is the centre, so
+the mesh is a shallow **dome** (a cap opening downward). It **follows the camera** [known]: `SkyRenderer::Update`
+S 006af210 copies, once per frame, the eye position of the device's active camera (`CGraphicDevice +0x1b4`, set by
+`SetActiveCamera`; slot 2 of the camera interface, `GetEyePosition`) into the renderer's `+0x40..+0x48`, or the
+vector at S 0088f1b0 when there is no camera; `BeginSkydomePass` S 006af260 takes the identity matrix and sets its
+translation to that eye position plus `(0, 15.0, 0)` (double S 007e2aa8). So the apex sits 15 units above the eye,
+the dome passes eye level about 274 units out (`sqrt(15 * 5010)`) and its rim is 25 units below the eye: looking up
+shows its inside, toward the horizon its lower part. Both views draw it first: `Scene::RenderPasses` S 0067eb20 runs
+it when pass bit 0x001 is set (the main view's mask is 0x1ff), `RenderReflectionPass` S 00680ab0 in the mirrored
+view; it writes no depth, so everything drawn after it covers it [known]. Because the eye is taken once per frame,
+the mirrored view sees the dome of the main camera, from below the water [inferred: the copy is made by the per-frame update, not per view; other writers of `+0x40` were not searched].
+**Quirk (presentation only): the reflected sky ends at a hard edge.** The mirrored camera sits as far below the
+water as the main camera is above it, so for water farther from the camera the mirrored view rays rise past the
+dome's 633-unit square and the reflection shows the clear colour behind a straight cut [inferred from the geometry;
+the remake's viewer, which draws this geometry, shows the cut, maintainer 2026-10-14]. No simulation state depends
+on it; the remake may continue the dome's surface past the square in both modes.
+`DrawSkydome` S 006af150 draws only the grid: the sun and moon quads are built and never drawn
+[known]. `RenderSkydome` S 00683e50 binds the skydome texture of the map's `.bin` index (`<Enviroment><Skydome>`
+in `graphics.xml`: Clouds, Stars, Egypt, Bavaria, Scot) with a rotation texture matrix, and a second one only when a
+secondary index is set [known]. Pixel (`enviroment_shader.fx`, technique `Default`) [known, file]:
+`uv = rotation(uv) + (t * 0.015, t * 0.005)`, colour = the texture alone (the vertex colour, and with it the alpha
+above, and the day-time blend of two textures are used only by the `combineTextures` variant, which the `Default`
+technique does not compile), alpha-blended over the background colour, depth test on, no depth write.
 
 **Environment particle layer** (`ai::render::EnvParticleLayer`, 0x258 bytes) [inferred] S 006adc90: a grid of
 falling streak billboards (spacing 0.1) around the camera with a per-point pseudo-random phase;
@@ -1067,9 +1410,24 @@ manager's constructor (S 00685112) and destructor (S 00684880) only, both times 
 of §3.1 and the debug draw act only on a non-null pointer, so no weather is ever drawn [known for the writes;
 inferred for the absence of an allocation]. The layer is a render object: presentation only.
 
-**Post processing** [inferred] S 00697290.., [known, file] for the values: scene colour plus a view-depth target;
-downsample, separable blur, combine: bloom above `minLuminance 0.98` scaled by `bloomScale 0.25`; depth of field
-around a focal distance that eases toward the picked ground point at `focusSpeed 3.0`, range `focalScale 25.0`.
+**Post processing** (`S2CG::PostProcessor`, 0x6c bytes; exists while the POSTFX setting is on, `Scene::Render`
+S 006836b0) [known] S 00696d20, S 00697010, S 00696ac0, S 00696f10, file `postprocess.fx`, `shared.inc`:
+
+1. `BeginScene` binds two targets: the scene colour, and a second target that every scene shader fills through
+   `COLOR_OUT` with its view depth (`PixelOut.luminance = viewZ`; the name is a leftover). The focal distance
+   `g_PostFx_FocalPoint` moves toward the view depth of the active camera's focus point (camera interface slot 6,
+   fallback a fixed point); the range is set to `1 / (focal + focalScale)` through `SetValueAndInverseRate` S 00696ca0.
+2. `RenderBlurPasses`: `CopyToTempBuffer` copies the scene colour into a temporary target and writes
+   `alpha = saturate(L - bloomParameter.y)` with `L` the sum of the maximum of nine taps of the second target;
+   then `BlurHorizontal` and `BlurVertical`, each a 9-tap box blur.
+3. `RenderCombine`: `lerp(blurred, scene, dof)` with `dof = 1 - saturate(|depth - focal| * range)`; technique 4
+   when the device can blur and a focus was found, else 3; both compile the same function, and neither blends.
+
+So **no bloom reaches the screen**: the bloom alpha of step 2 is never read (the combine ignores alpha and writes
+with blending off), and its threshold is taken from the depth target [inferred from the three functions and the
+pass states]. What the player sees is depth of field: sharp around the focal distance, the blurred copy elsewhere.
+`minLuminance 0.98`, `bloomScale 0.25`, `focalScale 25.0`, `focusSpeed 3.0` [known, file]. The temporary targets'
+size is [TODO] (the arguments of `CreateRenderTarget` in S 00697290 are not resolved by the decompile).
 
 ### 3.14 Selection markers and the build-placement overlay
 
@@ -1253,7 +1611,7 @@ encrypted container of `docs/asset-formats.md`. Values quoted are examples from 
 | `Camera` | `nearPlane="0.1"`, `farPlane="500.0"`, `minElevation="-85"`, `maxElevation="85"`, `moveSpeed="20.0"`, `zoomSpeed="150.0"`, `turnSpeed="0.5"`, `tiltSpeed="0.25"`, `minZoomLevel="1.0"`, `maxZoomLevel="1000.0"`, `doTerrainCollision="false"`, `targetRelativeHeight="0.3"`, `cameraRelativeHeight="0.6"` |
 | `Landscape` | `lodDistance="50.0"`, `iconSize="3.0"`, `iconOffset="0 0 -1.0"`; `Terrain maxIndices="20000"`; `ResourceFX minTime="8" maxTime="25"` |
 | `Landscape/Transitions/Transition` | 8 mask textures in index order: `transition00`, `01`, `02`, `C`, `B`, `A`, `03`, `04` (`[data]\map\transitions\*.dds`) |
-| `Water` | `shader="water_shader.fx"`, `color`, `phaseSpeed0="0.015 0.015"`, `phaseSpeed1="-0.017 -0.03"`, `tex0Scale=".1 .1"`, `tex1Scale=".1 .1"`, `tex0Rot="206"`, `tex1Rot="145"`, `OpacityFFP`, `TextureScaleFFP`, `TextureAnimSpeedFFP`, `TextureMoveSpeedFFP`. The parser S 006a93c0 names every one of these keys except `color` [known], so `color` is not read by it |
+| `Water` | `shader="water_shader.fx"`, `color`, `phaseSpeed0="0.015 0.015"`, `phaseSpeed1="-0.017 -0.03"`, `tex0Scale=".1 .1"`, `tex1Scale=".1 .1"`, `tex0Rot="206"`, `tex1Rot="145"`, `OpacityFFP`, `TextureScaleFFP`, `TextureAnimSpeedFFP`, `TextureMoveSpeedFFP`. The parser S 006a93c0 names every one of these keys except `color` [known], so `color` is not read by it. `tex0Rot`, `tex1Rot` are degrees (`* pi / 180`, double S 007db6a0): `WorldRenderer::UpdateWaterAnimation` S 006a65a0 writes, every frame, the normal-map texture matrices 0 and 1 (`+0x160`, `+0x1a0`) with the upper 2 x 2 `(cos, sin; -sin, cos)` and the translation row `animTime * phaseSpeed0` / `phaseSpeed1` (`animTime` = the sum of the frame deltas), which `Water_VS_2_0` applies to `position.xz * (0.19, 0.17) * 0.3` and `position.zx * (0.23, 0.19) * 0.3` as row vectors [known]. `tex0Scale`, `tex1Scale` scale the world x, z into the water vertices' own TEXCOORD0 and TEXCOORD1 (`EmitWaterQuad` S 006a6a5a); only the fixed-function technique reads those, `Water_VS_2_0` derives its coordinates from the position [known, file]. `OpacityFFP` becomes the alpha of the water vertex colour (`+0x4a8`) [known] |
 | `Water/WaterProperty` | 4 presets `Default`, `Highland`, `Swamp`, `Braindead`: `waterColor`, `waveColor`, `opacity` (2), `reflectionFactor`, `reflectionNoise` (2), `normalMap0`, `normalMap1`, `shallowColor`, `deepColor` |
 | `Street` | `shader="street_shader.fx"`, `numSegments="8"`, `width="1.0"`, `texStretch="0.25"`, `crossingRadius="2.25"`, `buoyDistance="1.7"`, texture and normal pairs 0 and 1, crossing pairs, `buoyTexture`, `routeTexture`, `routeNumSegments="3"`, `routeWidth="2.5"`, `routeTexStretch="0.1"`, `routeTexSpeed="10.0"`, `routeTexCount="16"`, `redStreetColor="1.0 0.0 0.0 0.9"`, `alphaStreetColor="1.0 1.0 1.0 0.6"` |
 | `Enviroment` | `timescale="0.033"`, `localtime="12"`, `animated="true"`; `Cubemap`, `Sun size="30.0"`, `Moon size="9"`, `Skydome name texture rotation` (5: Clouds, Stars, Egypt, Bavaria, Scot) |
@@ -1323,6 +1681,7 @@ when both end references of the route are valid) S 00683040.
 | File | Structure (example values) |
 |---|---|
 | `settings/buildings.xml` | `<Buildings lodBias="-70.0" lodScale="1.2" colorMap="[data]\buildings\colors.tga" numVariations="8">`; 112 `<Building name mesh frame enterDistance lodBias lodScale>` (`frame` on 100; `enterDistance`, `lodBias`, `lodScale` on one each) with `<DoorOpen file>` and `<DoorClose file>` (84 each), `<Working file>` (53; children `<Sound start name duration>`, `<Particle start duration name slot offset>`), `<Production mesh model texture scale numAnims anim0.. numModels boneLink0..>` (3), `<Sacrifice name>` with `<PFX name link>` children (1). `BuildingDesc::LoadFromXml` S 006d3880 also names `leaveDistance`, `heading`, `location0` and `location%d`, which the install does not use [known] |
+| `buildings/` (models, textures) | per type: `<mesh>.KEX` (meshes `House` and `GROUND`, skeleton with `root`, door / wheel bones, `MILFLAG`, `FIRE_%02d`; texture coordinate sets: diffuse atlas, light map unwrap, colour map texel; 95 of 106 have all three, 8 the first two, 3 one), optional `<mesh base>LOD0.KEX`, `<frame>.KEX` (meshes `0 .. N-1`, one per stage), the clips of `DoorOpen` / `DoorClose` / `Working` mostly in a folder named after the mesh; textures `<name>.dds` (diffuse, DXT1, 1-bit alpha for the alpha test) and `<name>_L.dds` (grey light map, DXT1). Shared: `PB_R_ConstructionSite01.dds` (all frames), `house_decal.dds` (1024², DXT3, all ground decals), `colors.tga` (64 x 256 RGB, 8 variation blocks x 32 bands), `MilitaryFlag1..3.dds` (512², DXT3), `MilitaryFlagInactive.KEX`, `MilitaryFlagSword00..10.KEX`, `MilitaryFlagBow00..10.KEX` (§3.9) [known, data] |
 | `settings/items.xml` | root `<Items>`: `<ItemDefinitions><Item name mesh references>` (55; `references` on one), `<AnimatedItems>`, `<DonkeyItems>`, `<StackLayouts count="2" distance="0.5"><Layout offset0..5 good0..>` (2 layouts) |
 | `character/settler_config.xml` | `<Characters scale="1.2" evadeRadiusScale evadeStart boatOffset goodOffset goodRotation lod0Range="30.0" lod1Range="40.0" lod2Range="60.0">`, 98 `<Character name mesh mesh1 mesh2 mesh3 color slotMap>`, `<Models><Model file>` (one model, `settler_model.KEX`), `<Donkey scale mesh model link="SLOT_Goods">` with 47 `<Animation name filename>` |
 | `character/settler_animations.xml` | `<Animations>` with 168 `<Animation name filename tribes>` (`tribes` on 8) and `<Sound start name>` (78) / `<Particle start name>` (1) children; `<RandomAnimations>` with one `<Random minDelay="5.0" maxDelay="8">` holding 11 `<Animation src probability>` |
@@ -1333,7 +1692,7 @@ when both end references of the route are valid) S 00683040.
 | `settings/effectMovies.xml` | 7 `<EffectMovie name>` with `<FX start particles link duration sound>` (13 in all) |
 | `settings/flocks.xml` | `<Flocks maxFlocks="10" minSpawn="10.0" maxSpawn="30.0" swarmTimeout="10.0">`; `<Bird>` and `<Fish>` (`minCount maxCount startMin startMax zone hasPOI nextMin nextMax minPOI maxPOI poiSpeed`), `<Bug>` (`numActors startMin startMax zone`), each with `<Evade minRange maxRange>`, `<MatchSpeed weight>`, `<Pack distance returnStr>`; `zone` = `flight`, `water`, `ground`. `SwarmMgr::LoadSettings` S 0069a9c0 reads the root attributes `maxSwarms`, `minSpawn`, `maxSpawn`, `swarmTimeout` [known]: the install's `maxFlocks` is not the key it asks for, so the swarm limit stays at the constructor default 5 (S 0069ab00; the other constructor defaults 5.0, 30.0 and 15.0 are replaced by the file) |
 | `settings/decals.xml` | 3 `<Texture name>` |
-| `scripts/effects/*.pfx` | 64 particle effect definitions; plain (not in the encrypted container), binary; every file starts with a u32 length 4 and the text `0002`, then a u32 length and a name (`Default` in the three files looked at). The rest of the layout is open (§10) |
+| `scripts/effects/*.pfx` | 64 particle effect definitions; plain (not in the encrypted container), binary; layout in `particles.md` §3.1 |
 | `settings/engine.xml` | one `<Engine>` element: `pureDevice`, `hardwareCursor`, `specialDepthMap`, `lowresDepthMap`, `multiSample`, `vsync`, `hwCursor` (cursor texture), `hotspot` |
 
 Meshes, skeleton models and animations are `.KEX` scenes; textures are `.dds` / `.tga`. Code that names a
@@ -1453,7 +1812,7 @@ A remake can therefore run the simulation headless and attach any renderer.
 | `.dds`, `.tga` | PNG or KTX2; keep alpha; index maps of characters must stay unfiltered and uncompressed |
 | the XML files of §6 | JSON resources with the same keys; keep the order of `<Pattern>` (rank) and `<Transition>` (index) |
 | `.fx` | hand-ported Godot shaders, one per effect family; the formulas of §3 are the reference |
-| `.pfx` | particle definitions (format open, §10) |
+| `.pfx` | particle definitions (`particles.md` §3.1, §9) |
 | map `.bin` sidecar | environment resource (skydome index, light angles, default and sphere `EnvData`) |
 
 **Terrain.** Build one `ArrayMesh` per 4 x 4 cell block from the height grid with the triangle split of §3.3
@@ -1505,21 +1864,21 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | `.pfx` particle file layout after the two header strings (§6.5) and the emitter model (curves, atlas cells, blend modes) | static: `ParticleEmitter` deserialiser and `ParticleEmitterParams`, `ParticleCurve*` |
-| 2 | KEX material and subset conventions used by buildings (stage subsets of the frame mesh, light map and colour map UV sets) | static: S 006d4060; data: one building KEX through `tools/kex.py` |
-| 3 | The value behind `constrProgress` / `upgradeProgress` and its fade timing | static: S 006abcf0 |
-| 4 | The value that selects the bow set of the military flag meshes (§3.9) | static: disassembly of S 006d2820 at the call of S 0055fd40 |
-| 5 | Building colour variation index per instance | static: the variant object in S 006ac810 |
-| 6 | Palette block construction from `color_slots.xml` (ramp rows, `solid`, slot order) | static: S 006c9bc0, S 006c9d20 |
-| 7 | Override table C of the animation set (which property family) and the meaning of loop mode values | static: S 006cc350, `CModelCache::Acquire` |
-| 8 | Who enables the radial vertex alpha of terrain patches (`TerrainDrawBatch +0x64`) | static: writers of the byte |
+| 1 | Answered: the `.pfx` layout and the emitter model are in [`particles.md`](particles.md) | - |
+| 2 | Answered (§3.9 "Assets per type", "Frame stages"): one frame subset per KEX mesh in the order of the names `0 .. N-1`, stage `k` draws the first `k`; LOD meshes `House` (else the first mesh); UV sets 1 / 2 / 3 = diffuse / light map (`Self-Illumination`) / colour map texel | - |
+| 3 | Answered (§3.9 "The progress values"): `1 - remainingA` of the construction (or of the upgrade's construction), sampled every logic tick and interpolated over one tick (`rate = 1 / gameSpeed`) | - |
+| 4 | Answered (§3.9 "Military flags"): `Military +0x68 soldierKind` (non-zero = bow set) | - |
+| 5 | Answered (§3.9 "Colour variation"): `instanceId mod numVariations`, the 1-based slot in the renderer's instance pool; the S 006ac810 "variant" is the LOD bone binding | - |
+| 6 | Answered: [`animation-models.md`](animation-models.md) §3.15 (index map R = 1-based Material index, decremented at load S 00692170; palette row = index - 1, ramp copied reversed; one Park-Miller draw per slot, seed 0x5432ace0; 1024² atlas of 16 x 16 blocks; full pixel formula) | - |
+| 7 | Answered: [`animation-models.md`](animation-models.md) §2.13, §3.9: table C = buildings (PropertiesDb +0x00), keyed by the worker's workplace building id; loop mode = KAnimationControl maxLoops: -1 default -> (type > 3) ? 1 : 0, 0 endless on a shared pool instance, 1 once and hold on an own instance | - |
+| 8 | Answered (§3.3): `TerrainDrawBatch::BeginFrame` S 006bd460 sets `+0x64` to `shader level < 2` every frame | - |
 | 9 | Per-LOD vertex counts of the terrain draw batch (§3.3) | static: the builder of the tables at `TerrainDrawBatch +0x74`, `+0x80` |
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
 | 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
 | 12 | Argument of the buoy bobbing sine of the territory border (§3.8) | static: disassembly of S 006b2ae0 |
 | 13 | Selection marker styles (UV rectangles, colours) and build icon atlas layout | static: `SelectionMarker::UpdateDecal`, `ConstructionMapRenderer::AddCellsInRect` |
-| 14 | Mapping of the `<Water>` attributes to the texture matrix globals; whether anything reads `<Water color>` (§6.1) | static: S 006a93c0 with S 006a65a0; xrefs of the string `color` near the water globals |
-| 15 | The caustics depth term `-(y - 100)` and the look of shallow water | running game: screenshot of a shore at shader level 2 |
+| 14 | Answered (§6.1): rotations and phase speeds build the normal-map texture matrices, `tex0Scale`/`tex1Scale` reach only the fixed-function texture coordinates, `color` is read by nothing | - |
+| 15 | Answered (§3.5): the terrain vertices are world positions, so the caustics pass adds nothing | - |
 | 16 | Meaning of shadow level 1 (global S 0088d6bc) and of the shadow flags 0x18 / 0x1a / 0x5a | static: readers of S 0088d6bc and of `Scene +0x34` |
 | 17 | Answered (§6.6): a day-time key loaded from `daytimes.xml` has heading = elevation | static: S 00684130, S 006e7b20 |
 | 18 | Whether the handlers of §3.2 that were not re-read call any logic mutator (§8) | static: read each handler body |
@@ -1574,15 +1933,26 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006a93c0 | `Gfx_Water_LoadFromXml` | `<Water>` |
 | 006b29c0, 006d8f50 | `BorderMgr::BuildPlayerBorders` / `PlayerBorderPoints::BuildFromMap` | territory border points |
 | 006b2ae0 | `ai::render::BorderMgr::RenderSet` | border posts and buoys |
-| 006a2bf0 | `S2CG::BuildingRenderer::AddBuilding` | building instance creation |
-| 006a0ad0 | `S2CG::BuildingRenderer::Render` | building passes |
+| 006821b0, 006a0e60 | `Scene_LoadBuildingsXml` / `BuildingRenderer::InitGraphicsResources` | root attributes, colour map, `COLORMAP_OFFSET`, variation step |
+| 006a2bf0, 006a17a0 | `S2CG::BuildingRenderer::AddBuilding` / `RemoveBuildingInstance` | building instance creation, instance slot (colour variation) |
+| 006a0ad0, 006a0cc0 | `S2CG::BuildingRenderer::Render` / `RenderWithExternalEffect` | building passes; shadow map pass |
+| 0069ff70 | `S2CG::BuildingRenderer::Update` | construction list, distance LOD, clip plane capability |
 | 006a0180, 006a0380 | `RenderConstructionSites` / `RenderInstances` | frame mesh stages, clipped finished mesh |
+| 0069fb10 | `S2CG::BuildingRenderer::DrawInstance` | LOD part, colour variation offset, materials |
+| 006a06d0 | `S2CG::BuildingRenderer::RenderRuins` | ruins in the frame pass |
 | 006aa1b0 | `S2CG::Building::GetConstructionStageIndex` | stage formula |
-| 006aabe0 | `S2CG::Building::GetConstructionClipPlane` | clip plane formula |
-| 006abcf0 | `S2CG::Building::Update` | per-frame building visuals |
+| 006aabe0, 006aae30 | `S2CG::Building::GetConstructionClipPlane` / `Building_HasClipProgress` | clip plane formula; when the rising building is drawn |
+| 006abcf0 | `S2CG::Building::Update` | per-tick building visuals: progress values, material pile, door close, buffs, fire |
+| 006ac810 | `S2CG::Building::ctor` | placement, progress fields, animated model, LOD bone binding, ground decal |
+| 006aa640, 006aa3b0, 006aa6f0 | `Building::TriggerWorkCycle` / `PlayStateAnimation` / `PlayOneShotAnimation` | door and work clips |
+| 006aa9d0 | `S2CG::Building::SetModelVariant` | LOD level and its bone binding |
+| 006ab5b0, 006ab710, 006a1250 | `Building::BeginUpgrade` / `EndUpgrade` / `BuildingRenderer::BeginBuildingUpgrade` | upgrade display |
 | 006abbb0, 006ac510 | `Building::UpdateFireEffects` / `InitFirePoints` | fire |
-| 006d3880, 006d4060 | `BuildingDesc::LoadFromXml` / `LoadResources` | `buildings.xml`, meshes |
-| 006d2820 | `S2CG::CMilitaryFlagRenderer::DrawFlags` | military flags |
+| 006d3880, 006d4060, 006a0990 | `BuildingDesc::LoadFromXml` / `LoadResources` / `ctor` | `buildings.xml`, meshes, defaults |
+| 006d50e0 | `S2CG::BuildingMaterial::Create` | texture usages of a subset |
+| 006b4400, 006da2a0 | `HouseDecalRenderer::AddDecal` / `GroundDecalMesh::Build` | ground decal laid on the terrain |
+| 006d2820, 006d2ec0, 006d2ab0 | `S2CG::CMilitaryFlagRenderer::DrawFlags` / `InitGraphicsResources` / `Render` | military flags |
+| 004d3df0 | `S2CE::CGraphicDevice::DetermineDeviceCaps` | `MaxUserClipPlanes` (S 0088d998) |
 | 00695130, 00694c00 | `CCharacterMgr::LoadFromXml` / `LoadCharacterDefs` | character data |
 | 00695490 | `S2CG::CCharacterMgr::CreateCharacter` | settler visual creation |
 | 006909f0 | `S2CG::CCharacter::UpdateLogic` | animation slot choice |

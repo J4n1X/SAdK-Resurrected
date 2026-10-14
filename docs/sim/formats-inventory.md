@@ -120,7 +120,7 @@ S 004f0790, S 004f04b0; `+0xc4` attachment from the typed struct `ParticleEmitte
 | `+0x40` / `+0x44` | ttl / ttlVar | f32 seconds | yes |
 | `+0x48` / `+0x4c` | spawn / spawnVar | f32 seconds | yes |
 | `+0x50` / `+0x60` | color / colorVar | vec4 RGBA, 0..1 | yes |
-| `+0x70` | randomSeed | i32, a 16-bit value set by the constructor S 004f2d50 ([TODO] not established: its source; the decompile shows the low 16 bits of the object's first dword, settled by the disassembly of the constructor's tail) | no |
+| `+0x70` | randomSeed | the low 16 bits of the params vtable pointer S 007e53a0, 0x53a0 for every emitter (`particles.md` §2.3) | no |
 | `+0x74` | random generator | `RandomGenerator` (own instance), seeded with randomSeed | no |
 | `+0x7c` / `+0x88` | emitter position / rotation quaternion | | no |
 

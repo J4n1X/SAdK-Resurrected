@@ -36,7 +36,8 @@ All of it is presentation. The simulation never reads a model, a skeleton or an 
 Out of scope: the lobby's avatar system (`ai::anim::AnimGraph`, `ai::lobbygfx::AnimModel`,
 `ai::anim::TransformInterpolator`; the only constructors of `AnimGraph` are `LobbyPetMgr::CreateInstance`
 S 004fe5c0 and `CGfxObjAvatar::CreateAnimation` S 00506e10 **[known]**), terrain, particles, static map objects
-drawn by `InstanceMeshRenderer`, and shader lighting.
+drawn by `InstanceMeshRenderer`, and shader lighting except the settler shader, whose pixel formula §3.15
+specifies because the colouring cannot be separated from it.
 
 ---
 
@@ -280,9 +281,9 @@ made then). Two loads of the same file make two entries on the one cached `KFile
 | `+0x00` | `slotCount` | number of animation *types* (10 for settlers, §3.9) |
 | `+0x04..+0x0c` | `anims` | vector of 0x24-byte records: `+0x00` animation id, `+0x04` name, `+0x20` `tribes` mask |
 | `+0x10` | `defaultAnimBySlot` | `int[slotCount]`, -1 = none |
-| `+0x14` | `overrideByKeyA` | `map<goodId, int[slotCount]>` |
-| `+0x20` | `overrideByOuterKeyB` | `map<tribeKey, map<goodId of a type-1 good, int[slotCount]>>` |
-| `+0x2c` | `overrideByOuterKeyC` | `map<tribeKey, map<id, int[slotCount]>>` |
+| `+0x14` | `overrideByKeyA` | table A: `map<goodId, int[slotCount]>` over the goods that are not settlers (wares, tools, weapons) |
+| `+0x20` | `overrideByOuterKeyB` | table B: `map<tribeId, map<professionGoodId, int[slotCount]>>` over the goods of type 1 (`Settler`: the professions, soldier ranks and NPCs of `Jobs.lua`) |
+| `+0x2c` | `overrideByOuterKeyC` | table C: `map<tribeId, map<buildingId, int[slotCount]>>` over the building records |
 | `+0x38` | `defaultRandomAnim` | `RandomAnimDesc*` |
 | `+0x3c` | `randomAnimByItem` | `map<itemId, RandomAnimDesc*>` |
 
@@ -375,6 +376,10 @@ f4 / f8, `boatOffset` S 00881704 (2 floats), `goodOffset` S 0088170c (2 floats).
    the engine point `s * (-y, z, x)`. `det(B) < 0`: the files are right-handed with Z up, the engine is
    left-handed with Y up, and the loader flips the winding once. **[inferred]** (arithmetic on **[known]**
    constants)
+   With the second swap of `CMesh::Load` (§3.2 step 3) a triangle keeps the file's index order; the main view culls
+   clockwise triangles (`D3DCULL_CW`, `docs/sim/rendering.md` §3.11), so in the file's order the front faces are the
+   triangles that are counter-clockwise on screen. **[inferred]** (from the two swaps and the cull mode; the remake's
+   viewer, which reverses each triangle for Godot's clockwise front faces, draws buildings solid from outside)
 
 The model scale `target.unitScale` comes from the caller **[known]**:
 
@@ -709,10 +714,12 @@ every entry. **[known]** The value handed to `Update` is the entry's accumulated
    - keyB = virtual `+0x14`: `logic +0x38`, the settler's property id (`NSettlers::Settler::GetPropertyId`,
      cached by the constructor S 006c7240) for the base class, soldiers, specialists, constructors and workers;
      -1 for carriers (vtables S 007fb984, S 007fb9d0, S 007fba50, S 007fba8c, S 007fbac8, S 007fbb0c);
-   - keyC = virtual `+0x18`: for workers the first dword of the workplace building's type record while the
-     workplace reference is valid (S 006c8620); -1 for every other class; that this dword is the building's
-     property id is **[inferred]**;
-   - outer key = the owning player's tribe id (`settler +0x28 → +0x44`).
+   - keyC = virtual `+0x18`: for workers the building property id of the workplace while the workplace
+     reference is valid (`CharacterWorker::GetWorkplaceTypeId` S 006c8620: the first dword of the record at
+     `NVillage::Building +0x0c`, which is the building's `BuildingProperty`, whose `+0x00` is its id,
+     `village-buildings.md` §2, `properties-data.md` §2.1); -1 for every other class **[known]**;
+   - outer key = the owning player's tribe id (`settler +0x28 → +0x44`, the `TribeProperty` id such as
+     `0xb0d378a3`, `players-victory.md`) **[known]**.
 4. If `req == -1`: `req = CharacterAnimation::UpdateLogic()` S 006c6590, which maps the action timer kind
    (`settler +0x1c`, `NSettlers::Animation.kind`, `settlers-jobs.md` §2.5):
 
@@ -755,6 +762,21 @@ true, set the slot speed to the settler's virtual `+0x34` (`settlers-jobs.md` §
 pair; base returns false / 1.0). If the instance changed, rebind the renderer's bone source
 (`SkinnedMeshRenderer::RebindInstanceBones`). **[known]**
 
+**Loop mode.** The loop mode of a request is the `maxLoops` count of the animation control it ends up in:
+`PlayAnimation` passes it unchanged to `CModelCache::Acquire(animId, loopMode, holder, loopMode != 0)` (§3.8),
+which hands it to `PlayAnimationWithEffects(animId, 0, maxLoops, 0)` and so to `KAnimationControl +0x30` (§2.9,
+§3.5). **[known]** (S 006c63a0, S 006ad4f0, S 0076b230)
+
+| Value | Meaning | Where it comes from |
+|---|---|---|
+| -1 | "default": replaced by `SetAnimationType` with `(type > 3) ? 1 : 0` before anything else; never reaches a control | `CCharacter::UpdateLogic` when the render logic asked for nothing (§3.9 step 2) |
+| 0 | loop for ever; the pool instance is **shared** with every holder of the same animation id (non-exclusive acquire), so these settlers move in phase; `GetAnimRemainingTime` is negative | types 0–3 by default; a carrier's boat request (types 4 / 5, step 2); the return from an idle variation (§3.11); the release call `PlayAnimation(-1, 0)` |
+| n > 0 | play `n` times, then hold the last key (`heldFrame = keyCount - 1`, §3.5); always an **own** (exclusive) pool instance, so the one-shot starts at time 0; remaining time = `n * duration - time` | 1 for types 4–9 by default and for an idle variation (`PlayAnimation(id, 1)`, S 006c6590) |
+
+No caller passes a value other than -1, 0 or 1 to `SetAnimationType` / `PlayAnimation` (their only callers are
+`CCharacter::Update` S 00690bd0, `SetAnimationType` itself and `CharacterAnimation::UpdateLogic` S 006c6590)
+**[known]**. Animals, ships and buildings use the same `maxLoops` convention with 0 and 1 (§3.16–§3.18).
+
 **Resolving type → animation id** (`AnimationSet::GetAnimIdForSlot` S 006ca8d0), first hit that is not -1
 **[known]**:
 
@@ -770,23 +792,49 @@ which uses the same 10 slot names), 0 for the animal sets (S 0069b7c0, 4 slot na
 Last, the set's `<RandomAnimations>` child is loaded (§3.11).
 
 - `defaultAnimBySlot[i]` = id of the animation named exactly like slot `i`;
-- for every good of the properties database whose name `G` gives at least one existing animation
-  `<slotName><G>`: if the good's type field (`+0x14`) is 1, then for every tribe a row
-  `overrideByOuterKeyB[tribe][goodId][i] = FindAnimIdByName(slotName_i + G, tribe)`; otherwise a row
-  `overrideByKeyA[goodId][i] = FindAnimIdByName(slotName_i + G, -1)`;
-- for every record of the properties map at `StaticAccess +0x00` (id `+0`, name `+4`) whose name `N` gives at
-  least one existing animation `<slotName><N>`: for every tribe a row `overrideByOuterKeyC[tribe][id][i]`.
+- **table A and table B** come from the goods map (`PropertiesDb +0x18`, `GoodProperty`: id `+0x00`, type
+  `+0x14`, name `+0x18`; `properties-data.md` §2.4). For every good whose name `G` gives at least one existing
+  animation `<slotName><G>` (`FindAnimIdByName(…, -1)`): if its type is 1 (`Settler`: a profession, soldier rank
+  or NPC, all 76 records of `Jobs.lua`), then for every tribe a row
+  `overrideByOuterKeyB[tribeId][goodId][i] = FindAnimIdByName(slotName_i + G, tribeId)` (table B); otherwise one
+  row `overrideByKeyA[goodId][i] = FindAnimIdByName(slotName_i + G, -1)` (table A);
+- **table C** comes from the building map (`PropertiesDb +0x00`, `BuildingProperty`: id `+0x00`, name `+0x04`;
+  `properties-data.md` §2.1): for every building whose name `N` gives at least one existing animation
+  `<slotName><N>`, for every tribe a row `overrideByOuterKeyC[tribeId][buildingId][i] =
+  FindAnimIdByName(slotName_i + N, tribeId)`.
+
+The tribe keys of tables B and C are the ids of the tribe records (`PropertiesDb +0x9c`, first dword of each
+`TribeProperty`), the same key the run-time lookup takes from the player (`Player +0x44`). **[known]** (S 006cc350)
+So the run-time keys match the tables: keyA is a good id (table A), keyB the settler's property id, i.e. the id of
+its profession good (table B), keyC the workplace's building property id (table C). **[known]**
 
 Names are concatenated without a separator and compared exactly (case-sensitive memcmp): `WalkWood`,
 `StandPlank`, `WorkLoop0Scythe`, `WorkLoop0Forester`, `WorkLoop0Smelter`. A row entry whose name does not exist is
--1 and falls through to the next level. Since keyB at run time is a settler's property id and keyC a building's,
-type-1 goods are the settler kinds and the `+0x00` map holds the buildings. **[inferred]**
+-1 and falls through to the next level. Several goods share a name (`Slaughter` exists once per tribe in
+`Jobs.lua`); each id gets its own row. **[known]**
 
 `FindAnimIdByName(name, tribe)` S 006ca790: the first animation with that name decides; with `tribe != -1` and a
 non-zero `tribes` mask on the record, the id is returned only if `mask & (1 << (tribe & 31))` is set, else -1 (the
-search does not continue to a later record of the same name). **[known]** Which number each tribe contributes to
-this test is **[TODO]** (§10): the value is the key of the properties tribe map, the same key the run-time lookup
-uses.
+search does not continue to a later record of the same name). **[known]** The tribe number in this test is the
+tribe id itself: `0xb0d378a3` (Bavarians) and `0x497ffda3` (Scots) test bit 3, `0xf5016d33` (Egyptians) bit 19
+(`defineTribes.lua`) **[known]** (data). The masks in `settler_animations.xml` follow the file's comment (bit 0
+"Roman", bit 1 "African", bit 2 "Chinese"; values 3 and 5), so they never contain bit 3 or 19: every animation with
+a non-zero mask is -1 in every row of tables B and C. **[known]** (code + data) The five such animations —
+`WorkLoop0Miller` (3), `WorkLoop0Slaughter` (3) of table B, `WorkLoop0Spring` (3), `WorkLoop0Smithy` (5) of
+table C, and `WorkLoop0Piggerey` (5), whose suffix names no record — are therefore never shown; those workers fall
+through to the next levels (keyB, keyA, finally the default `WorkLoop0`). **[inferred]** (no other name lookup of
+these animations was found)
+
+Where the shipped names land (computed over `settler_animations.xml`, `Goods.lua`, `Jobs.lua`, `buildings.lua`
+with the rules above) **[known]** (data): 10 defaults; 107 names in table A (`WalkWood`, `StandBoat`,
+`WorkLoop0Scythe`, `WorkLoop1Sword`, …); 21 in table B (`WorkLoop0Forester`, `WorkLoop0Baker`, `WorkLoop0Smelter`,
+`WorkLoop0Hunter`, `WorkLoop0Constructor`, `WorkLoop0Scholar`, `WorkLoop1Scholar`, `StandSword0`, `StandBow0..2`,
+`StandClaymore0..2`, `StandHalberd0..2`, `StandStone0..1`, and the two masked ones); 4 in table C
+(`WorkLoop0Stone Pit`, `WorkLoop0Locksmithery`, and the two masked ones); `StandOxen` / `WalkOxen` in both A and
+B (a good and a profession are both named `Oxen`); 19 names match no record and are never selected, among them
+`StandCrossbow0..2` (the professions are spelled `CrossBow0..2`), `StandBeer`, `Standwhisky` (the goods are
+`weissbeer`, `Whisky`), `StandFlesh`, `StandPig`, `StandShield`, `StandAnvil`, `StandDonkey`, `WalkDonkey`,
+`WorkLoop0Donkey Breeding` (the building is `Oxen Breeding`).
 
 ### 3.10 What the per-type render logic adds
 
@@ -879,7 +927,7 @@ bone's matrix in `KModel.boneMatrices` (model space for pool instances). **[know
 | Attached thing | Bone | Evidence |
 |---|---|---|
 | a settler's tool / weapon (the type's default item good), or its animated variant | the definition's `link` attribute, default `SLOT_HandR` | S 00694c00, S 006c7850, S 006c7760 **[known]** |
-| the good a settler carries | bone index from virtual `+0x20` of the render logic: the definition's link bone (`+0x0c`) for every class except the carrier, which returns its own index `+0x88`, resolved by its constructor from the bone name it is given (-1 without a name) | S 006d09b0, S 006c8d40, S 006c9150, vtables of §3.9 **[known]**; which name the carrier is given is **[TODO]** (`CCharacterMgr::CreateCharacter` S 00695490, call not resolved in the decompile) |
+| the good a settler carries | bone index from virtual `+0x20` of the render logic: the definition's link bone (`+0x0c`) for every class except the carrier, which returns its own index `+0x88`, resolved by its constructor from the bone name it is given (-1 without a name); that name is the definition's `link` too (`CreateCharacter` → `CCharacter::Init` S 00690760 → the logic constructor), so a carrier holds its good at `SLOT_HandR`, an ox / donkey at the `<Donkey link>` bone (`SLOT_Goods`; none when the attribute is empty, S 00694a70) | S 006d09b0, S 006c8d40, S 006c9150, S 00695490, vtables of §3.9 **[known]** |
 | goods on a donkey / ox | `link="SLOT_Goods"` | `settler_config.xml` `<Donkey>` **[known]** (data) |
 | a carrier's boat | placed at the figure's matrix shifted by `boatOffset` (x, z) and lowered by `draft * 0.7`; its cargo at `goodOffset` rotated by `goodRotation` degrees about Y | S 006c8ee0 **[known]** |
 | production animals of a building | bones named by `boneLink0..N`, or fixed `location0..N` vectors | S 006d3880 **[known]** |
@@ -903,30 +951,181 @@ stores the unclamped non-negative index as the instance's influence reduction. *
 
 ### 3.15 Colouring
 
-**Settlers** (shader `game/gfx/fx_20/skin_color_mesh.fx`, constants set in `CCharacter::SetShaderConstants`
-S 006910e0) **[known]**:
+**Settlers** are drawn with `game/gfx/fx_20/skin_color_mesh.fx` (the effect of the character manager's skinned
+renderer, `CCharacterMgr::ctor` S 006947d0). The mesh's own material textures are not used: texture 0 is the
+definition's `color` texture, an *index map*, and texture 1 is a palette atlas; every settler owns one palette of
+16 x 16 colours, filled at random from `color_slots.xml` when its character is created. **[known]** The parts
+below follow the data from file to pixel.
 
-- The mesh's texture 0 is the definition's `color` texture (e.g. `bavarian_colorindices_luminance.dds`), sampled
-  with point filtering. Its channels: **R** = palette row, **G** = luminance, **B** = specular strength, **A** =
-  1 for palette colour, 0 for player colour.
-- Texture 1 is a 1024x1024 atlas holding one 256-entry palette (16 slots x 16 shades) per distinct settler
-  look. The lookup is `u = saturate(G * light) * (15 / atlasWidth)`, `v = R * (256 / atlasHeight)`, plus the
-  palette's atlas offset and half a texel (`COLOR_INDEX_SCALE`, `TEXTURE_ATLAS_OFFSET`).
-- `rgb = lerp(playerColor * G * light * 2, paletteColour, A)`, then `+ specular * B`; output alpha = A.
-- `playerColor` (`PLAYER_COLOR`) is the owning player's colour entry (`ai::player::Player::GetColorEntry` S 005be2c0 of
-  `settler +0x28`).
+**1. The index texture** (`<Character color>`, §6.1) **[known]**. `CCharacterMgr::AcquireTexture` S 00694640
+loads each path once (a reference-counted cache) through `CTexture::CreateFromFile` S 004e80d0, whose second
+argument is "not a `.dds` file" (stored as the texture's single-level flag; what `CreateD3DTexture` does with it
+was not read); a managed texture then gets `SetLOD(g_TextureLOD)`, the global texture detail level, so lower
+detail settings skip the largest mip levels. Right after loading,
+`Texture_DecrementIndexChannel` S 00692170 subtracts 1, modulo 256, from the red byte of every texel of every mip
+level (loop bound `width * height` per level). The channels then are:
 
-The palette of a settler is built when its character is created (`CCharacterMgr::CreateCharacter` S 00695490):
-the colour map named by the definition's `slotMap` gives, for each of 16 palette slots, a colour-ramp name; one
-variant of each ramp is drawn at random (`ColorMapTable::BuildRandomPalette` S 006c9770) with a static generator
-seeded `0x5432ace0`; equal palettes share one atlas entry (`AcquirePaletteTexture` S 00693140). **[known]** So
-hair, skin and clothing shades vary per settler, and only the texels with A = 0 show the team colour.
+| Channel | In the file | In memory after the decrement | Use |
+|---|---|---|---|
+| R | the 1-based `Material index` of `color_slots.xml` (1..16) | palette row = index − 1 (0..15) | which palette slot |
+| G | luminance, 0..255 | | position along the slot's ramp, times the light |
+| B | specular mask | | strength of the highlight |
+| A | 255 = palette colour, 0 = player colour, intermediate values at the borders of team-coloured areas | | blend between the two |
 
-Colour ramps (`ColorMapTable::LoadFromXml` S 006c9d20, file `[data]\character\color_slots.xml`) **[known]**: a
-ramp is 16 colours; a `<ColorRamp slot=…>` gives one variant as `solid="r g b"`, as a gradient `lit=` / `dark=`,
-as 16 `<… value="r g b">` children, or several variants as the rows of a 16-texel-wide `texture` (32-bit, `rows`
-= number of rows used, default the texture height). `<ColorMap name>` children `<Material index slot>` map palette
-slot `index` to a ramp.
+Data **[known]**: the six files `settler_config.xml` references are A8R8G8B8 DDS of 2048 x 2048 (`bavarian`,
+`egypt`, `scot`) or 2048 x 1024 (the three `*_soldier`) with 12 mip levels; every mip level contains only the
+integer R values of level 0 (the chain was built by nearest-neighbour reduction). In
+`bavarian_colorindices_luminance.dds` the face is R = 1 (`bavarian_carrier`: Material 1 = `Skin_lobby`), hair and
+beard 14 (`Hair_lobby`), eye white, iris and pupil 11, 12, 13 (`EyeOuter`, `EyeInner`, `Black`), the hats 15. Four
+files also contain R = 0 in the unused area around the UV islands; after the decrement those texels hold 255 and
+sample 256 texel rows below the palette (part 5); that no visible triangle maps them is **[inferred]**. The texture
+is bound to stage 0 per draw (`SetShaderConstants` S 006910e0, vtable slot 0 `LinkToStage(0)`) and sampled with
+point min, mag and mip filter (`FILTER_MODE_0 Point`) and wrap addressing (`shared.inc`).
+
+**2. Colour ramps** (`ColorMapTable::LoadFromXml` S 006c9d20, `[data]\character\color_slots.xml`) **[known]**. A
+ramp *variant* is 16 ARGB colours, index 0 the lit end and 15 the dark end. Variants are collected in *ramp
+groups* by the `slot` attribute (`AddRampVariant` S 006c9bc0: the group is created with the first variant, later
+`<ColorRamp>` elements of the same name append, in file order). Each `<ColorRamp slot>` adds, by the first
+attribute present:
+
+- `solid="r g b"`: one variant, all 16 colours equal (`ColorRamp16::FillSolid` S 006c1190);
+- `lit="r g b"` and `dark="r g b"`: one variant, `colour[i] = lit + (i * 0.06666667) * (dark − lit)` for
+  `i = 0..15` (`FillGradient` S 006c11d0);
+- `texture=…` with optional `rows`: one variant per texture row `v = 0 .. rows − 1`, `colour[i] = texel (i, v)`;
+  `rows` absent or 0 means the texture height. The texture is loaded through the engine's texture object
+  (`CTexture::CreateFromFile(name, 1, 0, 0)`, vtable `+0x28`, S 004e80d0) and used only if its surface format is
+  `A8R8G8B8` (21) or `X8R8G8B8` (22);
+  otherwise, or when the load fails, the element adds no variant. Row `v` is the `v`-th row of the locked
+  surface;
+- none of these: one variant from the first 16 child elements' `value="r g b"`, in order (the loop does not
+  check that 16 children exist).
+
+Every colour is stored through `Gfx_PackColorARGB` S 004a8380: each component clamped to 0..1, times 255, rounded
+to the nearest integer with ties to even (the `+ 2^23` trick of `Math_FloatToIntRound` S 006e89f0 under the
+default x87 rounding mode), alpha 255. Texel values pass unchanged (`SetFromARGB` S 004a8230 and back).
+The shipped ramp tables are 24-bit uncompressed TGA with bottom-left origin, 16 x 16 except `eye_table`
+(16 x 1) and `red_table` / `yellow_table` (16 x 8) **[known]** (data); that the loader converts them to
+`X8R8G8B8` with row 0 = the top row of the picture (the D3DX convention) is **[inferred]**. Their column 0 is the
+lightest colour (`skin_lobby_table` row 0: `fadcc7` … `893b1b`), the same convention as `lit` → `dark`. A `rows`
+value larger than the texture height would read past the locked surface **[inferred]**; the data has none.
+
+**3. Colour maps** **[known]**. Every child element of `<ColorMaps>` (the element name is not tested) appends a
+0x5c-byte entry: the `name`, then `rampIndexBySlot[16]`, all -1. A child `<Material index="i" slot="s">` stores the
+group index of `s` (`FindRampByName` S 0050d2a0: exact, case-sensitive; -1 if unknown) at entry `+0x18 + 4 * i`,
+i.e. `rampIndexBySlot[i − 1]`: `index` is 1-based and is not range-checked (0 would overwrite the entry's name
+string, 17 and more the next entry). The `<SlotEnumeration>` names are stored (`slotNames[256]`) but not used by
+the palette code. In the shipped file all 63 maps name all 16 indices, every named ramp exists, and no ramp
+group is empty (§6.3) **[known]** (data).
+
+**4. The palette of one settler** (`CCharacterMgr::CreateCharacter` S 00695490). Its only caller,
+`Scene::OnSettlerCreated` S 0067f0f0, passes no palette, so every settler gets a random one **[known]**:
+
+```
+map = first ColorMap whose name equals def.slotMap exactly, else entry 0 ("default", the first in the file)
+for slot = 0 .. 15:                                       // fixed order, one draw per slot
+    group = ramps[map.rampIndexBySlot[slot]]               // -1 is not guarded (reads before the array)
+    v     = rng.NextInRange(0, group.variantCount - 1)     // also drawn when the group has 1 variant
+    for i = 0 .. 15:  palette[slot * 16 + i] = group.variant[v][15 - i]
+```
+
+(`ColorMapTable::BuildRandomPalette` S 006c9770, `Palette256::SetSlotRampReversed` S 0050e3f0) **[known]**. The
+copy is reversed: in the palette, column 0 is the darkest and column 15 the lightest colour of the ramp. The
+generator `ai::math::RandomGenerator` is the Park–Miller minimal standard: `NextInRange(lo, hi)` S 006ec3a0 sets
+`state = state * 16807 mod (2^31 − 1)` and returns `state mod (hi − lo + 1) + lo`. It is one function-local static
+(`S 0088d7c8`) of `CreateCharacter`, constructed on the first random palette of the process with the seed
+`0x5432ace0` (`SetSeed` S 006ec2a0 keeps a seed with 8 to 24 set bits unchanged; this one has 13) and never
+reseeded, so the sequence continues across matches and depends on the order in which every settler since start-up
+was created. **[known]** First states: `0x4af3d14f`, `0x4d32bffa`, `0x3ed9ddae`, `0x5168eabe`, `0x3f0b89b3`; as a
+test vector, the first palette of a process drawn for `bavarian_carrier` uses the variants 15, 10, 14, 14, 3, 11,
+11, 2, 1, 10, 0, 10, 14, 12, 2, 2 of its slots 0..15 (computed from the rules above). Oxen and donkeys bypass all of
+this: `CreateDonkeyCharacter` S 00694a70 passes neither atlas nor palette, and `donkey.fx` draws the plain
+texture times the per-vertex light (its `PLAYER_COLOR` is declared but unused) **[known]**.
+
+**5. The palette atlas** **[known]** unless marked. `CCharacterMgr::LoadFromXml` S 00695130 creates one
+`CTextureAtlas` (`+0xa4`) of 1024 x 1024 `A8R8G8B8`, one level (`CTextureAtlas::CreateTexture` S 004ee7e0).
+`AcquirePaletteTexture` S 00693140 searches the manager's palette entries for one equal in all 256 colours
+(`Palette256::Equals` S 0050e420); a hit raises its reference count and reuses its region, otherwise a new entry
+is appended: the palette becomes a 16 x 16 `X8R8G8B8` texture with row = slot and column = shade
+(`Palette256::CreateTexture` S 0050e4a0), is copied unpadded into a free 16 x 16 node of the atlas
+(`CTextureAtlas::AddImage` S 004ee710, `InsertNode` S 004ee1d0, `CopyImageToNode` S 004ee0c0) and the 1-based
+region id is kept. The packer is the classic binary split: a free node larger than the image is split once
+across its longer leftover (the left/top part keeps exactly the image's width or height), and the search is
+depth-first, first child first. With equal 16 x 16 images this places palettes 0..63 left to right along the top
+row, then alternately a column and a row of the remaining area (palette 64 at `(0, 16)` going down, palette 127
+at `(16, 16)` going right, …) **[inferred]** (derived from the split rule). No code releases a palette entry
+(`CCharacter::Release` S 00691870 does not, and no decrement of the count was found), so one atlas holds at most
+64 x 64 = 4096 distinct palettes; a further `AddImage` returns 0 and the region lookup then reads before its
+array **[inferred]**. The character manager — and with it atlas and palette cache — is destroyed with the scene
+(`Scene::Shutdown` S 006803f0) **[inferred]** (the global it deletes is the one `CCharacterMgr::GetInstance`
+returns); the generator of part 4 is not.
+
+**6. Shader inputs** **[known]**. `CCharacterMgr::Render` S 00692e20 links the atlas to stage 1 for the whole
+settler batch; `CShaderProgram::BeginPass` S 004e8e30 uploads the size of every stage's texture as
+`TEXTURE_ATTRIBUTES[stage] = (w, h, 1/w, 1/h)` (`Render_SetStageTextureSize` S 004e8a4d). Per draw of the
+character's mesh, outside the shadow pass, `CCharacter::SetShaderConstants` S 006910e0 sets:
+
+| Parameter | Value |
+|---|---|
+| `TEXTURE_ATLAS_OFFSET` | `(x / 1024, y / 1024, 16 / 1024, 16 / 1024)` of the palette's region (`CTextureAtlas::GetRegionUV` S 004ee420); the shader uses `.xy` |
+| `COLOR_INDEX_SCALE` | `(15 / 1024, 256 / 1024)` (atlas size from `GetMipSize` S 004ee040) |
+| `PLAYER_COLOR` | `g_PlayerColors[owner.colorIndex]`, `(r, g, b, 1)`, owner = `settler +0x28` (`Player::GetColorEntry` S 005be2c0); the eight values come from `menu.cfg` (`players-victory.md`) |
+| `AMBIENT` (shared) | `(ambient r, g, b, 0.299 r + 0.587 g + 0.114 b)` (`CGraphicDevice::SetAmbient` S 004d7640, device `+0x14c`) |
+| `LIGHT_COLOR` (shared) | `(light r, g, b, 0.299 r + 0.587 g + 0.114 b)` (`SetDirectionalLight` S 004d5340, device `+0x340`) |
+| `MAIN_LIGHT` (shared) | the direction the light travels (device `+0x330`); ambient and light colours and direction come from the environment (`rendering.md` §3.13) |
+
+There is no fallback for a settler without an owner: the player pointer is always dereferenced **[known]**.
+Other code uses white in that case (`Render_GetPlayerColorOrWhite` S 006d8d00 for borders; `ingame_avatar.fx`
+declares `PLAYER_COLOR = (1, 1, 1, 1)`).
+
+**7. The pixel** (`Main_PixelShader_2_0` of `skin_color_mesh.fx`; `shared.inc`) **[known]** (shader source):
+
+```
+idx  = tex2D(Texture0, uv0)                         // point; idx.r = (fileR - 1) / 255 after part 1
+fDot = saturate(dot(n, -MAIN_LIGHT.xyz))            // n = interpolated world normal, not renormalised
+D    = fDot * LIGHT_COLOR.a
+D   *= shadow                                       // PCF of 4 taps (Default), 1 tap (Low*), none (*NoShadow)
+D   += AMBIENT.a
+t.x  = saturate(idx.g * D) * COLOR_INDEX_SCALE.x + TEXTURE_ATLAS_OFFSET.x + 0.5 / 1024
+t.y  = idx.r * COLOR_INDEX_SCALE.y              + TEXTURE_ATLAS_OFFSET.y + 0.5 / 1024
+pal  = tex2D(Texture1, t)                           // bilinear (FILTER_MODE_1 Linear), wrap
+rgb  = lerp(PLAYER_COLOR.rgb * idx.g * D * 2, pal.rgb, idx.a)
+N    = normalize(n);  V = normalize(cameraPos - worldPos)
+refl = normalize(2 * D * N + MAIN_LIGHT.xyz)        // a reflection that uses D instead of dot(N, L)
+rgb  = saturate(rgb + pow(saturate(dot(refl, V)), 16) * idx.b)
+fow  = tex2D(Texture3, worldCoord)                  // worldCoord = (world x, z, 1) * TEXTURE_TRANSFORM[3]
+rgb *= fow.a;  rgb = lerp(tex2D(Texture6, worldCoord * 16).rgb * rgb, rgb, fow.a)   // CalcFOW
+out  = (rgb, idx.a)                                 // no blending, no alpha test, z test and write
+```
+
+(`shadow` is `shared.inc`'s `calculateShadow` / `calculateSimpleShadow` on the shadow map of `rendering.md` §3.13.)
+
+followed by the device's linear table fog (`rendering.md` §3.13). In texel units of the palette block the lookup
+is `x = s * 15 + 0.5` with `s = saturate(G * D)` and `y = k * 256 / 255 + 0.5` with `k` = the slot (file R − 1).
+So along the shade axis the bilinear filter interpolates between neighbouring ramp colours (s = 0 is exactly the
+darkest, s = 1 exactly the lightest colour); along the slot axis it takes row `k` with weight `1 − k / 255` and row
+`k + 1` with weight `k / 255` — 0 for slot 0, up to 5.9 % for slot 15, whose neighbour is the texel row below the
+block: row 0 of the palette placed below it, or atlas texels no palette was copied to. **[known]** (arithmetic;
+what those untouched texels contain is **[TODO]**, §10). Only the luminances of ambient and light enter, so the
+light's hue does not tint settlers; the team colour is `PLAYER_COLOR × G × D × 2`, not a palette colour.
+
+The technique is chosen per pass by `ShaderTechniqueTable::Select(lowQuality, shadows)` S 004ef880: at shader
+level 2 or more `Default` / `NoShadow` (shadows on / off) when `lowQuality` is false, `LowDefault` / `LowNoShadow`
+when it is true; levels below 2 fall back to `shader_2_0_vs_only` / `ffp` (fixed function, which blends the raw
+index map with the player colour). `CCharacterMgr::Render` passes `lowQuality = (scene setting vtable +0x54 != 3)`
+(`Scene::RenderPasses` S 0067eb20) **[known]**; which user setting that is **[TODO]**. The `Low` variants skin with
+the first two influences only (`weight0` and `1 − weight0`, `CalcSkinnedVertex2Bones`) and take one shadow tap;
+the colour computation is the same.
+
+**8. Other users of index textures.** In the game data only `settler_config.xml` references
+`*_colorindices_*` textures **[known]** (data). The *in-game avatars* (`S2CG::InGameAvatar`, whose constructor
+S 0068bc10 loads `ingame_avatar.fx` from the lobby data) use the same scheme: their index textures get the same
+red decrement (`InGameAvatarData::LoadFromFile` S 0068b850), each body part's 0x400-byte palette from the avatar
+data goes into an atlas (`InGameAvatar::Avatar::ctor` S 0068b530), and the shader does the same lookup with
+`D = (AMBIENT.a + fDot * LIGHT_COLOR.a) * planarLightMap`, a specular exponent of 4 and an optional player colour
+**[known]** (calls and shader file; the avatar data format is not covered here). The lobby's avatars (`skin.fx`,
+palettes built from the lobby's own `color_slots.xml` by `AvatarColorSlots::BuildPaletteFromColorMap` S 0050d100
+and `CopyVariantColorRamp` S 004fcc10, which also maps a 1-based Material index to row index − 1) are out of scope
+(§1).
 
 **Ships** (`ships.fx`): `rgb = lerp(colour, colour * lerp(1, playerColor * 1.8, textureAlpha), playerColorWeight)`
 with `PLAYER_COLOR` and `PLAYER_COLOR_WEIGHT` set by `ShipMgr`: the diffuse texture's alpha marks the team-colour
@@ -1144,16 +1343,26 @@ Names are slot names (§3.9) optionally followed by a property name: `Stand`, `W
 death animation, with `<Sound start="0.0" name="die"/>` and `<Sound start="0.3" name="fall down"/>`). Event
 children in this file: 78 `<Sound>`, one `<Particle start="0.0" name="StoneDust"/>`, no `<Item>` (§3.12).
 `tribes` is an integer bit mask, default 0 (the file's comment: 0 all, 1 Roman, 2 African, 4 Chinese; values used:
-0, 3, 5). `<RandomAnimations>` holds one group, `<Random minDelay="5.0" maxDelay="8">`, with 11
-`<Animation src probability>` children `male_idle00..10.KEX`: `probability` 0.1 for nine of them, 0.2 for
-`male_idle01`, 0.01 for one; with the rule of §3.11 the weights are 10, 20 and 1 (total 111). **[inferred]**
+0, 3, 5; the engine tests bit `tribeId & 31`, which these masks never contain, §3.9). `<RandomAnimations>` holds one
+group, `<Random minDelay="5.0" maxDelay="8">`, with 11 `<Animation src probability>` children `male_idle00..10.KEX`:
+`probability` 0.1 for nine of them, 0.2 for `male_idle01`, 0.01 for one; with the rule of §3.11 the weights are 10,
+20 and 1 (total 111). **[inferred]**
 
 ### 6.3 `[data]\character\color_slots.xml` **[known]** (S 006c9d20)
 
-`<SlotEnumeration>` (slot names such as `Hair`, `Skin`, `Jacket`, `Soldier_Armor_gold`), `<ColorRamps>` (e.g.
-`<ColorRamp slot="Hair" texture="[data]\character\colormaps\hair_table.tga" rows="16"/>`,
-`<ColorRamp slot="_empty_" solid="0.0 0.0 0.0"/>`), 63 `<ColorMap name>` elements with
-`<Material index="3" slot="Hair"/>` children.
+`<SlotEnumeration>` (15 `<Slot name>`: `_empty_`, `EyeInner`, `EyeOuter`, `Hair`, `Jacket`, `Skin`, `Trousers`,
+`Belt`, `Shoes`, `Details`, `Apron`, `Soldier_Armor_grey`, `Soldier_Armor_gold`, `Soldier_Helmet_Bush`,
+`Soldier_Shield_wood`; not used for palettes), `<ColorRamps>` with 41 `<ColorRamp>` elements of 41 distinct names
+(e.g. `<ColorRamp slot="Hair" texture="[data]\character\colormaps\hair_table.tga" rows="16"/>`,
+`<ColorRamp slot="_empty_" solid="0.0 0.0 0.0"/>`; one `solid`, no `lit`/`dark`, no `value` children, 40
+textures, `rows` given 10 times: 9 × 16 and `Skin` = 6), and `<ColorMaps>` with 63 `<ColorMap name>` elements,
+each with exactly 16 `<Material index="1..16" slot>` children (§3.15 parts 2–4). Variants per ramp after loading:
+`_empty_` and `EyeOuter` 1, `Skin` 6, `Yellow` and `Red` 8, all others 16. All 36 `slotMap` values of
+`settler_config.xml` name an existing map. Three textures are written without the `[data]` prefix
+(`data\character\colormaps\skin_egypt_table.tga`, `skin_egypt_woman_table.tga`, `skin_bavarian_woman_table.tga`);
+every Egyptian settler map and `bavarian_soldier` use them, and a ramp without variants is not guarded (§3.15
+part 4), so the path must resolve in the shipped game **[inferred]**; a reimplementation should resolve it like
+`[data]\character\colormaps\…`. **[known]** (data, counted)
 
 ### 6.4 `settings/buildings.xml`, `ships.xml`, `animals.xml`, `items.xml` **[known]** (data)
 
@@ -1195,7 +1404,13 @@ cycle. Event `start` / `duration` values are compared against `(time - startTime
 | `Wrap` | default sampler address mode of every stage (`ADDRESS_MODE_U0..` / `V0..`) | `gfx/fx_20/shared.inc` |
 | 0.5 | rounding of idle-variation weights (§3.11) | S 006de030 |
 | 1024 x 1024 | settler palette atlas | S 00695130 |
-| `0x5432ace0` | seed of the static cosmetic generators | S 00695490, S 006ce2c0 |
+| `0x5432ace0` | seed of the static cosmetic generators (the palette generator of §3.15 and the animals' stand choice; separate instances) | S 00695490, S 006ce2c0 |
+| `16807`, `2^31 − 1` | Park–Miller generator `ai::math::RandomGenerator` | S 006ec3a0 |
+| `15.0`, `256.0` (doubles S 007e2aa8, S 007e62d8) | `COLOR_INDEX_SCALE = (15 / atlasWidth, 256 / atlasHeight)` | S 006910e0 |
+| 16 x 16, `0xffff00ff` | palette size and its initial fill (magenta; also the initial fill of a ramp) | S 006c1140, S 0050e3b0 |
+| `0.06666667` | `1 / 15`, gradient step of `lit` / `dark` ramps | S 006c11d0 |
+| `0.299`, `0.587`, `0.114` | luminance stored in the alpha of the ambient and light colours | S 004d7640, S 004d5340 |
+| −1 on the red byte | 1-based index map → 0-based palette row | S 00692170 |
 
 ---
 
@@ -1321,7 +1536,7 @@ never feeds anything back into the simulation.
 | shared pose pool (§3.8) | optional optimisation: one skeleton per (model, clip) shared by many `MeshInstance3D`, or GPU instancing with baked animation textures; plain per-settler skeletons are behaviourally equal except that settlers would no longer move in phase |
 | attachments | `BoneAttachment3D` on `SLOT_HandR` / `SLOT_Goods` / the `boneLink` names |
 | animation events | call-method or audio tracks generated from the `<Sound start name>` children |
-| settler colouring | a small shader: index texture (R row, G luminance, B specular, A mask) + palette texture + player colour uniform (§3.15) |
+| settler colouring | a spatial shader with the index map, a per-settler 16 x 16 palette and the player colour (recipe below, §3.15) |
 | ship colouring | shader mixing `albedo * player_color * 1.8` by the albedo alpha |
 | building tint | per-instance uniform selecting a column of `colors.tga` |
 | LOD (`mesh`..`mesh3`, ranges 30 / 40 / 60) | `GeometryInstance3D` visibility ranges or manual switching |
@@ -1331,6 +1546,34 @@ keys, loop versus play-once-and-hold) and the timing contract of §8 (the simula
 follows) define what the player sees. **Free to change**: blending quality (adding cross-fades), pooling, LOD,
 palettes' random source.
 
+**Settler colouring recipe** (§3.15) **[inferred]** as a mapping; every number comes from the parts cited:
+
+1. *Import the index maps as data*: no VRAM compression, no sRGB conversion, nearest texel of the nearest mip
+   level, repeat (Godot's `filter_nearest_mipmap` blends two levels unless the project setting
+   `rendering/textures/default_filters/use_nearest_mipmap_filter` is on; alternatively pick the level in the shader
+   and read it with `textureLod` at a rounded level). Keep the DDS mip chain (its levels hold integer R values); a
+   generated chain, like a blend between two levels, would average slot numbers. Either subtract 1 from R at import (as the engine does, mod 256)
+   or in the shader: `k = round(texel.r * 255) - 1`. Texels with file R = 0 are unused background.
+2. *Build ramps* from `color_slots.xml` exactly as part 2 (group by `slot`, file order, round-half-even packing;
+   texture rows top to bottom, column 0 = lit end).
+3. *Build a palette per settler* as part 4: map by `slotMap` (fallback entry 0), slots 0..15 in order, one
+   `NextInRange(0, count − 1)` per slot, store reversed (`palette[slot][i] = variant[15 − i]`). To reproduce the
+   original sequence use one Park–Miller generator per process seeded `0x5432ace0`, advanced in settler creation
+   order; any other source only changes which look a settler gets.
+4. *Store it* as a 16 x 16 RGBA8 texture (row = slot, column = shade), linear filter, no mips, clamp — or as a
+   block of a shared atlas with the texel-centre arithmetic of part 7.
+5. *Shade* with the formula of part 7, in gamma space like the rest of the original renderer (`rendering.md`):
+   `D = saturate(dot(n, L)) * lum(light) * shadow + lum(ambient)` with `lum = 0.299 r + 0.587 g + 0.114 b` and
+   `n` not renormalised; palette lookup at `u = (saturate(G * D) * 15 + 0.5) / 16`,
+   `v = (k * 256 / 255 + 0.5) / 16`; `rgb = mix(player * G * D * 2, palette, A)`;
+   `rgb = clamp(rgb + pow(clamp(dot(normalize(2 * D * N - L), V), 0, 1), 16) * B, 0, 1)` with `L` the
+   direction *to* the light (the original adds `MAIN_LIGHT`, the travel direction); then fog of war and fog as for
+   other objects. With a 16-row palette and clamping, the `k / 255` share that slot 15 takes from the texel row
+   below its block (part 7) comes from row 15 itself; in the original it is a 5.9 % blend towards whatever lies
+   below the block in the atlas.
+6. *Player colour*: the owner's entry of the eight-colour table (`menu.cfg` values); a model viewer without an
+   owner can use white, as the engine's other fallbacks do.
+
 ---
 
 ## 10. Open questions
@@ -1339,7 +1582,7 @@ palettes' random source.
 |---|---|---|
 | 1 | Do the settler meshes look right with the constant quarter turn of §2.6 applied (i.e. is the turn compensated by the mesh data or by the render movement's heading)? | One converted settler viewed with a walk animation next to a screenshot. |
 | 2 | Front-face winding as the engine draws it: the `STATES_*` macros of `shared.inc` and the three object shaders set no cull mode, and samplers default to `Wrap` (§9); a `D3DRS_CULLMODE` write from code is not excluded. | Static: search the device wrapper for the cull render state; or one converted model viewed next to a screenshot. |
-| 3 | The tribe number tested against the `tribes` mask (`1 << (key & 31)`). | Static read of the properties tribe map (`StaticAccess +0x9c`) loader: the first dword of a tribe record. |
+| 3 | Answered (§3.9): the tested number is the tribe id itself (bits 3, 19, 3 for the three tribes), so the masks 3 and 5 of the data never match. | — |
 | 4 | Which code sets the render logic's byte `+0x2a` (copied to the character each tick and, as the animation's track flag, to `currentTrack +0x50`; §3.9 treats it as "visible"). | Static read of the writers of that byte in `S2CG::Character*`. |
 | 5 | Which caller enters `Scene::Update` with a non-zero flag (wall-clock time record, §4), and how often `Building::Update` runs. | Static: the callers of scene vtable slot 8 (S 007f8f2c) and of the building subclasses' virtual update. |
 | 6 | Timer kind 7 → `Hit`: none of the 15 callers of `NSettlers::Animation::Start` S 0065f080 passes 7 (they pass 2, 3, 4, 5 or 6; `Soldier::Update` S 006594a0 passes 5) **[known]**, so `Hit` looks unreachable **[inferred]**. Is the kind field (`settler +0x1c`) written anywhere else than `Start`, `Tick` and the loader? | Static: write references to the field. |
@@ -1351,6 +1594,10 @@ palettes' random source.
 | 12 | Do the `<PFX name link>` and `<Sacrifice name>` children of `<Building>` (§6.4) belong to this subsystem's loader or to another one? | Static: string references to `PFX` and `Sacrifice`. |
 | 13 | How a `.psd` / `.bmp` texture name in a material resolves to a shipped file. | Static read of the mesh managers' `AcquireTexture` / `GetOrLoadTexture`. |
 | 14 | `<Production scale>` reaches `AnimResMgr::LoadAnimation` S 004de400 as its `float unitScale` argument, the unit scale at +0x30 of the engine's 0x34-byte load parameter block **[inferred]**: S 006d3880 reads the attribute with a float getter into the production record and passes that field; the third parameter is a float pushed raw by other callers (disassembly of S 006de030), the same function passes the bit pattern of 1.0 for the door animations, and S 006d3880 calls no float-to-int helper. | Confirm with the disassembly of the call in S 006d3880. |
+| 15 | What the palette atlas holds where no palette was copied (the 5.9 % bleed of slot 15 and the texels sampled by index-map texels of file R = 0, §3.15 parts 1 and 7): the atlas texture is created through `CTexture` vtable `+0x2c (1024, 1024, A8R8G8B8, 1, 0)`; whether the pool or the code clears it is not read. | Static read of the texture creation path of S 004ee7e0 (`CreateD3DTexture`); or a dump of the atlas in the running game. |
+| 16 | Which user setting is the scene setting behind vtable `+0x54` whose value 3 selects the full `Default` / `NoShadow` techniques for settlers (any other value selects the two-bone `Low*` variants, §3.15 part 7). | Static: the implementation of slot `+0x54` of the scene settings object (`SceneSettings_GetInstance`) and its setter. |
+| 17 | How the three ramp texture paths without the `[data]` prefix (§6.3) are resolved by `File_ReadAndDecrypt`. | Static read of the path resolution in `File_ReadAndDecrypt` / the packed-file reader. |
+| 18 | Whether the lobby's avatar renderer (`CGfxObjAvatar`, `skin.fx`) also decrements the red channel of its index textures (its files hold R = 1..16 like the game's). | Static: the texture loading of `CGfxObjAvatar` / `AvatarBodyParts` (out of scope here, §1). |
 
 ---
 
@@ -1414,6 +1661,24 @@ palettes' random source.
 | S 006c8ee0 | `S2CG::CharacterCarrier::UpdateAttachedItem` | boat and cargo placement |
 | S 006d09b0 | `S2CG::Item::UpdateCarrierAttachment` | which settler or ship holds a good |
 | S 006c9d20 / S 006c9770 | `ai::gfx::ColorMapTable::LoadFromXml` / `BuildRandomPalette` | colour ramps and settler palettes |
+| S 006c9bc0 / S 0050d2a0 | `ColorMapTable::AddRampVariant` / `FindRampByName` | ramp groups by name |
+| S 006c1190 / S 006c11d0 / S 0050e470 / S 0050e3b0 | `ai::gfx::ColorRamp16::FillSolid` / `FillGradient` / `FromFloat4` / `ctor` | one 16-colour ramp variant |
+| S 004a8380 / S 006e89f0 | `Gfx_PackColorARGB` / `Math_FloatToIntRound` | float colour → ARGB8, round half to even |
+| S 0050e3f0 / S 0050e420 / S 006c1160 / S 006c1140 | `ai::gfx::Palette256::SetSlotRampReversed` / `Equals` / `Copy` / `ctor` | the 16 x 16 palette |
+| S 0050e4a0 / S 0050e5d0 | `Palette256::CreateTexture` / `AddToAtlas` | palette → 16 x 16 texture → atlas region |
+| S 00693140 | `CCharacterMgr::AcquirePaletteTexture` | shared palette cache, atlas region |
+| S 00694640 / S 00692170 | `CCharacterMgr::AcquireTexture` / `Texture_DecrementIndexChannel` | index texture cache, red − 1 |
+| S 006ec3a0 / S 006ec2a0 / S 006ec4a0 | `ai::math::RandomGenerator::NextInRange` / `SetSeed` / `ctor_WithSeed` | Park–Miller generator |
+| S 004ee7e0 / S 004ee710 / S 004ee1d0 / S 004ee0c0 / S 004ee420 / S 004ee040 | `S2CE::CTextureAtlas::CreateTexture` / `AddImage` / `InsertNode` / `CopyImageToNode` / `GetRegionUV` / `GetMipSize` | palette atlas |
+| S 004e80d0 | `S2CE::CTexture::CreateFromFile` | texture file load (vtable `+0x28`) |
+| S 004d7640 / S 004d5340 | `S2CE::CGraphicDevice::SetAmbient` / `SetDirectionalLight` | ambient and light colour with luminance in alpha |
+| S 004e8e30 / S 004e8a4d | `S2CE::CShaderProgram::BeginPass` / `Render_SetStageTextureSize` | `TEXTURE_ATTRIBUTES` per stage |
+| S 004ef880 | `ai::rendering::ShaderTechniqueTable::Select` | technique by shader level, quality, shadows |
+| S 006947d0 / S 00692e20 | `CCharacterMgr::ctor` / `Render` | settler effect and colour map table; atlas on stage 1, batch draw |
+| S 00690760 / S 00691870 | `S2CG::CCharacter::Init` / `Release` | shader handles, logic objects with the link bone; teardown |
+| S 00694a70 | `CCharacterMgr::CreateDonkeyCharacter` | oxen / donkeys without palette |
+| S 006c8620 | `S2CG::CharacterWorker::GetWorkplaceTypeId` | keyC: workplace building property id |
+| S 0068bc10 / S 0068b530 / S 0068b850 | `S2CG::InGameAvatar::ctor` / `InGameAvatar::Avatar::ctor` / `InGameAvatarData::LoadFromFile` | in-game avatars with index textures |
 | S 006d3880 | `S2CG::BuildingDesc::LoadFromXml` | building meshes, animations, production animals |
 | S 006aa640 / S 006aa3b0 / S 006aa6f0 | `S2CG::Building::TriggerWorkCycle` / `PlayStateAnimation` / `PlayOneShotAnimation` | building animations |
 | S 006a54c0 / S 006a5cc0 | `S2CG::Ship::Update` / `UpdateVisuals` | ship animation state, bobbing |
