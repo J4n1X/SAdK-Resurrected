@@ -358,6 +358,17 @@ and `AiLevel`. With `FormerHumans = idle` the players stay without a controller.
 saved; a save received from the host makes its receiver play the host's player offline. A network save loaded
 offline with `FormerHumans = ai`: the other player's seat is an AI player [live 2026-10-12].
 
+Kind 3 is not only a remote human. The shipped campaign maps C01, C04, C06 and C07 have a kind-3 player 3 with an
+empty name: the mission script's own party (C06.lua: `npcPlayer = 3`, `templePlayer = 3`, later
+`pl_changePlayer(templePlayer, player0)`), which no AI runs [known: the four map files' `MapInfo +0x48`]. Their saves
+keep it. What tells a network save apart is `MapInfo +0x1ec` (network game): `SetupSession` sets it to
+`!NComm_Manager_IsRole0` after it has written the kinds [known] S 004562d0, and it is stored and loaded with the save;
+it is 0 in every campaign map, every campaign save and every free-game save checked, and 1 in the network saves of
+2026-10-12 [known: the files]. The mod turns kind 3 into an AI player only when it is 1. Before that check, loading a
+C06 save handed player 3 to the AI and the game crashed right after (access violation in `Stl_VectorDword_PushBack`
+S 00654e50 on `this` = 0x6c, a vector member of a null object) [live 2026-10-14]. Which function pushed onto the null
+object is not established; that a C06 save loads with the check is [TODO live].
+
 `AiLevel` (1 to 3, default 2; any other value counts as 2) is the last argument of `ActivatePlayer`, which
 `NAI::Player::Activate` uses as the id of the AI property record (`PropertiesDb::GetAiProperty`) [known]
 S 00581c40, S 00582870. A new game passes 1, 2 or 3 for the setup's AI difficulty 0, 1 or 2 (`MapInfo +0xc8`)

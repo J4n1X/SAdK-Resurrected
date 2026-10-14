@@ -50,6 +50,10 @@
 //      control them. With FormerHumans = ai they become AI players: their slots become AI slots
 //      (GameFile_LoadMapInfo's result inside StartPendingMap) and after the load each is handed to the AI the way the
 //      Lua function ai_enable does it (NAI::System::ActivatePlayer S 00581c40).
+//      Only a save of a network match counts (is_network_save): kind 3 is also the controller of a campaign map's
+//      scripted party (C01, C04, C06, C07: player 3, no name; C06.lua npcPlayer/templePlayer = 3), which its mission
+//      script drives and no AI may take over. Handing C06's player 3 to the AI crashed the load (2026-10-14, access
+//      violation in Stl_VectorDword_PushBack S 00654e50 on a null object's +0x6c, right after the activation).
 //   5. Resynchronising. When the game detects a desync it only says so (AdvanceNetTick: "!DESYNC DETECTED",
 //      NComm_WriteDesyncDump S 0041f5e0). With AutoResync the host then saves its state and runs sync_load on it.
 //
@@ -813,6 +817,14 @@ void load_now()
 // file's local human (whoever saved) a remote one. A human player of the file that no slot has stays kind 3: nothing
 // controls it.
 // Offline: the humans who are not there are handed to the AI (FormerHumans = ai) or left without a controller.
+//
+// A save of a network match: SetupGameDialog::SetupSession S 004562d0 gives humans kind 2 and 3 and sets
+// MapInfo::bNetworkGame (+0x1ec) with SetNetworkGame(!NComm_Manager_IsRole0); a save keeps the flag (MapInfo::Store /
+// Load, v >= 8).
+// The shipped campaign maps have it 0 and a kind-3 player in C01, C04, C06 and C07; their saves and every free-game
+// save checked have it 0, the network saves of 2026-10-12 have it 1.
+bool is_network_save(const game::NLogic::MapInfo *info) { return info && info->bNetworkGame != 0; }
+
 void fix_players()
 {
     game::NLogic::System *logic = *var::g_pGameSystem;
@@ -827,7 +839,7 @@ void fix_players()
         std::int32_t kind = p->kind;
         if (!offline) {
             kind = i == local ? kKindLocal : kind == kKindLocal ? kKindRemote : kind;
-        } else if (kind == kKindRemote && g_former_humans_ai) {
+        } else if (kind == kKindRemote && g_former_humans_ai && is_network_save(logic->mapInfo)) {
             std::int32_t *start = logic->mapInfo->startPositionsFirst;
             if (!start || logic->mapInfo->startPositionsLast - start < (i + 1) * 2) {
                 sadk::log("player %d: no start position, left without a controller", i);
@@ -891,12 +903,13 @@ bool SADK_THISCALL send_game_loaded(Manager *m, unsigned char value)
     return !g_reloading && SendGameLoaded::original(m, value);
 }
 
-// The save the offline load menu is about to start from: the absent humans' slots become AI slots.
+// The save the offline load menu is about to start from: the absent humans' slots become AI slots (a network match's
+// save only, is_network_save).
 using LoadMapInfo = sadk::Hook<fn::GameFile_LoadMapInfo>;
 bool SADK_CDECL load_map_info(msvc::string *name, std::int32_t type, game::NLogic::MapInfo *info, bool flag)
 {
     bool ok = LoadMapInfo::original(name, type, info, flag);
-    if (ok && g_offline_start && g_former_humans_ai)
+    if (ok && g_offline_start && g_former_humans_ai && is_network_save(info))
         for (std::int32_t i = 0; i < 8; ++i) {
             std::int32_t *kind = fn::NLogic::MapInfo::GetPlayerKindPtr(info, &i);
             if (*kind == kKindRemote) *kind = kKindAi;
