@@ -555,12 +555,13 @@ sacrifice and the expedition. The only goods that reach its input stock are the 
 twice (`Depot::CollectGoods`, [village-buildings.md](village-buildings.md) §3.19). So the limit acts only
 through `ClampStockToLimit`, which `Hitpoints::OnChanged` S 0055b8b0 calls on every hit-point change and
 once when an upgrade completes (`Upgrade::Complete` S 005672c0: `SetType`, then `RescaleToTypeMax` S 0055b990
-→ `OnChanged`): every entry is cut to `max(1, trunc(hitpoints / maxHitpoints × stockLimit))` of the type the
-building has then (S 0055c200). A guard house is never an upgrade target, so its limit 2 matters only for the
-materials of an upgrade to a tower that is damaged while it runs [known]. [TODO] not reconciled: at full hit
-points the completed tower keeps `plank 3` and cuts `stone 5` to 4, but the live check of 2026-10-12
-(village-buildings.md §3.19) reported all 8 units still in the finished tower's input stock; reading that
-stock in a running game after an upgrade would settle it.
+→ `OnChanged`): every entry is cut to `max(1, trunc(hitpoints / health × stockLimit))` of the type the
+building has then (S 0055c200; the ratio divides by the type's `health`, `Hitpoints::GetRatio` S 0055b850). A
+guard house is never an upgrade target, so its limit 2 matters only for the materials of an upgrade to a tower
+that is damaged while it runs [known]. At full hit points the completed tower keeps `plank 3` and cuts `stone 5`
+to 4; the clamp writes the counts in the stock's tree nodes and leaves the stock's unit total at 8, which is
+the 8 units the live check of 2026-10-12 read ([village-buildings.md](village-buildings.md) §3.19) [known for
+the code, S 0055b090; inferred for what the check read].
 The watch towers of §2.4.1–2.4.3 are not territory buildings: they only uncover the map (sight 16).
 
 ### 2.5 Professions and carried tools

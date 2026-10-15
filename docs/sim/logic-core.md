@@ -142,7 +142,7 @@ S 00539a90, S 00539e10.
 
 | Offset | Type | Name | Meaning |
 |---|---|---|---|
-| +0x04, +0x10, +0x1c | `std::list` ×3 | `listA/B/C` | Empty at construction S 005282a0, destroyed in the destructor S 00532080; no other access found, so they stay empty [inferred]. |
+| +0x04, +0x10, +0x1c | `std::list` ×3 | `listA/B/C` | Empty at construction S 005282a0, destroyed in the destructor S 00532080. `listA` is the `ObserverList` that `NVillage::Construction::OnBuildWorkDone` S 0055eec0 and `Complete` S 0055ef00 notify ("building completed", `ObserverList::Notify1`); no in-match `ObserverList::Subscribe` S 00458860 call names it, so it stays empty and the notification reaches nobody [inferred: [village-buildings.md](village-buildings.md) §3.4]. No other access to the three lists found. |
 | +0x28 | `NLogic::System*` | `owner` | Constructor argument. |
 | +0x2c | `std::set<CallbackReceiver*>` | `receivers` | Ordered by **pointer value**. |
 | +0x38 | bool | `notifyEnabled` | 1 at construction. All broadcasters do nothing while 0. |
