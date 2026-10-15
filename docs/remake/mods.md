@@ -164,6 +164,10 @@ Each mod declares its settings in C# (`ISettingsStage`) or in `data/settings.lua
 | `match` | read by simulation code at run time | stored in the match and its saves; set by the host in the pre-game room |
 | `user` | presentation and input only | local; never read by simulation code |
 
+`user` settings may change while the game runs and announce the change; their values are kept in the profile as
+`<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The Options screen's Mods tab shows
+them, labelled by the text key `!<mod id>.<name>`.
+
 ### 6.3 Data stage [draft]
 
 Three sub-stages; each runs over all mods in load order before the next starts [binding]. In each sub-stage a
@@ -626,7 +630,8 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
   `core.game`); a listener with an id outside its namespace must replace an existing one. `engine.*` is the game's:
   `engine.start` (event, emitted after the mods load and by the mods screen's "Back"), `engine.quit { code }`,
   `engine.close { overlay }`, `engine.mods`, `engine.shell { reason }`, `engine.language { code }` (switches the
-  text language, [assets.md](assets.md) §8).
+  text language, [assets.md](assets.md) §8), `engine.options { tab? }` (the Options screen, a modal overlay the game
+  hosts; core.mainmenu's "!SETTINGS" entry and the map view open it, [renderer.md](renderer.md) §19).
 - **Dependencies.** A mod whose listener or route emits another mod's intent names that mod among its dependencies
   (`tools.assetbrowser` requires `core.mainmenu`), else a warning; the version range is the contract's version. Mods
   share no types: another mod's intent is emitted as a key and plain data, never with its record.

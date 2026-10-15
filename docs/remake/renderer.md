@@ -556,6 +556,11 @@ animals, ships and animated building parts use one skinning path of their own in
   pool, as the original does.
 - Animals, ships and oxen use the same path with their own shaders (`animals.fx`, `ships.fx` player-colour weight,
   `donkey.fx`).
+- **Unseen characters cost no animation work**: the pose is computed from the clock in the vertex shader, so a
+  character out of view has nothing to pause and shows the right point of its clip when it comes back into view. A
+  visibility notifier per character would add a node that has to move every tick and save nothing
+  ([godot-capabilities.md](godot-capabilities.md) §6). The CPU work per mover is the interpolation above, done only
+  for visible regions.
 
 ## 10. Terrain [draft]
 
@@ -757,7 +762,11 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   door, slot 1 work) on disjoint bones (the conversion records each bone's layer per building model), so the two
   play at once without blending (an `AnimationTree` with both, or one player per layer).
   Triggered by `ActionTimerStarted` of the worker and by settlers passing `enterDistance` (presentation logic over
-  motion samples), as RE §3.9 describes.
+  motion samples), as RE §3.9 describes. While a building is out of view, a `VisibleOnScreenNotifier3D` on its node
+  switches its players off; on `screen_entered` each player seeks to `(clock − clip start) mod length`, so the clip
+  shows where it would be by now (`VisibleOnScreenEnabler3D` would resume where it stopped instead). Notifiers ignore
+  shadow passes, so the shadow of a building just outside the view may show a held pose
+  ([godot-capabilities.md](godot-capabilities.md) §6).
 - **Ground decal**: the `GROUND` mesh clipped against the terrain triangles under it and laid 0.01 above (the viewer's
   `Placement.GroundDecal`), on a worker thread; rebuilt when heights change under it.
 - **Fires**: `toInt((1 − hpRatio) × firePoints + 0.5)` emitters `BuildingFire` at the `FIRE_%02d` nodes, else at five
@@ -828,6 +837,10 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - Frame-rate dependent effects of the original (the settler death sink per frame call, camera smoothing per frame)
   become `dt`-based in both modes; they are presentation only.
 - Stalls: faithful saw-tooth or refined hold ([sim-boundary.md](sim-boundary.md) §4.1).
+- **One clock** [the maintainer's direction 2026-10-15]: game speed is `Engine.TimeScale` and pause is
+  `SceneTree.Paused`, so animation players, particles, tweens and the presentation time (`sadk_time`) follow both by
+  themselves; the camera, the UI and the boot code run on real time (`Time.GetTicksUsec`) and process always
+  ([godot-capabilities.md](godot-capabilities.md) §6).
 
 ## 18. Picking [draft]
 
@@ -859,6 +872,21 @@ The table of RR §2.3 stands. Added here:
 
 Settings apply at once where they are globals; those that change batches (LOD, region size) rebuild at the next
 match load.
+
+**In the game** [implemented 2026-10-15]: one shared `RenderSettings.Current` (a map view reaches it as
+`rc.Settings`), stored as `<Graphics>` in `settings.xml` ([assets.md](assets.md) §3) and changed in the Options screen
+(`engine.options`, tabs Graphics, Shadows, Quality) or the map view's quick switches, which are a form over the same
+object. Every change applies at once, including the region size and blended foliage, which rebuild the shown world.
+
+| Element | Attributes |
+|---|---|
+| `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth` |
+| `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
+| `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
+| `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |
+| `AmbientOcclusion`, `DepthOfField` | `enabled`, `intensity`, `radius`, `lightAffect`; `enabled`, `strength` (follows the eye distance, easing at the original's focus speed 3, S 00696d20) |
+
+SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the Compatibility renderer.
 
 ## 20. Performance [draft]
 

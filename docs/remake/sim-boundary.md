@@ -113,6 +113,14 @@ public sealed class TickRecord             // immutable once published
 - The accumulator semantics are the original's (they decide the feel of speed changes). The simulation does not
   run in Godot's physics step: a lockstep stall or a pause must not produce physics frames that Godot would
   interpolate across ([godot-capabilities.md](godot-capabilities.md) §6).
+- **Speed and pause in Godot** [draft; the maintainer's direction 2026-10-15]: the driver is a pausable node that
+  calls `Advance` from `_Process` with Godot's scaled delta, so the game speed is `Engine.TimeScale` (set only from
+  simulation state: the speed command's tick and cinematic blends; `SimClock.TimeScale` mirrors it) and an offline
+  pause is `SceneTree.Paused` rather than a time scale of 0. Animation players, particles, tweens and the presentation
+  time then follow speed and pause without code of their own; `RealDelta` comes from `Time.GetTicksUsec`, since Godot
+  exposes no unscaled step ([godot-capabilities.md](godot-capabilities.md) §6). The fixed-tick accumulator stays the
+  remake's, so frame timing decides only when a tick runs. Open: whether the original clamps the frame time at 5 s
+  before or after applying the speed.
 - **Offline commands** execute in the gap between two ticks, with the tick counter of the previous tick, as the
   original executes them inside the UI call (GC §3.1). Network commands execute at the closing tick of net tick
   `N+2`, at the start of that tick before its subsystems (GC §3.2). Both are scheduled by `SimHost`; the UI only

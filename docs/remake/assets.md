@@ -47,7 +47,7 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 |---|---|---|
 | the installation | never | the player's copy of the original |
 | `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
-| the game's folder: `settings.xml` | the game, at the first start | the installation's path and the conversion folder [implemented, maintainer 2026-10-15] |
+| the game's folder: `settings.xml` | the game, at the first start and after each change | the installation's path and the conversion folder [implemented, maintainer 2026-10-15]; the language, `<Window>` (mode, size, screen, V-Sync, frame limit) and `<Graphics>` ([renderer.md](renderer.md) §19) [implemented 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
 | the game's folder | the installer | the engine and, in `mods/`, the mods that ship with it: `core.game`, `core.mainmenu`, `core.lobby`, `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
@@ -60,6 +60,8 @@ folder** is the player's choice at the first start (maintainer, 2026-10-15): the
 `%LOCALAPPDATA%\sadk-remake\converted` on Windows (not the roaming folder, for 1.3 GB) and `<user data>/converted`
 elsewhere, shows the free space, and keeps the choice with the installation's path in `settings.xml` next to the
 executable (the project folder when run from the editor; the user folder when the game folder is not writable).
+Every setting is written, so the file lists all that can be set; a value that does not parse or lies out of range is
+reported at start and replaced by its default, and elements the game does not know are kept when it saves.
 Deleting `settings.xml` makes the next start ask again; `--conversion=<folder>` sets it for unattended runs. The `<install id>`
 is a hash of the installation's path and its identity, so two installations (another language, another patch)
 convert side by side. A conversion folder holds [implemented]:

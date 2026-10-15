@@ -9,6 +9,7 @@ engine until 2026-10-15: `RedotSharp.xml`, 49,813 documented members; editor typ
 move to Godot 4.7.2 was checked by building and running everything, §1);
 **[viewer]** = used by the testbed viewer (`sadk-remake`, commit `ea6b13e`) and seen working there;
 **[godot]** = Godot behaviour as Godot's documentation states it, not checked here;
+**[source]** = read in Godot's sources at the tag `4.7.2-stable` (2026-10-15 audit; file and line in the text);
 **[check]** = to verify before a design depends on it. An [api] tag says the member exists, not that it behaves as
 its name suggests.
 
@@ -42,6 +43,8 @@ Godot has three renderers. The maintainer runs **Forward+** on Windows; unattend
 | MultiMesh with per-instance colour and custom data | yes | yes | yes | [api]; [viewer] |
 | Directional shadows with cascades | yes | yes | yes | [viewer] (soft-shadow filter quality on Forward+) |
 | SSAO, SSR, SSIL, SDFGI, VoxelGI, volumetric fog | yes | no | no | [godot]; SSAO [viewer] Forward+ only |
+| Depth fog (`Environment`, fog mode depth) | yes | yes | yes | [source]: `smoothstep(begin, end, length(vertex))`, not linear and on radial distance (scene_forward_clustered.glsl:1141) |
+| `FOG` output of a spatial shader (the shader's own fog; Godot skips the environment's and blends this one) | yes | yes | yes | [source] scene_forward_clustered.glsl:1486, gles3 scene.glsl:2381 |
 | Depth of field (`CameraAttributesPractical`) | yes | partly | no | [viewer]: Forward+ only in its Quality tab |
 | MSAA | yes | yes | yes | [viewer] |
 | FXAA, SMAA, TAA, FSR 1, FSR 2.2 | yes | some | FXAA only [check] | [viewer] Quality tab; FSR 2.2 and TAA Forward+ [godot] |
@@ -49,13 +52,19 @@ Godot has three renderers. The maintainer runs **Forward+** on Windows; unattend
 | `CompositorEffect` (custom post passes in GLSL) | yes | yes | **no** | [api]; [godot] |
 | `Decal` nodes (projected textures) | yes | yes | no [check for 4.5] | [api]; [godot] |
 | `GPUParticles3D` | yes | yes | yes [check] | [api]; [godot] |
-| Occlusion culling (`OccluderInstance3D`, `Viewport.UseOcclusionCulling`) | yes | yes | no [check] | [api]; [godot] |
+| Occlusion culling (`OccluderInstance3D`, `Viewport.UseOcclusionCulling`) | yes | yes | yes | [source]: a CPU ray cast in the shared cull code (renderer_scene_cull.cpp:2927), not a renderer feature |
 
 **Consequence for the design:** everything the original's look needs (light model, terrain, water, objects,
 settlers, particles, reflection, shadows) must work in Godot's shading language on all three renderers. GLSL through
 `RenderingDevice` and compositor effects are allowed for **optional** features (refined-look post effects, compute
 skinning or particles as an alternative path) that have a shading-language fallback or switch off on the
 Compatibility renderer. `remake-architecture.md` §11 ("GLSL allowed") is read in that sense.
+
+Godot's screen-space reflection (`Environment.SsrEnabled`) serves opaque materials only (the flags are set for the
+opaque pass, render_forward_clustered.cpp:755), traces the previous frame's picture, replaces part of the indirect
+specular light and fades out between roughness 0.6 and 0.7; where it misses, the sky or probe radiance remains
+[source]. It cannot apply the original's lookup offsets and never reaches the blended water, so the remake traces its
+own ([renderer.md](renderer.md) §8.3).
 
 The Compatibility renderer shows its output linearly, without the sRGB step: colours in its shots are darker and more
 saturated than on Forward+; it also uses a different depth range in NDC (`CURRENT_RENDERER ==
@@ -73,7 +82,7 @@ through the editor's import pipeline. Godot offers:
 | Models | `GltfDocument` + `GltfState`: `AppendFromBuffer` / `AppendFromFile`, then `GenerateScene`; extensions through `GltfDocumentExtension` (`RegisterGltfDocumentExtension`) | [api]; runtime glTF in exported projects [godot] |
 | Meshes in code | `ArrayMesh.AddSurfaceFromArrays` (custom vertex channels with an explicit format flag), `SurfaceTool`, `ImporterMesh`; `RenderingServer.Mesh*` | [api]; `ArrayMesh` with custom channels [viewer] |
 | Audio | `AudioStreamOggVorbis.LoadFromBuffer` / `LoadFromFile`, `AudioStreamWav.LoadFromBuffer`, `AudioStreamMP3` | [api] |
-| Fonts | `FontFile.LoadDynamicFont` (TrueType/OpenType), `FontFile.LoadBitmapFont` (BMFont) | [api] |
+| Fonts | `FontFile.LoadDynamicFont` (TrueType/OpenType), `FontFile.LoadBitmapFont` (BMFont) | [api]; `LoadBitmapFont` opens real paths only and applies kerning [source] font.cpp:1494, 2050 |
 | Video | `VideoStreamTheora` (Ogg Theora only; other codecs need a native plugin) | [api]; [godot] |
 | Archives | `ZipReader`, `ZipPacker` | [api] |
 | Resource packs | `ProjectSettings.LoadResourcePack` (mounts a `.pck` into `res://`) | [api] |
@@ -85,7 +94,17 @@ Rules that follow:
 - A runtime-loaded image gets no import step: mipmaps, compression and the alpha check are the loader's job. The
   viewer generates mipmaps only for uncompressed images, so a compressed DDS without a mip chain keeps none
   [viewer]. The conversion writes complete mip chains ([assets.md](assets.md) §6.2).
-- Godot's DDS loader reads only the first face of a cube map; the viewer parses cube maps itself [viewer].
+- Godot's DDS loader reads only the first face of a cube map; the viewer parses cube maps itself [viewer]. Read
+  from a buffer, `Image.LoadDdsFromBuffer` returns only the first image (texture_loader_dds.cpp:751) [source].
+- The original's fonts are bitmap fonts (BMFont after conversion). The remake builds their `FontFile` itself: Godot's
+  loader cannot read from `vfs://` and would apply the kerning pairs the original ignores ([assets.md](assets.md)
+  §6.1) [source]. Multichannel signed distance fields, mipmaps and oversampling apply to vector fonts only (the glyphs
+  are drawn from the outlines, text_server_adv.cpp:1408; a fixed-size font skips oversampling, :4265). The project
+  setting `gui/theme/default_font_multichannel_signed_distance_field` changes only Godot's embedded default font, and
+  only while no custom default font is set (default_theme.cpp:1393) [source].
+- Exported games cannot compress to BC formats: etcpak's compressor is registered in editor builds only
+  (etcpak/register_types.cpp:41) [source]. The conversion, which has no Godot dependency, writes compressed textures
+  with complete mip chains itself.
 - Vulkan uploads DXT1 as RGB and loses the one-bit alpha the foliage is cut out with: such textures go to the GPU
   decompressed [viewer].
 - glTF loaded at run time produces scene nodes; the remake converts them to its own render data (meshes, skeleton
@@ -163,12 +182,40 @@ Costs the viewer measured or ran into [viewer, `remake-rendering.md` §4.2]:
 | `WorkerThreadPool`, .NET `Task`/`Thread` | the simulation library uses .NET threads only (no Godot types) | [api] |
 | Threading rule | scene-tree and most Godot calls from the main thread only; the simulation thread never touches Godot | [godot]; [binding] the simulation has no Godot dependency |
 
+What follows `Engine.TimeScale` and `SceneTree.Paused` [source]:
+
+| Facility | `Engine.TimeScale` | `SceneTree.Paused` |
+|---|---|---|
+| `_Process` delta | scaled (main.cpp:5062) | stops pausable nodes (node.cpp:911) |
+| `_PhysicsProcess` | delta scaled (main.cpp:5001); the number of ticks per second follows real time (main.cpp:4937), so a time scale never adds ticks | stops pausable nodes |
+| shader `TIME` | scaled: the renderer adds the scaled step (main.cpp:5089, renderer_compositor_rd.cpp:123); wraps at `rendering/limits/time/time_rollover_secs` (3600) | keeps running |
+| `AnimationPlayer` / `AnimationMixer` | scaled; no option to ignore the scale (animation_mixer.cpp:2407) | stops |
+| `Timer`, `SceneTreeTimer`, `Tween` | scaled unless told to ignore it (timer.cpp:54, scene_tree.cpp:796, 829; `CreateTimer` scales by default) | stop, unless they process always |
+| `GPUParticles3D` | scaled (particles_storage.cpp:1484) | speed set to 0 (gpu_particles_3d.cpp:599) |
+| audio | not scaled; `AudioServer.PlaybackSpeedScale` is separate (audio_server.cpp:1229) | players pause (audio_stream_player_internal.cpp:118) |
+
+No unscaled process step is exposed to scripts (core_bind.cpp:2110); real time comes from `Time.GetTicksUsec`. For
+the remake this means: game speed is `Engine.TimeScale` and pause is `SceneTree.Paused`, so Godot-animated
+presentation (animation players, particles, tweens, shader time) follows both by itself; the simulation keeps its own
+fixed-tick accumulator fed by the scaled delta, so frame timing decides only when a tick runs, never what it computes
+([sim-boundary.md](sim-boundary.md) §4); the camera, the UI and the boot code run on real time and process always.
+Godot's own `--time-scale`, `--fixed-fps` and `--write-movie` then work for unattended runs and replay videos.
+
+**Visibility notifiers** (`VisibleOnScreenNotifier3D`, or node-free ones through `RenderingServer`) [source]: each is
+an instance in the normal cull loop of every camera of the world, sub-viewports (the mirror) included, filtered by the
+camera's cull mask (renderer_scene_cull.cpp:2924); signals fire only on a change; they are sent after all viewports
+are drawn, so work they gate starts one frame late (rendering_server_default.cpp:109); shadow passes do not count
+(renderer_scene_cull.cpp:2427); a `MultiMesh` is culled as one box, never per instance (:2004). Useful for objects
+animated on the CPU (an `AnimationPlayer` per building: disable it while unseen, seek to the clock's time on
+entering); unnecessary for the GPU-skinned crowds, whose animation phase is computed from the clock in the shader
+and costs nothing unseen ([renderer.md](renderer.md) §9, §13).
+
 ## 7. Audio, UI, input, network
 
 | Area | Facilities | Evidence |
 |---|---|---|
 | Audio | `AudioStreamPlayer`, `AudioStreamPlayer3D`, `AudioStreamPolyphonic` (many one-shots on one player), `AudioStreamInteractive` and `AudioStreamPlaylist` (music), buses and effects | [api] |
-| UI | `Control` nodes built at run time; `RichTextLabel`, `NinePatchRect`, `TextureRect`, `Theme`, `TextServer`; `TranslationServer` | [api]; run-time `Control` trees [viewer] |
+| UI | `Control` nodes built at run time; `RichTextLabel`, `NinePatchRect`, `TextureRect`, `Theme`, `TextServer`; `TranslationServer` | [api]; run-time `Control` trees [viewer]; a theme does not pass a `CanvasLayer`, so each layer needs its own theme owner (theme_owner.cpp:404) [source] |
 | Input | `InputMap` and actions, `InputEvent*` | [godot] |
 | Network | `ENetConnection`, `StreamPeerTcp`, `PacketPeerUdp`, `Upnp`; .NET sockets equally available | [api] |
 
