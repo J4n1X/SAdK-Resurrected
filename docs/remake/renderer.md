@@ -666,16 +666,25 @@ show the 1.5-unit facets.
 
 **The smooth surface** goes through the same height samples and exists only in the presentation:
 
-- **One cubic patch per fine triangle, for the height only**, so the surface stays a function of x and z: the corner
-  control heights are the three samples; the edge control heights come from the corner heights and the gradients at
-  the corners (from the vertex normals the terrain already computes); the centre control height follows the
-  PN-triangle rule. The result:
-  - an edge's curve depends only on its two end vertices, so neighbouring triangles meet without cracks;
+- **One cubic patch per fine triangle, for the height only**, so the surface stays a function of x and z. **The edges
+  follow their own lattice lines** (maintainer, 2026-10-15: "non-linear offset interpolation by using neighbors and
+  next-in-line comparisons"): every fine-triangle edge A→B lies on one of the triangle lattice's three line
+  directions; its curve is a cubic Hermite in the height whose slopes are Catmull-Rom differences along that line,
+  `m_A = (h(B) − h(A − u)) / 2` and `m_B = (h(B + u) − h(A)) / 2` with the next-in-line samples `A − u` and `B + u`
+  (one-sided at the map border). The interior is the cubic Bézier triangle bounded by those three curves, its centre
+  control height by the PN-triangle rule. Slopes per line instead of one gradient per vertex (an average over all six
+  neighbours) keep a ridge along one line sharp across it. The result:
+  - an edge's curve depends only on the samples of its own line, so neighbouring triangles meet without cracks;
+  - collinear samples give a straight edge, so ramps stay straight;
   - the surface passes exactly through every sample, so objects standing on sample vertices stay on the ground;
   - where the gradients equal one plane's slope the patch is that plane, so a flattened building plot stays flat
     inside.
-- **No overshoot**: steep edges (cliffs, plot borders) limit their edge control heights to the range of the two end
-  heights, in the manner of monotone cubic interpolation, so no ridge or dip appears that the samples do not have.
+- **No overshoot** (the next-in-line comparison): where the steps on the two sides of a vertex along a line differ in
+  sign or one is zero, the slope there is 0; otherwise it is limited to three times the smaller step (Fritsch–Carlson),
+  so no ridge or dip appears that the samples do not have and plot borders stay crisp.
+- **A baked normal texture** at a finer resolution than the fine grid (e.g. 4×), computed once on the CPU from the
+  curved surface (and on height edits), carries its light into the terrain shaders, so even the settings without extra
+  triangles show the curvature in the light at one texture read per pixel (principle 14).
 - **Normals** come from the patch's derivative, so the light runs smoothly across the former facet edges.
 - **Density**: the setting **Terrain detail** splits each fine triangle into k² triangles, every edge into k equal
   parts (an even split exists only for k², so there is no "double" step):
