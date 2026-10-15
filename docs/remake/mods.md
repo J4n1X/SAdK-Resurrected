@@ -171,15 +171,24 @@ Three sub-stages; each runs over all mods in load order before the next starts [
 mod's C# part runs first (`IDataStage.Definitions` / `Updates` / `FinalFixes`), then its Lua file (`data.lua` /
 `data-updates.lua` / `data-final-fixes.lua`).
 
+**The content model is the engine's** [implemented, the maintainer's decision 2026-10-15]: the record types
+(`TribeDef`, `GoodDef`, `BuildingDef`, `PatternDef`, …, namespace `Sadk.Engine.Content`), the registry kinds and the
+`properties.*` API (`Sadk.Engine.Content.Properties`) belong to the engine, not to a mod. Before any mod's data stage
+the engine defines the kinds and the four configuration blocks (owner `engine`) and installs `properties` in every
+data-stage Lua state, with the global naming of §6.4; a C# data stage gets the same database (`ctx.Properties`).
+While a mod's step runs, the records it creates are owned by that mod. A mod that adds records therefore needs no
+dependency on `core.game`; one that reads or changes base entries (a tribe that uses the base goods) requires it.
+
 `core.game`'s definitions sub-stage runs the original's property scripts from the converted installation
-([lua.md](lua.md) §3): `data.lua` with the 21 files it loads, through the `properties.*` bindings, which create
-and fill registry entries. Afterwards `core.game` applies what the original keeps outside the property scripts
+([lua.md](lua.md) §3): `data.lua` with the 21 files it loads, through the engine's `properties.*` bindings, which
+create and fill registry entries. Afterwards `core.game` applies what the original keeps outside the property scripts
 (settings XML values that the simulation reads, §8.3) and its own C# definitions (the behaviour components the
 property values configure).
 
 Data-stage Lua sees two APIs:
 
-- `properties.*`: the original's 243 functions with the original's semantics, so a property script written for
+- `properties.*`: the original's 243 functions with the original's semantics, plus the remake's 13
+  `X_createNamed` ([lua.md](lua.md) §3.3), so a property script written for
   the original (a sadkmod `scripts\properties\*.lua` mod) runs unchanged as a mod's `data-updates.lua`. The id
   globals of the original scripts (`woodCutter`, `brauhaus`, ...) are defined in this state.
 - `registry`: a reflection view over the registry's definition objects for changes the property API cannot
@@ -203,8 +212,11 @@ naming the mod, file and line.
 - `core.game`'s keys are the global variable names the original's property scripts assign the ids to (`brauhaus`,
   `woodCutter`); how they are found is in [lua.md](lua.md) §3.3. Each entry also keeps its original id (signed
   32 bit) as data [binding].
-- A mod's new entries take the prefix `<mod id>.` by convention. Defining a key that exists is an error; changing
-  an existing entry goes through `get`. Collisions are loud instead of silently overriding.
+- A mod's new entries take the prefix `<mod id>.` by convention (`X_createNamed` adds it). Defining a key that
+  exists is an error; changing an existing entry goes through `get`. Collisions are loud instead of silently
+  overriding; a hex `X_create` over an id another mod derived from a name is a load error naming both records, not a
+  takeover.
+- Owners: the kinds and configuration blocks are `engine`'s, every record belongs to the mod that created it.
 
 ### 6.5 Freeze and the registry checksum [draft]
 
@@ -218,7 +230,10 @@ After the final fixes:
 3. validation by each definition class (`Validate()`), e.g. a production needs a workplace;
 4. the **registry checksum**: a hash over the canonical serialisation of every simulation-relevant definition field
    (presentation fields such as the gfx name excluded). Peers compare it at join; a mismatch with an identical mod
-   set means a mod's data stage is not deterministic, and the message names the first differing entry.
+   set means a mod's data stage is not deterministic, and the message names the first differing entry. A record's
+   canonical form names its type without namespace [implemented], so moving a definition type between namespaces or
+   assemblies does not change the checksum; code is covered by the match set's content hashes (§9.1). The reference
+   installation gives `22926df0…` (892 records).
 
 After the freeze the registry is read-only for the rest of the process.
 
@@ -275,7 +290,7 @@ registration first:
   with its last object, so the mod's code unloads once its views are freed, in editor runs and exports alike
   [tested 2026-10-15]. The shared build rules are `src/Mods/Mod.props` in sadk-remake.
 - **A mod may use the types of the mods it depends on** [implemented]. Its reference to an assembly of a dependency
-  (a tribe mod's to `Core.Game`, for `TribeDef`) resolves to the copy that mod loaded, so both share one type; only
+  (a mod's to a type another mod defines) resolves to the copy that mod loaded, so both share one type; only
   declared dependencies are searched (`Requires`, `Optional`, and theirs in turn), before the mod's own `bin/`. A mod
   never ships a dependency's assembly: its project references it with `Private="false"`, which also gives the editor
   the dependency's symbols. The resolver holds only the dependencies' ids: it lives in the mod's load context, and
@@ -470,7 +485,8 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   `<code>`), every assembly writes its documentation file, and the files travel with the dlls (the mods' `bin/`, the
   export's `data_` folder, Godot's and Harmony's from their packages), so the editor shows the engine's, core.game's
   and Godot's descriptions; the check probes them. Checked with two mods built outside the repository: a tribe in C# with
-  core.game's `TribeDef`, and a client mod with its own node type, an overlay and a menu entry. The core mods in the
+  the engine's `TribeDef` (the example requires no mod since the content model moved into the engine), and a client mod
+with its own node type, an overlay and a menu entry. The core mods in the
   repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
   `mod.xml` and `intents.xml`, the mods' XML doc files next to their assemblies, a `dotnet new` template.
@@ -497,7 +513,7 @@ emits `engine.start`; from there the mods decide what shows. The remake itself i
 
 | Mod | Side | Holds |
 |---|---|---|
-| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies: `Core.Game.Simulation` (no Godot) and `Core.Game.Renderer` (Godot), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
+| `core.game` | simulation + client | the game's content (it fills the engine's registry from the original's property scripts) and the logic that uses it, systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies: `Core.Game.Simulation` (no Godot) and `Core.Game.Renderer` (Godot), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
 | `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 

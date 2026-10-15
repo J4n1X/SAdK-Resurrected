@@ -44,8 +44,9 @@ Sadk.Game (the executable)          Sadk.Headless (conversion, validation, repla
    ([assets.md](assets.md) §4).
 2. Mods are resolved and ordered, the virtual file system mounted (converted installation, then the mods),
    assemblies loaded and their Harmony patches applied ([mods.md](mods.md) §5, §6).
-3. Settings stage; data stage (`core.game` runs the original's property scripts through its `properties.*` bindings; mods
-   change entries in C# and Lua); the registry is frozen and checksummed; presentation documents (the original's
+3. Settings stage; data stage (the engine defines the kinds and the `properties.*` API, `Sadk.Engine.Content`;
+   `core.game` runs the original's property scripts through it; mods add and change entries in C# and Lua without
+   needing `core.game` for the types); the registry is frozen and checksummed; presentation documents (the original's
    settings XML as visual descriptors, layouts) are merged and patched.
 4. Main menu.
 5. A match: the map package mounted on top; the simulation builds the world, runs the map script's top-level chunk,

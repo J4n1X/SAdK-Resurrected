@@ -218,8 +218,9 @@ mods); it reports constructs it had to rewrite.
   `buildings`, `sacrifices` with `_goodExchange` and `_campaign`, `signs`, `military`, `ship`, `sounds`, `ai`,
   `harbors`, `tribes`, `spawnpoints`; LR §4.1). File names resolve case-insensitively by name (`goods` →
   `Goods.lua`).
-- The 243 `properties.*` bindings (224 of them called by the shipped scripts, 7 739 call sites [data]) are C# in
-  `core.game` (`Core.Game`), with the original's conventions (LR §3.5): `X_create("hex")` parses up to 32 hex digits, creates the
+- The 243 `properties.*` bindings (224 of them called by the shipped scripts, 7 739 call sites [data]) are the
+  engine's C# (`Sadk.Engine.Content.Properties`, installed in every mod's data-stage state), with the original's
+  conventions (LR §3.5): `X_create("hex")` parses up to 32 hex digits, creates the
   record with the original's defaults (`../sim/properties-data.md`) and returns the id as a signed number; setters and
   adders return nothing; `pa_create` over an existing id replaces the record, losing every earlier value, as the
   original does; a setter on an id that was never created is a Lua error (the original crashes or silently creates a
