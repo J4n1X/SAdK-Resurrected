@@ -194,6 +194,17 @@ layers and then patched ([mods.md](mods.md) §6.6).
   the original: "no match, no object, no error"); in refined mode a placeholder is drawn.
 - The simulation never resolves an asset ([mods.md](mods.md) §8.3).
 
+### 5.3a The engine asset layer [implemented 2026-10-15]
+
+The engine ships assets of its own at the bottom of the file system, below the converted installation: `engine/`
+next to the executable (in the editor `src/Sadk.Game/engine/`, built from `src/Sadk.Presentation/assets`). It holds
+what every world and mod builds on: the shared shader includes `shaders/sadk/*`, the sky shaders `shaders/sky/*` and
+the engine's text tables `game/language/<lang>/engine.txt`. Any layer above replaces a file at the same logical
+path, so `core.game` or a mod can change a shared include for every shader that uses it. A folder (not the `.pck`)
+needs no I/O path of its own, works alike in the editor and in exports, and lets players see the files. The startup
+log names it first (`file system: engine (20 files), install (…), mod:…`). A mod build deletes files the mod no
+longer has from the game's copy of it, so a stale copy cannot shadow the engine's.
+
 ### 5.4 The original's bare-name rule [draft]
 
 The original resolves a request by its file name through an index built once at start-up; the folders in the

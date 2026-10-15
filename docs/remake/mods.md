@@ -517,6 +517,13 @@ emits `engine.start`; from there the mods decide what shows. The remake itself i
 | `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
+The engine holds the vocabulary every mod builds on, so no core mod is needed for it [the maintainer's decision
+2026-10-15]: the content model (record types, kinds, the `properties` API, §6.3), and the world renderer base with
+the shared shaders, global shader parameters and camera actions ([renderer.md](renderer.md) §2.1, the engine asset
+layer of [assets.md](assets.md) §5.3a). `core.game`'s client entry point only registers its map layers; a mod adds
+layers to maps with `MapLayers.Register` and to other worlds with `WorldLayers.Register(kind, …)`, and disposes the
+registration in its `OnUnload`.
+
 `core.game` is the only simulation mod of the three, so it alone decides multiplayer compatibility (§9.1); a changed
 main menu or lobby never splits players. `core.game` requires no other core mod, so it loads headless (tests, replays,
 the checksum comparison, a dedicated host).

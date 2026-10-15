@@ -37,10 +37,12 @@ From the binding documents:
 
 Added here [draft]:
 
-8. **Engine code holds mechanisms, `core.game` holds the renderer.** The engine loads assets, expands shader includes
-   and runs the file system; the renderer itself (render kinds, the map renderer, its services) is `core.game`'s
-   client assembly, and the shaders and descriptors that reproduce the original's look are `core.game`'s assets,
-   replaceable like any other asset. Another mod uses the renderer through a dependency on `core.game`.
+8. **The engine holds what every world needs, `core.game` the match maps** [the maintainer's decision 2026-10-15].
+   The world renderer base (`Sadk.Presentation.Rendering`: renderer, layers, environment rig, mirror and
+   reflections, settings, globals, orbit camera) and the shared shader includes (the engine asset layer,
+   [assets.md](assets.md) §5) are engine code and assets, so no mod is needed for them; `core.game`'s client assembly
+   adds the map renderer and its layers, and its shaders and descriptors reproduce the original's look, replaceable
+   like any other asset. A later lobby renderer builds on the same base.
 9. **Every look must work on all three renderers** (Forward+, Mobile, Compatibility); features that need
    `RenderingDevice` are optional extras with a switch ([redot-capabilities.md](redot-capabilities.md) §2).
 10. **Batching technique by count**: tens of thousands of map objects go into region MultiMeshes; hundreds of
@@ -60,8 +62,9 @@ Added here [draft]:
 
 ## 2. Place in the process [draft]
 
-The renderer is `core.game`'s client assembly `Core.Game.Renderer` (namespace `Core.Game.Rendering`; [mods.md](mods.md)
-§11a), built on `Sadk.Presentation`'s mechanisms. Per frame it runs in steps 3 and 4 of the presentation frame
+The world renderer base is the engine's (`Sadk.Presentation.Rendering`); the map renderer and its layers are
+`core.game`'s client assembly `Core.Game.Renderer` (namespace `Core.Game.Rendering`; [mods.md](mods.md) §11a). Per
+frame it runs in steps 3 and 4 of the presentation frame
 ([sim-boundary.md](sim-boundary.md) §4.2): apply each tick record's events and motion samples, then interpolate,
 animate and draw. It runs on the main thread; CPU-heavy preparation (terrain region meshes, ground decals, street
 meshes, particle simulation) runs on worker threads, with the results handed to the main thread.
@@ -90,28 +93,44 @@ var map = MapData.Load(rc, "maps/MP_2P_steinfjord.sadkmap");  // or the package'
 var renderer = new MapRenderer(rc, new RenderSettings());
 AddChild(renderer);
 renderer.Show(map);
-AddChild(new MapCamera(renderer));                             // or a camera controller of one's own
+AddChild(new OrbitCamera(renderer));                           // or a camera controller of one's own
 ```
+
+Engine (`Sadk.Presentation.Rendering`):
 
 | Type | What it is |
 |---|---|
-| `RenderContext` | the mod set as the renderer reads it: file system, asset cache, frozen registry, presentation documents; the original's settings XML (`GameSettings`, merged and patched); original references (`[data]\map\textures\x.dds` = `game/map/textures/x.dds`, then the path as written, then the bare-name rule of [assets.md](assets.md) §5.4) to textures and cube maps |
+| `WorldRenderer` | the node that draws a world through its own camera (horizontal field of view 50°, near plane 1): its kind (`WorldKind`), layers (`Layers`, `AddLayer`, `RemoveLayer`, `Layer<T>()`), `Environment` (the rig), `Mirror` (requests), `SetView(focus, eyeDistance)`, `Report`, the presentation clock (`Time`, `Paused`); a world type overrides `GroundHeight`, `Bounds`, `Pick` and its report lines |
+| `IWorldLayer`, `WorldLayers` | one part of a world's picture (`Show`, `Clear`, `Frame`, `ApplySettings`, `Report`) and the registry per world kind: `WorldLayers.Register(kind, name, order, factory)` returns a registration the mod disposes in its `OnUnload` |
+| `EnvironmentRig`, `WorldLight` | the world environment, the sun and its shadowless copy for the mirror, the mirror view, the sky, the fog that follows the zoom with the far plane and shadow range after it; a world's environment layer feeds it each frame (`SetLight`); `WorldLight.Unlit` is the neutral look without an environment |
+| `MirrorRequests` | a layer whose material reads the mirror picture sets the bounds where it does; the mirror view is drawn only in planar mode while one of them is in view (§8.3) |
+| `ReflectionVariants` | the shader of a reflective material per reflection mode, from its table's `<Reflection>` children |
+| `RenderContext` | the mod set as the renderer reads it: file system, asset cache, frozen registry, presentation documents, a per-context cache (`Shared<T>()`); original references (`[data]\map\textures\x.dds` = `game/map/textures/x.dds`, then the path as written, then the bare-name rule of [assets.md](assets.md) §5.4) to textures and cube maps |
+| `OrbitCamera`, `CameraActions` | the free orbit camera on the input actions `engine.camera.*` (§8.1) |
+| `RenderSettings`, `RenderSettingsPanel` | the switches of §19 with their defaults (`NotifyChanged` applies them), and a panel of them with the engine's text keys |
+| `RenderGlobals` | the global shader parameters (§7.3), declared once by the engine at start |
+| `RenderLayers` | the render layers: terrain, objects, water, border, particles, overlays, sun, mirror sun, mirror marker |
+
+core.game (`Core.Game.Rendering`):
+
+| Type | What it is |
+|---|---|
+| `rc.GameSettings()` | the original's settings XML (`GameSettings`, merged and patched), cached per context |
 | `MapData` | one map: the package, the parsed `.s2m`, `world/environment.xml` (else `local_enviroment.xml`; null when neither gives a complete one), the water preset (null when there is none; a preset may be incomplete), `MapGeometry`, the terrain patterns by map pattern id (registry `PatternDef` gfx name → `<Pattern>`), the terrain blocks (`TerrainBlock`: bounds, lowest and highest height, pattern ids); mounts the package's `assets/` as a layer while open |
 | `MapGeometry` | grid to world; `HeightAt` is the plane of the drawn terrain triangle (§10.1), used for placement, picking and the camera |
-| `MapRenderer` | the node that draws a map with its own camera (horizontal field of view 50°, near plane 1); `Show`, `Clear`, `SetView(focus, eyeDistance)`, `HeightAt`, `CellAt`, `Pick`, `Report`, the presentation clock (`Time`, `Paused`); its picture is made by layers (`Layers`, `AddLayer`, `RemoveLayer`, `Layer<T>()`) |
-| `IMapLayer` | one part of the picture: `Show(renderer, map)`, `Clear`, `Frame`, `ApplySettings`, `Report`; core.game's environment, terrain, water and map objects are layers like any mod's |
-| `MapLayers` | the layers every renderer is made with: `Register(name, order, factory)` returns a registration the mod disposes in its `OnUnload` (core.game: environment 100, terrain 200, water 300, map objects 400) |
-| `MirrorRequests` | `MapRenderer.Mirror`: a layer whose material reads the mirror picture sets the bounds where it does; the mirror view is drawn only while one of them is in view (§8.3) |
-| `MapCamera` | the free orbit camera on input actions (§8.1) |
-| `RenderSettings` | the switches of §19 with their defaults; `NotifyChanged` applies them |
-| `RenderGlobals` | the global shader parameters (§7.3) |
-| `RenderLayers` | the render layers: terrain, objects, water, border, particles, overlays, sun, mirror sun, mirror marker |
+| `MapRenderer` | a `WorldRenderer` of kind `core.game.map`: `Show(map)`, `Clear`, `HeightAt`, `CellAt` |
+| `IMapLayer`, `MapLayers` | a map layer (`Show(renderer, map)`) and `MapLayers.Register(name, order, factory)`, the same as `WorldLayers.Register("core.game.map", …)` (core.game: map environment 100, terrain 200, water 300, map objects 400) |
 
 The mode `core.game.mapview {map, back, x, z, yaw, pitch, distance}` shows a map outside a match with a HUD of the
 switches; the asset browser opens map packages in it, and `--emit=core.game.mapview?map=…` with `--shot-after` and
 `--shot` takes unattended pictures.
 
 ## 3. Structure [draft]
+
+The tree below is the renderer of a match. Its parts that every world shares are implemented as the engine's world
+renderer base (§2.1: `WorldRenderer`, its layer registry, the `EnvironmentRig` with the mirror view, the settings and
+globals, the shader loading through `vfs://`); `MapRenderer` and its layers (map environment, terrain, water, map
+objects) are core.game's. The render kinds are the layers of a world kind.
 
 ```
 WorldRenderer                      Node3D; owns the World3D (scenario) of a match
@@ -348,8 +367,12 @@ including `objects/doodad.gdshaderinc`). The viewer's wrapper files are this sha
 
 ### 7.3 Global parameters [draft]
 
-Declared in `project.godot` and set by the services; switches are globals so they apply at once without
-recompiling (RR §2.1).
+Declared by the engine once at game start (`RenderGlobals`, `RenderingServer.GlobalShaderParameterAdd`; the rendering
+server lists globals only in the editor, so the class tracks what it declared) and set by the services; the shaders
+read them through `vfs://shaders/sadk/globals.gdshaderinc`, which declares each once. A mod may declare globals of
+its own and removes them in its `OnUnload`. Switches are globals so they apply at once without recompiling (RR §2.1).
+Implemented so far: the light, sky, time, mirror, map and animation groups, `sadk_fog_start` / `sadk_fog_end` (the
+map's unscaled fog, used outside the map, §11.1) and `sadk_pixel_light`.
 
 | Group | Globals |
 |---|---|
@@ -416,12 +439,12 @@ depends on them.
 - The camera controller (zoom steps, tilt, yaw offsets, smoothing, border clamp, cutscene splines) is presentation
   code outside the renderer (CI §3.2, §3.7); the renderer only takes the pose and is told the ground focus point and
   the eye distance (`MapRenderer.SetView`), which the environment blend and the fog are measured from.
-- **Controls are input actions** (Godot's `InputMap`): the mod that owns a control declares the action with its
-  default keys and buttons when it loads, unless an action of that name exists already (a player's own binding wins),
-  and erases the actions it declared when it unloads; every control can therefore be rebound. `core.game`'s free map
-  camera (`MapCamera`, used by the map view and available to a map editor) declares `core.game.camera.forward`,
-  `back`, `left`, `right`, `turn_left`, `turn_right`, `zoom_in`, `zoom_out`, `drag` and `orbit`. Saving a player's
-  bindings belongs to the settings, later.
+- **Controls are input actions** (Godot's `InputMap`): whoever owns a control declares the action with its default
+  keys and buttons, unless an action of that name exists already (a player's own binding wins); a mod erases the
+  actions it declared when it unloads. Every control can therefore be rebound. The engine's orbit camera
+  (`OrbitCamera`, used by the map view and available to a map editor) uses `engine.camera.forward`, `back`, `left`,
+  `right`, `turn_left`, `turn_right`, `zoom_in`, `zoom_out`, `drag` and `orbit`, declared by the engine at start.
+  Saving a player's bindings belongs to the settings, later.
 - Cutscene splines are converted to tracks by running the cutscene scripts against a recording `cutscene` table
   ([lua.md](lua.md) §6.2) and are sampled with the original's Hermite rule.
 
