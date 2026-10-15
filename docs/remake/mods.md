@@ -439,6 +439,91 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 - **Logs**: one log file; every line from mod code carries the mod id; Lua errors with file and line (the original
   discards them, [lua.md](lua.md) §2.7).
 
+## 11a. Core mods, modes and intents [agreed with the maintainer 2026-10-15]
+
+### 11a.1 The game is a host; the remake is mods
+
+`Sadk.Game` and the engine are a host: the first-start conversion, the virtual file system, the registry, the mod
+loader, the Lua host, the asset loaders and instantiation helpers, the mode host (below), and a fallback shell
+(development menu and mods screen) for when no mod provides a start mode. The remake itself is three **core mods**,
+ordinary mods in `<game folder>/mods/` that ship with the game and are enabled in the default profile:
+
+| Mod | Side | Holds |
+|---|---|---|
+| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). Takes over the role of `base`; `refined` requires it |
+| `core.mainmenu` | client | the main menu; first a stub that lists maps to start and opens the asset browser |
+| `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents |
+
+`core.game` is the only simulation mod of the three, so it alone decides multiplayer compatibility (§9.1); a changed
+main menu or lobby never splits players. `core.game` requires no other core mod, so it loads headless (tests, replays,
+the checksum comparison, a dedicated host).
+
+### 11a.2 Modes, handlers, intents
+
+- A **mode** is an exclusive state of the application (the main menu, a hosted game's room, a match, the lobby
+  world). Pause or option menus are UI inside a mode, not modes. A mod registers a mode's code by id
+  (`ctx.Modes.Add("core.game.match", () => new MatchMode())`); it gets `Enter(intent)` and `Exit()`.
+- An **intent** is a request as plain data: a key and named parameters (`core.game.hostroom { map, session }`).
+  Plain data, because an intent may cross a mod-set reload and may arrive over the network or be logged; nothing of a
+  mod travels in it. Godot signals are not used for this: they bind to live objects, which would keep an unloaded mod's
+  code alive (§9.3).
+- **Every mode and every handler answers an intent of its own id.** Emitting `core.game.hostroom` enters that mode;
+  emitting a handler's id runs it without leaving the current mode (`ctx.Intents.Handle("core.game.openhost", …)`).
+- An **event** is an intent without a target of its own (`core.game.matchended`); another mod routes it, otherwise it
+  falls back to `engine.start`.
+- A **route** sends an intent somewhere else. It is only needed for events and to override a target.
+
+Declarations are data, in a presentation document every mod contributes at the same logical path (`modes.xml`), so
+they merge and patch like any other (§6.6): a later mod's route with the same key replaces an earlier one.
+
+```xml
+<!-- core.game: assets/modes.xml -->
+<Modes>
+  <Mode id="core.game.hostroom">
+    <Param name="map" type="string" required="true"/>
+    <Param name="session" type="string"/>
+    <Param name="slots" type="int" default="8"/>
+  </Mode>
+  <Mode id="core.game.match"/>
+  <Handler id="core.game.openhost"><Param name="session" type="string" required="true"/></Handler>
+  <Intent key="core.game.matchended"><Param name="result" type="string"/></Intent>
+</Modes>
+
+<!-- core.mainmenu: assets/modes.xml -->
+<Modes>
+  <Mode id="core.mainmenu.main"/>
+  <Route key="engine.start" mode="core.mainmenu.main"/>
+  <Route key="core.game.matchended" mode="core.mainmenu.main"/>
+</Modes>
+
+<!-- a pre-game-room mod: its own room instead of core.game's -->
+<Modes>
+  <Mode id="roomplus.room"><Param name="map" type="string" required="true"/></Mode>
+  <Route key="core.game.hostroom" mode="roomplus.room"/>
+</Modes>
+```
+
+```csharp
+// core.lobby, when the lobby server says the player hosts a game:
+ctx.Intents.Emit("core.game.hostroom", new() { ["map"] = map, ["session"] = sessionId });
+```
+
+### 11a.3 Rules
+
+- A mod declares modes, handlers and events only under its own id (`core.game.*` belongs to `core.game`); `engine.*`
+  is the engine's (`engine.start` at boot, `engine.quit`, `engine.loadmods { set, then }`). Any mod may emit or route
+  any declared intent; routing someone else's intent is the extension point.
+- A mod that emits another mod's intents requires that mod in `mod.xml` (`core.lobby` requires `core.game ^1.0`):
+  the version range is the contract's version. Mods share no types; the intent is the whole interface.
+- At load (step 8): every route names a declared intent and a declared target; every declared mode and handler has
+  code registered under its id; intents nobody answers and modes nothing reaches are listed. `validate-mods` prints
+  the table.
+- On emit: an undeclared intent or a missing required parameter is an error naming the emitting mod; an unknown
+  parameter is a warning; parameters get their declared defaults.
+- A transition leaves the current mode (`Exit`) before entering the next. `engine.loadmods` leaves the current mode,
+  unloads the mod set, loads the new one and then emits the pending intent (joining a match with other mods).
+- The engine emits `engine.start` at boot; without a route the fallback shell opens.
+
 ## 12. Examples
 
 | Goal | Level | How |
