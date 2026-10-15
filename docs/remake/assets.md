@@ -286,6 +286,33 @@ everything the original's look depends on; engine-native forms only in the dispo
   `boneLink<i>`).
 - The renderer does not keep glTF scenes as node trees: it converts them into its own mesh, skeleton and animation
   tables and caches those as engine-native resources ([renderer.md](renderer.md) §6).
+- [implemented 2026-10-15, sadk-remake `Sadk.Formats/Gltf`] The engine-neutral model (`SadkModel`) is what both
+  sides share: the converter writes it as `.glb`, the runtime reads `.glb`, `.gltf` and raw `.KEX` into it.
+  - **Units**: positions are divided by the file's `unitScale` (1, 39.37 or 100), which is the original loader's
+    result for model scale 1.0; the extension keeps `unitScale` as a record only, and the runtime must not divide by
+    it again (the light's `normal_scale` takes the definition's model scale alone).
+  - **Axes**: the original's import transform, then z negated; for every shipped file `(x, y, z) → (−y, z, −x)`.
+    Rotations, inverse bind matrices and keys are carried through it; a skinned mesh in its rest pose equals the
+    unskinned mesh, and every animated pose equals the file's own under the transform [checked, tests].
+  - **Winding**: the model is in Godot's order; the `.glb` holds glTF's counter-clockwise order, and writer and reader
+    swap two indices per triangle, as Godot's own glTF importer does.
+  - **Standard attributes where glTF has them**: extra UV sets (`TEXCOORD_0..3`) and vertex colours (`COLOR_0`,
+    normalised bytes); the KEX tangent has no handedness and goes into `_TANGENT`. Meshes skinned to another file's
+    skeleton (381: settlers, animals, ships) keep their joints and weights in `_JOINTS_0` / `_WEIGHTS_0` and their
+    bone names in the extension; meshes skinned to their own file's skeleton get a glTF skin.
+  - **Animations**: key `i` at `i · length / keyCount`, LINEAR, nothing resampled; `length` and `keyCount` are kept
+    in the extension, since the original blends the last key back to key 0. A channel the KEX track lacks is written
+    out as position 0 or rotation identity, which is how the original samples it (not the rest value).
+  - **Kept only in the extension**: materials with no triangles (1,552, for their texture references) and the 15
+    animations with no channel at all.
+  - **Repairs that do not change what the original draws** are reported: zero or non-finite normals take their face
+    normal (114), tiny negative weights become 0, a joint repeated within one vertex is merged.
+  - [measured] 1,639 files, 5,332 meshes, 189 skeletons, 520 animations, 200 MB; 1.4 s; every output passes the
+    Khronos glTF validator without error or warning. Texture references: 6,462 resolve exactly (139 through a
+    duplicate name), 100 only with `.dds` for the written extension, 1,963 are missing in `game/character/meshes` and
+    `lobby/avatars` (replaced at run time by the settler and avatar colour data), 4 elsewhere.
+  - The writer adds no glTF images: the textures are `.dds`, which core glTF does not allow, so other tools show the
+    models untextured; the reader ignores embedded images with a warning.
 
 ## 7. Map packages [draft]
 
@@ -370,3 +397,10 @@ defaulting to the installed folder. Text tables, fonts, localised textures and t
    lookup does not find; the lobby loader probably puts a folder in front (FI §3.1).
 8. How the original treats KEX material texture names with `.psd`, `.bmp` or a missing `.tga` (AM open question 13);
    the converter tries the name, then the same name with `.dds`.
+9. Four skeletons fit their inverse bind matrices only before the load-time bake (`deer_model`, `elk_model`,
+   `AO_FishingRod01_Model`, `PV_R_Ship01Model`; off by up to 2.0, 0.65 and 0.33 after it; AM §2.6 counts 181 that fit,
+   the baked data 177): either the original draws these rest poses distorted, or `FlattenBoneOrientations`
+   S 0072ce50 does more than `position · inverse(own 3×3)`. A question for Ghidra.
+10. Which of two bones with the same name a track drives: the converter gives the k-th track of a name to the k-th
+   bone of that name (the two Castle door clips animate two `ee_door1` bones).
+
