@@ -249,8 +249,13 @@ That B is the frame phase and A the main phase follows from `RequestMaterials`, 
 
 Where a delivered ware lands is decided by `Depot::CollectGoods` (§3.19).
 
-A `Stock` is an ordered `map<goodId, count>`; iteration is in ascending good id [inferred] (MSVC tree
-iteration in S 005594e0).
+A `Stock` is an ordered `map<goodId, count>` plus a running total of units (`totalUnits`, `Stock+0x14`; layout
+and operations in [logic-core.md](logic-core.md) §2.5, §3.4). Iteration is in ascending good id compared as a
+**signed** 32-bit int: `Stock::GetCount` S 005399b0 looks up through the tree find S 00546c70, which compares the
+keys with signed jumps (`JGE` / `JL`), so a good whose hash id has the top bit set (`plank` 0xc5c945a3) comes before
+`stone`-type ids below 0x80000000 [known]. The good-flag map (§2.7) is ordered the same way (find S 00562dd0)
+[known]. `totalUnits` changes only through the unit operations (`AddOne`, `RemoveOne`, …);
+`Depot::ClampStockToLimit` (§3.7) writes the counts without it.
 
 ### 2.6 Settler orders
 
@@ -340,18 +345,29 @@ following must hold, in this order:
    the right grid bit (`size == 8`: bit 0x10 set; any other size: bit 0x200 set; `size == 0x10` is also
    accepted when bit 0x10 is clear, whatever bit 0x200 says), and either already holds a layer-0 object that is
    a flag of this player, or holds none and a flag can be placed there [known] S 0052fa00.
-4. No cell of the anchor and its 6 neighbours has grid bit 0x1 (blocked) or 0x400 (logic object) [known].
-5. If `size & 1` or `size & 8`: for each neighbour (radius 1) that is not water (grid bit 0x4), the slope class
-   relative to the average height (radius 2 for `size & 1`, radius 1 for mines) must be within −3..+3 [known].
+4. No cell of the anchor and its 6 neighbours has grid bit 0x1 (blocked) or 0x400 (logic object); cells outside
+   the map are skipped, and with `ignoreCentre` (the upgrade check) the anchor is skipped [known].
+5. If `size & 1` or `size & 8`: for each of the 6 neighbours that is inside the map and not water (grid bit
+   0x4), the slope class (`GetSlopeClassFromHeight` S 00675ec0) relative to the average height
+   (`GetAverageHeightInRadius` S 00675f40; radius 2 for `size & 1`, radius 1 for mines) must be within −3..+3
+   [known].
 6. Mines (`size & 8`): the anchor must be a free owned cell without street carrying grid bit 0x10
    (S 0052f820); nothing else is checked [known].
 7. Otherwise every footprint cell must be inside the map, hold no layer-0 object, be a free owned land cell
    (owned, not blocked 0x1, not deposit 0x80, not building footprint 0x100), carry no street (0x2) and carry
    the buildable bit 0x200 (bit 0x20000 when `size == 0x10`) [known] S 0052f460, S 0052f3d0.
-8. Large types (bit 4 without bits 1 and 2, S 0052d900; this includes 0x44): every cell within radius 2 inside
-   the map and none of them holding a building of a large type, then slope class within −3..+3 for every cell of
-   radius 2 [known].
-9. Types with bit 2 or 4 but not bit 1: every cell of radius 2 inside the map with slope within −3..+3 [known].
+8. Large types (bit 4 without bits 1 and 2, S 0052d900; this includes 0x44): every cell of the spiral of radius 2
+   (the anchor included, unless `ignoreCentre`) must be inside the map and none of them may hold the anchor of a
+   building of a large type (`FindBuildingAtOrNearest` S 00558890 with radius 0). Then the slope class against
+   the average height of radius 2 must be within −3..+3 on **hex ring 3**: `HexRing3Iterator` (ctor S 0052db50:
+   start at the corner three steps in direction 4; `Next` S 0052db80: one step in direction `d`, three steps
+   per direction, `d` = 0..5, false once `d` reaches 6) is advanced once before the loop and tested after each
+   further advance (S 0052fff6..00530038), so 17 of the 18 ring cells are tested and the start corner is not.
+   A tested ring cell outside the map fails the placement; water is not skipped [known].
+9. Types with bit 2 or 4 but not bit 1 (medium and large types; a large type runs rules 8 and 9): the 18 cells
+   of radius 1 and 2 around the anchor (the spiral iterator S 0052db20 / S 00600e90, advanced once past the
+   anchor) must be inside the map and have a slope class within −3..+3 against the average height of radius 2;
+   water is not skipped [known] S 0052fbe0.
 10. Ship sites (`size & 0x10`): the cell needs a shore and a free water neighbour [known].
 
 The per-player **construction flags** of a cell are precomputed from the same predicate: probe sizes 4, 2, 1,
@@ -362,13 +378,15 @@ does not test the lock [known] S 00781980.
 
 ### 3.2 Placement (`System::PlaceBuilding` S 0055a090) [known]
 
-Steps 1 to 4 run inside one map-update batch, which ends with a "building changed" message (type id, anchor)
-to the command router:
+Steps 1 to 5 run inside one map-update batch (`MapUpdateBatch_Begin` S 00532180 … `MapUpdateBatch_End`
+S 005321c0); there is no "building changed" message:
 
-1. Construct the building (`Building::ctor_Place` S 0055d980):
-   1. create all components; `variantKey` = owner tribe; assign a new `Unique`;
+1. Construct the building (`Building::ctor_Place` S 0055d980), in this order:
+   1. create all components (§2.3: ticker period 100, `variantKey` = owner tribe, `reserved38` = 0, both search
+      counters 0, entrance (−1, −1)); only then assign a new `Unique` (`Unique::AssignNew`); set `Depot.flag08`;
    2. entrance cell = anchor stepped one cell in `doorOffsetDirection[variantKey]`, or the anchor itself when
-      the type has no entry for that tribe (S 0055d1f0). The stored number is passed unchanged to
+      the type has no entry for that tribe (S 0055d1f0). The data has 7 entries, all 4 (§6); 97 of the 104 types
+      have none, so their entrance is the anchor for every tribe [known: data]. The stored number is passed unchanged to
       `MapPos::StepDirection` (S 0055cdd0 returns the map value, S 0054d990 stores Lua argument 3 as is)
       [known]. Data values: `DoorOffsetWest` = 3, `DoorOffsetNorthWest` = 4, `DoorOffsetNorthEast` = 5, i.e.
       the step directions that [../map-format.md](../map-format.md) §5.1 labels W, SW and SE. The game's names
@@ -379,36 +397,70 @@ to the command router:
       (62, 87) [live, 2026-10-14]. Neither the compass labels nor the data names describe screen directions;
    3. block the footprint in the map (`Blocking`: grid bit 0x1 on the anchor, grid bit 0x100 on every footprint
       cell that is inside the map, S 00566e10, S 00673cf0, S 00673da0);
-   4. `Bulldozing::Begin(type)` (§3.3), which ends by starting the construction (§3.4);
-   5. if the game is in **batch editing** mode (map set-up, editor, script placement; `NLogic::Edit` query):
+   4. `Bulldozing::Begin(type)` (§3.3), which levels the ground and ends with `Construction::StartWithType`
+      (§3.4): the material requests, or at once a finished building when `constructionTime <= 0`;
+   5. if the game is in **batch editing** mode (the query is vtable +4 of `NLogic::Edit`, `NLogic::System+0x38`):
       activate the territory source, complete the construction at once, then: `workerLimit > 0` → spawn the
       worker inside; else if `territoryBuilding`: `depot` → fill the initial stock (`Depot::AddInitialStock`
       S 0055b020: the map's initial goods for the tribe, plus the tribe's `tp_addBonusResources` list,
       `TribeProperty+0x90`, when `ai::player::Player::IsStateDefault(owner)`; the table of who qualifies is in
       [players-victory.md](players-victory.md) §3.4), not `depot` → spawn one soldier of kind 0;
-      otherwise (normal play) only `TerritoryUpdater::ActivateIfOccupied`;
+      otherwise (normal play) only `TerritoryUpdater::ActivateIfOccupied`. The start castle of a match is
+      placed by `Game_CreatePlayersFromDescriptor` S 005abb60 without a placement check and takes the normal
+      branch: its `constructionTime` of −1 has completed it in step 4 already, and its initial stock comes from
+      that caller, the only other caller of `Depot::AddInitialStock` [known: callers of S 0055b020];
    6. types with `territoryBuilding && depot` (the headquarters): switch off both soldier-training slots and
       the training upgrade (`SetSlotEnabled(0..1, false)`, `SetUpgradeEnabled(false)`);
-   7. mark the building on its map cell, raise "building added" and tell the AI players
-      (`AIPlayers_NotifyBuildingAdded`; the destructor calls the matching "removed" hook,
-      [ai-player.md](ai-player.md)).
+   7. mark the building on its map cell (`MapModifier::SetBuildingAtCell`, layer 1), raise "building added"
+      (callback slot +0x08) and tell the AI players (`AIPlayers_NotifyBuildingAdded`; the destructor calls the
+      matching "removed" hook, [ai-player.md](ai-player.md)).
 2. Insert into the unique map and append to the building vector.
-3. Attach the entrance flag: the flag at anchor + direction 1 (NE); if there is none, place one
-   (S 00557660). Note the flag is always at direction 1, independent of `doorOffsetDirection`.
-4. Route a map change for every footprint cell.
-5. If the type has `productivity` and (a `plantingDeposit` or a product in slot 0): set the building's
-   productivity statistic to its start value [inferred] S 0055a090 (`SetMapEntryFloatHalf`).
-6. Add to the category indexes.
-7. Remove every animal standing on a footprint cell.
+3. Attach the entrance flag (`Building_AttachEntranceFlag` S 00557660): the player's flag at anchor +
+   direction 1 if there is one, else a new flag placed there by `Logic_PlaceFlag` (flag id, its two
+   net-continent ids, `FlattenAroundCell` over vertex ring 1, callback +0x18; a street passing the cell is
+   split, [streets-transport.md](streets-transport.md) §3.1). No street is built. The flag is always at
+   direction 1, independent of `doorOffsetDirection`.
+4. For every footprint cell, the doodads it obstructs are queued for removal at the batch end
+   (`MapUpdateBatch::RemoveObstructedDoodadsAtCell` S 00532280); then the construction flags within hex radius 4
+   of the anchor are invalidated once (`MapUpdateBatch::InvalidateConstructionAroundCell2` S 005323b0, which
+   ignores its first argument; the same call ends `RemoveBuilding`, `TransferBuildingOwnership`,
+   `Upgrade::Start` and the creation and removal of remains).
+5. Close the batch: obstructed doodads removed, construction flags recomputed for the dirty area, one elevation
+   change for the levelled area ([map-resources.md](map-resources.md) §3.4, §3.5).
+6. If the type has `productivity` and (a `plantingDeposit` or a product in slot 0):
+   `Statistics::ResetBuildingProductivity` S 00538440 sets the building's productivity entry to 0.5 (creating
+   it) [known].
+7. Add to the category indexes.
+8. Remove every animal standing on a footprint cell (`NResources::System::RemoveAllAnimalsAt` S 0053f840).
+
+**Unique ids drawn by one placement**, in this order [known]: the building (step 1.1); an AI cell when the owner
+is an active computer player without a cell at that coarse position (`NAI::Player::OnBuildingAdded` S 00584030 →
+`CellSystem::AddCell` S 0058b2b0; `NAI::Building::Init` S 00596ba0 may also create needs for producing or
+consuming types, [ai-player.md](ai-player.md)); a new entrance flag; its two net continents. The ware requests
+of step 1.4 draw none (`NeedGoods::AddRequest` S 0064eb80, `NeedSystem::CreateNeed` S 00652420, the need and
+element constructors and `Need::Init` S 007756f0 call no `AssignNew`) [known].
 
 ### 3.3 Ground preparation (`Bulldozing`) [known] S 00568040, S 00567f70, S 00567e90
 
-- "Level" means the height of the anchor's vertex equals that of all six neighbours.
-- `Begin`: if not level, set the anchor to the average height (radius argument 2,
-  `MapModifier::LevelCellToAverageHeight`).
-- Then, only for `size == 4` and if still not level: set each of the six neighbours to the anchor's height.
-  The test is for the exact value 4, so a large military type (0x44, the fortresses) is not included.
-- Then `Construction::StartWithType(type)`.
+- "Level" (`IsGroundLevel` S 00567e90): the height of the anchor's sample vertex (vertex
+  `(4x + (y odd ? 2 : 0), 4y)`) equals the heights of the sample vertices of the six neighbour cells, visited
+  from the neighbour in direction 4 and then stepping in directions 0..5, i.e. the neighbours in directions 4, 5,
+  0, 1, 2, 3.
+- `Begin` (S 00568040): store the type being built; if not level, `MapModifier::LevelCellToAverageHeight(anchor,
+  2)` S 006744f0: every vertex of the vertex spiral of radius 2 around the anchor's sample vertex gets the
+  truncating mean of `max(height, minHeight)` over the cell spiral of radius 2, then vertex ring 3 is smoothed in
+  ring order, each vertex to the truncating mean of its six neighbours, seeing the vertices already smoothed
+  ([map-resources.md](map-resources.md) §3.4).
+- Then (S 00567f70, inside a map-update batch of its own) only for `size == 4` and if still not level: each
+  neighbour cell, in the order above, is levelled to the anchor's height (`LevelCellToCellHeight` S 00674560,
+  the same vertex-disk levelling with the anchor's sample height). The test is for the exact value 4, so a large
+  military type (0x44, the fortresses) is not included.
+- Then `Construction::StartWithType(type)` on the effective construction (`Building::GetConstruction`
+  S 0055bf90: the upgrade's while an upgrade is active, §3.13).
+
+Each levelling invalidates the construction flags around its cell; water, shore and cliff bits are not refreshed;
+the elevation change is raised once, when the outermost batch closes, with the dirty rectangle inflated by 16
+vertices ([map-resources.md](map-resources.md) §3.3, §3.4) [known].
 
 Levelling is instantaneous at placement: the builder goes straight to building and the ground is level at once;
 there is no levelling phase [live, 2026-10-14]. `cfg_setBulldozeTime` (55, `GameConfig+0x14`) is never read
@@ -448,7 +500,8 @@ building (§3.12).
 S 0077fe70) [known]:
 
 1. Decide (state 7): stop if the site is aborted. If the frame phase is done (`1 − remainingB >= 1`): work when
-   the site stock is not empty. Otherwise: work when the site stock holds the **first** `frameCost` good.
+   the site stock is not empty (its map holds at least one entry: the node count at `Construction+0x20` =
+   `stock+0x10` is not 0). Otherwise: work when the site stock holds the **first** `frameCost` good.
    Else play "be nervous" (idle) and decide again. This test reads the `frameCost` list of the building's
    **current** type (`Building+0x0c`), while step 2 reads the lists of the site's type (`pBuildingDef`); they
    differ only during an upgrade.
@@ -462,9 +515,11 @@ S 0077fe70) [known]:
    `strokes = trunc(constructTime)` = 30.
 4. While strokes remain, on every update in which the builder is not walking: (re)start the hammer animation
    (kind 4, duration `constructTime`) when it has ended, `strokes -= 1`, `AdvanceWork(workPerStroke)`; if both
-   remaining values are `<= 0`, strokes = 0.
+   remaining values are `<= 0`, strokes = 0. The positions not yet visited are still walked afterwards, each
+   with one stroke that changes nothing [known] S 0077fb50.
 5. After the fourth position, once the hammer animation has ended: one more `AdvanceWork(workPerStroke)`; if
-   nothing remains → `Construction::Complete` and clear the site stock. The `Construct` action ends. If both
+   nothing remains (`IsUnderConstruction` S 00526ed0 false: both values `<= 0`) → `Construction::Complete` and
+   clear the site stock. The `Construct` action ends. If both
    phases are now done, `ConstructBuilding` posts the player message `!Building constructed` (category 7, name
    of the site's type `pBuildingDef`, position) and ends; otherwise the decision of step 1 runs again.
 
@@ -478,11 +533,22 @@ from the main phase at the frame phase's rate [inferred].
 `remainingA > 0`: subtract; when it drops below 0 set 0 and call `OnBuildWorkDone` (S 0055eec0: raise
 "building completed" to the observers; for a `territoryBuilding` whose territory is not active yet, set
 `military.soldierKind` (+0x68) to 1 when `Player_CountStockedSoldiersOfClass(owner, 0)` is 0, else to 0,
-S 0055fce0). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`; the
-builder's `Complete` (step 5) raises the same event.
+S 0055fce0). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`.
 
-**`Complete`** S 0055ef00 [known]: clear all ware requests of the depot; zero both remaining values (for a
-ship site: in the ship); if it was under construction raise "building completed" as above.
+**`Complete`** S 0055ef00 [known]: clear all ware requests of the building's depot (`NeedGoods::ClearAll`; for
+an upgrade this is the same list as the building's own production requests); zero both remaining values (for a
+ship site: in the ship); if a remaining value was still above 0 on entry, raise "building completed" and select
+the soldier kind as in `OnBuildWorkDone`. The builder calls `Complete` only after `IsUnderConstruction` has
+turned false (step 5), so its call never raises the event: the event comes from `AdvanceWork` alone, and a site
+whose `remainingA` lands exactly on 0.0 raises it never and keeps the constructor's soldier kind 0. The event
+goes to the `ObserverList` at `NLogic::CallbackManager+0x04` (`listA` of [logic-core.md](logic-core.md) §2.6);
+none of the in-match `ObserverList::Subscribe` S 00458860 calls (`NLogic::System::InitSubsystems` S 00527f70,
+`nGame::System::BuildScene` S 007842e0, `nMenu::Game::SetupHud` S 005ed700, `Messages::InitAndAttachToParent`
+S 005f8fa0) names that list [known]; the other callers of `Subscribe` are front-end, lobby and panel widgets
+[inferred: their names], so the notification has no effect and the soldier-kind selection beside it is the only
+thing that differs. Immediate completion (`StartWithType` with `constructionTime <= 0`, the editor, a
+transfer) calls `Complete` on a full site and does notify; the soldier kind is then selected only when the
+territory source is not yet active.
 
 **Pause** (command 0x20029, `GE_Construction_Pause` → S 00782fc0 → `AbortAndReturnGoods` S 0055ed30) [known],
 allowed only while the effective construction has work left and is not yet paused: clear ware requests;
@@ -592,7 +658,9 @@ reference is valid:
 
 ### 3.6 Per-tick logic of a finished building (`Building::Update` S 0055e2f0) [known]
 
-Under construction only the builder request of §3.4 runs. For a finished building, in this order:
+Under construction (the building's own construction, not the upgrade's) only the builder request of §3.4 runs
+(`Construction::Update` S 0055ea90); the ticker and the search counters do not advance. For a finished
+building, in this order:
 
 1. `Upgrade::Update` (§3.13).
 2. `TerritoryUpdater::ActivateIfOccupied` (§3.14).
@@ -612,8 +680,9 @@ Under construction only the builder request of §3.4 runs. For a finished buildi
 already active territory updater is required; then, if `workerLimit == 0` the answer is true; otherwise it
 needs `workerCount > 0` and at least one worker slot whose settler answers false to its virtual test at
 vtable +0x24 (S 0055b4d0). For `Worker` and `Constructor` that test is "state (+0x54) is 0, 1, 3 or 4"
-(S 0065c7b0), so a worker counts as present in every other state [inferred: the vtable slot assignment is
-taken from the function's annotation, not re-read]. The four states are: 0 leaving the building it was
+(S 0065c7b0), so a worker counts as present in every other state [known: the slot +0x24 of the `Worker`
+vftable S 007f84dc (at S 007f8500) and of the `Constructor` vftable S 007f8594 (at S 007f85b8) both hold
+S 0065c7b0]. The four states are: 0 leaving the building it was
 created in, 1 ready with nothing started, 3 going home without a job, 4 walking to the workplace
 ([settlers-jobs.md](settlers-jobs.md) §2.4). A worker spawned inside by `Workers::SpawnWorker` starts in a
 work state and counts at once (§3.18).
@@ -626,14 +695,21 @@ product slot 0 (`GoodProperty+4`, entries {goodId, amount}) [known] S 005657c0. 
 
 Good types (`gp_setType`, `GoodProperty+0x14`) [known]: −1 Invalid, 0 Ware, 1 Settler, 2 WareGroup,
 3 EitherGroup. An input of type 3 is a set of alternatives: one unit of **any** member satisfies one unit
-(example: `foodScots` = `fishScots`, `bread` or `sheepHam`). The members are enumerated for the owner's tribe
-by `PropertyGroupIter` [inferred] S 005657c0.
+(example: `foodScots` = `fishScots`, `bread` or `sheepHam`). The members are enumerated by
+`PropertyGroupIter` (`Init` S 007767c0, `Next` S 00776690, `Current` S 00776630): it walks the **owner tribe's
+goods list** (`tp_addGood`, `TribeProperty+0x20`) in script order and yields each good that has a positive
+amount in the group good's own `gp_addCost` list. The order of the alternatives is therefore the tribe list's,
+not the group's, and a member that is not in the owner's tribe list is never requested or consumed [known].
 
 **Can a cycle start** (`CanStartProduction` S 00565bd0, asked by the worker when choosing work) [known]:
 
 1. Production enabled (`bEnabled`; for barracks the training component decides) and `workerCount > 0`.
 2. Barracks: the training component decides (not covered here).
-3. `workingMode == 10`: false when the animal count of the area around the building is 20 or more.
+3. `workingMode == 10`: false when more than 19 animals are counted in the building's low-resolution block:
+   `AnimalAreas::GetCountAt` for the 16 × 16-cell block that contains the anchor
+   (`LowResResourcePosition::ctor_FromFinePos` S 00582430: `x / 16`, `y / 16`, applied to the anchor cell),
+   where every animal counts in the block of its **home** cell (`AnimalAreas::AddAnimal` S 005424c0), not where
+   it stands [known].
 4. Mines: §3.8.
 5. Otherwise: the recipe is empty, or the input stock holds every recipe entry in full
    (`Stock::HasAll`).
@@ -697,7 +773,13 @@ storage building supplies to a request leave it differently, with a carrier spaw
   move any remaining surplus from the input stock to the output stock; if below, request the difference.
 - Types without `depot` additionally clamp every input stock entry to the scaled limit (`ClampStockToLimit`
   S 0055b090): the count is overwritten with the limit, so the surplus units are destroyed. It runs after the
-  rebalancing above, which has already moved the surplus of the recipe goods when production is enabled.
+  rebalancing above, which has already moved the surplus of the recipe goods when production is enabled. The
+  function writes the count in the tree node directly and leaves the stock's `totalUnits` unchanged (§2.5), so
+  afterwards `totalUnits` is above the sum of the counts by the units destroyed, until a load rebuilds the stock
+  from its entries ([logic-core.md](logic-core.md) §7) [known] S 0055b090. Readers of `totalUnits` are the mine
+  food test (§3.8) and `VillageSacrifice::GetCostProgress` S 005613a0; it is neither saved nor hashed. Types
+  with `health` are the only ones whose hit points change, so in the shipped data this concerns the military
+  buildings, the catapults and the Olympic flame.
 
 **Switching production** (command 0x2000a toggles; `SetEnabled` S 00565ff0) [known]: off → clear all ware
 requests and move the whole input stock to the output stock (so the wares are carried away). On → for both
@@ -716,8 +798,9 @@ product slots move any units of the recipe goods from the output stock back to t
   computer player's mines do so only at level 3 [known: `Player.state` is written by `Player::Init` S 005bea90
   from the descriptor's start-resources value (`CreatePlayer` call in S 005abb60) and by the load code only].
 - Input requests are filed only when `ai::player::Player::IsStateNotDefault(owner)`.
-- A cycle can start when a resource cell is linked (`fieldConnection != −1`) and not (must eat and the total
-  input stock count is below the first recipe amount).
+- A cycle can start when a resource cell is linked (`fieldConnection != −1`) and not (must eat and the input
+  stock's `totalUnits`, all goods together (§2.5), is below the amount of the first recipe entry) [known]
+  S 00565bd0.
 - At cycle start inputs are consumed only when the mine must eat.
 - The product's `gp_setMiningGood` (`GoodProperty+0xbc`, read through S 00553070 from the good in product
   slot 0) names the resource type searched on the map [known for the read; the map side S 00540660 is
@@ -741,9 +824,10 @@ product slots move any units of the recipe goods from the output stock back to t
   building of mode 1 or 2 takes the **mining good** of its slot-0 product (`GoodProperty+0xbc`,
   `gp_setMiningGood`, S 00553070). If that good's byte +0x50 is set (`gp_enableDeposits`, S 0054e870; data:
   `stone`, `wood`, `corn`, `egyptCorn`, `stoneScots`, `stoneBav`) and no deposit is linked, it links the
-  nearest free deposit of that mining good within `workingRadius` (S 00540870; the search itself was not
-  read). Which deposits count as free, including the time-to-live a woodcutter puts on a tree it is working
-  on, is in [map-resources.md](map-resources.md).
+  nearest free deposit of that mining good within `workingRadius` (`Resources_FindNearestFreeDeposit`
+  S 00540870, called with the anchor cell). The search (breadth-first from the anchor, which deposits count as
+  free, the time-to-live a woodcutter puts on a tree it is working on) is specified in
+  [map-resources.md](map-resources.md) §3.9.
 - **Animal** (`UpdateHuntTargetSearch` S 0055c050): runs in the same tick, right after. When `tickCounter` is 0
   (just wrapped) a mode-7 building without linked animal links the animal found within `workingRadius` by
   `Resources_FindNearestHuntableAnimal` (S 005407a0 → S 0053fb40), a breadth-first flood fill from the
@@ -760,8 +844,10 @@ product slots move any units of the recipe goods from the output stock back to t
   [known] S 0053ee60, S 00542c40. In every other tick
   this function increments `tickCounter` again.
   The counter therefore
-  advances by 2 per tick (0, 2, …, 100, then 0): the searches run every 51 ticks [inferred from the two
-  bodies].
+  advances by 2 per tick (0, 2, …, 100, then 0): in the 51st update of the finished branch the deposit search
+  finds 100, resets the counter to 0 and searches, the animal search then sees 0, searches and leaves the
+  counter at 0; both searches run every 51 ticks, first in the 51st [known] S 0055bfb0, S 0055c050. A building
+  whose mode is neither 1, 2 nor 7 runs through the same counter without searching.
 - **Mine resource** (`UpdateResourceSearch` S 0055ded0): own counter 0..100, period 101 ticks. With at least
   one worker, no linked cell, a product in slot 0 and not a catapult: breadth-first flood fill from the anchor
   (S 00540660 → S 0053f940, same neighbour order as the animal search) over every cell with hex distance
@@ -1087,12 +1173,15 @@ package serves, when the carrier is inside ([streets-transport.md](streets-trans
 Step 1 does not skip step 2: during an upgrade every delivered unit is credited twice, once to the upgrade
 site and once to the finished building's input (or output) stock, whichever request it was meant for. The
 function does not look at which list requested the good. Seen in the running game: each of the 8 deliveries
-to an upgrading guard house made two `Stock::AddOne` calls, and the 8 extra units were still in the input
-stock of the finished tower [known: live 2026-10-12]. The code cuts that stock when the upgrade completes:
-`Upgrade::Complete` S 005672c0 → `RescaleToTypeMax` S 0055b990 → `Hitpoints::OnChanged` S 0055b8b0 →
-`ClampStockToLimit` S 0055b090, every entry to `max(1, trunc(hp ratio × stockLimit))` of the new type (tower
-4: `stone 5` becomes 4) [known]. [TODO] not reconciled with the live count above; reading the tower's input
-stock right after completion would settle it ([tribes-content.md](tribes-content.md) §2.4.4).
+to an upgrading guard house made two `Stock::AddOne` calls, and the input stock of the finished tower still
+held 8 units [known: live 2026-10-12]. The code cuts the entries when the upgrade completes:
+`Upgrade::Complete` S 005672c0 (`SetType`, then) → `RescaleToTypeMax` S 0055b990 → `Hitpoints::OnChanged`
+S 0055b8b0 → `ClampStockToLimit` S 0055b090, every entry to `max(1, trunc(hitpoints / health × stockLimit))`
+of the new type (S 0055c200, ratio from `Hitpoints::GetRatio` S 0055b850). For a `towerBav` at full hit points
+(80 / 80, `stockLimit` 4) `plank 3` stays and `stoneBav 5` becomes 4, but the clamp writes the tree node only
+and `totalUnits` stays 8 (§2.5, §3.7) [known]. The live count of 8 is that total [inferred: the entries would
+sum to 7]; the extra unit vanishes from `totalUnits` at the next load. A reimplementation that wants equal
+mine-food tests and sacrifice progress must keep `totalUnits` as a separate counter with this behaviour.
 
 ## 4. Update order
 
@@ -1172,8 +1261,12 @@ back to the flag, `aborted` set) while the upgrade itself stays active until 0x2
   `!Military Building Destruction executed` (1), `!Attack Target has been destructed` (1),
   `!Building is not connected` (1), `!Lost Military Building to enemy.` (1),
   `!Military Building conquered.` (1).
-- Map change routing (`GameCmdRouter`): every footprint cell on place; one "building changed" message at the
-  anchor on place, upgrade start and removal (S 0055a090, S 005671a0, S 00559db0).
+- Map-update batch (`MapUpdateBatch` on `g_pGameSystem->cmdRouter`), no message: on place, an
+  obstructed-doodad check per footprint cell (S 00532280); on place, removal, ownership transfer, upgrade start
+  and the creation and removal of remains, one construction-flag invalidation of hex radius 4 around the anchor
+  (`InvalidateConstructionAroundCell2` S 005323b0; callers S 0055a090, S 00559db0, S 0055a210, S 005671a0,
+  S 005598a0, S 00558ec0) [known]. The construction flags, doodad removals and elevation changes become
+  visible when the outermost batch closes ([map-resources.md](map-resources.md) §3.5).
 
 ### 5.3 Asked of other subsystems
 
@@ -1211,7 +1304,7 @@ count over the 104 types and examples:
 | `bp_setSize` | 104 | woodcutter `SizeSmall`, bakery `SizeMedium`, farm `SizeLarge`, mines `SizeMine`, guard house `SizeSmall+SizeMilitary` |
 | `bp_addFrameCost` / `bp_addCost` | 99 / 102 | woodcutter plank 1 / plank 1; bakery plank 2 / `stoneScots` 2; fortress plank 4 / `stoneScots` 7 |
 | `bp_setGoods` / `bp_setSecondGoods` | 83 / 1 | bakery `bread` 1; brewery (`brauhaus`) `weissbeer` 2; goat breeder `goat` 1 + `milk` 1 |
-| `bp_setStockLimit` | 65 | 6 in 38 calls (workshops), 2 in 18 (mines and others), 4 in 7 (the three catapults, the three towers, `gemMineClay`), 3 in 2 (`gemMine`, `gemMineBav`); guard houses and fortresses have none |
+| `bp_setStockLimit` | 65 | 6 in 38 calls (workshops and the three fortresses), 2 in 18 (mines, the three guard houses and others), 4 in 7 (the three catapults, the three towers, `gemMineClay`), 3 in 2 (`gemMine`, `gemMineBav`) |
 | `bp_setProductionTime` | 79 | workshops 333, woodcutter 55, farm 83, catapult 25, goat breeder 100, `hunterScots` 0 |
 | `bp_setRestTime` | 79 | 55 typical, woodcutter 222, fisher 770, hunter 1500 |
 | `bp_setWorker` / `bp_setWorkerLimit` | 86 / 22 | `good_bakerScots`; limit set to 0 in 15 calls and to 1 in 7; unset = 1 (constructor default) |
@@ -1361,8 +1454,11 @@ references go through untagged variants, the other components through their norm
 - **Iteration orders that matter** [known]: buildings in placement order (vector); removal during the update
   shifts later buildings one slot forward without skipping; remains in ascending unique id; order matching by
   player index, category, bucket entry creation order, first-seen network node; stocks and good-flag maps in
-  ascending good id; cost lists in script order; supplier candidates in category-vector order with strict
-  `<` on path cost (first found wins ties).
+  ascending good id compared as signed 32-bit ints (§2.5); cost lists in script order; `EitherGroup`
+  alternatives in the owner tribe's goods-list order (§3.7); supplier candidates in category-vector order with
+  strict `<` on path cost (first found wins ties).
+- A stock's `totalUnits` can exceed the sum of its counts after `ClampStockToLimit` (§3.7) and is rebuilt by a
+  load; the mine food test reads it (§3.8).
 - A served order sets a per-category "served" byte in the iterator (S 005691c0). The byte of category 1
   makes the iterator skip category 2 for that player in the same pass (§3.12) [known] S 00569760. The other
   six bytes (+0x10, +0x12..+0x16) are only written (mark, per-player reset, constructor) and never read
@@ -1432,6 +1528,10 @@ references go through untagged variants, the other components through their norm
 | 9 | Answered (§3.5): `Military.destroyCountdown` is written only by the constructor (−1, S 0055fef0), `StartDestroyCountdown` S 0055fc10, the decrement in `Military::Update` S 005609b0 and `Military::Load` S 005604d0 (every write to and address of `+0x90` below S 006f0000 decompiled; no shared setter) | — |
 | 10 | Answered (§3.8): a mine gets `min(n, 8) − 1` products out of a resource cell with amount `n` | static: S 00674650, S 00674e70, S 0055c860, S 00565f80 |
 | 11 | Harbours: no building type in `buildings.lua` is a harbour; harbours come from `harbors.lua` and the navy code | see [../navy-and-military.md](../navy-and-military.md) §5 and [navy.md](navy.md) |
+| 12 | Answered (§3.19, §3.7): the finished tower's entries are clamped (`stoneBav 5` → 4) while the stock's `totalUnits` stays 8, because `ClampStockToLimit` writes the counts in the tree nodes only | static: S 0055b090, S 005672c0, S 0055b990, S 0055b8b0, S 0055c200 |
+| 13 | Answered (§3.7): `EitherGroup` alternatives are the owner tribe's `tp_addGood` goods, in that list's order, that have a positive amount in the group's cost list | static: S 007767c0, S 00776690 |
+| 14 | Answered (§3.4): "building completed" is raised only by `AdvanceWork` when `remainingA` drops below 0; the builder's `Complete` never raises it, and no in-match observer is subscribed to its list | static: S 0055eff0, S 0055ef00, S 0077fb50, S 00526ed0, callers of S 00458860 |
+| 15 | Answered (§3.1): large types test 17 of the 18 cells of hex ring 3 for slope, not radius 2; medium and large types also test the 18 cells of radius 1 and 2 | static: S 0052fbe0, S 0052db50, S 0052db80, S 00600e90 |
 
 ---
 
@@ -1509,3 +1609,9 @@ references go through untagged variants, the other components through their norm
 | S 00540660 / 0053f940 / 00542970 / 00542d50 | `Resources_FindNearestMapResourceCell` / `FloodFillSearch::Run_MapResourceCell` / `MapResourceCellSearch::CanExpand` / `IsTarget` | mine resource search (§3.9) |
 | S 0067a3b0 / 0067a030 | `NMap::Territory::RecalcAll` / `Territory_CollectSources` | territory sources recollected from the buildings (§3.14) |
 | S 005691c0 / 005691d0 | `OrderIterator::MarkCategoryAssigned` / `NextPlayer` | served bytes: set, reset |
+| S 0052db50 / 0052db80 / 0052db20 / 00600e90 | `HexRing3Iterator::ctor` / `Next` / `HexSpiralIterator::ctor` / `Next` | ring-3 and spiral walks of the placement test (§3.1) |
+| S 00557660 / 00532280 / 005323b0 / 00538440 / 0053f840 | `Building_AttachEntranceFlag` / `MapUpdateBatch::RemoveObstructedDoodadsAtCell` / `InvalidateConstructionAroundCell2` / `Statistics::ResetBuildingProductivity` / `NResources::System::RemoveAllAnimalsAt` | placement steps (§3.2) |
+| S 0055ea90 / 00526ed0 | `Construction::Update` / `IsUnderConstruction` | builder request tick; "work left" test |
+| S 007767c0 / 00776690 / 00776630 / 00776780 | `PropertyGroupIter::Init` / `Next` / `Current` / `HasCurrent` | `EitherGroup` alternatives (§3.7) |
+| S 00582430 / 005424c0 | `LowResResourcePosition::ctor_FromFinePos` / `AnimalAreas::AddAnimal` | animal count of the breeding test (§3.7) |
+| S 005399b0 / 00546c70 / 00562dd0 | `Stock::GetCount` / tree find of the stock map / tree find of the good-flag map | signed key order (§2.5) |

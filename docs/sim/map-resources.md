@@ -377,7 +377,8 @@ two map editor tools (S 006021d0, S 006033d0); no gameplay function steps with 6
 S 00675000 read]. The variable directions of the gameplay callers are 0..5 loop counters, ring iterators that
 reset their side counter above 5 (S 00600e90 and its inlined copies, S 0052db80 stops at 6), `GetHexDirectionTo`
 S 00675090 (angle in [0, 360) / 60 through the table S 007f8948 = 5, 0, 1, 2, 3, 4), `rand() % 6`, the A* scan
-directions (< 6), the door direction of `bp_setDoorOffsetDirection` (4 for every shipped building) and the two
+directions (< 6), the door direction of `bp_setDoorOffsetDirection` (4 in each of the 7 shipped entries; the
+other 97 building types have none and keep the entrance on the anchor, `village-buildings.md` §3.2) and the two
 side directions of `SetElevationAlongStreet` S 00673370, which runs only for a street direction of 2..4 and so
 steps with 4, 5, 0 and 0, 1, 2. Only presentation and editor code (`nMenu::Debug::DrawEditorCellOverlay`
 S 006066d0, `nGame::Cursor::DrawStreetSlopeMarkers` S 00788f90) was not bounded this way.
