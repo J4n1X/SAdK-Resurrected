@@ -205,6 +205,20 @@ needs no I/O path of its own, works alike in the editor and in exports, and lets
 log names it first (`file system: engine (20 files), install (…), mod:…`). A mod build deletes files the mod no
 longer has from the game's copy of it, so a stale copy cannot shadow the engine's.
 
+### 5.3b The file system in Godot's `ResourceLoader` [implemented 2026-10-15]
+
+Every asset is reachable through Godot's `ResourceLoader` as well as through the asset cache, which stays the owner:
+`vfs://<logical path>` for a file as the layers resolve it, `doc://<logical path>` for a presentation document as
+merged and patched (§6.6 of [mods.md](mods.md)). The result is a Godot type where Godot has one (textures, cube maps,
+sounds, fonts, shaders and their includes, models as `PackedScene`, text tables as `Translation`) and a `VfsAsset`
+around the decoded object otherwise (XML, Lua, particle effects, map packages, GLSL). Godot's own text and binary
+resources (`.tres`, `.tscn`, `.res`) load from any layer; from a layer without files on disk (a zipped mod, a map
+package) through a copy under `user://vfs-cache/<layer>/`, deleted with the layer; relative references in text
+resources and relative shader includes resolve against the file's `vfs://` folder. Godot's cached entries leave with
+their layer, when a layer on top shadows them, with a cache clear and with a mod-set change. A path written in
+another spelling than the file's would be cached twice; the loader warns. Concurrent threaded requests that share a
+sub-resource need the engine fix of Godot PR #118824 (Godot 4.7 on; measured to crash on Redot 26.2).
+
 ### 5.4 The original's bare-name rule [draft]
 
 The original resolves a request by its file name through an index built once at start-up; the folders in the
