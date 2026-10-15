@@ -265,6 +265,13 @@ registration first:
 - **No ReadyToRun and no trimming** for the engine, `base` and mods. Trimming removes code mods may need;
   ReadyToRun precompiles call sites with inlined callees, which Harmony cannot reach. Everything is JIT-compiled.
 - A simulation assembly that references GodotSharp is refused with a message naming the mod [implemented].
+- **Mods may define their own Godot node types** (maintainer, 2026-10-15) [implemented]. A mod project runs Redot's
+  source generators as a "tools project" (`IsGodotToolsProject=true`): the method, property and signal bridges are
+  generated, so `_Ready` and `_Process` overrides are called, but no `res://` script paths (a mod's files are not in
+  the game's project, and the paths of two mods would collide) and no game entry point. A mod's node type becomes a
+  script without a path when its first object is made; such a script is reference-counted and leaves Redot's type map
+  with its last object, so the mod's code unloads once its views are freed, in editor runs and exports alike
+  [tested 2026-10-15]. The shared build rules are `src/Mods/Mod.props` in sadk-remake.
 
 ### 7.2 Entry point [draft]
 
@@ -284,7 +291,7 @@ public sealed class BreweryYeast : IMod
 `OnLoad` runs in load order before the settings stage, so patches are in place before any engine code that they
 change runs, and before the JIT has compiled callers that might inline the patched methods. `ModContext` gives
 the mod its id, its logger, its settings, its folder in the virtual file system and the registration APIs of
-§6.7. A client assembly has its own entry point (`IClientMod.OnLoad(ClientModContext)`), called after the
+§6.7. A client assembly has its own entry point (`IClientMod.OnLoad(ModContext)`), called after the
 simulation entry points, with the presentation registrations (render kinds, UI parts, input actions, audio).
 
 ### 7.3 Harmony [draft]
@@ -439,90 +446,149 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 - **Logs**: one log file; every line from mod code carries the mod id; Lua errors with file and line (the original
   discards them, [lua.md](lua.md) §2.7).
 
-## 11a. Core mods, modes and intents [agreed with the maintainer 2026-10-15]
+## 11a. Core mods, modes and intents [agreed with the maintainer 2026-10-15; implemented in sadk-remake d49188c]
 
 ### 11a.1 The game is a host; the remake is mods
 
 `Sadk.Game` and the engine are a host: the first-start conversion, the virtual file system, the registry, the mod
-loader, the Lua host, the asset loaders and instantiation helpers, the mode host (below), and a fallback shell
-(development menu and mods screen) for when no mod provides a start mode. The remake itself is three **core mods**,
-ordinary mods in `<game folder>/mods/` that ship with the game and are enabled in the default profile:
+loader, the Lua host, the asset loaders and instantiation helpers, the intent bus with its mode host (below), and the
+game's own `engine.shell` (when no mod enters a mode) and `engine.mods` (the mods screen). After the start the game
+emits `engine.start`; from there the mods decide what shows. The remake itself is three **core mods**, ordinary mods in
+`<game folder>/mods/` that ship with the game and are on by default (`<EnabledByDefault>true</EnabledByDefault>` in
+`mod.xml`; the profile lists such a mod only when the player switched it off, as `<Disabled id="…"/>`):
 
 | Mod | Side | Holds |
 |---|---|---|
-| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). Takes over the role of `base`; `refined` requires it |
-| `core.mainmenu` | client | the main menu; first a stub that lists maps to start and opens the asset browser |
-| `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents |
+| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). Takes over the role of `base`; `refined` requires it [planned] |
+| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
+| `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
 `core.game` is the only simulation mod of the three, so it alone decides multiplayer compatibility (§9.1); a changed
 main menu or lobby never splits players. `core.game` requires no other core mod, so it loads headless (tests, replays,
 the checksum comparison, a dedicated host).
 
-### 11a.2 Modes, handlers, intents
+The development tools are a mod as well: `tools.assetbrowser` (on by default, requires `core.mainmenu`) adds "Asset
+browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented].
 
-- A **mode** is an exclusive state of the application (the main menu, a hosted game's room, a match, the lobby
-  world). Pause or option menus are UI inside a mode, not modes. A mod registers a mode's code by id
-  (`ctx.Modes.Add("core.game.match", () => new MatchMode())`); it gets `Enter(intent)` and `Exit()`.
-- An **intent** is a request as plain data: a key and named parameters (`core.game.hostroom { map, session }`).
-  Plain data, because an intent may cross a mod-set reload and may arrive over the network or be logged; nothing of a
-  mod travels in it. Godot signals are not used for this: they bind to live objects, which would keep an unloaded mod's
-  code alive (§9.3).
-- **Every mode and every handler answers an intent of its own id.** Emitting `core.game.hostroom` enters that mode;
-  emitting a handler's id runs it without leaving the current mode (`ctx.Intents.Handle("core.game.openhost", …)`).
-- An **event** is an intent without a target of its own (`core.game.matchended`); another mod routes it, otherwise it
-  falls back to `engine.start`.
-- A **route** sends an intent somewhere else. It is only needed for events and to override a target.
+### 11a.2 Modes, overlays, handlers, events, listeners, routes [implemented]
 
-Declarations are data, in a presentation document every mod contributes at the same logical path (`modes.xml`), so
-they merge and patch like any other (§6.6): a later mod's route with the same key replaces an earlier one.
+An **intent** is a request as plain data: a key and named parameters of type `string`, `int`, `float` or `bool`
+(`core.lobby.world { frommatch: true }`). Plain data, because an intent may cross a mod-set reload, arrive over the
+network or be logged; nothing of a mod travels in it. Godot signals are not used for this: they bind to live objects,
+which would keep an unloaded mod's code alive (§9.3). Every intent is declared once, as one of four kinds:
 
-```xml
-<!-- core.game: assets/modes.xml -->
-<Modes>
-  <Mode id="core.game.hostroom">
-    <Param name="map" type="string" required="true"/>
-    <Param name="session" type="string"/>
-    <Param name="slots" type="int" default="8"/>
-  </Mode>
-  <Mode id="core.game.match"/>
-  <Handler id="core.game.openhost"><Param name="session" type="string" required="true"/></Handler>
-  <Intent key="core.game.matchended"><Param name="result" type="string"/></Intent>
-</Modes>
+| Kind | Answers its own id by | Example |
+|---|---|---|
+| **mode** | replacing the current mode: exactly one at a time (the main menu, the lobby world, a match). Pause or option menus are UI inside a mode | `core.mainmenu.main` |
+| **overlay** | opening over the current mode. It belongs to that mode and closes when the mode is left, unless declared `keep`; a `modal` one gets a shade that takes the input below. Emitting an open overlay's id again calls `Reopen` instead of opening a second one (a minimized setup window comes back); minimizing is the overlay's own business | `tools.assetbrowser.check` |
+| **handler** | running code, without a view and without leaving the mode: a command with one doer | `core.mainmenu.addmenuitem` |
+| **event** | nothing: it announces that something happened; **listeners** react to it | `engine.start`, `core.game.matchended` |
 
-<!-- core.mainmenu: assets/modes.xml -->
-<Modes>
-  <Mode id="core.mainmenu.main"/>
-  <Route key="engine.start" mode="core.mainmenu.main"/>
-  <Route key="core.game.matchended" mode="core.mainmenu.main"/>
-</Modes>
+A **listener** reacts to an event, when its condition holds (`when="type=network"`, `name=value` or `name!=value`,
+several joined by `;`), by emitting one intent: the event's parameters that the target declares, plus constants
+(`<Set>`). A listener written in C# runs its method instead, which may return the intent to emit. Whether that intent
+switches the mode or runs a handler follows from its declaration. Its `id` is optional: it only lets other mods and
+reports name it. A **route** sends an intent of a mode, overlay or handler somewhere else (one winner per key; events
+are not routed, they are listened to).
 
-<!-- a pre-game-room mod: its own room instead of core.game's -->
-<Modes>
-  <Mode id="roomplus.room"><Param name="map" type="string" required="true"/></Mode>
-  <Route key="core.game.hostroom" mode="roomplus.room"/>
-</Modes>
-```
+**Two equal forms.** A mod writes its intents as C# attributes, in its `intents.xml` (at the top of the mod, next to
+`mod.xml`), or both; a Lua form (registration calls) is [planned]. The loader turns the attributes into elements of the
+same document, so both merge, patch and validate the same way; the same id twice within one mod is a load error.
 
 ```csharp
-// core.lobby, when the lobby server says the player hosts a game:
-ctx.Intents.Emit("core.game.hostroom", new() { ["map"] = map, ["session"] = sessionId });
+// core.mainmenu
+[assembly: On("engine.start", Id = "core.mainmenu.boot", Emit = "core.mainmenu.main")]
+
+public sealed class MainMenuMod : IClientMod                // the entry point keeps the menu's entries
+{
+    [Handler("core.mainmenu.addmenuitem")]
+    void AddMenuItem(MenuItem item) { … }
+}
+public sealed record MenuItem(string Id, string Text, string Emit, string? Params = null, int Order = 100);
+
+[Mode("core.mainmenu.main")]
+public sealed class MainMenuMode : Mode                     // a new object per entry; the constructor asks for
+{                                                           // the entry point and the mod's context
+    public MainMenuMode(MainMenuMod mod, ModContext ctx) { … }
+    public override object? Enter(Intent intent) => new MainMenuView { … };   // a node type of the mod's own
+}
+
+// tools.assetbrowser
+[Overlay("tools.assetbrowser.check", Modal = true)]
+public sealed class CheckOverlay : Overlay<CheckParams> { … }
+public sealed record CheckParams(bool Quit = false);       // the record's constructor is the parameter list
 ```
 
-### 11a.3 Rules
+```xml
+<!-- tools.assetbrowser: intents.xml (pure wiring, so written as data) -->
+<Intents>
+  <Listeners>
+    <On id="tools.assetbrowser.menu.check" event="engine.start" emit="core.mainmenu.addmenuitem">
+      <Set name="id" value="tools.assetbrowser.check"/>
+      <Set name="text" value="Check all assets"/>
+      <Set name="emit" value="tools.assetbrowser.check"/>
+      <Set name="order" value="110"/>
+    </On>
+  </Listeners>
+</Intents>
+```
 
-- A mod declares modes, handlers and events only under its own id (`core.game.*` belongs to `core.game`); `engine.*`
-  is the engine's (`engine.start` at boot, `engine.quit`, `engine.loadmods { set, then }`). Any mod may emit or route
-  any declared intent; routing someone else's intent is the extension point.
-- A mod that emits another mod's intents requires that mod in `mod.xml` (`core.lobby` requires `core.game ^1.0`):
-  the version range is the contract's version. Mods share no types; the intent is the whole interface.
-- At load (step 8): every route names a declared intent and a declared target; every declared mode and handler has
-  code registered under its id; intents nobody answers and modes nothing reaches are listed. `validate-mods` prints
-  the table.
-- On emit: an undeclared intent or a missing required parameter is an error naming the emitting mod; an unknown
-  parameter is a warning; parameters get their declared defaults.
-- A transition leaves the current mode (`Exit`) before entering the next. `engine.loadmods` leaves the current mode,
-  unloads the mod set, loads the new one and then emits the pending intent (joining a match with other mods).
-- The engine emits `engine.start` at boot; without a route the fallback shell opens.
+The whole document has six groups; a mode, overlay or handler written in XML names its C# code (`class=`,
+`method="Namespace.Type::Method"`), and the declared parameters must match the code's record (the drift check):
+
+```xml
+<Intents>
+  <Modes><Mode id="mod.screen" class="Mod.ScreenMode"><Param name="map" type="string" required="true"/></Mode></Modes>
+  <Overlays><Overlay id="mod.panel" class="Mod.Panel" modal="true" keep="false"/></Overlays>
+  <Handlers><Handler id="mod.count" method="Mod.Entry::Count"><Param name="by" type="int" default="1"/></Handler></Handlers>
+  <Events><Event id="mod.done"><Param name="ok" type="bool"/></Event></Events>
+  <Listeners><On id="mod.afterMatch" event="core.game.matchended" when="type=network" emit="mod.screen"><Set name="map" value="x"/></On></Listeners>
+  <Routes><Route key="other.screen" to="mod.screen"/></Routes>
+</Intents>
+```
+
+Attribute forms: `[Mode]`, `[Overlay]` on a class deriving from `Mode`/`Mode<TParams>` or `Overlay`/`Overlay<TParams>`
+(`Replaces = "…"` adds a route to it); `[Handler]` on a method taking nothing, an `Intent` (any parameters) or a
+record; `[Event]` on the record an event carries (`Intents.Emit(new MatchEnded(…))`); `[On]` on a method or on the
+assembly (pure wiring, `Emit` and `Set = new[] { "name=value" }`); `[Route(key, to)]` on the assembly. A record's
+constructor parameters are the declared parameters (names in lower case, compared without regard to case); one without
+a default that is not nullable is required. Modes and overlays are made new for each entry; handler and listener
+methods run on the mod's one object of their class (the entry point when it is that class). Constructors may ask for
+the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entry point or another class of the mod.
+
+### 11a.3 Rules [implemented]
+
+- **Merging.** Each mod's attributes and `intents.xml` make one document of that mod. The mods' documents are merged
+  in load order: a later mod's listener of the same `id` or route of the same `key` replaces the earlier one, and
+  `remove="true"` takes it away. Then patches apply as to any presentation document (`<Patch file="intents.xml">`,
+  §6.6), so a data-only mod can change even an attribute's listener (`SetAttribute` on its `when`, say).
+- **Namespaces.** A mod declares modes, overlays, handlers and events only under its own id (`core.game.*` belongs to
+  `core.game`); a listener with an id outside its namespace must replace an existing one. `engine.*` is the game's:
+  `engine.start` (event, emitted after the mods load and by the mods screen's "Back"), `engine.quit { code }`,
+  `engine.close { overlay }`, `engine.mods`, `engine.shell { reason }`.
+- **Dependencies.** A mod whose listener or route emits another mod's intent names that mod among its dependencies
+  (`tools.assetbrowser` requires `core.mainmenu`), else a warning; the version range is the contract's version. Mods
+  share no types: another mod's intent is emitted as a key and plain data, never with its record.
+- **At load** (step 8): problems in a mod's own declarations are errors (the set does not load): a declaration
+  without code, a class or method not found, a parameter list that differs from the record, a namespace broken, an id
+  twice. A listener or route that names an intent nobody declares is a warning and is left out. `validate-mods`
+  prints the table; a headless run does not load client code, so the ids of mods with client code are not checked
+  there.
+- **The bus.** `Emit` only queues; the game processes the queue once a frame, so a mode switch never happens inside a
+  button's own signal. An undeclared intent, a missing required parameter or a value of the wrong type drops the
+  intent with an error naming the emitter; an undeclared parameter is a warning. Of the intents one event's listeners
+  produce, all handler and overlay intents go on, but only **one mode switch**: a conditional listener's beats an
+  unconditional one's, a later listener's an earlier one's; the overruled ones are logged. A mode switch closes the
+  overlays that belong to the mode and leaves it (`Exit`) before the next enters. A mode or overlay whose code throws
+  is logged; a mode that fails falls back to `engine.shell`, as does an `engine.start` that enters no mode. A handler
+  or listener that throws is logged and the rest goes on. More than 256 intents in one frame wait for the next; a queue
+  sixteen times that is dropped as a loop.
+- **Unloading.** Before the mod set unloads (§9.3) the bus closes the mods' overlays, leaves a mod's mode (the game's
+  own `engine.mods` stays) and drops everything of the mods; the game frees their views at once, so the leak check
+  finds nothing.
+- **The game's options** for unattended runs: `--emit=<key>[?name=value&…][;…]` once the start has settled,
+  `--press=<button text>[;…]` presses buttons as the player would, `--trace-intents` logs every intent and where it
+  went, `--shot=<png>` once the intents have settled.
 
 ## 12. Examples
 
