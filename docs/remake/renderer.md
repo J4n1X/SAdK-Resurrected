@@ -616,9 +616,11 @@ animals, ships and animated building parts use one skinning path of their own in
 - **Levels of detail** [the original's rules: [../sim/animation-models.md](../sim/animation-models.md) §3.14]: faithful,
   the set's `mesh` .. `mesh3` switched at eye distance 30 / 40 / 60 without hysteresis or cross-fade, clamped to the
   set, the same level in the shadow and mirror passes. The original's levels are automatic vertex-removal decimations
-  with fixed budgets (heads collapse at LoD3); a refined option takes Godot's levels generated from LOD0 instead, if
-  they compare better (asset browser comparison), which index LOD0's own vertices, so one skin and one animation table
-  serve every level.
+  with fixed budgets (heads collapse at LoD3). Refined: Godot's levels generated from LOD0, which compare as good or
+  better at the same triangle count (asset browser, "Compare levels of detail", 2026-10-15: at LoD3 the original
+  stretches the texture across the merged eyes, Godot keeps nose and both eyes) and index LOD0's own vertices, so one
+  skin and one animation table serve every level. Godot halves per level (4480 → 2240 → 1120 → 560 → 280), so the
+  refined set takes the levels nearest to the original's counts at the same distances.
 - Animals, ships and oxen use the same path with their own shaders (`animals.fx`, `ships.fx` player-colour weight,
   `donkey.fx`).
 - **Unseen characters cost nothing**: their visibility notifier takes them out of their batches (§4.7), so neither
@@ -804,6 +806,10 @@ instead of 0.25), and the final pixel colour is known only after Godot's light p
   priority 2 to 4 elements such as grass and small plants are inferred never to be drawn in the game) and a size cull
   (small objects vanish at a distance by `objectDetails`). The remake draws every element today; the faithful look
   follows both once the gate is confirmed live, the refined one may keep the extra detail as a switch.
+- Godot's generated levels do not serve map objects or buildings: its simplifier prunes small separate parts, so a
+  tree loses its leaf cards (almost the whole crown) and a building gets holes in walls and frames (asset browser
+  comparison, 2026-10-15). Buildings keep the original's `LOD0` parts (§13); the `…LOD0` files some trees have are
+  the candidates for a refined distance level of map objects, which the original does not use.
 - Created on `EntityAdded` for deposits, doodads, flags, harbours, sea routes (one buoy per end), chests and spawn
   points; the descriptor comes from the gfx name; `meshType="none"` creates a render object without a batch slot.
 - **Placement** as the original's `MapObjLayer::AddInstance` (RE §3.11): the stored fine position's vertex (deposits
