@@ -39,7 +39,7 @@ scripts of the reference installation on 2026-10-15; **[binary]** = read in the 
 | Need | MoonSharp |
 |---|---|
 | deterministic iteration | a table keeps one insertion-ordered linked list behind all its keys; `pairs` and `next` walk it, so the order does not depend on .NET's per-process string hashing [checked in its source, `Table.cs`] |
-| the original's one 5.0-only construct, `for k, v in t do` | accepted: a MoonSharp addition turns a table into an iterator [checked, `ExecIterPrep`] |
+| the original's one 5.0-only construct, `for k, v in t do` | not accepted at run time: the 2.0.0 package fails with "attempt to call a table value" [tested 2026-10-15], so the converter rewrites it (§3.2) |
 | run-time evaluation of constant expressions, as Lua 5.0 does | no constant folding [checked, `BinaryOperatorExpression`] |
 | a place to round arithmetic to single precision | the seven arithmetic instructions `ExecAdd`, `ExecSub`, `ExecMul`, `ExecDiv`, `ExecMod`, `ExecPower`, `ExecNeg` of the VM, plus `BinaryOperatorExpression.Eval` for dynamic expressions [checked] |
 | sandbox | core modules are chosen per script (no `io`, `os`, `debug`, `loadlib`) |
@@ -56,10 +56,15 @@ package; its upstream is dormant, so a fork costs little:
    [checked]; handled by the converter (§3.2), the fork only reports the original line;
 4. `tostring` of tables and functions gives a stable per-object number instead of an address.
 
+The `original` profile must also provide what 5.0 has and MoonSharp lacks: the global `__pow` (the converter's
+target for `^`), and, for third-party scripts, `table.getn`, `math.mod`, `loadstring`, `gcinfo`, `string.gfind` and
+`setfenv`, which no shipped script calls [tested 2026-10-15]. The converter's `arg` prologue calls `select`, which 5.0
+does not have; a 5.0 script that defines a global `select` of its own would break it.
+
 Alternatives considered: **Lua-CSharp** (Lua 5.2, active, async-based; its table iteration order would need the
 same check and probably the same change) and **a port of Lua 5.0.2 to C#** (exact, even the original's hash order
 for `pairs`, but the most work; the fallback if third-party scripts ever depend on the original's hash order, §8.4).
-**Decision for the maintainer.**
+**Decided by the maintainer 2026-10-15: MoonSharp in a fork of our own.**
 
 ### 2.2 Script states [draft]
 
@@ -171,22 +176,33 @@ inside a callback a wait is a Lua error, as in Lua 5.0.2 (LR §3.3).
 
 All 355 `.lua` files and `menu.cfg` (20 913 lines, all CRLF) [data], at the first start, into the converted tree
 ([assets.md](assets.md) §6.1); map scripts and cutscene paths into their map packages. The original text is kept
-beside the converted one for error reports.
+beside the converted one (`<path>.orig`) for error reports.
 
-### 3.2 How [draft]
+Implemented (sadk-remake `Sadk.Formats/Lua`, `Sadk.Convert/Jobs/LuaJob.cs`, 2026-10-15): all 356 chunks convert;
+the 159 the map packages do not take go into the converted tree, the 197 map scripts and cutscene paths into the map
+packages; every converted chunk compiles on MoonSharp 2.0.0; 354 come out byte for byte unchanged.
 
-A real Lua 5.0 lexer, never regular expressions: 41 string literals contain `--`, 91 trailing comments follow a call
-directly [data]. Rewrites, all token-level so that every line keeps its number:
+### 3.2 How [draft, implemented]
+
+A real Lua 5.0 lexer, never regular expressions: 41 string literals contain `--`; 98 comments sit directly against a
+call's `)`, 91 of them in `buildings.lua` [data]. Behind the lexer a parser of the whole 5.0 grammar (no code
+generation) rejects what 5.0 rejects (`return` or `break` not last in a block, `break` outside a loop, assignment to
+a call, a call whose `(` starts a new line, nesting deeper than 200), so a chunk the original could not have run fails
+its conversion with 5.0's message and line. Rewrites, all token-level so that every line keeps its number:
 
 | Construct | Shipped data [data] | Rewrite |
 |---|---|---|
-| `for k, v in t do` over a table | 1 (`tools.lua:19`, in `getn`; order-independent: it computes a maximum) | `for k, v in next, t do` (MoonSharp also accepts the bare form; the rewrite keeps the meaning explicit) |
+| `for k, v in t do` over a table | 1 (`tools.lua:19`, in `getn`; order-independent: it computes a maximum) | `for k, v in next, t do` when the expression list is one expression that is not a call (5.0 decides at run time; a table is what such an expression yields); required, MoonSharp fails on the bare form |
 | string escapes | only `\\` and 13 `\n` | every literal decoded with 5.0's rules (an unknown escape drops the backslash, `\ddd` decimal) and re-emitted with `\ddd` escapes where needed |
 | bytes above 0x7F | 7 literals in `patterns.lua` | files are read as bytes and decoded as Latin-1 (one byte, one character); bindings that take names pass them back as the same bytes |
 | `a ^ b` | 0 | a call of the global `__pow(a, b)`: in 5.0 `^` calls that global |
-| `%` | 0 (a syntax error in 5.0) | — |
+| `%`, `#`, `...` as an expression | 0 (syntax errors in 5.0) | reported as errors; MoonSharp would accept them |
+| long strings `[[ ]]` | 0 | kept, with `=` levels added where 5.0's nesting puts a `]]` inside; one that holds a CR or a byte above 0x7F becomes a short string with `\` + line feed at each line break |
+| a table constructor starting with `;` (`{;}`) | 0 | the `;` becomes a space |
+| a numeral directly followed by a name (`0x10` is `0` and `x10` in 5.0) | 0 | a space between them |
+| comments whose brackets mean something else in 5.2 (a nested `--[[ ]]`, a line comment starting `--[=[`) | 0 | adjusted |
 | names that are keywords in 5.2 (`goto`) | 0 | renamed with a fixed prefix |
-| `arg`, `...` | 0 | `arg` provided as 5.0 builds it, if ever needed |
+| `arg`, `...` | 0 | in a vararg function that reads `arg`: `local arg = {...}; arg.n = select("#", ...);` after its `)` |
 
 Nothing else in the shipped data is specific to Lua 5.0 [data]: no `pairs`, `next`, metatables, coroutines, closures
 (all 414 functions are global functions at file top level), method calls, long strings, hex literals,

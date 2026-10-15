@@ -27,18 +27,19 @@ AM = `../sim/animation-models.md`.
 |---|---|---|---|---|
 | `.dds` | 1,050 | 421 MB | yes | DXT1 792 (2 cube maps), DXT3 58, DXT5 17, A8R8G8B8 127, others 56; 226 without mips (FI) |
 | `.kex` | 1,639 | 227 MB | no | meshes, skeletons, animations; no ids or hashes inside (AF §2) |
-| `.ogg` | 723 | 194 MB | no | 540 voices (`language\de\voices`), sounds, music |
-| `.tga` | 124 | 62 MB | yes | cursors, particle atlas, colour ramps, font pages |
+| `.ogg` | 738 | 194 MB | no | 540 voices (`language\de\voices`), sounds, music |
+| `.tga` | 125 | 62 MB | yes | cursors, particle atlas, colour ramps, font pages |
 | `.s2m` | 33 | 22 MB | yes | 31 free and campaign maps, 2 prototype maps in the old layout |
-| `.wav` | 125 | 13 MB | no | PCM16, IMA ADPCM and float variants (AU §6) |
+| `.wav` | 126 | 13 MB | no | PCM16 103, IMA ADPCM 16, float 7 (AU §6) |
 | `.bmp` | 35 | 10 MB | no | map previews, two lobby textures |
 | `.lua` | 355 | 0.3 MB | yes | property scripts, map tools, map and cutscene scripts, info pages |
 | `.xml` | 110 | 0.3 MB | yes | settings, layouts, lobby data |
-| `.pfx`, `.fx`, `.fnt`, `.npc`, `.bin` | 64, 59, 15, 30, 31 | < 1 MB | no / yes (`.fx`) | effects, D3D9 shaders, bitmap fonts, avatars, map environment sidecars |
+| `.pfx`, `.fx`, `.fnt`, `.npc`, `.bin` | 64, 59, 15, 32, 31 | < 1 MB | no / yes (`.fx`) | effects, D3D9 shaders, bitmap fonts, avatars, map environment sidecars |
 
-About 950 MB and 4,487 files in all; 55 file names occur more than once below `data\`, nearly all as a copy under
-both `data\game` and `data\lobby` (settler and soldier meshes, idle animations, door clips, `color_slots.xml`). No
-video file exists in the installation.
+4,453 files and 955 MiB below `data\` [measured 2026-10-15]; the sizes above are those of the stored (packed)
+files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than once below `data\`: 32 between
+`data\game` and `data\lobby`, 23 inside `data\game` (settler and soldier meshes, idle animations, door clips,
+`color_slots.xml`); 29 of them are identical in every copy. No video file exists in the installation.
 
 ## 3. Storage layout [draft]
 
@@ -52,8 +53,18 @@ video file exists in the installation.
 | `<user data>/maps/`, `maps-received/` | the editor / transfers | map packages (§7) |
 | `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
 
-`<user data>` is Godot's `user://` of the remake. The `<install id>` is a hash of the installation's path and its
-build identity, so two installations (another language, another patch) convert side by side.
+`<user data>` is Godot's `user://` of the remake, a custom user folder named `sadk-remake` (`%APPDATA%\sadk-remake`
+on Windows, `~/.local/share/sadk-remake` on Linux); the headless runner computes the same folder. The `<install id>`
+is a hash of the installation's path and its identity, so two installations (another language, another patch)
+convert side by side. A conversion folder holds [implemented]:
+
+| Path | What |
+|---|---|
+| `data/` | the converted tree: the bottom layer of the virtual file system, logical paths as the installation spells them |
+| `maps/` | the map packages (§7) |
+| `conversion.json` | the record: identity, converter versions per job kind, every source file (path, size, time, SHA-256), every job (sources, read-only dependencies, outputs with SHA-256, error), the compatibility CRCs |
+| `conversion.journal` | while a run is going: one line per finished job, so an interrupted run resumes; folded into the record at the end |
+| `report.md` | what was converted, rewritten, skipped (with the reason) or failed |
 
 ## 4. The conversion
 
@@ -61,7 +72,11 @@ build identity, so two installations (another language, another patch) convert s
 
 1. **Find the installation**: the recorded path, else the known install locations, else ask the player. Identify it
    by the build number (34688) and patch level (9212) and its language folder. An unknown build is converted with a
-   warning; compatibility mode is offered only for the known one.
+   warning; compatibility mode is offered only for the known one. [implemented] The patch level is `[Lobby]
+   patchlevel` of `game/settings/network.ini` (a file with a UTF-8 byte order mark); the build number is no file of
+   its own but the constant `g_BuildVersion` S 008793c0 of the executable, read today at a per-executable offset for
+   the two known executables (the DRM-free and the SecuROM one). [open] The maintainer will provide an unpatched
+   installation; until then this rule stays as it is (§9).
 2. **Check** at every start: compare the recorded list (relative path, size, modification time) with the disk. A
    difference: hash the file; if the hash changed, mark the outputs made from it for conversion. Moving the
    installation keeps the conversion valid when the hashes match at the new place.
@@ -73,15 +88,25 @@ build identity, so two installations (another language, another patch) convert s
   progress events) or headless (`Sadk.Headless --convert`).
 - One job per source file and kind, run in parallel. Each job writes to a temporary file and renames it when done,
   and the record is updated per finished job, so an interrupted conversion resumes.
+- **Jobs** [implemented]: factories hand the source files to jobs in a fixed order (map packages first, so they
+  take their companions; then fonts with their pages; then one factory per format); files on the ignore list
+  (§6.1, last row) are taken out before, and a file no factory takes is listed in the report. A job may read files it
+  does not own (a map reads the text tables for its keys) and lists them as dependencies. Each job kind has a
+  converter version; raising it converts that kind again at the next start. A failed job leaves no output behind and
+  runs again only when its kind's version changes; the report names it with the reason.
 - **Deterministic output**: the same source gives byte-identical output, so outputs can be compared between
-  machines and used as cache keys.
+  machines and used as cache keys. [checked] Two full conversions of the reference installation agree output for
+  output (`Sadk.Headless compare`).
 - **Self-checks** run as part of the conversion: every container's CRCs (the reader checks them), every `.KEX` and
   `.pfx` parses completely, every map parses to its last byte, and the settler palette test vector
   (`AM` §3.15) comes out right. These are the viewer's `tools/KexCheck` and `tools/MapCheck`.
 - **Compatibility records**: for every `scripts\**\*.lua` and `settings\**\*.xml` the converter keeps the container
   header field +0x08 (the plaintext CRC-32), which is what the original's build checksum XORs
   (`GameData_ComputeBuildChecksum` S 005ab800, DL §3). Without them the remake cannot answer an original client's
-  checksum in a compatibility-mode match.
+  checksum in a compatibility-mode match. [measured] The reference installation contributes 171 files (157 Lua: the
+  property scripts, info pages, map tools, editor brushes and `graphic_main.lua`; 14 settings XML; `data\lobby` has
+  no such folders; map scripts and `menu.cfg` do not count) whose CRCs XOR to **0x555bfa51**. The conversion compares
+  its value with that one and reports a difference.
 - **Base reference resolution**: the original finds nearly every file by its bare lower-case name, whatever folders
   a reference names (§5.4). The converter applies that rule once to every reference written in the original's data
   (XML attributes, Lua path strings, `.npc` strings, KEX material texture names, the names the code builds) and
@@ -157,6 +182,14 @@ request only decide between files of the same name, by a substring test on the c
 (`FileScan::ResolvePath` S 006ef8a0, `PickCandidateByParentDir` S 006ef680; FI §3.1). The shipped data relies on it
 (`[data]\scripts\campaignMaps\C02_11bigBUILD.lua` loads a file from `maps\campaignMaps`).
 
+The exact rule [known, FI §3.1]: the request is lower-cased with `/` turned into `\`; its name is the part after the
+last `\`; one file of that name is found whatever folders the request names; of several, the first in the
+index's scan order whose last folder name plus `\` occurs anywhere in the request (a plain substring test, so
+`maps\` also matches `campaignmaps\`); a request without `\` finds nothing when the name occurs more than once.
+`[data]` is never substituted. [measured] Of the 2,792 XML values with an extension, 2,395 resolve by a unique name,
+366 through a duplicate name by the folder test, 25 not at all (bare duplicate names in the lobby's
+`bodyparts.xml` and `npc_bodyparts.xml`, §9) and 6 name files that do not exist.
+
 The remake reproduces the rule in two places only:
 
 - in the converter, for every reference of the shipped data (§4.2);
@@ -189,35 +222,50 @@ everything the original's look depends on; engine-native forms only in the dispo
 | `.kex` mesh, skeleton | `.glb` (glTF 2.0) with an extension `SADK_kex` | glTF reader → the renderer's mesh, skeleton and animation tables | §6.3 |
 | `.kex` animation | `.glb` with the animation and the skeleton nodes it targets | same | keys stay evenly spaced (`keyCount` over `length`); nothing resampled |
 | `.dds` BC1 without alpha, BC2, BC3, A8R8G8B8 | `.dds`, unchanged; mip chains completed where they are missing | `Image.LoadDdsFromBuffer` | §6.2 |
+| `.dds` A4R4G4B4, R8G8B8, R5G6B5, A1R5G5B5, A8 (55 files) | `.dds` A8R8G8B8, every value expanded exactly (`round(v · 255 / max)`; A8's colour 0, as D3D9 samples it) | same | so Godot's loader always gets a format it reads |
 | `.dds` BC1 with one-bit alpha | `.dds` BC3 | same | §6.2 |
-| `.dds` cube maps | `.dds` with all six faces in a layout Godot's loader takes, or six `.png` faces [check] | own reader if needed | Godot reads only the first face of a DDS cube map [viewer] |
-| settler and avatar colour-index maps | `.dds` A8R8G8B8, **unchanged** (including the original's mip chain) | point sampled | never filtered, compressed or re-mipped (AM §3.15) |
-| `.tga` | `.png` (top-left origin) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels |
+| `.dds` cube maps (2) | `.dds`, unchanged | own reader: the six faces as images, then a `Cubemap` | Godot's loader reads only the first face [viewer, checked] |
+| settler and avatar colour-index maps (`*_colorindices_*`) | `.dds` A8R8G8B8 unchanged (including the original's mip chain); the lobby's R8G8B8 ones expanded to A8R8G8B8, levels as they are | point sampled | never filtered, compressed or re-mipped (AM §3.15) |
+| `.tga` | `.png` (top-left origin; grey, RGB or RGBA as the source) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels; also `game/animals/pig.dds`, which holds a BMP, and the one encrypted `.png` |
 | `.bmp` map previews | `.png` inside the map package | — | §7 |
 | `.ogg`, PCM16 `.wav` | unchanged | `AudioStreamOggVorbis`, `AudioStreamWav` | |
-| IMA ADPCM and float `.wav` | PCM16 `.wav` | `AudioStreamWav` | whether Redot reads them as they are is open (AU §10 Q11); converting is always safe |
-| `.fnt` + `_00.tga` page | `.fnt` with glyph ids mapped from Windows-1252 to Unicode, page as `.png` | `FontFile.LoadBitmapFont` | the original's glyph ids are cp1252 bytes (FI §3.6) |
-| language `.txt` tables | UTF-8 `.txt` with the original's syntax (`key<TAB>value`, later wins, `\n`) | own loader | keys verbatim, `!` included; a missing key shows the key, as in the original |
+| IMA ADPCM and float `.wav` (23) | PCM16 `.wav` | `AudioStreamWav` | converted always, so the question whether Redot reads them as they are (AU §10 Q11) does not arise |
+| `.fnt` + `_00.tga` page | `.fnt` with glyph ids mapped from Windows-1252 to Unicode, the original's padding arithmetic applied (padding and spacing then 0), a `page` line naming the page, kerning kept; page as `.png` | own reader building a `FontFile` (Godot's `LoadBitmapFont` reads only real files) | the original's glyph ids are cp1252 bytes and its reader ignores kerning and the `page` line (FI §3.6) |
+| language `.txt` tables | UTF-8 `.txt` with the original's syntax (`key<TAB>value`, later wins, `\n`) | own loader | keys verbatim, `!` included; a missing key shows the key, as in the original; `info.txt` and `dialogs.txt` are loaded by no code and not converted |
+| `engine.ini`, `network.ini`, `LobbySettings.ini`, the lobby's `;`-separated tables (`lobby/config/*.txt`) | copied as they are | — | |
 | `.pfx` | `.pfx.json` (lossless: the grammar of `../sim/particles.md` §3.1) | own loader (both forms) | |
 | settings XML, UI layouts | decrypted `.xml`, unchanged | presentation documents | merged and patched ([mods.md](mods.md) §6.6) |
-| `.lua` | converted Lua ([lua.md](lua.md) §3) | Lua host | the original source is kept beside it for error reports |
+| `.lua`, `menu.cfg` | converted Lua ([lua.md](lua.md) §3) | Lua host | the original source is kept beside it as `<path>.orig` for error reports |
 | `.s2m` + `.bin`, `.bmp`, `.lua`, cutscenes, briefing texts | map package (§7) | map loader | |
 | `.npc` | `.json` + palette `.png` | lobby / avatars | only when the remake has the 3D lobby |
 | `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in `base`; the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
-| `.psd`, `.lep`, `.ico`, `.html`, unused text tables | ignored | — | FI §3.14 |
+| `.psd`, `.lep`, `.ico`, `.html`, `.sav`, `.fx`, `.inc`, `.npc`, unused text tables and ini copies, the installer pictures, the two prototype maps (124 files) | not converted; the report lists each with its reason | — | FI §3.14; the prototype maps need `tools/s2m_upgrade.py` first (MF §9) |
 
 ### 6.2 Textures [draft]
 
 - Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer.
 - **BC1 with one-bit alpha** loses its alpha on Godot's Vulkan path (Vulkan uploads it as RGB) [viewer]. The
-  converter transcodes these to BC3: the alpha block holds the one-bit alpha exactly, the colour block is re-encoded
-  from the decoded colours with a fast range-fit encoder. Twice the size of BC1, an eighth of RGBA8. The converter
-  reports the largest per-channel colour error per texture; RGBA8 is the fallback should the error ever be visible.
-- **Missing mip chains** of 3D textures are completed at conversion (decode, filter, store uncompressed when the
-  source was uncompressed, BC3 otherwise). UI textures keep no mips: their pixels are addressed by layouts and
-  `iconconfig.xml`.
+  converter transcodes these to BC3 (maintainer's decision, 2026-10-15): the alpha block holds the one-bit alpha
+  exactly, the colour block is re-encoded from the decoded colours. Twice the size of BC1, an eighth of RGBA8.
+  [measured] 234 of the 792 DXT1 files use a transparent texel (a three-colour block with index 3) inside the
+  surface; four-colour blocks are copied unchanged. A three-colour block cannot be kept exactly: BC3's colour line has
+  no midpoint and no black off the line, so the encoder chooses among range-fit, the original end points and widened
+  end points, opaque texels first. The largest opaque error is 42 (0.34 % of the opaque texels differ by more than
+  16); 85.8 % of the transparent texels stay black, the others take the block colour nearest to black, which only
+  shows as the colour bilinear filtering blends in at cut-out edges (the original blends black there). The report
+  gives both errors per texture; RGBA8 stays the fallback should a fringe ever be visible (§9).
+- **Missing mip chains** of 3D textures are completed at conversion: the last level present is decoded, box-filtered
+  down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3 or A8R8G8B8). [measured] 226
+  textures have no chain and `game/map/objects/buoy.dds` stops after three levels; 114 are completed (the 95
+  animated water frames among them). This is needed, not only nicer: Godot's DDS loader rejects a partial chain
+  [checked]. UI textures keep their chain as it is (four DXT5 UI textures and `PokerCards.dds` ship with full ones):
+  everything under `game/gfx/` except the decals (`decals.dds`, `buildingselect.dds`, `catapultTarget.dds`), plus
+  `lobby/gfx/Village_Minimap.dds`, `PokerCards.dds` and the localised `ui_s2logo*.dds`.
 - The six settler colour-index maps (about 100 MB uncompressed) are kept byte for byte: the original's mip chain
   holds only level-0 values and the shader samples them point-wise.
+- [measured] The converted textures and pictures take 847 MiB (A8R8G8B8 644 MiB, mostly the colour-index maps);
+  every output loads with Godot's `LoadDdsFromBuffer` / `LoadPngFromBuffer` with its full number of levels, and the
+  decoded texels match the converter's own decoders (colour ±1 from rounding of interpolated BC colours).
 - `animals\pig.dds` holds a BMP; seven textures have non-power-of-two sizes (FI); the converter handles both.
 
 ### 6.3 Models [draft]
@@ -259,10 +307,18 @@ unit.
   assets/                  a layer of the virtual file system for this map (§5.1)
 ```
 
-- Original maps are packaged at conversion: each `.s2m` with its `.bin`, `.bmp`, `.lua`, cutscene scripts and the
-  briefing keys of `briefings.txt` that start with `B<name>_`, under the map's internal name. The converter reports
-  the two maps whose internal name differs from the file name and the two prototype maps in the old layout
-  (`MF` §9; `tools/s2m_upgrade.py` converts them).
+- Original maps are packaged at conversion: each `.s2m` (decrypted) with its `.bin` (as `world/environment.xml`,
+  the field names of `local_enviroment.xml`, floats in round-trip form), `.bmp` (as `preview.png`), `.lua` and
+  cutscene scripts (`<name>_<k><label>.lua` beside the map, converted, the original beside as `.orig`), under the
+  map's internal name (MapInfo `+0x24`). The map's own text keys go into `locale/<lang>/map.txt`: for campaign map
+  `C<nn>` the briefing pages `B<n>_*` (n without the leading zero, `C01` → `B1_`) and `C<nn>`, `C<nn>_*` (title,
+  subtitle, description, quests) of `briefings.txt`; for a free map its title, the key of its name in `ui.txt`
+  (free maps have no description keys). `map.xml` [implemented] carries `id` (the MapInfo UUID, Microsoft byte
+  order), `name`, `version`, `contentHash` (SHA-256 over the package's other files), `format`, `type` (campaign or
+  free), `players` (start positions), `width`, `height`, `originalClients`, `scriptApi`, `titleKey`,
+  `descriptionKey` and `RequiredMods`. The whole map is parsed to its last byte as the package's self-check. In the
+  reference installation all 31 current maps have their file name as internal name; the two prototype maps in the
+  old layout are not packaged (`MF` §9; `tools/s2m_upgrade.py` converts them).
 - **Maps carry no assemblies and no data-stage scripts** in the first version: a map that needs new registry types
   needs a mod and names it in `required mods`. Maps can add assets, presentation XML (new visual descriptors, a
   patched skydome list) and scripts. Because maps are data only, they can be transferred without the trust question
@@ -297,13 +353,20 @@ defaulting to the installed folder. Text tables, fonts, localised textures and t
 
 ## 9. Open points
 
-1. Building and settler lookup keys: `<tribe name>_<gfx name>` for buildings is inferred, with a case question
-   (`Scholarhut` and `ScholarHut`); the settler's character name per settler type is chosen in code and is not
-   simply the good's name (`good_helper` is drawn as `Carrier`) (AF; `../sim/rendering.md` §3.9).
+1. Settler lookup keys: the character name per settler type is chosen in code and is not simply the good's name
+   (`good_helper` is drawn as `Carrier`) (AF; `../sim/rendering.md` §3.9). The building key `<tribe name>_<gfx
+   name>` has no case question in the shipped data: 104 of the 109 `tp_addBuilding` pairs match `buildings.xml`
+   exactly, the other 5 (`<tribe>_MediumDummy`, two `OlympicFlame`) have no entry.
 2. Readers of `items.xml`, `sf_setBuffGfxName` and the building-level `<PFX>` / `<Particle position>` elements
    (`../sim/tribes-content.md` §10 Q5, Q6; `../sim/particles.md` §10 Q3).
-3. Whether Redot reads the IMA ADPCM and float `.wav` files directly (AU §10 Q11); converting is the safe default.
-4. The cube-map form Redot's loader accepts.
+3. How the installation is identified (§4.1): the maintainer will provide an unpatched installation; the rule is
+   settled with it.
+4. The colour the BC3 transcode gives transparent texels (§6.2): the nearest block colour, or black at the cost of
+   opaque error, or RGBA8 for the 234 textures.
 5. Other retail languages: folder names and whether their installations differ beyond `language\` (an English or
    French installation would settle it).
 6. The water-preset index of `MapInfo +0x1cc` and the `.bin` field names (MF §4.2, §4.17).
+7. The lobby's `bodyparts.xml` and `npc_bodyparts.xml` name 25 textures by bare duplicate names, which the original's
+   lookup does not find; the lobby loader probably puts a folder in front (FI §3.1).
+8. How the original treats KEX material texture names with `.psd`, `.bmp` or a missing `.tga` (AM open question 13);
+   the converter tries the name, then the same name with `.dds`.
