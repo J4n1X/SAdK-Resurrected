@@ -59,6 +59,12 @@ Added here [draft]:
     mirror picture, an environment cube map, a vertex animation) is a flag in a data table that mods can patch; shared
     services take generic requests; composition points are open registries. A mod must be able to add another
     reflective material, terrain type or object kind without touching the renderer's code.
+14. **CPU and GPU in balance; integrated graphics are a target** [binding, maintainer 2026-10-15: "We can't offload
+    everything to the GPU ... then we're fucked if someone only has integrated graphics"]. What is static or changes
+    rarely (the terrain's surface, heights after building, placement) is computed once on the CPU, on worker threads,
+    and stored; the GPU gets only work that changes every frame (blending between levels, skinning, waves). No
+    evaluation per vertex per frame of what a vertex buffer could hold. Every expensive option has a cheap setting,
+    and the defaults must run on integrated graphics.
 
 ## 2. Place in the process [draft]
 
@@ -691,13 +697,14 @@ show the 1.5-unit facets.
   the sun, how objects sit on the ground). The density is uniform over the map, so regions never meet at different
   densities (no T-junctions). If Smoothest everywhere proves too heavy, k = 4 near the camera and a lower k farther
   out, with stitched region borders as the original stitches its LOD levels (RE §3.3), is the fallback.
-- **Computed in the vertex shader** (`sadk/terrain_surface.gdshaderinc`) from two small textures: the fine heights
-  (R32F, (4W + 1) × (4H + 1): 441 × 441 for a 110 × 110 map) and the gradients (RG16F). Each mesh vertex carries its
-  fine triangle and barycentric position. The global switch `sadk_smooth_terrain` chooses the patch or the flat
-  triangle, which is exactly the original's surface, so the switch is instant while the mesh is denser than k = 1; a
-  change of density rebuilds the regions in the background.
-- **Height edits** (`MapChanged(Heights, rect)`) update the two textures in the rectangle (plus one vertex of margin
-  for the gradients); the mesh itself does not change.
+- **Computed on the CPU, stored in the vertex buffers** (principle 14): the mesh builder evaluates the patches on a
+  worker thread when a map is shown, with `TerrainSurface.HeightAt`'s formula, and writes final positions and normals.
+  The vertex shader only blends: each vertex also carries its position and normal at the next coarser level for the
+  refined settings' geomorphing, and a stitchable edge vertex its averaged alternative for the faithful stitching,
+  chosen by the neighbour's level. A change of density rebuilds the blocks in the background; the finest levels exist
+  only for blocks within their band.
+- **Height edits** (`MapChanged(Heights, rect)`) rebuild the blocks touched (plus one vertex of margin for the
+  gradients) on the worker thread.
 - **Everything on the ground uses the same surface**:
   - `TerrainSurface.HeightAt(x, z, mode)` in C#, float32, the same formula as the shader: object placement, settler
     and animal height snapping, picking;
