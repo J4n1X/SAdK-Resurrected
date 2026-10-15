@@ -988,8 +988,9 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Nodes**: one `BuildingNode` per building under the renderer's pausable `Animated` node, inspectable (type, tribe,
   stages, cut height, colour slot, flag, fires, demolition, in view, clip); part 0 on a `Skeleton3D` bound with weight 1
   to each vertex's first bone; the `LOD0` part through visibility ranges (part 0 only by default, the original's hard
-  switch, a variant with hysteresis, or the LOD part only; a layer property for now, a `<Buildings lod>` setting is
-  next). Materials are shared per texture pair, per-building values are instance uniforms; colour-variation slots
+  switch, a variant with hysteresis, or the LOD part only; the setting `<Buildings lod="Part0|ByDistance|
+  ByDistanceSmooth|LastPart">`, default Part0, in the Options' Graphics tab; the building gallery's switch overrides it
+  until the setting changes). Materials are shared per texture pair, per-building values are instance uniforms; colour-variation slots
   reuse the slot freed last.
 - **Shaders** (`shaders/buildings/`): house, house_cut (the cut by including `cut_none` or `cut_plane`, no define),
   frame (also ruins), decal, soldierflag; all write `FOG`. `sadk/light_original.gdshaderinc` is split into the model
@@ -1012,7 +1013,7 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   map in all 8 variations (the original's colour variation is nearly invisible). Six skeletons repeat a bone name;
   Godot rejects duplicates, so the second gets a `#<index>` suffix and indices stay the file's.
 - **Alpha test**: `ATEST127` is AlphaFunc Greater, AlphaRef 127 (`shared.inc:668`), so Godot's threshold is 128/255;
-  this settles §24 item 6 (the map-object shaders' 127/255 lets alpha 127 through, which the original rejects).
+  this settles §24 item 6 (the map-object shaders used 127/255 and let alpha 127 through; now 128/255 as well).
 - **Not drawn yet**: fire and demolition particles (counted), the ruin decal (the ruin models have no `GROUND` mesh;
   S 006d4e00 [inferred]), farm animals at `boneLink` bones.
 - **Gallery**: `core.game.buildinggallery {map, tribe, progress, upgrade, health, lod, flags, ruins, door, work,
@@ -1110,7 +1111,7 @@ The table of RR §2.3 stands. Added here:
 | Foliage | blended, sorted per batch, shadow-only copies | opaque cutout with alpha to coverage (the default, §12) |
 | Stall picture | saw-tooth | hold |
 | Missing visual | nothing drawn | placeholder |
-| Building LOD | part 0 | LOD parts by distance |
+| Building LOD (`<Buildings lod>`) | part 0 (Part0, the default) | the original's distance switch, hard (ByDistance) or with hysteresis (ByDistanceSmooth) |
 | Far plane, zoom range | 500, original steps | extended |
 | Fog | the map's fixed distances, linear on the view depth | scaled with the eye distance beyond the original's 84 units (§11.1); far plane, shadow range and LOD bands follow it; smooth curve (the default) |
 | Terrain detail | Faithful: flat triangles of the fine grid | Smooth (4×), Smoother (9×), Smoothest (16×) triangles on cubic patches (§10.2) |
@@ -1202,8 +1203,8 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 5. The remaining picture-affecting reverse engineering: selection marker styles and the build icon atlas (RE §10
    Q13), the border bobbing (Q12), ship player-colour values, the loader of building-level particle elements (PA
    §10 Q3), the texture particle passes 1 and 2 sample (Q1), what drives the tree sway and fall states.
-6. The object alpha-test threshold: 0.5 in the viewer against "AlphaTest ≥ 127" in `map_objects.xml`, an
-   off-by-one at 127 to check against the `.fx` files.
+6. Settled 2026-10-16: `ATEST127` is AlphaFunc Greater with AlphaRef 127, so alpha 127 is rejected; the house and
+   map-object shaders keep alpha ≥ 128/255 (sadk-remake 328c30c).
 7. The smooth terrain's density default: **Low** (maintainer, 2026-10-16). Measured in the game (compat, Icebound near
    view, 2026-10-16): Very High against Faithful changes 9 % of the pixels by more than 8 of 255 levels, the mean by
    3.9; only 14 of 625 blocks lie in the 16× band (to 34 units from the eye point), most of the view in the original's
