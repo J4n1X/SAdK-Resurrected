@@ -766,6 +766,81 @@ show the 1.5-unit facets.
 - **Faithful** reproduces the original's own terrain LOD exactly (maintainer, 2026-10-15): its three levels per block,
   its selection (RE §3.3), its stitching and its hard switch, popping included. The refined settings morph instead.
 
+### 10.4 As built [implemented 2026-10-16, sadk-remake 1135c7c]
+
+**The mesh.**
+- Patches (solid/blend per pattern, rank order, transition-mask UVs) are built once per block (TerrainMesher); a level only
+  sets how finely each cell triangle is split: its vertices are the lattice points (i, j), i + j ≤ N, of the cell
+  triangle (corners at the cells' sample vertices), placed on TerrainSurface on the CPU. N = 4, 2, 1 are exactly the
+  original's levels 0, 1, 2 (rendering.md §3.3); the refined levels add N = 8, 12, 16.
+- Draw unit: per region (regionBlocks × regionBlocks blocks) one mesh of the blocks at the fine grid or coarser, and one
+  "near" mesh of its blocks finer than the fine grid; each a solid (shadow-casting) and a blend MeshInstance3D, one
+  surface per pattern. Draw calls stay at the faithful look's level (Steinfjord: 1089 vs 1082 near, 3033 vs 2847 far).
+- Rebuilds: each frame the selection's changes go out as one batch (the regions and near meshes whose blocks changed
+  level, stitch or neighbour level); its CPU work runs in parallel on workers, the Godot meshes are made after, and the
+  whole batch is swapped in in one frame. The first picture is built synchronously in the layer's first frame
+  (Steinfjord, 6 cores, Compatibility renderer: Faithful 279 ms, Moderate 572-733 ms, Very High 0.9-1.0 s).
+- Memory: only the dense levels (finer than the fine grid) are kept on the CPU (the wanted level and one either side,
+  prefetched one hysteresis ahead); the original's levels are built again with each batch. Measured on Steinfjord
+  (vertex buffers / normal texture / CPU at rest):
+  Faithful 10.9 MB / – / 0; Low 22.0 / 8.6 / 0; Moderate 27.7 / 8.6 / 20 MB (36 MB while turning);
+  High 29.8 / 8.6 / ≈25 MB; Very High 35.9 / 8.6 / 48 MB (83 MB while turning). Icebound similar (normals 6.5 MB).
+  Triangles: Faithful 320k (the whole map at the fine grid would be 866k), Low 350k, Moderate 492k, High 551k,
+  Very High 710k.
+
+**The smooth surface** (the maintainer's formula, 2026-10-15).
+- Every fine-triangle edge lies on one of the lattice's three lines. Along an edge A → B the height is a cubic Hermite
+  curve with Catmull-Rom slopes from the samples next in line (P₋₁ = A − (B − A), P₂ = B + (B − A); one-sided at the
+  map's border), limited monotonically (Fritsch–Carlson: slope 0 where the two secants differ in sign or one is zero,
+  else at most 3 × the smaller secant). Inside: the cubic Bézier triangle with those edges (edge controls a third of the
+  way along: corner + slope / 3), centre control by the PN rule, limited to the corners' range. Properties (tested):
+  through every sample, crack-free shared edges, no overshoot (monotone across a step), level plots stay level, a
+  straight ramp stays straight, ridges along one line stay sharp across it.
+- Normals: per grid vertex the average of the surrounding patches' derivative normals; between vertices the PN-triangle
+  quadratic normal field over those (continuous across edges, so the light has no facet seams). Faithful keeps the
+  original's stored vertex normals interpolated.
+- Baked normal texture (all refined settings, Low included): the smooth surface's normals at 4 texels per fine step
+  over the map's extent, RG8 (x and z; y follows), with mipmaps, baked on the CPU on a worker when a map is shown
+  (Steinfjord 115 × 115: 1843² texels, 8.6 MB with mipmaps; Icebound 6.5 MB). The terrain passes read it once per pixel
+  in place of the interpolated vertex normal (tangent made from it as the vertices' is); globals sadk_terrain_normals,
+  _normal_rect, _normal_on (core.game's).
+- Everything on the ground uses the same surface: MapGeometry.HeightAt follows the drawn surface (HeightMode set by the
+  terrain layer), so object placement, picking and the camera use it; objects are placed again when the surface
+  changes; the border skirt's wall top follows it (four pieces per fine step) and is rebuilt with it.
+- No height or gradient texture is read per vertex: the vertex shader only blends (§10.3).
+
+**Levels by distance.**
+- Chains: Faithful 4/2/1; Low 4/2/1 (smooth); Moderate 8/4/2/1; High 12/4/2/1; Very High 16/8/4/2/1. The original's
+  lodDistance L = <Landscape lodDistance> (graphics.xml, 50; read into GameSettings.LandscapeLodDistance, 0 if absent as
+  the exe) · (groundDetail · 5 + 0.25) + 1.15 · √((4 stepX)² + (4 stepZ)²) = 271.6 at the top preset (groundDetail 1,
+  the remake's faithful). Band ends: N = 4 at 0.5 L (135.8), N = 2 at 1.5 L (407.4), N = 1 beyond; the refined finer
+  levels at 0.5 L · 4 / N (N = 8: 67.9, 12: 45.3, 16: 34.0).
+- Faithful selection = the original's: from eye = camera + 0.7 (target − camera), XZ distance to the block's box
+  centre, lod = min(2, trunc(d / L + 0.5)), every frame for every block, no hysteresis, hard switch (the batch makes the
+  switch visible one or two frames after the original would: geometry exact, timing by a frame). Stitching: of two
+  neighbours with different levels the finer stitches, levels 0 and 1 only; a stitched edge's odd vertices take the
+  average height and normal of their two edge neighbours, the tangent and the rest stay (the original's AddPatch).
+  Shadows and the mirror draw the same levels (the same meshes).
+- Refined selection: XZ distance from the same eye point to the block's nearest point; a block steps coarser only
+  24 units (one block) past its band's end and finer as soon as it is inside the finer band; neighbours are kept within
+  one level. Every vertex of a refined level carries its next coarser level's position (CUSTOM0.xyz, RGBA float) and
+  normal (CUSTOM1.xyz), and the distances where it starts and completes blending toward them (CUSTOM0.w, CUSTOM1.w: the
+  last 40 % of the band); the vertex shader mixes by the vertex's XZ distance from the eye point (global
+  sadk_terrain_eye): one distance and two mixes per vertex. A finer block's edge toward a coarser neighbour takes the
+  neighbour's own edge data (position, coarser position, blend distances), so the two move together and no crack
+  opens at any blend state; the switch happens only where the vertices are fully blended, so nothing pops.
+- Not used: Godot's visibility ranges for the far band (regions already batch it; no draw-call gain) and HLOD.
+- Map view: levels=true colours the levels, wire=true shows Godot's wireframe, stats=true adds the terrain's numbers to
+  the STATS line, switchTo / switchAt change the setting while running.
+
+**The setting** (§19): <Terrain detail="Faithful|Low|Moderate|High|VeryHigh">, default Low (the maintainer's decision of
+2026-10-16: the finer levels change the picture little, since the samples are already smooth at the game's distances
+and the fine bands cover only the area around the focus; all levels stay selectable); Options (Graphics) and the map
+view's quick switches; changing it rebuilds the terrain, the objects' placement and the skirt.
+
+**GPU cost**: per vertex the refined vertex shader does one distance, two mixes and a normalize; per pixel one RG8 texture read
+and two cross products for the baked normal. Faithful: no blend, no texture read.
+
 ## 11. Water, border, sky, environment [draft]
 
 - **Water**: one quad per block at or below the water level, at `sadk_water_level`, batched per region (the viewer
@@ -1011,6 +1086,7 @@ object. Every change applies at once, including the region size and blended foli
 | Element | Attributes |
 |---|---|
 | `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
+| `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4) |
 | `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed, Off), `curve` (Smooth, Linear); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
 | `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |
