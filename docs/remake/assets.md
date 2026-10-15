@@ -72,11 +72,25 @@ convert side by side. A conversion folder holds [implemented]:
 
 1. **Find the installation**: the recorded path, else the known install locations, else ask the player. Identify it
    by the build number (34688) and patch level (9212) and its language folder. An unknown build is converted with a
-   warning; compatibility mode is offered only for the known one. [implemented] The patch level is `[Lobby]
-   patchlevel` of `game/settings/network.ini` (a file with a UTF-8 byte order mark); the build number is no file of
-   its own but the constant `g_BuildVersion` S 008793c0 of the executable, read today at a per-executable offset for
-   the two known executables (the DRM-free and the SecuROM one). [open] The maintainer will provide an unpatched
-   installation; until then this rule stays as it is (§9).
+   warning; compatibility mode is offered only for the known one. [implemented, maintainer's rule 2026-10-15] The
+   patch level is `[Lobby] patchlevel` of `game/settings/network.ini` (a file with a UTF-8 byte order mark). The
+   executable is recognised by its hash among the known ones, the retail (SecuROM) and the DRM-free `SADK.exe`, which
+   also gives the build (34688, the constant `g_BuildVersion` S 008793c0). The data files are compared with a
+   **reference edition**: the SHA-256 of every file of an unmodified installation (`de-retail-9212`, 4,451 files,
+   made from the maintainer's original installation), shipped with the converter, never the files themselves.
+   - After every conversion, and at every start from the record's hashes (milliseconds), the installation is compared
+     with the edition of its language and patch level. Changed, missing and added files are **warnings**: a changed
+     file that parses is converted and used, one that does not is a failed job as well. Files on the ignore list do
+     not count.
+   - The player may ignore the warnings ("Ignore and continue" or "Quit"); the choice is remembered for exactly that
+     state, so any further change is asked about again.
+   - The record keeps two **base game hashes**: one over every converted source (content) and one over the files the
+     original's build checksum covers (`scripts/**/*.lua`, `settings/**/*.xml`: the rules). They are the identity of
+     `base` that network games compare (mods.md §9.1), so a modified installation cannot pass for an original one;
+     a presentation-only change (textures, sounds, texts) leaves the rules hash alone.
+   - [measured] The original installation converts with 0 differences. A patched copy (fog values raised in all 31
+     map `.bin` sidecars, a changed `daytimes.xml`, three ini files) shows those 34 files; `daytimes.xml` changes the
+     rules hash, as it changes the original's own build checksum.
 2. **Check** at every start: compare the recorded list (relative path, size, modification time) with the disk. A
    difference: hash the file; if the hash changed, mark the outputs made from it for conversion. Moving the
    installation keeps the conversion valid when the hashes match at the new place.
@@ -386,8 +400,8 @@ defaulting to the installed folder. Text tables, fonts, localised textures and t
    exactly, the other 5 (`<tribe>_MediumDummy`, two `OlympicFlame`) have no entry.
 2. Readers of `items.xml`, `sf_setBuffGfxName` and the building-level `<PFX>` / `<Particle position>` elements
    (`../sim/tribes-content.md` §10 Q5, Q6; `../sim/particles.md` §10 Q3).
-3. How the installation is identified (§4.1): the maintainer will provide an unpatched installation; the rule is
-   settled with it.
+3. Reference editions of other languages and patch levels (§4.1): an English or French installation would add its
+   fingerprint and settle §9 item 5 at the same time.
 4. The colour the BC3 transcode gives transparent texels (§6.2): the nearest block colour, or black at the cost of
    opaque error, or RGBA8 for the 234 textures.
 5. Other retail languages: folder names and whether their installations differ beyond `language\` (an English or
