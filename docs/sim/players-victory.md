@@ -350,7 +350,8 @@ Runs once when a world is built from a map of a "new game" type (0, 1, 2, 100, 0
      `ai_normal = ai_create("2")`, `ai_strong = ai_create("3")` `[known]` data; that `ActivatePlayer` looks the
      level up as a profile id is described in `docs/sim/ai-player.md`. When the setup came from the descriptor,
      the player is renamed to the localised text of
-     the key `"<tribe name>_AI_<computer level>_<i>"` (e.g. `Bavarian_AI_2_3`) `[known]`.
+     the key `"<tribe name>_AI_<computer level>_<i>"` (e.g. `Bavarian_AI_2_3`), with the stored level 0..2, not the
+     level + 1 passed to the AI `[known]`.
    - place the start building at start position i (`NVillage::System::PlaceBuilding`), then
      `Depot::AddInitialStock` (below), then `Player::RecountStocks`.
    - if `desc+0x28 == 1` (fog of war disabled): `MapModifier::ExploreArea(centre = (W/2, H/2),

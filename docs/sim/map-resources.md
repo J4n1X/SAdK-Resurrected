@@ -421,6 +421,10 @@ dir = table[(angle / 60) % 6]      table S 007f8948 = {5, 0, 1, 2, 3, 4}
 ```
 
 So angle 60..119 gives E, 120..179 NE, 180..239 NW, 240..299 W, 300..359 SW and 0..59 SE; equal points give E.
+Because `a` is truncated toward zero, the bin edges are not symmetric in the untruncated angle: they lie at −150, −90
+and −30 for negative values (−30.0 already gives NE) and at 31, 91 and 151 for positive ones (30.9 still gives E)
+[known; the remake's `HexGrid.DirectionTo` decides the bins with cross products against six boundary vectors and
+matches this formula on 10,404 point pairs].
 Callers [known, call graph]: street shaping (§3.4), `NMovement::FinePath::SetTarget`, `NMovie::RotateCatapult::Start`
 and three render classes.
 
@@ -1276,7 +1280,8 @@ system (`DoodadsSystem`: static, temporary, blocking lists) are separate section
 
 | State | How it is rebuilt |
 |---|---|
-| construction flags | allocated on load (`ConstructionMap::Init` in S 00672030); filled for the whole map by `ConstructionMap_RecomputeAll` in `MapModifier_InitAfterMapLoad` S 00673000, which `Game_LoadWorldFromDescriptor` S 005ac770 calls after the file is read, for a new map and for a save alike. The debug menu's load button calls the file loader directly, without that step [known for the callers in the cached decompile] |
+| construction flags | allocated on load (`ConstructionMap::Init` in S 00672030); filled for the whole map by `ConstructionMap_RecomputeAll` in `MapModifier_InitAfterMapLoad` S 00673000 (which then only raises
+`TerritoryChanged` and `PlayerRectChanged` for the local player and touches no border bit), which `Game_LoadWorldFromDescriptor` S 005ac770 calls after the file is read, for a new map and for a save alike. The debug menu's load button calls the file loader directly, without that step [known for the callers in the cached decompile] |
 | object layers | each object's `PostLoad` re-registers itself (flag, building, street, deposit, dig reservation) |
 | `activeDeposits` | a loaded deposit is active iff `depletedTicks != 0 || growth < 1.0 || ttl >= 0` |
 | `depositById`, `animalById` | filled while loading |
@@ -1288,7 +1293,17 @@ system (`DoodadsSystem`: static, temporary, blocking lists) are separate section
 territory. In particular loading a deposit, a blocking doodad, a spawn or a navy object does not set its bit; the
 saved `GridStatesMap` must already contain it.
 
-`Animal::PostLoad` S 00541bf0 clamps `timeStamp` to at most `tick / 10` [known].
+`Animal::PostLoad` S 00541bf0 clamps `timeStamp` to at most `tick / 10`; the comparison reads the tick counter as
+unsigned, so on a fresh map (tick −1) the clamp has no effect [known].
+
+A loaded deposit or animal whose type id has no property record gets a default record inserted by the property
+lookup (`GetOrInsert*`), so it loads with default properties instead of failing [known].
+
+**Duplicate ids on load** [known] S 00540fd0, S 00544ef0: within one class a later object with the same id replaces
+the earlier one in the id map; the deposit and spawn vectors keep both; the static doodad index keeps the last
+doodad per vertex. The load constructors fire no "added" events (deposit S 00543210, doodad S 00545460, animal
+S 00541e00); these objects are announced only by `PostLoad`. The harbour's `ctorAtPos` S 005b5bc0, which does
+announce, is reached only from `Create`.
 
 **Section versions of `resources`** (`NResources::System::Load` S 00540fd0) [known]: the animal list is read only
 when the section version is > 0; versions 3 and 4 carry 0x20 raw bytes after the animals that are read and

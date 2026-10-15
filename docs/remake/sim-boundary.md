@@ -193,15 +193,22 @@ deposits, doodads, flags, buildings, settlers and ships already carry the identi
 | Group | Events (payload) | Replaces in the original |
 |---|---|---|
 | world | `WorldBuildBegin/End`, `LoadRebuildBegin/End` (bracket around the re-sent "added" events after a load) | callback slots +0x00, +0x04 |
-| entities | `EntityAdded(id, kind, typeKey, owner, cell, finePos, reason)` with reason Placed, Loaded, TypeChanged, Transferred, Spawned; `EntityRemoved(id, kind, reason, info)` with `info` = cell, fine position, type, owner, `leavesRemains`, `destroyed` | the 34 add / remove slots (buildings, flags, settlers, streets, deposits, animals, packages, remains, doodads, ships, harbours, routes, projectiles, sacrifices, chests, spawn points) |
+| entities | `EntityAdded(id, kind, type, owner, cell, finePos, reason)` with reason Placed, Loaded, TypeChanged, Transferred, Spawned; `EntityRemoved(id, kind, reason, info)` with `info` = cell, fine position, type, owner, `leavesRemains`, `destroyed` | the 34 add / remove slots (buildings, flags, settlers, streets, deposits, animals, packages, remains, doodads, ships, harbours, routes, projectiles, sacrifices, chests, spawn points) |
 | state | `UpgradeStarted(building, targetType)`, `UpgradeCancelled`, `StreetUpgraded`, `DepositShown`, `DepositDepleted(id, depletedTicks)`, `SettlerPathChanged(id)`, `PackagePile(id, flag, attached)`, `ChestOpened(id, player)`, `HarborLinked(flag)`, `FightChanged(id)`, `CarriedPackageChanged(settler)`, `ActionTimerStarted(entity, kind, totalTicks)`, `EntityStateChanged(entity, state)` | slots +0x10..+0x14, +0x44..+0x50, +0x5c, +0x60..+0x6c, +0xc8..+0xd0; the per-tick polling of action timers and states |
 | one-shot | `Strike(attacker, target)`, `ProjectileLaunched(id, kind, source, target, launchTick, impactTick)`, `ProjectileEnded(id, impact)`, `SpawnTriggered(id)`, `SacrificeEffect(kind, subject)`, `SacrificeState(building, state)` | slots +0x30, +0x98, +0x9c, +0xa0..+0xc4, +0xdc |
 | map | `MapChanged(layer, rect, player)`, layer = Heights, Patterns, Territory, Exploration, ConstructionFlags, GroundResources, Reinitialised; one merged rectangle per layer, player and tick | `NMap::CallbackReceiver`; **new**: territory with a rectangle (the original rebuilds all borders), construction flags (the original recomputes the build overlay per frame) |
-| players | `PlayerAdded/Removed`, `MessagePosted(player, messageKey, type, args, cell?)`, `QuestChanged(slot)`, `StatisticsSampled(player)`, `PlayerDefeated(index)`, `MatchDecided(winners)` | player table notifications; message and statistics listeners; the victory code's local-player branches |
+| players | `PlayerAdded/Renamed/Removed`, `MessagePosted(player, messageKey, type, args, cell?)`, `QuestChanged(slot)`, `StatisticsSampled(player)`, `PlayerDefeated(index)`, `MatchDecided(winners)` | player table notifications; message and statistics listeners; the victory code's local-player branches |
 | session | `SpeedChanged(speed)`, `CommandResolved(sender, commandType, result)` | the speed command's local effects; the executors' direct calls into the local street placement mode (GC §3.4) |
 | script UI | `ScriptUi(player or all, request)`: book pages, tutorial page, minimap symbol, letter, action override, cinematic pages, particle at a cell, lock-map refresh | the UI-only `menu.*`, `ui.*`, `gfx.*` calls of map scripts ([lua.md](lua.md) §6) |
 | services | `ChestClaimed(chest, player, value)`, `MatchDecided` | the referee's ClaimChest and FinishGame, the campaign progress and profile writes |
 | loading | `LoadProgress(step, of)` | the ten "Finalizing world" progress steps; the simulation never draws a frame |
+
+As built (sadk-remake, 2026-10-16): `type` is the registry entry itself, not a key string; `EntityKind` and the map
+layers are open names, so a mod adds kinds and layers without touching the engine; `EntityAdded` and `EntityRemoved`
+can be subclassed, and a sea route's added event (`ShipRouteAdded`) also carries its path and whether both harbours
+are linked. `PlayerAdded` carries the slot kind; a computer's name change at the start is `PlayerRenamed`, and the
+name is a text key (`<tribe>_AI_<level>_<slot>`), so the simulation does not depend on the language. An empty world
+also emits `WorldBuildBegin` and `WorldBuildEnd`.
 
 `SimEvent` is an open base record: a mod's component emits its own event types, and the presentation maps event
 types to handlers, so a mod brings render and audio behaviour for its own events ([mods.md](mods.md) §8.2).
@@ -236,6 +243,11 @@ public interface IWorldView
     IQueries Queries { get; }      // pure queries for the UI
 }
 ```
+
+As built (sadk-remake, 2026-10-16): `IWorldView` has `Map` (`IMapView`: sizes, water level, spans of heights,
+patterns, grid states and territory, per-cell resources, exploration, continents, construction flags and the five
+object layers), `TryGet` and `Query` (ordered by id). The players stay core.game's view (`PlayerTable`), not an
+engine interface; `IQueries` is not built yet.
 
 Entity views are component-shaped (`IConstructionView`, `IHitpointsView`, `IProductionView`, `IMovementView`,
 `IActionTimerView`, `IMilitaryFlagView`, `IGrowthView`, ...), so a mod's component adds its own view interface and
@@ -378,9 +390,13 @@ These matter more in the remake than in the original, because Harmony patches ca
    the refined look (the original does not check lock, tribe or construction time there); no chests offline (as the
    original); map scripts deferred to campaign maps (the 20 shipped free-game maps have none); user maps whose stored
    ids collide with the counter behave as the original (a duplicate within a class replaces the earlier object) with a
-   warning; no start-position shuffle.
-3. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
+   warning; no start-position shuffle. Taken while building the match from a map (to review): the per-net-tick
+   checksum keeps the original's coverage (map, resources, doodads and spawns stay out) and the whole state goes into a
+   separate state hash; a unit type the registry lacks leaves the object out with a warning (the original inserts
+   default properties); the whole-map exploration notice goes to every player (the original sends it for its local
+   player); a map reference's hash covers the world part's bytes including mod overlays.
+5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
-4. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.
-5. Message ids: the original's counter is not saved and repeats ids after a load (EC §7); the remake keys messages
+6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.
+7. Message ids: the original's counter is not saved and repeats ids after a load (EC §7); the remake keys messages
    by the `(tick, seq)` of the posting event.
