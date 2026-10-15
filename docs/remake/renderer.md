@@ -48,6 +48,15 @@ Added here [draft]:
     all three.
 11. **Per-instance variation never through copied materials** (the viewer's settler palettes and building colour
     offsets): instance data, instance uniforms or atlases.
+12. **No game data in code** [binding, maintainer 2026-10-15]. Every value the original's data holds (settings XML,
+    maps, scripts, `menu.cfg`, paths, colours, scales) is read from the converted installation and the mods; what the
+    files do not give is reported and left out, never substituted. Constants in code are the original executable's
+    own defaults and algorithm constants, each with its address, or the remake's own design values, labelled as
+    such.
+13. **No special cases for one material, type or name** [binding, maintainer 2026-10-15]. What a material needs (the
+    mirror picture, an environment cube map, a vertex animation) is a flag in a data table that mods can patch; shared
+    services take generic requests; composition points are open registries. A mod must be able to add another
+    reflective material, terrain type or object kind without touching the renderer's code.
 
 ## 2. Place in the process [draft]
 
@@ -87,9 +96,12 @@ AddChild(new MapCamera(renderer));                             // or a camera co
 | Type | What it is |
 |---|---|
 | `RenderContext` | the mod set as the renderer reads it: file system, asset cache, frozen registry, presentation documents; the original's settings XML (`GameSettings`, merged and patched); original references (`[data]\map\textures\x.dds` = `game/map/textures/x.dds`, then the path as written, then the bare-name rule of [assets.md](assets.md) §5.4) to textures and cube maps |
-| `MapData` | one map: the package, the parsed `.s2m`, `world/environment.xml`, the water preset, `MapGeometry`, the terrain patterns by map pattern id (registry `PatternDef` gfx name → `<Pattern>`), the blocks that need the mirror; mounts the package's `assets/` as a layer while open |
+| `MapData` | one map: the package, the parsed `.s2m`, `world/environment.xml` (else `local_enviroment.xml`; null when neither gives a complete one), the water preset (null when there is none; a preset may be incomplete), `MapGeometry`, the terrain patterns by map pattern id (registry `PatternDef` gfx name → `<Pattern>`), the terrain blocks (`TerrainBlock`: bounds, lowest and highest height, pattern ids); mounts the package's `assets/` as a layer while open |
 | `MapGeometry` | grid to world; `HeightAt` is the plane of the drawn terrain triangle (§10.1), used for placement, picking and the camera |
-| `MapRenderer` | the node that draws a map with its own camera (horizontal field of view 50°, near plane 1); `Show`, `Clear`, `SetView(focus, eyeDistance)`, `HeightAt`, `CellAt`, `Pick`, `Report`, the presentation clock (`Time`, `Paused`); each part of the picture is a file of its own joined by partial methods (`Show*`, `Clear*`, `Frame*`, `Apply*`, `Report*`) |
+| `MapRenderer` | the node that draws a map with its own camera (horizontal field of view 50°, near plane 1); `Show`, `Clear`, `SetView(focus, eyeDistance)`, `HeightAt`, `CellAt`, `Pick`, `Report`, the presentation clock (`Time`, `Paused`); its picture is made by layers (`Layers`, `AddLayer`, `RemoveLayer`, `Layer<T>()`) |
+| `IMapLayer` | one part of the picture: `Show(renderer, map)`, `Clear`, `Frame`, `ApplySettings`, `Report`; core.game's environment, terrain, water and map objects are layers like any mod's |
+| `MapLayers` | the layers every renderer is made with: `Register(name, order, factory)` returns a registration the mod disposes in its `OnUnload` (core.game: environment 100, terrain 200, water 300, map objects 400) |
+| `MirrorRequests` | `MapRenderer.Mirror`: a layer whose material reads the mirror picture sets the bounds where it does; the mirror view is drawn only while one of them is in view (§8.3) |
 | `MapCamera` | the free orbit camera on input actions (§8.1) |
 | `RenderSettings` | the switches of §19 with their defaults; `NotifyChanged` applies them |
 | `RenderGlobals` | the global shader parameters (§7.3) |
@@ -325,11 +337,13 @@ including `objects/doodad.gdshaderinc`). The viewer's wrapper files are this sha
 
 ### 7.2 Loading [draft]
 
-- `ShaderLibrary` resolves shader paths through the file system, expands `#include "shaders/..."` itself
-  (recursively, once per file, with a line map for error messages), and sets `Shader.Code`. Godot's own include
-  resolution is path based and cannot see mod files ([redot-capabilities.md](redot-capabilities.md) §4).
+- Shaders load through the file system's `vfs://` loader [implemented]: `rc.Assets.Load<Shader>("shaders/x.gdshader",
+  AssetKinds.Shader)` and `ResourceLoader.Load<Shader>("vfs://shaders/x.gdshader")` give the same resource, and
+  Godot's own preprocessor resolves `#include "vfs://shaders/sadk/globals.gdshaderinc"` or an include relative to the
+  including file through the file system, once per file, with errors listed per include file and line
+  ([redot-capabilities.md](redot-capabilities.md) §4).
 - A mod that replaces `sadk/light_original.gdshaderinc` changes the light of every object shader; one that
-  replaces `objects/tree.gdshader` changes trees only. Dependents of a replaced include are recompiled.
+  replaces `objects/tree.gdshader` changes trees only. A shader recompiles when one of its includes changes.
 - Shaders compile at match load (behind the loading screen) for every descriptor of the match, so no frame stalls.
 
 ### 7.3 Global parameters [draft]
@@ -431,6 +445,12 @@ As in the viewer, with one change:
   reflection" is on;
 - a guard band of a quarter above and below; resolution, range and update rate as switches; not drawn while no
   terrain block at or below the water level or with ice is in view;
+- **requests instead of materials** [implemented]: the mirror view knows no water or ice. Each layer whose material
+  reads the picture states the world bounds where it does (`MapRenderer.Mirror.Set(layer, boxes)`): the water layer
+  the blocks at or below the water level while the planar reflection is on, the terrain layer the blocks holding a
+  pattern whose terrain type is marked `mirror="true"` in its type table, a mod's glass its own boxes. The view is
+  drawn while any requested box is in view, as the original draws its reflection scene only while water or ice is
+  visible (Scene::Render S 006836b0).
 - **new**: the mirror camera's cull mask contains a marker layer; `is_mirror_pass()` in `sadk/mirror.gdshaderinc`
   tests it through `CAMERA_VISIBLE_LAYERS` and discards geometry below the water. The viewer's test "camera below the
   water" breaks for a camera that dips under the surface.

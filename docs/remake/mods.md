@@ -600,7 +600,8 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
 - **Namespaces.** A mod declares modes, overlays, handlers and events only under its own id (`core.game.*` belongs to
   `core.game`); a listener with an id outside its namespace must replace an existing one. `engine.*` is the game's:
   `engine.start` (event, emitted after the mods load and by the mods screen's "Back"), `engine.quit { code }`,
-  `engine.close { overlay }`, `engine.mods`, `engine.shell { reason }`.
+  `engine.close { overlay }`, `engine.mods`, `engine.shell { reason }`, `engine.language { code }` (switches the
+  text language, [assets.md](assets.md) §8).
 - **Dependencies.** A mod whose listener or route emits another mod's intent names that mod among its dependencies
   (`tools.assetbrowser` requires `core.mainmenu`), else a warning; the version range is the contract's version. Mods
   share no types: another mod's intent is emitted as a key and plain data, never with its record.

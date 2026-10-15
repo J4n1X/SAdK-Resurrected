@@ -88,7 +88,8 @@ Rules that follow:
 | Facility | Notes | Evidence |
 |---|---|---|
 | `Shader.Code` settable at run time | shaders can be compiled from text the game assembled | [api]; [viewer] (`ShaderFiles.cs` builds variants from strings) |
-| `ShaderInclude` with `ShaderInclude.Code`; `#include` in shader code | Godot resolves include paths as resource paths (`res://…`); the viewer includes `res://shaders/…` | [api]; [viewer]; that files outside `res://` cannot be included by path is [godot, check] |
+| `ShaderInclude` with `ShaderInclude.Code`; `#include` in shader code | The preprocessor resolves an include through `ResourceLoader.Exists` and `Load`: a relative path, a bare name included, against the including file's folder, any other path as written. Include-once is by the include's resource path, cycles are an error, nesting stops at depth 25. A shader recompiles when one of its includes changes. `Shader.Code` drops preprocessor errors (missing include, cycle) and compiles the unexpanded code, which reports "Unknown character '#'". Compile errors inside an include are listed per file with path and line. `set_include_path` is not exposed in C#, so a shader made from code resolves relative includes only once it has a path | `shader_preprocessor.cpp` `process_include`; `shader.cpp` `Shader::set_code`; [measured] editor and exported build |
+| Custom `ResourceFormatLoader` in C# | Registered at the front, it answers `Exists` and `Load` for its own paths. A path with an alphanumeric `scheme://` passes `localize_path` unchanged; a relative path becomes `res://`. Godot caches results by exact path, which is case-sensitive; clearing a resource's path takes it out of the cache. `Exists` answers true for a cached path whatever the loaders say. The engine calls the C# overrides only when the assembly is built with Redot's source generators | `resource_loader.cpp` (`exists`, `_load`, `_validate_local_path`); `project_settings.cpp` `localize_path`; [measured] |
 | Global shader parameters | `RenderingServer.GlobalShaderParameterSet` and friends, declared in `project.godot` or added at run time (`GlobalShaderParameterAdd`); switching one takes effect at once, no recompile | [api]; [viewer] (15 globals) |
 | Camera built-ins in spatial shaders | `CAMERA_VISIBLE_LAYERS` (the drawing camera's cull mask), `CAMERA_POSITION_WORLD`, `NODE_POSITION_WORLD`, `INSTANCE_ID`, `INSTANCE_CUSTOM`, `MODEL_NORMAL_MATRIX`, `VIEW_INDEX` | names present in the engine binary; `CAMERA_POSITION_WORLD` [viewer]; `CAMERA_VISIBLE_LAYERS` lets a shader tell the mirror pass from the main view ([renderer.md](renderer.md) §8.3) [check on all three renderers] |
 | Per-instance uniforms | `instance uniform` in the shader, set with `RenderingServer.InstanceGeometrySetShaderParameter` / `GeometryInstance3D.SetInstanceShaderParameter`; Godot limits them to 16 per shader | [api]; limit [godot]; not used by the viewer |
@@ -101,9 +102,14 @@ helper functions; values computed in `fragment()` reach `light()` only through v
 portable (point sampling with the nearest mip computes the level from derivatives); Godot turns a back face's normal
 toward the viewer; `blend_add` is SrcAlpha/One.
 
-Because Godot's include resolution is path based, the remake expands `#include` itself before it sets
-`Shader.Code`: an include path is a logical asset path, looked up through the virtual file system, so a mod can
-replace a shared include for every shader that uses it ([renderer.md](renderer.md) §7.2).
+The game's file system is in Godot's `ResourceLoader` under `vfs://` (`VfsResourceLoader`, Sadk.Presentation). A
+shader loaded from `vfs://` resolves its includes through it, so a mod's file at the same logical path replaces an
+include for every shader that uses it ([renderer.md](renderer.md) §7.2). The loader reports missing and cyclic
+includes with file and line itself. Godot's text and binary resources in a directory layer load through Godot's own
+loaders, and their `vfs://` references come back through the file system; inside a zip layer (a zipped mod, a map
+package) they cannot be loaded, since Godot's resource loaders read only real files. A layer's paths leave Godot's
+resource cache when the layer is unmounted. A path must be written in the file's own spelling: Godot's cache
+compares case, the file system does not, and two spellings make two resources.
 
 ## 5. Low-level rendering (`RenderingServer`)
 

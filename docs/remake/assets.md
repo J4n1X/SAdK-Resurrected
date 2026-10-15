@@ -433,6 +433,29 @@ is a client-only mod; the one text-derived value the simulation uses, the number
 (`game/language/<lang>/voices/<key>.ogg`) fall back the same way; a text-only translation keeps the original voices.
 The original fonts hold Windows-1252 glyphs only: a translation into another script brings its own font.
 
+**The text service** [implemented, sadk-remake 2026-10-15]: the engine resolves keys without Godot
+(`Sadk.Engine.Text.TextService`, the static front `Locale`; mods get it as `ModContext.Text`), so Lua, the headless
+runner and the server use the same lookup; the presentation loads the same tables into Godot `Translation` resources
+of the `TranslationServer`, so controls translate their text themselves and a language switch updates every visible
+label.
+
+- **Keys** are written as the original writes them: a leading `!`, no trailing one (`!EXIT`, `!SINGLE PLAYER`); a
+  text that starts with `!` is a key (`nUi::Text` S 004b46d0); a missing key shows as itself and an empty key gives
+  an empty text (`Localization::GetText` S 00496070). A mod's own keys are `!<mod id>.<name>` in its
+  `assets/game/language/<lang>/*.txt`.
+- **Order**: within a language, map scope before game scope; the chosen language before the base language across
+  both scopes, then the key. Within a layer the original's five files come first in its order (briefings, ui,
+  credits, lobby_ui, lobby_items; `Localization::LoadAllTextFiles` S 00496b80), then the layer's other `*.txt` by name.
+  `game/language/<lang>/` is the original's `[data]\language\<code>\` (S 00496b80, `BuildLanguagePath` S 004955a0).
+- **Godot**: the message ids are the keys as written; each language's translation has the base language merged under
+  it, so Godot falls back per key as the engine does. While a map is entered its texts sit in the translation domain
+  `sadk.map`. The tables are rebuilt on every change (mod set load or unload, language switch) and removed with the
+  mod set.
+- **Language**: `settings.xml <Language code>` in the game folder, overridden by `--language=<code>` for one run, and
+  switched with the intent `engine.language { code }`. When the base language cannot be told, it is the
+  installation's only language folder. `Locale.LanguageFile("fonts/X.fnt")` finds a file of the chosen language (with
+  the same fallback).
+
 ## 9. Open points
 
 1. Settler lookup keys: the character name per settler type is chosen in code and is not simply the good's name
