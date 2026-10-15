@@ -1,0 +1,309 @@
+# Remake: assets — conversion, virtual file system, formats, maps
+
+Draft of 2026-10-15. Part of the remake design set ([README.md](README.md)). It turns
+[`../remake-architecture.md`](../remake-architecture.md) §11 into a design: where files live, how the player's
+installation is converted once and checked at every start, how every asset is found (the virtual file system with
+its layers), which formats the converted assets have (the architecture's open point §13 item 4), what a map package
+holds, and when what is loaded.
+
+Tags: **[binding]**, **[draft]**, and the source tags of the cited documents; **[measured]** = counted on the
+reference installation (German retail, patch level 9212) on 2026-10-15. Short names: AF = `../asset-formats.md`,
+FI = `../sim/formats-inventory.md`, MF = `../map-format.md`, DL = `../data-loading.md`, AU = `../sim/audio.md`,
+AM = `../sim/animation-models.md`.
+
+## 1. What is fixed [binding]
+
+- No original data is shipped; the remake reads the player's installation.
+- Assets are converted **once, at the first start**, into formats the engine loads directly; again only when their
+  sources change. Every start compares the recorded file list (size and modification time, no hashing); a changed
+  file is hashed and converted again; a missing installation stops the game.
+- Maps bring their own assets, searched before the base game's and transferred with the map.
+- Models are not bound to `.KEX`: the asset lookup chooses the loader by format.
+- Shaders may be loaded from files, GLSL included (read as in [redot-capabilities.md](redot-capabilities.md) §2).
+
+## 2. The original's installation [measured]
+
+| Kind | Files | Size | Encrypted | Notes |
+|---|---|---|---|---|
+| `.dds` | 1,050 | 421 MB | yes | DXT1 792 (2 cube maps), DXT3 58, DXT5 17, A8R8G8B8 127, others 56; 226 without mips (FI) |
+| `.kex` | 1,639 | 227 MB | no | meshes, skeletons, animations; no ids or hashes inside (AF §2) |
+| `.ogg` | 723 | 194 MB | no | 540 voices (`language\de\voices`), sounds, music |
+| `.tga` | 124 | 62 MB | yes | cursors, particle atlas, colour ramps, font pages |
+| `.s2m` | 33 | 22 MB | yes | 31 free and campaign maps, 2 prototype maps in the old layout |
+| `.wav` | 125 | 13 MB | no | PCM16, IMA ADPCM and float variants (AU §6) |
+| `.bmp` | 35 | 10 MB | no | map previews, two lobby textures |
+| `.lua` | 355 | 0.3 MB | yes | property scripts, map tools, map and cutscene scripts, info pages |
+| `.xml` | 110 | 0.3 MB | yes | settings, layouts, lobby data |
+| `.pfx`, `.fx`, `.fnt`, `.npc`, `.bin` | 64, 59, 15, 30, 31 | < 1 MB | no / yes (`.fx`) | effects, D3D9 shaders, bitmap fonts, avatars, map environment sidecars |
+
+About 950 MB and 4,487 files in all; 55 file names occur more than once below `data\`, nearly all as a copy under
+both `data\game` and `data\lobby` (settler and soldier meshes, idle animations, door clips, `color_slots.xml`). No
+video file exists in the installation.
+
+## 3. Storage layout [draft]
+
+| Location | Written by | Holds |
+|---|---|---|
+| the installation | never | the player's copy of the original |
+| `<user data>/converted/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from) |
+| `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
+| the game's folder | the installer | the engine, the built-in mods `base` and `refined` (assemblies, shaders, the remake's own layouts) |
+| `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
+| `<user data>/maps/`, `maps-received/` | the editor / transfers | map packages (§7) |
+| `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
+
+`<user data>` is Godot's `user://` of the remake. The `<install id>` is a hash of the installation's path and its
+build identity, so two installations (another language, another patch) convert side by side.
+
+## 4. The conversion
+
+### 4.1 When and what is checked [draft]
+
+1. **Find the installation**: the recorded path, else the known install locations, else ask the player. Identify it
+   by the build number (34688) and patch level (9212) and its language folder. An unknown build is converted with a
+   warning; compatibility mode is offered only for the known one.
+2. **Check** at every start: compare the recorded list (relative path, size, modification time) with the disk. A
+   difference: hash the file; if the hash changed, mark the outputs made from it for conversion. Moving the
+   installation keeps the conversion valid when the hashes match at the new place.
+3. **Missing installation**: the game does not start and says which folder it expected [binding].
+
+### 4.2 The pipeline [draft]
+
+- `Sadk.Convert`, a library without Godot, run inside the game at first start (with a progress screen fed by
+  progress events) or headless (`Sadk.Headless --convert`).
+- One job per source file and kind, run in parallel. Each job writes to a temporary file and renames it when done,
+  and the record is updated per finished job, so an interrupted conversion resumes.
+- **Deterministic output**: the same source gives byte-identical output, so outputs can be compared between
+  machines and used as cache keys.
+- **Self-checks** run as part of the conversion: every container's CRCs (the reader checks them), every `.KEX` and
+  `.pfx` parses completely, every map parses to its last byte, and the settler palette test vector
+  (`AM` §3.15) comes out right. These are the viewer's `tools/KexCheck` and `tools/MapCheck`.
+- **Compatibility records**: for every `scripts\**\*.lua` and `settings\**\*.xml` the converter keeps the container
+  header field +0x08 (the plaintext CRC-32), which is what the original's build checksum XORs
+  (`GameData_ComputeBuildChecksum` S 005ab800, DL §3). Without them the remake cannot answer an original client's
+  checksum in a compatibility-mode match.
+- **Base reference resolution**: the original finds nearly every file by its bare lower-case name, whatever folders
+  a reference names (§5.4). The converter applies that rule once to every reference written in the original's data
+  (XML attributes, Lua path strings, `.npc` strings, KEX material texture names, the names the code builds) and
+  reports each reference that resolves through a duplicate name or not at all. The converted tree then uses
+  logical paths only.
+
+### 4.3 Expected cost [estimate]
+
+Container decoding, KEX parsing and writing, map packaging and Lua conversion take seconds each; with textures kept
+in their compressed form the first start should take on the order of a minute. The one slow step would be encoding
+block-compressed textures; §6.2 keeps that to the DXT1 textures with one-bit alpha and a fast encoder.
+
+## 5. Virtual file system and asset lookup
+
+### 5.1 Layers [draft]
+
+All assets are read through one virtual file system of **logical paths**. Layers, from bottom to top:
+
+1. the converted installation (`base`'s content from the player's copy);
+2. `base`'s own files (the remake's shaders, layouts, UI parts, visual-descriptor extensions);
+3. `refined`, when active;
+4. the mods' `assets/` folders, in load order ([mods.md](mods.md) §5);
+5. the current map package's `assets/` folder, while that map is loaded [binding: a map's files before the base
+   game's].
+
+A file in a higher layer **shadows** the file with the same logical path below it. That is how a texture pack
+works, and how a map brings its own skydome. Presentation XML documents are not shadowed but **merged** across
+layers and then patched ([mods.md](mods.md) §6.6).
+
+### 5.2 Logical paths [draft]
+
+- Forward slashes, compared case-insensitively (the original's lookup is case-insensitive, the Linux file system is
+  not), no `[data]` prefix, rooted like the original's data tree: `game/buildings/pb_b_bowmaker01.kex`,
+  `game/map/textures/z_meadow_00.dds`, `lobby/...`.
+- A mod's new assets go under `mods/<mod id>/...` by convention, a map's under `maps/<map id>/...`, so new files never
+  collide by accident; shadowing an existing path is always deliberate.
+- **Kind-based extension resolution.** References carry the original's extension (`.kex`, `.dds`), but the lookup
+  treats the extension as a hint: for a reference of a given kind it searches each layer, top first, for the stem
+  with every extension that kind accepts. Within one layer the first extension in the kind's order wins; across
+  layers the higher layer wins whatever its extension. So a mod replaces a `.kex` model by a `.glb` or a `.dds`
+  texture by a `.png` at the same path.
+
+| Kind | Extensions, in order |
+|---|---|
+| model | `.glb`, `.gltf`, `.kex` |
+| texture | `.dds`, `.ktx2`, `.png`, `.webp`, `.jpg`, `.tga` |
+| sound | `.ogg`, `.wav`, `.mp3` |
+| shader | `.gdshader`; include `.gdshaderinc`; compute and post effects `.glsl` |
+| effect | `.pfx.json`, `.pfx` |
+| font | `.fnt` (with its page), `.ttf`, `.otf` |
+| text table | `.txt` (UTF-8, the original's syntax) |
+| presentation XML, layouts | `.xml` |
+| Lua | `.lua` |
+
+- **Loaders by format.** Each `(kind, extension)` has a registered loader; mods can register loaders for new formats
+  ([mods.md](mods.md) §6.7). The `.kex` loader is the converter's reader with its bake (`Sadk.Formats`), so a mod
+  made for the original that ships raw `.KEX` files works unconverted.
+
+### 5.3 References in data [draft]
+
+- Registry entries and presentation documents name assets by logical path with the kind given by the field
+  (`ModelRef`, `TextureRef`, `SoundRef`, `ShaderRef`, `EffectRef`). Entries of the original name presentation by
+  **gfx name**, resolved through the visual descriptors ([renderer.md](renderer.md) §5).
+- References are checked after the presentation documents are parsed ([mods.md](mods.md) §6.1 step 7): a missing
+  asset is logged once, naming the mod and entry that referenced it. In faithful mode the object is not drawn (as in
+  the original: "no match, no object, no error"); in refined mode a placeholder is drawn.
+- The simulation never resolves an asset ([mods.md](mods.md) §8.3).
+
+### 5.4 The original's bare-name rule [draft]
+
+The original resolves a request by its file name through an index built once at start-up; the folders in the
+request only decide between files of the same name, by a substring test on the candidate's last folder name
+(`FileScan::ResolvePath` S 006ef8a0, `PickCandidateByParentDir` S 006ef680; FI §3.1). The shipped data relies on it
+(`[data]\scripts\campaignMaps\C02_11bigBUILD.lua` loads a file from `maps\campaignMaps`).
+
+The remake reproduces the rule in two places only:
+
+- in the converter, for every reference of the shipped data (§4.2);
+- in the compatibility path resolver of the Lua host, for `[data]\...` paths that scripts pass at run time
+  (`Default.CallScript`, cutscene paths), over a file-name index of all layers ([lua.md](lua.md) §4.6).
+
+Everything else is addressed by logical path. A map's file named `door_open.kex` therefore cannot shadow every
+building's door clip.
+
+### 5.5 Loading and lifetime [draft]
+
+- **Lazy, cached**: an asset is loaded on first use and cached by logical path. A cache entry belongs to the layer
+  that provided it; entries from a map's layer are released when the match ends.
+- **Preload per match**: before a match starts, the presentation collects the visual descriptors of every type the
+  map contains and every type its players can build, and loads their assets behind the loading screen, so no file is
+  read during play (the original reads `.pfx` files at every effect start and models when objects are created).
+- **Threads**: file reading, decoding and mesh building run on worker threads; GPU resources are created on the
+  main thread.
+- **Development mode**: files of mods and of `base` are watched; a changed asset is reloaded and its users notified.
+
+## 6. Formats after conversion
+
+Answers [binding] architecture §13 item 4. The rule: open formats that modders can edit with common tools, keeping
+everything the original's look depends on; engine-native forms only in the disposable cache.
+
+### 6.1 Overview [draft]
+
+| Source | Converted | Runtime loader | Notes |
+|---|---|---|---|
+| `.kex` mesh, skeleton | `.glb` (glTF 2.0) with an extension `SADK_kex` | glTF reader → the renderer's mesh, skeleton and animation tables | §6.3 |
+| `.kex` animation | `.glb` with the animation and the skeleton nodes it targets | same | keys stay evenly spaced (`keyCount` over `length`); nothing resampled |
+| `.dds` BC1 without alpha, BC2, BC3, A8R8G8B8 | `.dds`, unchanged; mip chains completed where they are missing | `Image.LoadDdsFromBuffer` | §6.2 |
+| `.dds` BC1 with one-bit alpha | `.dds` BC3 | same | §6.2 |
+| `.dds` cube maps | `.dds` with all six faces in a layout Godot's loader takes, or six `.png` faces [check] | own reader if needed | Godot reads only the first face of a DDS cube map [viewer] |
+| settler and avatar colour-index maps | `.dds` A8R8G8B8, **unchanged** (including the original's mip chain) | point sampled | never filtered, compressed or re-mipped (AM §3.15) |
+| `.tga` | `.png` (top-left origin) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels |
+| `.bmp` map previews | `.png` inside the map package | — | §7 |
+| `.ogg`, PCM16 `.wav` | unchanged | `AudioStreamOggVorbis`, `AudioStreamWav` | |
+| IMA ADPCM and float `.wav` | PCM16 `.wav` | `AudioStreamWav` | whether Redot reads them as they are is open (AU §10 Q11); converting is always safe |
+| `.fnt` + `_00.tga` page | `.fnt` with glyph ids mapped from Windows-1252 to Unicode, page as `.png` | `FontFile.LoadBitmapFont` | the original's glyph ids are cp1252 bytes (FI §3.6) |
+| language `.txt` tables | UTF-8 `.txt` with the original's syntax (`key<TAB>value`, later wins, `\n`) | own loader | keys verbatim, `!` included; a missing key shows the key, as in the original |
+| `.pfx` | `.pfx.json` (lossless: the grammar of `../sim/particles.md` §3.1) | own loader (both forms) | |
+| settings XML, UI layouts | decrypted `.xml`, unchanged | presentation documents | merged and patched ([mods.md](mods.md) §6.6) |
+| `.lua` | converted Lua ([lua.md](lua.md) §3) | Lua host | the original source is kept beside it for error reports |
+| `.s2m` + `.bin`, `.bmp`, `.lua`, cutscenes, briefing texts | map package (§7) | map loader | |
+| `.npc` | `.json` + palette `.png` | lobby / avatars | only when the remake has the 3D lobby |
+| `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in `base`; the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
+| `.psd`, `.lep`, `.ico`, `.html`, unused text tables | ignored | — | FI §3.14 |
+
+### 6.2 Textures [draft]
+
+- Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer.
+- **BC1 with one-bit alpha** loses its alpha on Godot's Vulkan path (Vulkan uploads it as RGB) [viewer]. The
+  converter transcodes these to BC3: the alpha block holds the one-bit alpha exactly, the colour block is re-encoded
+  from the decoded colours with a fast range-fit encoder. Twice the size of BC1, an eighth of RGBA8. The converter
+  reports the largest per-channel colour error per texture; RGBA8 is the fallback should the error ever be visible.
+- **Missing mip chains** of 3D textures are completed at conversion (decode, filter, store uncompressed when the
+  source was uncompressed, BC3 otherwise). UI textures keep no mips: their pixels are addressed by layouts and
+  `iconconfig.xml`.
+- The six settler colour-index maps (about 100 MB uncompressed) are kept byte for byte: the original's mip chain
+  holds only level-0 values and the shader samples them point-wise.
+- `animals\pig.dds` holds a BMP; seven textures have non-power-of-two sizes (FI); the converter handles both.
+
+### 6.3 Models [draft]
+
+- One `.glb` per `.KEX` file, in Godot's axes `(x, y, z) → (−y, z, −x)` with every triangle reversed, after the
+  client's load-time bake (identity keys stripped, bone orientations flattened, the scale channel folded into the
+  positions; AM §3.1).
+- **The caller's model scale is not baked.** The original bakes the scale chosen by the loader (settlers 1.2,
+  animals and ships from their XML, buildings 1.0) into the vertices and leaves normals `1/s` long, which its light
+  depends on. The converter writes unscaled meshes; the scale is applied per definition at run time and the shaders
+  restore the normal length (`normal_scale`, [renderer.md](renderer.md) §7.4).
+- The `SADK_kex` glTF extension keeps what glTF has no place for: the source axes and `unitScale`, `exportName`,
+  material usages (`DiffuseColor`, `Self-Illumination` = light map, `Opacity`) with the bare texture names and the
+  logical paths they resolved to, the per-mesh bone name lists, the extra UV sets (buildings use three) and vertex
+  colours.
+- Mesh, node and bone names are kept: the original's code addresses them (`House`, `GROUND`, construction stages
+  `0..N−1`, `MILFLAG`, `FIRE_%02d`, `SLOT_HandR`, `SLOT_Goods`, `ROTATE`, `ARM_ROTATE`, `BULLET_POS`,
+  `boneLink<i>`).
+- The renderer does not keep glTF scenes as node trees: it converts them into its own mesh, skeleton and animation
+  tables and caches those as engine-native resources ([renderer.md](renderer.md) §6).
+
+## 7. Map packages [draft]
+
+A map is one file, `<name>.sadkmap` (a zip; a folder in development), so that it is shared, hashed and cached as a
+unit.
+
+```
+<name>.sadkmap
+  map.xml                  manifest: id (the MapInfo UUID for converted maps), name, version, content hash,
+                           format, players, size, title and description keys, required mods (id, version, hash),
+                           whether original clients can play it, the script profile (`scriptApi`: `original` or
+                           `remake-1`, lua.md §2.3)
+  world/<name>.s2m         the original layout, read by the original's reader (compatibility mode); maps made for
+                           the remake later use the remake's own map format (§7.2)
+  world/environment.xml    the contents of the original's `.bin` sidecar (skydome, light, fog, environment spheres)
+  script/<name>.lua        the map script; script/<name>_<n><cutscene>.lua the camera paths
+  locale/<lang>/map.txt    the map's own text keys (briefings, quest texts)
+  preview.png
+  assets/                  a layer of the virtual file system for this map (§5.1)
+```
+
+- Original maps are packaged at conversion: each `.s2m` with its `.bin`, `.bmp`, `.lua`, cutscene scripts and the
+  briefing keys of `briefings.txt` that start with `B<name>_`, under the map's internal name. The converter reports
+  the two maps whose internal name differs from the file name and the two prototype maps in the old layout
+  (`MF` §9; `tools/s2m_upgrade.py` converts them).
+- **Maps carry no assemblies and no data-stage scripts** in the first version: a map that needs new registry types
+  needs a mod and names it in `required mods`. Maps can add assets, presentation XML (new visual descriptors, a
+  patched skydome list) and scripts. Because maps are data only, they can be transferred without the trust question
+  of code mods ([mods.md](mods.md) §7.4).
+- **Transfer**: the lobby announces the map's id and content hash; a peer without it receives the package as one
+  stream with a sliding window (today's assetshare sends one archive per file in 4 KB stop-and-wait blocks). A
+  compatibility-mode match with original clients can only use original maps (the `.s2m` and its companions), since
+  the original resolves nothing else.
+
+### 7.2 The remake's own map format (later) [draft]
+
+The `.s2m` stays the format of original maps, read bit-exactly for compatibility mode. Maps made with the remake's
+editor need room for layers that mods add, so the remake's own format is a list of named, versioned sections, each
+owned by a system (engine grid layers, `base` sections, a mod's sections). A section of a mod that is not present is
+kept unread and written back unchanged. Designing it belongs with the map editor.
+
+## 8. What is loaded when [draft]
+
+| When | What | Notes |
+|---|---|---|
+| start | settings; installation check; conversion if needed | §4 |
+| start | mods resolved, file system mounted, assemblies loaded | [mods.md](mods.md) §6 |
+| start | data stage: the property scripts, the settings XML values the simulation reads, `menu.cfg` values (player colours, language) | the original reads the scene XML per match (DL §2); it does not change between matches, so the remake reads it once |
+| start | presentation documents merged and parsed; the sound table built from the registry's sound entries (files themselves load lazily: the original decodes every sample at start, AU §3) | |
+| start | UI: layouts, fonts, text tables of the chosen language, cursors | |
+| match load | map package mounted; map read; script converted (if not cached) and loaded; preload of the match's assets (§5.5) | |
+| match | nothing read from disk except streamed music and voices | |
+| match end | the map's layer and its cache entries released | |
+
+**Language**: one shipped folder (`de`) in the reference installation; the remake's language is its own setting,
+defaulting to the installed folder. Text tables, fonts, localised textures and the 540 voice files follow it.
+
+## 9. Open points
+
+1. Building and settler lookup keys: `<tribe name>_<gfx name>` for buildings is inferred, with a case question
+   (`Scholarhut` and `ScholarHut`); the settler's character name per settler type is chosen in code and is not
+   simply the good's name (`good_helper` is drawn as `Carrier`) (AF; `../sim/rendering.md` §3.9).
+2. Readers of `items.xml`, `sf_setBuffGfxName` and the building-level `<PFX>` / `<Particle position>` elements
+   (`../sim/tribes-content.md` §10 Q5, Q6; `../sim/particles.md` §10 Q3).
+3. Whether Redot reads the IMA ADPCM and float `.wav` files directly (AU §10 Q11); converting is the safe default.
+4. The cube-map form Redot's loader accepts.
+5. Other retail languages: folder names and whether their installations differ beyond `language\` (an English or
+   French installation would settle it).
+6. The water-preset index of `MapInfo +0x1cc` and the `.bin` field names (MF §4.2, §4.17).
