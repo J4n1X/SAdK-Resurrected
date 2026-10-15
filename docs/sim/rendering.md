@@ -1252,6 +1252,24 @@ hangs still [known, file]): `CalcFlagVertexPos` [known, `shared.inc`]:
 `s = 0.33 * saturate(dot(p.xz, p.xz) - 0.02)`, `c = 0.5 + 0.5 * cos(4 * (m41 + m43 + p.x + p.y + t))`,
 `p.z += s * c`, `p.x += s * (1 - c)`.
 
+**What is drawn at all** (2026-10-15):
+- **Priority gate** (`MapObjLayer::RenderEntries` S 0068d360): an element is drawn when its
+  `<LandscapeElement priority>` (default 0, S 0068f200) is at most `CMapRenderer+0xa0`, or when `device+0xc8`
+  (`bExternalWindow`, the editor) is set. `+0xa0 = ftol(Settings.detail)` (`Scene::ApplySceneSettings` S 0067f500);
+  the presets give `detail` 0, ⅓, ⅔, 1, 1 (`ApplyQualityPreset` S 00695860), so the level is 0, 0, 0, 1, 1. Of 230
+  elements, 50 have priority 0, 32 have 1, 35 have 2, 24 have 3, 15 have 4 and 74 none (0). **[known]** Consequence:
+  elements of priority 2 to 4 (grass, stones, plants, cacti, shells, water plants) are never drawn in the game
+  **[inferred; to verify live by reading `CMapRenderer+0xa0`, instance S 0088cf64, in a running match]**; who could
+  set `detail` above 1 is open.
+- **Size cull** (`InstanceMeshRenderer::RenderShaderInstanced` S 006b8250, `RenderPerInstance` S 006b8600): an
+  instance is drawn if `0.0009·d² > 0.01` (nearer than 3.33 units it is culled) and `boundingRadius / (0.0009·d²) ≥
+  lodDistance`, d from the eye, `lodDistance = 1 − objectDetails` (`CMapRenderer+0xa4`, S 0067f662): at preset 0 a
+  radius-r object vanishes beyond about 33.3·√r units, at the top preset nothing beyond the near limit. Skipped when
+  `noDistanceCull` (`+0x90`, setter not found) or `bExternalWindow` is set. The per-instance path also fades the
+  instance out with `alpha = 1 − (d² − fogStart²)/(fogEnd² − fogStart²)` (device fog range `+0x320` / `+0x324`).
+  **[known]**
+- Map objects have no LOD meshes. **[known, data]**
+
 ### 3.12 Streets, goods, ships, animals, projectiles, particles
 
 **Streets** [inferred] S 0069f570, S 006df940: a street is a

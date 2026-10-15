@@ -949,6 +949,29 @@ same bones. **[known]** `SkinnedMeshRenderer::SetInstanceLod` S 0076e850 clamps 
 `0 .. meshCount - 1` of the instance's mesh group, so a definition with fewer meshes keeps its last one, and
 stores the unclamped non-negative index as the instance's influence reduction. **[known]**
 
+- The distance runs from the character's position (`movement+0x58`) to the camera eye (`device+0x1b4`, method 8),
+  only for visible characters (a hidden one gets FLT_MAX); thresholds `lod0Range` / `lod1Range` / `lod2Range` = 30 /
+  40 / 60 (S 008816f0..f8), compared with ≥, no hysteresis, once per frame from the main camera, so the shadow and
+  reflection passes draw the same level (`CCharacter::UpdateCameraDistance` S 00691060, `CCharacterMgr::Update`
+  S 00692a30). **[known]**
+- LOD 0 is forced while `Scene::screenshotRequested` is set (`Scene::Update` S 006805e0 → argument 3 of
+  `CCharacterMgr::Update`, disassembly S 00692c2d). The manager's forced LOD is the console variable
+  `Character/ForceLOD` (−1..3, default −1, S 00694808), not a quality setting; the ranges do not depend on the
+  quality presets. **[known]**
+- The influence reduction is used only by software skinning (shader level 0): `max(1, maxInfluences − lod)` weights
+  per vertex (`SkinnedMeshRenderer::RenderInstances` S 0076e8a0); hardware skinning ignores it. **[inferred]**
+- The level switches at once, without a cross-fade. With the zoom's eye at 21 × step units from the focus (up to 84),
+  settlers near the focus are LOD 0 at step 1, LOD 2 at step 2 and LOD 3 at steps 3 and 4. **[known]**
+- The data [known, file]: `settler_config.xml <Character mesh mesh1 mesh2 [mesh3]>`, 43 distinct sets, 98 entries
+  (69 with four levels, 29 with three). The levels are automatic vertex-removal decimations onto LOD0's points (in
+  most sets 100 % of a level's positions are LOD0 positions; 93 to 98 % of its vertices keep LOD0's UV there), with
+  fixed budgets of about 1190 / 590 / 290 triangles whatever LOD0 has (median LOD0 4490). Each file has its own bone
+  list; compared by name, 99.7 % of the shared vertices carry identical bones and weights. The egypt carpenter: 4480 /
+  1192 / 592 / 312 triangles, its head 86 / 18 / 10 / 5 distinct points, so the face merges at LoD3. Anomalies:
+  scot_coiner and scot_geologe have a LOD0 no finer than LoD1; egypt_miner's LoD3 equals its LoD2.
+- The active `<Donkey>` block is the ox (`oxTransport.KEX`, one mesh, no LOD); the `donkey_mesh_LOD1..3` files are
+  unused, their block is commented out. **[known, data]**
+
 ### 3.15 Colouring
 
 **Settlers** are drawn with `game/gfx/fx_20/skin_color_mesh.fx` (the effect of the character manager's skinned
