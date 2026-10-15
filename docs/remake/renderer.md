@@ -294,8 +294,11 @@ no node each, the same notifier without a node through `RenderingServer`). What 
   | turning 30°/s, on | 1.75 M (−19 %) | 2.35 ms | 1.44 ms |
 
   Godot's cull pass pays about 0.2 ms per camera for 4838 notifiers; the remake's own bookkeeping 0.02 to 0.04 ms;
-  no object was missed. The vertices saved matter little on this GPU, where terrain, shadows and SSAO dominate; they
-  matter more where the vertex work is heavier (skinned characters) or the GPU weaker.
+  no object was missed. With these heavy settings, terrain, shadows and SSAO dominate the GPU and the saved vertices
+  show little; with the default shadows (4096, hard edges) the maintainer saw the GPU clock drop markedly with the
+  notifiers on (2026-10-15), the measure he judges load by. Decision: one notifier per object, on by default, for every
+  kind; grouping static objects per terrain block stays in reserve should the cull pass's CPU time ever become the
+  limit.
 
 ## 5. Visual descriptors
 
