@@ -1460,6 +1460,12 @@ S 0065a930 reads the building reference only if the `SettlersCarrier` section ve
 
 ## 8. Determinism notes
 
+**Found by the remake's port (2026-10-16)** [known]:
+- The reserve-last rule of `AddPackage` (S 00671590) compares only stacked packages that have a next waypoint: a stack
+  whose only package has no waypoint refuses its last place to a routed newcomer (all compared packages are vacuously
+  "the same").
+- A street's upgrade and its second-carrier order happen in the same `Street::Update`.
+
 - **Checksum.** `NNet::System::StoreForChecksum` S 00664550 (only caller `nGame::System::ComputeChecksum`
   S 00784080) writes the same fields in the same order as `Store` without the `Net System` tag; flags, streets
   and `NetContinentIds` go through their normal `Store` [known]. The transport system's normal `Store` is used;

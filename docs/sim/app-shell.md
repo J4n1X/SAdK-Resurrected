@@ -1068,6 +1068,11 @@ Nothing of the shell's own state is in a save game. Related facts:
 
 ## 8. Determinism notes
 
+- The 24-bit precision control makes C# `float` arithmetic match the x87 for float operands; an x87 operation with a
+  **double** operand (e.g. `FSUB qword`, the productivity decay's 0.05, S 007e6d80) rounds its result once to float,
+  which a C# `float - (float)0.05` does not reproduce: such operations need the double subtraction and one rounding
+  (found by the remake's port, 2026-10-16) [known].
+
 The shell holds no simulation state and never calls the simulation's random generator: none of the functions of
 §11 references `Rng_ParkMillerNext` or the logic random object, and their writes go to the window, the timer
 globals, the profile, the descriptor and files [known: callee lists of the functions read].

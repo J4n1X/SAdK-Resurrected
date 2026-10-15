@@ -1752,6 +1752,25 @@ worker's `lastWorkTick`. **[known]**
 
 ## 9. Notes for a reimplementation
 
+**Corrections found by the remake's port (2026-10-16)** [known]:
+- The first pop of a free or fine path is already the first step, not the start cell: `PathBase::Build` (S 00772c50)
+  and `FinePath::SetTarget` set the index to count − 1, which points at `from`; `ComputeRoute` does the same for street
+  legs; only a zero-distance entry runs the pop loop again. "Walking toward element k: index k" holds.
+- `StreetPath::CanAdvance` (S 007747b0) tests the cell just reached (`cells[index]`), not the next one: a torn-up street
+  stops the walker on the first cell that lost the street bit.
+- `CancelRoute` sets movement +0xc1, which is `StreetPath.noReplanAtFlags`, not "stop after this step": the walk goes
+  on to the next own flag or the end of the leg; the street path's reset clears it.
+- After every completed street step `Rough::UpdateStep` calls `StreetPath::ReplanFromCurrentCell` (S 007746a0): the
+  route is recomputed at the end of a leg short of its target and at an intermediate own flag.
+- "Stop any move" before a walk start (also in `BeginWaitAtFlag` and `StopAndIsCellCentered`) sets the path mode to 0
+  and clears the rough moving byte; the interpolator is not reset. The free path's prepare slot is a no-op (vtable
+  S 008342a8 slot 6 = S 00472360) and `FinePath::SetTarget` never clears its list, so an adjacent, building-to-flag or
+  fine path started over a running walk is appended to the old cells (the movies wait for idle, so normal play never
+  does this).
+- `Fine::ClearCurrentCell` sets the fine current position to (−1, −1).
+- The float32 step rates: 0.057999995 (cell, speed 0.058), 0.23199998 (fine), 0.046400003 / 0.0348 / 0.023200002
+  (slope factors 0.8 / 0.6 / 0.4).
+
 - The movie tree is a set of small coroutines. A remake can express each as an explicit state machine or a
   coroutine, as long as "start in tick N, first update in tick N+1" and the failure paths (a `Start` that returns
   false) are kept, because they decide how many ticks a cycle takes.

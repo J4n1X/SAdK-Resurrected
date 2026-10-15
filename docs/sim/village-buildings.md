@@ -1442,6 +1442,28 @@ references go through untagged variants, the other components through their norm
 
 ## 8. Determinism notes
 
+**Found by the remake's port (2026-10-16)** [known, the addresses cited]:
+- The construction strokes run in float32 (one unit = 4 walks + 121 strokes of `1 / (total · 120)`), so where a phase
+  ends depends on the total: for the woodcutter (frame total 1) 6.17e-7 is left after 120 strokes, so the frame phase
+  uses all 121 strokes and nothing carries over; a total of 2 ends on stroke 241; totals 4, 6 and 7 end after exactly
+  120·T strokes; the bakery completes on the 119th stroke of its 4th unit. "The last unit overshoots" holds only for
+  some totals.
+- The skip count of `RequestMaterials` after a pause: a pause after exactly 120·k strokes skips one unit fewer in
+  float32 for totals 1, 2, 3, 5, 8 and 9 (bakery: `remainingB` = 0.5000005, skip 0, so 4 requests instead of 3). A
+  unit the builder has taken but not finished is no longer in the site stock and is not skipped, so it is requested
+  again.
+- The productivity decay subtracts the double 0.05 (`FSUB` with a double operand, S 007e6d80): the result is the x87
+  result rounded once to float, which a C# `float - float` does not reproduce; the decay also counts a per-entry
+  counter (node +0x2c). `RegisterProductionEvent` is called unconditionally in `DeliverProducts` (S 00565990); the
+  `productivity` flag only gates the reset to 0.5 at placement, so a type without it still gets an entry at its first
+  cycle.
+- Four good ids are literals in the executable: corn doubling 0x17626a03 (S 00663450), the wood TTL 0xCD6EC133
+  (S 0077eda0), the wood/stone exclusion (S 00542a30) and `good_helper` 0x7bff15ce (S 00668e10, S 00668be0,
+  S 0064d020). The remake carries them as good flags set by `core.game`'s data stage.
+- One copy of the site stock serves both request lists (S 0055eb50); the removal spill keeps non-tribe refund entries at
+  0; the mine start test reads `totalUnits`, so after `ClampStockToLimit` a mine could start without food entries
+  (only for types with health; the shipped mines have none).
+
 - **No random numbers** are drawn in any function read for this document [known for the functions listed in
   §11]. `Catapult.targetSeed` is a plain counter, incremented per attack and used as
   `candidates[targetSeed mod count]` ([military.md](military.md) §3.10); `SelectTarget` S 00567d20 passes it
