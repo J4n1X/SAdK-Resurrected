@@ -274,6 +274,12 @@ registration first:
   script without a path when its first object is made; such a script is reference-counted and leaves Redot's type map
   with its last object, so the mod's code unloads once its views are freed, in editor runs and exports alike
   [tested 2026-10-15]. The shared build rules are `src/Mods/Mod.props` in sadk-remake.
+- **A mod may use the types of the mods it depends on** [implemented]. Its reference to an assembly of a dependency
+  (a tribe mod's to `Core.Game`, for `TribeDef`) resolves to the copy that mod loaded, so both share one type; only
+  declared dependencies are searched (`Requires`, `Optional`, and theirs in turn), before the mod's own `bin/`. A mod
+  never ships a dependency's assembly: its project references it with `Private="false"`, which also gives the editor
+  the dependency's symbols. The resolver holds only the dependencies' ids: it lives in the mod's load context, and
+  anything of the mod it held would keep that context from being collected.
 
 ### 7.2 Entry point [draft]
 
