@@ -69,7 +69,7 @@ The proposals that change direction or cost real work, bundled:
 
 1. **No unloading of mods.** A different simulation mod set restarts the game into it, landing back in the lobby
    room, match or save; today's sadkmod design unloads per match ([mods.md](mods.md) §9.3).
-2. **The Lua package**: MoonSharp in a fork, or Lua-CSharp, or a port of Lua 5.0.2 ([lua.md](lua.md) §2.1).
+2. **The Lua package** — decided 2026-10-15: MoonSharp in a fork of our own ([lua.md](lua.md) §2.1).
 3. **Scripted maps in compatibility-mode matches with original clients**: run them without `logic` as a fresh
    original process does, or refuse them ([lua.md](lua.md) §4.5).
 4. **End of a cinematic in a remake multiplayer match**: when every peer has finished it, or for everyone when the
@@ -77,8 +77,19 @@ The proposals that change direction or cost real work, bundled:
 5. **`refined` as a built-in simulation mod**: refined mode = `{base, refined}`, compatibility mode = `{base}`
    ([mods.md](mods.md) §9.4).
 6. **Data-stage formats**: C# and Lua only in the first version ([mods.md](mods.md) §6.3).
-7. **DXT1 textures with one-bit alpha** transcoded to BC3 (twice the size of BC1) instead of decoded to RGBA8
-   (eight times) ([assets.md](assets.md) §6.2).
+7. **DXT1 textures with one-bit alpha** — decided 2026-10-15: transcoded to BC3 (twice the size of BC1) instead of
+   decoded to RGBA8 (eight times) ([assets.md](assets.md) §6.2).
+
+Also decided on 2026-10-15:
+
+- **UI stays XML.** Godot scenes (`.tscn`) were weighed as the form of moddable UI parts and rejected: they do not
+  merge across mods, their `res://` references bypass the virtual file system, and compatibility mode needs the
+  original's XML layouts anyway. Architecture §6 stands as written.
+- **Game elements are inspectable nodes** ([renderer.md](renderer.md) §4.6): every building, settler, animal and
+  ship is a node that shows its state in the remote inspector, while drawing stays batched.
+- **The first implementation step** is the loader: the first-start conversion, the virtual file system and a loader
+  per kind, ending in an asset check that loads every asset; the data stage (Lua runtime, registry) is the next
+  step.
 
 ## What the viewer study found
 

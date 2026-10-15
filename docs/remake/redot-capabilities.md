@@ -187,7 +187,13 @@ nothing in the shipped game depends on the editor.
 |---|---|
 | GDScript | [binding]: no float32 scalar, too slow for pathfinding; one language for all mods |
 | GDExtension for game code | native code is out of reach of Harmony and closes the code to mods ([binding] architecture, 2026-10-14 decision against a native core) |
-| `.tscn` scenes for moddable UI | [binding] architecture §6: scenes do not merge across mods; used only for the remake's own development screens |
+| `.tscn` scenes for moddable UI | [binding] architecture §6, confirmed by the maintainer 2026-10-15: scenes do not merge across mods, their `res://` references bypass the virtual file system, and they can carry GDScript; used only for the remake's own development screens |
 | The editor import pipeline for game content | content arrives at run time from the player's installation and from mods; nothing is imported at build time |
 | Godot's physics step as the simulation clock | §6 |
 | `Skeleton3D` per character for crowds | §5 (video memory per instance) |
+
+Node classes from mod assemblies: `Godot.Bridge.ScriptManagerBridge.LookupScriptsInAssembly(Assembly)` is public in
+RedotSharp 26.2 [api, checked by reflection 2026-10-15], so a mod assembly loaded at run time can have its node
+classes registered as scripts. Not yet tried in an exported game; architecture §9 keeps mods without node classes
+until it is.
+

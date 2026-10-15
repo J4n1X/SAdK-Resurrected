@@ -98,7 +98,8 @@ WorldRenderer                      Node3D; owns the World3D (scenario) of a matc
 ```
 
 Everything numerous is drawn through `RenderingServer` resources (instances, MultiMeshes, meshes, materials) in the
-match's scenario; nodes are used for singletons only (camera, `WorldEnvironment`, the sun, the mirror `SubViewport`).
+match's scenario; nodes that draw are used for singletons only (camera, `WorldEnvironment`, the sun, the mirror
+`SubViewport`). Game elements are still nodes, but nodes that do not draw (§4.6).
 
 ## 4. Render objects and batches
 
@@ -174,6 +175,22 @@ object:
   original's `CalcFOW` darkening with `fow_noise.tga`. A kind's vertex shader collapses an instance whose block is not
   revealed (all vertices to one point, so it rasterises nothing); its fragment shader applies `CalcFOW`.
 - Frustum culling is Godot's, per batch box.
+
+### 4.6 Proxy nodes [binding, maintainer 2026-10-15]
+
+Most elements of the game are their own nodes one can inspect (maintainer: "most elements of the game should in the
+end be their own nodes you can inspect"), without giving up the batches:
+
+- Every building, settler, animal and ship is a plain `Node3D` proxy under the `WorldRenderer`, named after its
+  entity, at its interpolated transform. Its exported properties show the entity's state (type, owner, task,
+  goods, health) in the remote inspector, and selection and picking can hand it out. It draws nothing: its render
+  object (§4.1) holds its batch slots.
+- Map objects (tens of thousands of trees and stones) get one proxy node per region (§4.3); the node of a single
+  object is made on demand, when it is selected or inspected, and freed again.
+- Proxies are made and freed by the same events as render objects (`EntityAdded`, `EntityRemoved`) and keep no state
+  of their own, so they cannot drift from the simulation.
+- Node classes need their scripts registered with Godot: the proxies live in the game's own assemblies; for mods see
+  [redot-capabilities.md](redot-capabilities.md) §10.
 
 ## 5. Visual descriptors
 
