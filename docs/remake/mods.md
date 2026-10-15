@@ -447,7 +447,10 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   (from the exported `data_` folder, never copied), the generator (as a "tools project", §7.1; `ModUsesGodot=false`
   for simulation-only code) and the assemblies of every mod its `mod.xml` names as `Requires` or `Optional` (from the
   game's `mods/`, in a step the editor's design-time build runs too, so IntelliSense completes their types). A build
-  copies the mod into `mods/<id>/`. Checked with two mods built outside the repository: a tribe in C# with
+  copies the mod into `mods/<id>/`; `dotnet run` starts the game with the mod switched on for that run (the game's
+  `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Redot's options, for instance the
+  installation and conversion folder when the game folder has no `settings.xml` yet). `sdk/README.md` is the guide
+  for mod authors. Checked with two mods built outside the repository: a tribe in C# with
   core.game's `TribeDef`, and a client mod with its own node type, an overlay and a menu entry. The core mods in the
   repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
