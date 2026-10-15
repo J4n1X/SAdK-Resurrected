@@ -52,7 +52,7 @@ What a part changes, and therefore whether the mod is a simulation mod:
 | `assets/` | no | presentation only; the simulation never reads an asset (§8.3) |
 | `patches/` | no | patch presentation documents only |
 | `scripts/` | yes | run inside the simulation when a map script requires them |
-| `maps/` | per map | a map is compared and transferred as a map, not as part of the mod set |
+| `assets/maps/` | per map | a map is compared and transferred as a map, not as part of the mod set; an overlay folder that changes a map's `world/` or `script/` changes that map (assets.md §5.6) |
 
 The manifest's simulation flag must agree with the contents: the engine refuses a mod that declares itself
 client-only but carries a simulation assembly, a `data/` script or a `scripts/` library. The registry checksum
