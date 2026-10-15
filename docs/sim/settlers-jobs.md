@@ -361,13 +361,33 @@ The base ctor (S 00656c20) assigns a new `Unique`, stores owner and property, cr
 | `NTransport::System::SpawnCarrierWithPackage` S 0064d020 | Carrier `0x7bff15ce`, through `SettlerSpawn::SpawnCarrier` | building `+0xf8` | 0 | only when the building's flag stacks are not full for the good; one unit of the good is removed from the building stock and created as a package in the carrier's hands; unassigned carrier that brings it to the flag (3.6.1) |
 | Lua `se_createSettler(player, good, x, y)` S 005ae160 | by the good's type; nothing for other types | given cell (player index `< 8`, player active, cell inside the map) | Worker, Constructor, Specialist, NPC: 1; Carrier, Soldier: 0 | |
 
-**[known]** for the calls; "building `+0xf8`" is the building's door/work cell (the cell a worker stands on when
-it is "inside"). **[inferred]**
+**[known]** for the calls. "Building `+0xf8`" is the building's entrance cell: the anchor stepped once in the
+type's `doorOffsetDirection` for the owner's tribe, or the anchor itself when the type has none
+([`village-buildings.md`](village-buildings.md) §2.3, §3.2); it is the cell a worker stands on when it is
+"inside" and the cell `HasArrivedAtWorkplace` compares with (3.5.2). **[known]**
 
-`Workers::SpawnWorker` is used when a building is placed complete and when a building is conquered
-(callers `Building::ctor_Place` S 0055d980 and `System::ConquerBuilding` S 0055a890; the third caller is
-`LuaMenu_CreateBuildingWithSettler` S 005d9ac0). **[inferred]** In state 0x23 without a started `Rest` movie
-the rest counter is 0, so the next update finishes the rest at once and the worker chooses work. **[inferred]**
+`Workers::SpawnWorker` has three callers **[known]** (cross references of S 0055b6a0): `Building::ctor_Place`
+S 0055d980, only while the edit object reports batch editing (the branch at S 0055ddd8..0055de0b, which also
+completes the construction; the map editor's placement), `System::ConquerBuilding` S 0055a890 and
+`LuaMenu_CreateBuildingWithSettler` S 005d9ac0. A worker spawned in state 0x23 has not started its `Rest`
+movie; the `Rest` constructor (S 0077b600) sets `restTicksLeft = 0` and `Rest::Update` (S 0077b630)
+decrements first, so the first update finishes the rest and the worker chooses work in the tick of its
+first update. **[known]**
+
+`NNet::Street::SpawnCarrier` has two callers **[known]** (cross references of S 00668be0):
+`NNet::System::AttachStreetToFlags` S 006662f0, only while the edit object (`NLogic::System +0x38`, its
+virtual `+0x04`) reports batch editing, and `TransferPlayerAssets` S 00529040. In a running match carriers
+come from the order system (3.1, "which settler is released") and from `SpawnCarrierWithPackage`.
+
+**When a new settler is first updated.** `UpdateSettlerVector` S 00654a10 computes the element count of its
+list once before the loop and lowers it on every erase (`i < count`) **[known]**, so a settler appended to a
+list during that list's loop is first updated in the next tick, while one appended to a list whose loop has
+not started yet in this tick (a later list in the order of section 4, or any list when the creator runs in an
+earlier tick step) is updated in the same tick **[known]**. Settlers released by the order system
+(`OrderSystem::Update`, in the `NVillage` step) are therefore updated in the tick they were created, and the
+`LeaveBuilding` walk their constructor started (3.2) advances in that tick; a carrier created by
+`SpawnCarrierWithPackage` (in the `NTransport` step, after the settlers) is first updated in the next tick.
+**[known]**
 
 #### Training (tools)
 
@@ -419,9 +439,14 @@ Called first by every class `Update`: **[known]**
    - **3**: if `leaveMap.Update()` reports finished: find the owner's building nearest to the current cell with
      `BuildingList_FindNearestReachable(list, owner, cell, maxDist = -2, mode = 1, layer = 1)` (S 00557fe0 through
      S 005586d0 / S 00558700; soldiers use the list at `NVillage::System +0x74`, others the list at `+0x20`;
-     `maxDist = -2` means no distance limit; see 3.4 for the modes). That the two lists are the military and
-     the storehouse lists is **[inferred]**.
-     If one exists and `HexDistance(building cell, settler cell) < 2` → `state = 2`, else `StartDying()`.
+     `maxDist = -2` means no distance limit; see 3.4 for the modes). The list at `+0x74` is `casernBuildings`
+     (types with `casern`), the one at `+0x20` `depotBuildings` (types with `depot`)
+     ([`village-buildings.md`](village-buildings.md) §2.2) **[known]**.
+     If one exists and `HexDistance(building anchor (+0x20), settler cell) < 2` → `state = 2`, else
+     `StartDying()`.
+   - The class `Update` reads the state again after the base update, so a settler whose state went from 0 to 1
+     here starts its first job movie in the same tick (`Worker::Update` S 0065d7f0 tests "active" and switches on
+     the state after `Settler::Update`). **[known]**
    - **5**: if `remaining <= 0` → `state = 6`. Otherwise if `total - remaining == 14.0` exactly and the configured
      skeleton doodad id is not -1 and no doodad is at the settler's fine position: add the skeleton doodad there.
 
@@ -441,8 +466,9 @@ For each list, index `i` from 0: **[known]**
 - `state == 6`: erase and delete; do not advance `i`.
 - otherwise call `settler->Update()` and advance `i`.
 
-The element count is read once before the loop and decremented on erase, so settlers appended during the loop are
-not updated until the next tick. **[inferred]**
+The element count is read once before the loop and decremented on erase, so settlers appended to this list during
+the loop are not updated until the next tick (consequences in 3.1, "When a new settler is first updated").
+**[known]** (S 00654a10)
 
 Destructors unlink: the base dtor discards a carried package (`NTransport::System::DiscardPackage`), unlinks home
 building and ship, and deletes the movement object; `Worker` removes itself from its workplace's worker list;
@@ -620,7 +646,9 @@ In this order: **[known]**
 4. If the chosen movie's `Start` returned false ("failed") → `RestOrIdleOutside()`.
 
 `ReturnFromIdle` only walks the worker back in; when it finishes the state-0x13 rule calls `ChooseNextWork` again,
-which then starts the work movie. **[inferred]**
+which then starts the work movie: the walk ends on the fine centre of the work cell, not on idle position 1, so
+"at the idle position" (S 0065c740, which also needs fine mode, 3.8.4) is false on that second call. **[known]**
+(S 0065d7f0, S 0065d660, S 0077d420)
 
 #### 3.5.4 `RestOrIdleOutside` (S 0065d3b0)
 
@@ -650,8 +678,22 @@ building property for the owner's tribe (`bp_setIdlePosition(building, tribe, in
 
 #### 3.5.5 Worker movies
 
-All step machines below: **[inferred]** from the function summaries unless marked; the functions were read where
-a constant is quoted.
+Every step machine below was read in its `Start` and `Update` functions (addresses given) **[known]**, except
+where a statement carries its own tag. Common rules of the packages **[known]** (S 0077de50 and every package
+`Update` listed in this section): `StartStep(sub, id)` writes the step id and calls the sub-movie's `Start` in
+the same call; a package `Update` that has just started a sub-movie returns without updating it, so the new
+sub-movie is first updated in the next tick (section 4). A package passes on the start result of its first
+sub-movie as its own (`ChooseNextWork` treats `false` as "failed"); a failed start of a later sub-movie is
+handled where the text says so, otherwise the result is ignored and the sub-movie is simply updated next tick.
+
+The leaf movies **[known]**: `MoveToPosition(cell)` = `MoveToCell(cell, astarMode false)` (S 00777ac0);
+`MoveToFinePosition(pos)` = `MoveToFinePos(pos)` (S 00779630); `ReturnToLogicGrid::Start` (S 00777c70) clears
+a set stop distance and fine-walks to the centre of the rough mover's current cell (`movement +0x30`, the
+cell of the last cell-grid walk) when that cell is inside the map, else to the centre of the logic cell
+(`MoveToCellCenter` S 00657f10); `MoveToWorkingPlace` (S 007775a0) = `MoveToStreetPosition` (S 007780e0) =
+`StartStreetMoveTo` the owner's virtual target cell (slot 11, 2.3). All of them, and `MoveAwayFromDeposit`,
+finish when the movement is not busy (`IsBusy` false: S 00777c50, S 007780f0, the forwarding `Update`
+S 00777590 of `MoveToWorkingPlace`); they keep no state of their own (section 7).
 
 **`GoToWorkingPlace`** (`Start` S 00779e70, `Update` S 00779f20): step 2 = `MoveToWorkingPlace`: a street walk
 (`SettlerMovement::StartStreetMoveTo`) to the owner's virtual target cell — for a worker the cell of the
@@ -678,14 +720,19 @@ without the notification. State 1 — notify with the building one step in direc
 Both walks pass `astarMode = true` (3.8.3). **[known]**
 
 **`GoMining`** (modes 1, 2; `Start` S 0077d250, `Update` S 0077d090): `Start` fails when production is disabled;
-else step 7 `LookForDeposit`. 7 → `LeaveBuilding` (8) → `MoveToDeposit` (9; if it cannot start the movie ends
-with step ≠ 10) → `Working` (10) → finished with step 10 = success.
+else step 7 and the result of `LookForDeposit::Start`. 7 → `LeaveBuilding` (8) → `MoveToDeposit` (9; if it
+cannot start, the movie reports finished in the same update with step 9 ≠ 10) → `Working` (10) → finished
+with step 10 = success. `LookForDeposit::Update` is the constant `true` (vftable S 0083453c slot 6 =
+S 005e4e90), so step 7 lasts exactly one tick.
 - `LookForDeposit::Start` (S 00778d50): succeeds iff the workplace already holds a deposit reference (the
-  building subsystem assigns deposits). If not, and production is enabled and the building's productivity is
-  below 0.5, it posts the player message `!No resources found.` (kind 3).
-- `MoveToDeposit` (S 00777990, S 007778f0): free-walk to the deposit's cell with stop distance 1; then clear the
-  stop distance, set the stop distance from the deposit property (`DepositProperty +0x50`) and fine-walk to the
-  deposit's fine position; finished when idle.
+  building subsystem assigns deposits). If not, and production is enabled and the building's productivity
+  (`NLogic::Statistics::GetProductivity`) is below 0.5, it posts or refreshes the player message
+  `!No resources found.` (kind 3) at the building.
+- `MoveToDeposit` (S 00777990, S 007778f0): needs a valid deposit reference (else fails); `MoveToCell(deposit
+  cell (+0x20), false)` and, if that started or the settler already stands there, stop distance 1; the
+  internal state is 0 and `Start` returns the walk result. `Update`, once the movement is not busy: state 0 →
+  clear the stop distance, set the stop distance to the int at `DepositProperty +0x50` (deposit `+0x1c`) and
+  `MoveToFinePos(deposit fine position, +0x28)`, state 1; state 1 → clear the stop distance, finished.
 
 **`Working`** (`Start` S 0077eda0, `Update` S 0077ebf0): **[known]**
 - Duration = `BuildingProperty +0xd8` (`bp_setProductionTime`, e.g. 55 for woodcutter and forester), animation
@@ -706,21 +753,43 @@ with step ≠ 10) → `Working` (10) → finished with step 10 = success.
     S 00553070 (field `+0xbc` of a global property record). That this id is the fish resource is **[inferred]**.
   - others: nothing.
 
-**`BringGoodHome`** (S 0077c720, S 0077c740): step 4 `BringGoodToWorkingPlace`, then `EnterBuilding` (0x0c).
-`BringGoodToWorkingPlace` (S 0077f140, S 0077f270): `PickupProduct` (0x12) → `ReturnToWorkingPlace` (2) →
-`PutDownPackage` (0x13), repeated while the worker still carries something.
-- `PickupProduct::Start` (S 00777f80) picks the good: one ware from the building depot if it has any; else the
-  building's first production good; for mode 7 with a linked animal, a good popped from the animal's stack
-  (when the stack is then exhausted the animal goes to state 8). It then runs the pick-up timing of 3.7.
-  **[known]**
-- `ReturnToWorkingPlace` (S 0077eeb0, S 0077f020): `MoveAwayFromDeposit` (0x17; re-centre on the cell) or, if
-  that cannot start, `WaitForFreeFlag` (0x10); then `MoveOnMapToWorkingPlace` (2): free-walk to the workplace's
-  flag cell. While it carries a package that the flag cannot take, it stops one cell short (stop distance 1)
-  and waits. When the walk ends: finished if it stands on the flag cell, else `WaitForFreeFlag` again. When
-  `MoveOnMapToWorkingPlace` cannot start after `WaitForFreeFlag`, the movie sets `astarMode = 1` (3.8.3) and
-  starts it once more. **[known]**
-- `PutDownPackage` (S 0077a8e0): if the owner's flag is on the cell and can take the package, run `Drop` (3.7).
-  After the drop, for a Worker (type 0) with nothing left to carry and working mode 1, 2, 3 or 7:
+**`BringGoodHome`** (S 0077c720, S 0077c740): step 4 `BringGoodToWorkingPlace`, then `EnterBuilding` (0x0c),
+whose `Update` result is the movie's (a step 5 that reports finished at once exists in the code but is never
+entered). `BringGoodToWorkingPlace` (S 0077f140, S 0077f270): `PickupProduct` (0x12) → `ReturnToWorkingPlace`
+(2) → `PutDownPackage` (0x13); after each `PutDownPackage` it restarts `PutDownPackage` while the settler's
+package reference is valid (id hi `0..0x7fffffff`), else finished.
+- `PickupProduct::Start` (S 00777f80) picks the good: one ware from the building depot if it has any
+  (`Depot::TakeOneWare`); else entry 0 of the building's goods list (`GetGoods(0)`), and for mode 7 with a
+  valid animal reference a good popped from the animal's stack when it is not exhausted (when the stack is
+  then exhausted the animal goes to state 8). It stores the good in its `Pickup`, starts the action timer
+  (kind 2, drop time) and sets the `Pickup` state to 0: phase 0 of 3.7 begins in `Start`. `Update` is the
+  `Pickup` update (S 00777590 forwards). **[known]**
+- `ReturnToWorkingPlace` (S 0077eeb0, S 0077f020; sub-movies from its constructor S 0077ef80: `WaitForFreeFlag`
+  `+0x0c`, `MoveAwayFromDeposit` `+0x14`, `MoveOnMapToWorkingPlace` `+0x1c`): `Start` = `MoveAwayFromDeposit`
+  (0x17), or, if that cannot start, `WaitForFreeFlag` (0x10). `Update`:
+  - 0x17 finished → `MoveOnMapToWorkingPlace` (2); if that cannot start → `WaitForFreeFlag` (0x10).
+  - 0x10 finished → `StopAndIsCellCentered` (halts any walk, then "fine position = centre of the logic cell");
+    not centred → `MoveAwayFromDeposit` (0x17); centred → `MoveOnMapToWorkingPlace` (2), and if that cannot
+    start: `astarMode = 1` (`movement +0x70`, 3.8.3) and start it once more, result ignored.
+  - 2 finished → finished if the settler's cell is the cell of the workplace's flag (`building +0xa0`,
+    flag `+0x28`), else `WaitForFreeFlag` (0x10).
+- `MoveAwayFromDeposit::Start` (S 00780240): fails only when the settler holds a package, the workplace's flag
+  refuses it (`Transport_CarrierTryPlacePackageOnFlag`, with its side effects) and the rough mover's current
+  cell (`movement +0x30`) is the flag's cell; otherwise `MoveToCellCenter(movement +0x30)` (fine walk) and its
+  result.
+- `WaitForFreeFlag` (vftable S 0083459c): `Start` is the constant `true` (S 005e4e90); `Update` (S 00777be0)
+  = `Transport_CarrierTryPlacePackageOnFlag(settler, workplace flag)`, so the flag test runs on every tick of
+  the wait.
+- `MoveOnMapToWorkingPlace` (S 00780090, S 00780150): for a settler that is not a Worker, `MoveToCell(virtual
+  slot 11 cell, false)` and finished when not busy. For a Worker: when it holds a package, stands at hex
+  distance 1 from the workplace's flag and the flag refuses the package → `Start` fails; else `MoveToCell(flag
+  cell, false)`, and if that fails `MoveToCell(flag cell, true)`. `Update` while busy: holding a package that
+  the flag refuses → stop distance 1 (set once); otherwise a set stop distance is cleared. When not busy: clear
+  a set stop distance; finished.
+- `PutDownPackage` (`Start` S 0077a850 = step 0x14 only, shared with `WaitForPackage`; `Update` S 0077a8e0):
+  step 0x14 — no flag of the owner on the cell (`NNet::System::FindFlagAt`) → finished (still holding); the
+  flag refuses the package → finished (still holding); else `Drop` (0x13, 3.7). Step 0x13, `Drop` finished:
+  for a Worker (type 0) with nothing left to carry and working mode 1, 2, 3 or 7:
   `SacrificePlayerTableRef::GetEntryWithModifiers(workplace, 0)` (S 00661c50) returns `{good, count}` =
   entry 0 of the workplace property's goods list (`BuildingProperty::GetGoods`; filled by
   `bp_setGoods(building, good, amount)`, e.g. `(woodCutter, wood, 1)` **[inferred]**). Only when that good
@@ -731,12 +800,26 @@ with step ≠ 10) → `Working` (10) → finished with step 10 = success.
   made up to twice), else discarded. So the number of goods delivered per harvest is the `bp_setGoods`
   amount, doubled for corn under that sacrifice. **[known]** (S 0077a8e0)
 
-**`ReturnHome`** (S 0077bf10, S 0077bed0): `ReturnToWorkingPlace` (0x18) → `EnterBuilding` (0x0c).
+**`ReturnHome`** (S 0077bf10, S 0077bed0): `ReturnToWorkingPlace` (0x18) → `EnterBuilding` (0x0c), whose
+`Update` result is the movie's.
 
 **`BringGoodOut`** (mode 6 and step 1 of `ChooseNextWork`; S 0077c3b0, S 0077c510): `PickupProduct` (0x12) →
 `WaitForFreeFlag` (0x10; finished once the workplace's flag can take the package) → `LeaveBuilding` (8) →
-`PutDownPackage` (0x11, repeated while still carrying) → `EnterBuilding` (3). Back inside: if the depot still
-holds a ware, restart from the top; else finished.
+`PutDownPackage` (0x11; restarted while the package reference is still valid) → `EnterBuilding` (3). Back
+inside (`EnterBuilding` finished): if the depot still holds a ware (`Depot::HasAnyWare`), the movie calls its
+own `Start` in that update (a new `PickupProduct`, timer started) and goes on; else finished. A step 6 that
+reports finished exists in the code but is never entered.
+
+**Example: one workshop cycle (mode 6), derived from the rules of this section and of 3.7, 3.8.** A worker on the
+entrance cell of a building whose entrance is its anchor (no door offset), flat ground, a free flag, no
+sacrifices, production time `P`, rest time `R`; tick `t0` = `ProduceGood::Start`: the production timer runs
+out at `t0 + P` (`BringGoodOut` and `PickupProduct` start); the package is created at `+4` and the pick-up ends
+at `+8` (`WaitForFreeFlag` starts); `WaitForFreeFlag` admits the package at `+9` and the one-cell walk to the
+flag starts (building-to-flag shortcut, no random draw); the walk ends at `+27` (18 advances) and
+`PutDownPackage` starts; `Drop` starts at `+28`, hands over at `+32`, ends at `+36` (`EnterBuilding` starts);
+the walk back ends at `+54`, when `EnterBuilding`, `BringGoodOut` and state 0x35 finish and `Rest` starts; the
+rest ends `R` ticks later. One cycle is `P + 54 + R` ticks (164 for `P = R = 55`). **[inferred]** (composed
+from the known rules; not observed)
 
 **`ProduceGood`** (S 00777460, S 00777430): `Start` calls `Production::StartProductionCycle()` and starts
 animation kind 4 for `Production::GetProductionDuration()` (S 00565ed0) = `productionTime`
@@ -758,11 +841,16 @@ is removed, S 0077bc50, and the movie ends) → `Working` (10) → unlink the de
 finished. **[known]** That the property key read for the planting deposit is `bp_setPlantingDeposit` and
 that list `+0x74` is the tree-type list is **[inferred]** (names of the mapped fields).
 
-**`GoFishing`** (S 0077cda0, S 0077cea0): step 7 `LookForFishing` → `LeaveBuilding` (8) → `MoveToPosition` to the
-found cell (9; failure ends the movie) → `Working` (10) → finished with step 10.
-`LookForFishing::Start` (S 0077f670): from the cell in front of the building, flood-fill within the building's
-`workingRadius` (`BuildingProperty +0x78`) for fishable shore cells; pick `LogicRandom % count`; reserve the fish
-resource in `building +0x94/+0x98`. None found: same `!No resources found.` rule as mining; fail.
+**`GoFishing`** (S 0077cda0, S 0077cea0): step 7 `LookForFishing` → `LeaveBuilding` (8) → in the update in
+which `LeaveBuilding` finishes: step 9, look-at position = the fish reservation cell (`building +0x94`), and
+`MoveToPosition` to the found cell; if that cannot start the movie reports finished (step 9 ≠ 10) → `Working`
+(10) → clear the look-at position; finished with step 10.
+`LookForFishing::Start` (S 0077f670): from the building anchor stepped once in direction 1 (the flag cell),
+flood-fill within the building's `workingRadius` (`BuildingProperty +0x78`) for fishable shore cells; with
+candidates: one draw `LogicRandom % count` picks the target, and the nearest resource cell of the building's
+goods entry 0 within `cfg FishingDistance` of it is reserved in `building +0x94/+0x98`
+(`Resources_FindNearestMapResourceCell` S 00540660). None found: same `!No resources found.` rule as mining,
+target `(-1, -1)`, fail.
 
 **`GoHunting`** (S 0077caa0, S 0077cba0): step 7 `LookForAnimal` (succeeds iff the workplace holds a target
 animal reference, `building +0x70`) → `LeaveBuilding` (8) → `MoveToAnimal` (9) → on arrival, if the animal
@@ -774,7 +862,8 @@ the animal's fine cell centre with stop distance 1, or 2 when the building's `pr
 
 **`GoDigging`** (mode 11 and the Specialist; S 0077b170, S 0077b4b0): `digsRemaining = 10`. Loop:
 `SearchScholarDiggingPosition` (7; flood-fill radius 5 around the settler's target, pick `LogicRandom % count`),
-reserve the cell → `LeaveBuilding` (1) if still inside → `MoveToPosition` (9) → `DigForResources` (10;
+reserve the cell (`MapModifier::SetDigReservationAtCell`, object layer 4) → `LeaveBuilding` (1) only for a
+Worker standing on its workplace's work cell → `MoveToPosition` (9) → `DigForResources` (10;
 S 0077e840: animation of 80.0 ticks, kind 5 when the cell has neither `GridStates` bit `0x200` nor a resource
 entry, else kind 4) → place the resource sign doodad for what the cell holds (S 0077b2f0) and, only when the
 cell yields a good id other than -1, send the `!Found Resource` message (kind 2) or refresh an existing one
@@ -786,10 +875,15 @@ look-at position to the workplace's flag; finished. **`ReturnFromIdle`** (S 0077
 look-at, fine-walk to idle position 0, then to the fine centre of the building's work cell (`building +0xf8`);
 finished. **[known]**
 
-**`CatapultAttack`** (S 0077b940, S 0077b880): `RotateCatapult` (0x1c; animation kind 4 for `(turns + 1) *
-cfg CatapultRotationTimeFactor`, `turns` = minimal number of 60° steps from the current to the target direction)
-→ if ammunition: `ShootCatapult` (0x1d; animation kind 5 for `productionTime`, `Catapult::Fire`) → clear target
-→ rotate back (0x1e) → finished.
+**`CatapultAttack`** (S 0077b940, S 0077b880): `Start` aims the catapult (`Catapult::AimAtTarget`) and starts
+`RotateCatapult` (0x1c; animation kind 4 for `(turns + 1) * cfg CatapultRotationTimeFactor`, `turns` = minimal
+number of 60° steps from the current to the target direction). 0x1c finished → with ammunition
+(`Catapult::HasAmmo`) `ShootCatapult` (0x1d; animation kind 5 for `productionTime`, `Catapult::Fire`), without
+it `RotateCatapult` back (0x1e); 0x1d finished → `Catapult::ClearAim`, rotate back (0x1e); 0x1e finished →
+finished.
+
+**`GoToConstructionPlace`** (Constructor; vftable S 00834c58, `Start` S 0077dd70, `Update` S 0077dd80): one step,
+2 = `MoveToWorkingPlace` (a street walk to the site's flag cell, slot 11); finished when that is.
 
 `Worker::GetWorkProgress` (S 0065ce80) derives a 0..1 UI value from state and step (gather step 8/9/10 → 0.1 /
 0.2 / 0.5, times 0.75; bringing home adds the last quarter; production = elapsed / total). Presentation only.
@@ -973,18 +1067,29 @@ time for phase 1.
   `carryOver = (float32)(progress - 1.0)`. `carryOver` is not cleared when a step does not complete.
 - A step is complete when `progress > 1.0` (strictly) after `Advance`.
 - "Moving" tests are `progress >= 0`.
+- Starting a walk zeroes both `progress` and `carryOver` (`Interpolator::Zero04_08` in `Rough::StartMoveTo`
+  S 00773c10 and `Fine::StartMoveTo` S 00774050), then pops path cells until `BeginStep` accepts one with a
+  non-zero distance (the first popped cell is the start cell itself). So the carry-over lives only within one
+  walk: every free walk, every street leg (each leg is a new `StartRoughMove`, 3.8.5) and every fine walk
+  starts at 0. **[known]**
+- Stopping (`Rough::Stop` S 00773a20, `Fine::Stop` S 00773ea0) is immediate: `Interpolator::Reset` and the
+  path emptied; the cells stay as they are. **[known]**
 
-Because the overshoot is carried into the next step, the average speed is exact over a path; the per-step tick
-count varies between `floor` and `ceil` of `1/stepRate`. **[inferred]**
+Because the overshoot is carried into the next step, the average speed within one walk is exact; the per-step
+tick count is `floor` or `ceil` of `1/stepRate`. **[known]** (arithmetic of the rules above)
 
 Step rate for one cell step (`Rough::BeginStep`, S 00773a40): **[known]**
 
 ```
-stepRate = 1.0 / ( hexDistance(from, to) / (slopeFactor * baseSpeed) )
+stepRate = 1.0 / ( (float)hexDistance(from, to) / (slopeFactor * baseSpeed) )
 ```
 
-and for one fine step (`Fine::BeginStep`, S 00773ec0) the same with `baseSpeed * 4.0`. Consecutive path cells are
-neighbours, so `hexDistance` is 1. **[inferred]**
+and for one fine step (`Fine::BeginStep`, S 00773ec0) `1.0 / (dist / ((slopeFactor * baseSpeed) * 4.0))`. The
+consecutive cells of every path are neighbours (`BuildPath` steps one direction per cell, map-resources.md
+§3.12; street paths follow the street's cell list; `FinePath::SetTarget` steps one fine unit), so `hexDistance`
+is 1 **[known]**. In single precision the double division does not give the speed back: with `baseSpeed =
+0.058f` and factor 1.0 the step rate is `0.057999995f` (not `0.058f`), and the fine step rate `0.23199998f`
+**[known: computed in float32]**.
 
 - `baseSpeed` = `gameConfig +0x00` (`cfg_setSettlerSpeed`, 0.058 in the data, ctor default 0.1) times a
   per-player factor: `effective[1]` for Carriers, `effective[8]` for Soldiers, 1.0 for all other types
@@ -1005,6 +1110,22 @@ per logic tick, 10 ticks per second at speed 1, so about 1.7 s per flat cell. **
 eight carriers over 1,347 ticks: 59 flat cells of 17 ticks and 2 of 18 after the first; 11 of 21 and 1 of 22;
 5 of 28 and 2 of 29]**
 
+Exact sequences for a walk on constant slope, from the float32 rules above (`Advance`, `BeginStep`, the start
+at 0) **[known: computed in float32]**. On mixed ground the carry-over left by the previous cell decides
+between the two values of a slope cell, which is how the live sample above mixes them:
+
+| Factor | Step rate | Ticks per cell, cells 1, 2, 3, ... |
+|---|---|---|
+| 1.0 | 0.057999995 | 18, 17, 17, 17, 18, 17, 17, 17, 18, ... (period 4) |
+| 0.8 | 0.046400003 | 22, 22, 21, 22, 21, 22, 21, 22, ... |
+| 0.6 | 0.0348 | 29, 29, 29, 28, 29, 29, 29, 28, ... |
+| 0.4 | 0.023200002 | 44, 43, 43, 43, 43, ... |
+| fine, 1.0 | 0.23199998 | 5, 4, 4, 5, 4, 4, ... (a cell is 4 fine steps) |
+
+Since the logic cell changes in the tick of the last advance and the movie that waits for the walk is updated
+after the movement in the same `Settler::Update` (3.2), a one-cell walk started in tick `t` ends, and the
+waiting movie sees it, in tick `t + 18` on flat ground. **[known]**
+
 #### 3.8.2 Composite update (`Movement_Update`, S 007730e0)
 
 Nothing while `progress < 0`. **[known]**
@@ -1014,6 +1135,15 @@ Nothing while `progress < 0`. **[known]**
   distance `< stopDistance`: stop the rough move.
 - Fine mode: `Fine::UpdateStep(holdStep)`; `finePos = fine.current`, `cell` derived from it; stop when the fine
   path's remaining index `< stopDistance`.
+
+The stop test runs after every `UpdateStep`, also on ticks without a completed step **[known]** (S 007730e0
+disassembly). Path index semantics **[known]** (S 007730c0, S 00774f10, S 00773c10): a free or fine path is
+stored target first (`[to, ..., from]`), the index starts at the last element and `PopNextCell` decrements it
+before reading, so while the settler walks toward element `k` the index is `k`, the number of steps left after
+the current one. With stop distance `n` a free walk therefore stops in the tick in which the step toward
+element `n - 1` would begin (the step that was just begun is dropped by the immediate stop): the settler ends
+`n` cells short of the target. A walk to a neighbour cell with stop distance 1 advances once and stops on its
+start cell. The street path's remaining distance is the street rule below.
 
 The logic cell and fine position therefore change only when a step *completes*; in between only `progress`
 changes (the renderer interpolates). **[known]**
@@ -1061,6 +1191,17 @@ Reset the action animation, stop any move; if not already at the target: build a
 (`FinePath::SetTarget`, S 00774f10): starting at the target, repeatedly step one fine unit in
 `MapPos::GetHexDirectionTo(pos, from)` until `from` is reached; the list is consumed from the source end. No
 obstacle test. Fails only when the target is outside the fine grid. **[known]**
+
+**Fine mode** **[known]** (S 006574d0, S 00772f60, S 00773e70, S 00658000, S 00657f50, S 00657ea0): the byte
+`Fine.moving` (`movement +0xd4`) selects the fine branch of `Movement_Update` and of the position model. A fine
+walk sets it (`Fine::SetCurrentCell(finePos)`: byte 1, current and step position = the settler's fine position,
+`holdStep = 0`) and it **stays set after the walk ends**; every start of another walk (`MoveToCell`,
+`StartStreetMoveTo`, `MoveToFinePos` itself, `StopAndIsCellCentered`) first clears it
+(`Fine::ClearCurrentCell`). So a settler that ended a fine walk stays "in fine mode", with its logic cell
+derived from its fine position, until its next walk; this is what "a fine move is active" means in the idle
+position test (3.5.4). `MoveToFinePos` to the fine position the settler already has leaves fine mode, starts
+nothing and returns true. The action animation is also reset by `StartRoughMove` (S 00657480) whether or not
+the walk starts; `Animation::Reset` (S 0065f030) sets `kind = 0`, `remaining = 0` and keeps `total`.
 
 #### 3.8.5 Street routes (`StartStreetMoveTo`, S 00657f50)
 
@@ -1185,12 +1326,17 @@ Ship routine (S 0065e770): same walk; then link to the shipyard's existing ship,
 values are `<= 0` the shipyard is removed; `StopAndSetState3()`. **[known]**
 
 `ConstructBuilding` (S 0077daf0) loops (decision step 7): finished at once when the construction byte `+0x78`
-is set; while frame work remains (`site +0x74 > 0`) `Construct` (10) when the site stock holds the first good
-of the `frameCost` list, afterwards `Construct` when the site-stock field `construction +0x20` is non-zero
-(expected: the stock is not empty, **[inferred]**); else `BeNervous` (0x0d; S 00778250: fine-walk 3 fine steps
-in direction 5 from the cell centre, then back to the centre of the site's flag cell). After `BeNervous` it
-decides again; after `Construct`, if both remaining-work floats are `<= 0` it sends the player message
-`!Building constructed` (kind 7, at the building cell) and is finished, else it decides again. `Construct`
+is set; while frame work remains (`1 - site(+0x74) < 1`) `Construct` (10) when the site stock holds the first
+good of the `frameCost` list (of the building's current type, `building +0x0c`), afterwards `Construct` when
+the site stock holds anything: `construction +0x20` is the entry count of the site stock's goods map (stock at
+`Construction +0x10`, map size at stock `+0x10`), and a stock entry never stays at count 0
+([`logic-core.md`](logic-core.md) §3.4) **[known]**; else `BeNervous` (0x0d; S 00778250: fine-walk 3 fine
+steps in direction 5 from the cell centre, then back to the centre of the site's flag cell). Timing **[known]**:
+`Start` (S 0077d5d0, shared with `ConstructShip`) only sets step 7, so the first decision is made in the first
+update; when `BeNervous` finishes the decision runs in the same update; when `Construct` finishes with work
+left the step is set to 7 and the decision runs in the next tick. After `Construct`, if both remaining-work
+floats are `<= 0` it sends the player message `!Building constructed` (kind 7, the type name of the site's
+`pBuildingDef`, at the building anchor) and is finished. `Construct`
 (S 0077fe70, S 0077fb50) consumes one good, walks through the 4 construction positions of the building property
 (`bp_setConstructionPosition`) and hammers at each. **[known]** for the following (S 0077fe70, S 0077fb50):
 
@@ -1269,8 +1415,15 @@ Specialist, Carrier, NPC**, each list front to back (3.3). **[known]**
 
 Per settler and tick: `Animation::Tick` → `ai::settlers::SettlerMovement::Update` → base state handling → class state machine,
 which calls the `Update` of the one active top-level movie, which may start the next sub-movie in the same tick.
-A movie started in a tick is first updated in the next tick. **[inferred]** (every `Update` read here returns
-right after starting a sub-movie; not checked for all movies).
+A movie started in a tick is first updated in the next tick **[known]**: every package `Update` of 3.5.5,
+3.6 and 3.9 returns right after starting a sub-movie, and the class state machines return after
+`SetStateAndStartMovie`. Its action timer and its walk, both started in the start tick, are first advanced at
+the beginning of the next tick's `Settler::Update`, before the movie's update. The one start outside a
+settler's own update is the `LeaveBuilding` walk of the settler constructor (3.1, 3.2), whose first update
+falls in the creation tick when the creator runs before the settler step (3.1, "When a new settler is first
+updated"). Within one update a finished sub-movie and the start of the next one share the tick; `ConstructBuilding`
+after `BeNervous` (3.9) and `BringGoodOut` back inside with wares left (3.5.5) also start the next sub-movie in
+that tick.
 
 Other per-tick callers that touch settler state: `NVillage::SettlerSpawn::Update` (cooldown, healing of stored
 soldiers: counter `+= 2` per tick; when it exceeds the int at `militaryConfig +0x110` every stored hit-point
@@ -1585,9 +1738,13 @@ worker's `lastWorkTick`. **[known]**
   24-bit (single) precision before every logic update (`_controlfp(0x20000, 0x30000)` in S 0057b9b0; call
   sites in [`logic-core.md`](logic-core.md)), so intermediate results are rounded to single as well.
   **[known]** The two float-to-int conversions of this document (`Rest`, strokes) truncate toward zero.
+  A reimplementation in C# gets the same values from `float` arithmetic written in the same order (one
+  rounding per operation); the step rate of 0.058 flat is `0.057999995f` (3.8.1).
 - **Same-tick ordering.** Buildings and the street net update before settlers, transport after (section 4); a
-  package put on a flag by a carrier is seen by the transport system in the same tick, by another carrier in the
-  next one. **[inferred]**
+  package put on a flag by a carrier is seen by the transport system in the same tick, by carriers later in
+  the update order (section 4, list order) in the same tick and by earlier ones in the next tick. **[inferred]**
+  (from the loop order; `PutDownCarriedPackage` makes the package choosable at once through `OnPlacedOnFlag`,
+  [`streets-transport.md`](streets-transport.md) §3.6)
 - Presentation-only fields that are nevertheless saved and part of the checksum data: `lookAtPos`.
   `renderDirty` is neither saved nor part of the checksum. **[known]**
 
@@ -1601,6 +1758,9 @@ worker's `lastWorkTick`. **[known]**
 - Keep the two-level position model: logic cell changes only on step completion; everything else (footprint
   tests, "is at flag", "is at work cell") uses the logic cell. Visual interpolation is free.
 - Keep one action timer per settler with integer-tick semantics (`remaining -= 1` until `<= 0`).
+- Keep the movement details that change tick counts: carry-over only within one walk or street leg, the
+  immediate stop at the stop distance, the fine-mode latch that outlives a fine walk (3.8.4), and the action
+  timer reset by every walk start.
 - The step ids and the shared state numbers are stored in saves and compared in checksums; for compatibility
   with original saves they must be kept as numbered here. Without that requirement they can be renamed freely.
 - Can be simplified without changing behaviour: the `Rough`/`Fine`/`Path` class split (one mover with a mode is
@@ -1736,3 +1896,26 @@ worker's `lastWorkTick`. **[known]**
 | 0057b9b0 | `Fpu_SetDefaultControlWord` | 24-bit FPU precision |
 | 00555780 | `Properties_GameConfig_ctor` | config defaults |
 | 00527070 | `NLogic::System::Update` | tick order |
+| 00773c10 / 00774050 | `NMovement::Rough::StartMoveTo` / `Fine::StartMoveTo` | walk start: interpolator zeroed, first step |
+| 00773a20 / 00773ea0 | `NMovement::Rough::Stop` / `Fine::Stop` | immediate stop |
+| 007730c0 | `NMovement::Path::GetRemainingDistance` | path index or street remaining distance |
+| 00657480 | `SettlerMovement::StartRoughMove` | timer reset, rough walk, renderer notice |
+| 00657f10 / 00657ea0 | `SettlerMovement::MoveToCellCenter` / `StopAndIsCellCentered` | re-centring |
+| 00772f60 / 00773e70 | (enter fine mode) / `NMovement::Fine::SetCurrentCell` | fine mode byte `+0xd4` |
+| 0065f030 | `NSettlers::Animation::Reset` | timer kind and remaining to 0 |
+| 00777c50 | `NMovie::Object::IsOwnerMovementIdle` | `Update` of the walk-only leaf movies |
+| 00777ac0 / 00779630 / 00777c70 | `MoveToPosition` / `MoveToFinePosition` / `ReturnToLogicGrid` start | leaf walks |
+| 007780e0 / 007780f0 / 007775a0 | `MoveToStreetPosition` start / `Update`, `MoveToWorkingPlace` start | street walk leaf |
+| 00777be0 | `NMovie::WaitForFreeFlag::Update` | flag test every tick |
+| 00780090 / 00780150 | `NMovie::MoveOnMapToWorkingPlace::Start` / `Update` | walk to the workplace flag |
+| 00780240 | `NMovie::MoveAwayFromDeposit::Start` | re-centre before the walk home |
+| 0077ef80 | `NMovie::ReturnToWorkingPlace::ctor` | sub-movie layout |
+| 00777590 | (forwarding `Update`) | `PickupProduct`, `MoveToWorkingPlace` |
+| 0077a850 / 0077d5d0 | package `Start` at step 0x14 / at step 7 | `PutDownPackage`, `WaitForPackage` / `ConstructBuilding`, `ConstructShip` |
+| 0077dd70 / 0077dd80 | `NMovie::GoToConstructionPlace::Start` / `Update` | builder walk |
+| 0077bf10 / 0077bed0 | `NMovie::ReturnHome::Start` / `Update` | walk home empty-handed |
+| 0077c3b0 | `NMovie::BringGoodOut::Start` | workshop product out |
+| 0077cda0 / 0077cea0 | `NMovie::GoFishing::Start` / `Update` | fishing job |
+| 0077b940 / 0077b880 | `NMovie::CatapultAttack::Start` / `Update` | catapult job |
+| 0077b600 | `NMovie::Rest::ctor` | `restTicksLeft = 0` |
+| 005586d0 / 00558700 | `NVillage::System` depot / casern nearest-building wrappers | home lists `+0x20` / `+0x74` |
