@@ -253,6 +253,31 @@ end be their own nodes you can inspect"), without giving up the batches:
 - The proxy node classes are `core.game`'s renderer's own node types; mods may define node types of their own
   ([mods.md](mods.md) §7.1).
 
+### 4.7 Visibility per object [the maintainer's direction 2026-10-15; draft]
+
+Godot culls a `MultiMesh` only as a whole, by its box, so an object outside the view is still drawn while its region
+is partly in view. Every placed object (map objects, settlers, animals, ships) therefore gets a visibility notifier,
+Godot's own (`VisibleOnScreenNotifier3D` under the proxy node of a kind that has one, §4.6; for map objects, which have
+no node each, the same notifier without a node through `RenderingServer`). What it switches:
+
+- **Out of view**: the object's slots leave their batches (swap-remove, §4.2), so its vertices are not processed at
+  all, and its CPU work stops: interpolation, attachments, animation events, sounds, emitters. **Back in view**: its
+  slots return with its current state; the pose is computed from the clock (§9), so it shows the right point of its
+  clip at once.
+- **The notifier's box** is the object's bounds grown by what the notifier cannot see: a margin for its answer
+  arriving one frame late ([godot-capabilities.md](godot-capabilities.md) §6); for a moving object the motion of one
+  tick, so its box moves once per tick, not per frame; and the reach of its shadow towards the sun (height over the
+  tangent of the sun's elevation), since notifiers ignore shadow passes and an object just outside the view may cast
+  a shadow into it.
+- **The mirror counts**: the notifiers lie on a layer the mirror camera sees as well, so what shows only in the
+  reflection stays drawn.
+- Region batches stay (they keep the draw calls few) and Godot still culls whole regions; the notifiers drop what lies
+  outside the view within the visible ones. Buildings (§13) are single instances, which Godot culls one by one
+  already; their notifier switches their animation players.
+- **To measure** before it is the default for every kind: the notifiers' cost in Godot's cull pass against the saved
+  vertex work and uploads (a panning camera moves objects in and out of batches), on the maintainer's GPU (§20). Map
+  objects come first, as they are the only kind drawn today.
+
 ## 5. Visual descriptors
 
 ### 5.1 What they are [draft]
@@ -568,11 +593,9 @@ animals, ships and animated building parts use one skinning path of their own in
   pool, as the original does.
 - Animals, ships and oxen use the same path with their own shaders (`animals.fx`, `ships.fx` player-colour weight,
   `donkey.fx`).
-- **Unseen characters cost no animation work**: the pose is computed from the clock in the vertex shader, so a
-  character out of view has nothing to pause and shows the right point of its clip when it comes back into view. A
-  visibility notifier per character would add a node that has to move every tick and save nothing
-  ([godot-capabilities.md](godot-capabilities.md) §6). The CPU work per mover is the interpolation above, done only
-  for visible regions.
+- **Unseen characters cost nothing**: their visibility notifier takes them out of their batches (§4.7), so neither
+  their vertices nor their interpolation are processed; the pose is computed from the clock in the vertex shader, so
+  a character shows the right point of its clip the moment it comes back into view.
 
 ## 10. Terrain [draft]
 

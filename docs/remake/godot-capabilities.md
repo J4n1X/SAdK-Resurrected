@@ -214,8 +214,10 @@ camera's cull mask (renderer_scene_cull.cpp:2924); signals fire only on a change
 are drawn, so work they gate starts one frame late (rendering_server_default.cpp:109); shadow passes do not count
 (renderer_scene_cull.cpp:2427); a `MultiMesh` is culled as one box, never per instance (:2004). Useful for objects
 animated on the CPU (an `AnimationPlayer` per building: disable it while unseen, seek to the clock's time on
-entering); unnecessary for the GPU-skinned crowds, whose animation phase is computed from the clock in the shader
-and costs nothing unseen ([renderer.md](renderer.md) §9, §13).
+entering), and for batched objects (map objects, settlers, animals, ships), whose `MultiMesh` Godot culls only as a
+whole: the notifier is what lets an object outside the view leave its batch, so it is not drawn at all
+([renderer.md](renderer.md) §4.7, §13). The GPU-skinned crowds need no animation work while unseen either, since
+their pose is computed from the clock in the shader.
 
 ## 7. Audio, UI, input, network
 
