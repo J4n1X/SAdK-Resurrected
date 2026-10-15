@@ -636,8 +636,9 @@ animals, ships and animated building parts use one skinning path of their own in
   blend patches per 4 × 4 block with transition-mask UVs, under-water tint, the pattern order of
   `terrain_static_data.xml` (RE §3.3).
 - One mesh per region with one surface per pattern; materials per pattern with the pattern type's shader (§7.1).
-  With the level of detail of §10.3 the terrain is drawn as instanced blocks with the pattern layering in the
-  shader instead; these region meshes are then the fallback.
+  **The per-pattern patches stay** with the level of detail of §10.3 (maintainer, 2026-10-15): every pattern type
+  keeps its own shader from `types.xml`, mods' types included; the levels change the patches' geometry, not the
+  layering.
 - `MapChanged(Heights | Patterns, rect)` rebuilds the regions touched plus one block of margin on a worker thread;
   the result replaces the region's mesh on the main thread. Ground decals, streets and object heights in the
   rectangle are re-laid.
@@ -673,12 +674,15 @@ show the 1.5-unit facets.
 - **Density**: the setting **Terrain detail** splits each fine triangle into k² triangles, every edge into k equal
   parts (an even split exists only for k², so there is no "double" step):
 
-  | Level | k | Terrain triangles | Surface |
+  | Setting (maintainer, 2026-10-15) | k | Terrain triangles near the camera | Surface |
   |---|---|---|---|
-  | Faithful | 1 | 1× | the original's flat triangles |
-  | Smooth (default of the refined look) | 2 | 4× | cubic patches |
-  | Smoother | 3 | 9× | cubic patches |
-  | Smoothest | 4 | 16× | cubic patches |
+  | Faithful | 1 | 1×, the original's three levels by distance (§10.3) | the original's flat triangles |
+  | Very Low | 1 | 1× | cubic patches (smoothed shape and light, no extra triangles) |
+  | Moderate (the default) | 2 | 4× | cubic patches |
+  | High | 3 | 9× | cubic patches |
+  | Very High | 4 | 16× | cubic patches |
+
+  A triangle splits evenly only into k × k parts, so there are no 2× or 8× steps.
 
   Every level lights per pixel, as the original's terrain shader already does: normals interpolated across the
   triangles plus the pattern's normal map. In the curved levels the vertex normals come from the patch's derivative.
@@ -732,18 +736,16 @@ show the 1.5-unit facets.
 - **No popping**: in the outer part of each band the vertex shader blends every vertex between its position at the
   block's level and at the next coarser level (geomorphing, as in the CDLOD terrain technique), so the change of
   level is not seen.
-- **Drawn as instances**: because the heights come from the textures (§10.2), every block of one level is the same
-  grid. The terrain becomes one instanced mesh per level, with the block's origin, level, neighbour levels and morph
-  factor per instance: a handful of draw calls for the whole terrain, and the LOD costs no extra draw calls.
-- **This moves the ground textures into the shader too**: the pattern of every cell in a texture, the patterns'
-  diffuse and normal maps and the transition masks in texture arrays, and the original's layering (the lowest pattern
-  of a triangle solid, the others blended over it with their transition masks in rank order, the seam brightened or
-  darkened by the mask's red channel; RE §3.3) evaluated per pixel instead of drawn as separate patch layers. Same
-  formula, same result; the per-region meshes with one surface per pattern of §10.1 remain the fallback if the
-  per-pixel form cannot match the original exactly.
+- **Drawn per block**: the levels are chosen per block (the original's unit), so the patches are drawn per block,
+  with the block's level, its neighbours' levels and the morph factor as instance uniforms; the heights come from the
+  textures (§10.2). The far band of the refined look draws whole regions as visibility parents of their blocks.
+- **The layering stays in patches** (maintainer, 2026-10-15): each block's solid and blend patches are built per
+  level; per-pixel layering in one shader (texture arrays, a shader generated from `types.xml`) was weighed and set
+  aside: about three times the work, the faithful layering to be proven again, and its gain (fewer draw calls) is not
+  the limit today.
 - **Shadows and the mirror view** choose their own, coarser levels (the far cascades and the reflection need less).
-- The original's own terrain LOD (levels 0 to 2 by distance) is still not reproduced (RR §2.4): Faithful draws the
-  full fine grid everywhere.
+- **Faithful** reproduces the original's own terrain LOD exactly (maintainer, 2026-10-15): its three levels per block,
+  its selection (RE §3.3), its stitching and its hard switch, popping included. The refined settings morph instead.
 
 ## 11. Water, border, sky, environment [draft]
 
