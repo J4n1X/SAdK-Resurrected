@@ -119,8 +119,31 @@ public sealed class TickRecord             // immutable once published
   pause is `SceneTree.Paused` rather than a time scale of 0. Animation players, particles, tweens and the presentation
   time then follow speed and pause without code of their own; `RealDelta` comes from `Time.GetTicksUsec`, since Godot
   exposes no unscaled step ([godot-capabilities.md](godot-capabilities.md) §6). The fixed-tick accumulator stays the
-  remake's, so frame timing decides only when a tick runs. Open: whether the original clamps the frame time at 5 s
-  before or after applying the speed.
+  remake's, so frame timing decides only when a tick runs. The 5 s clamp applies after the speed
+  (`dt = frameSeconds × speed; if dt > 5`, logic-core §3.1, game-commands §4): at speed 3 a real frame over about
+  1.67 s counts as one tick.
+- **Built** [implemented 2026-10-15, sadk-remake a7a220c]: `Sadk.Session.SimHost.Advance(simSeconds, realSeconds)`,
+  fed by the pausable `SimDriver` node (`Sadk.Presentation/Simulation`), which also sets `Engine.TimeScale` from the
+  world's speed and back to 1 when it leaves the tree; `Step(n)` and `Flush()` for headless runs. Tick 0 runs in the
+  first frame; all due ticks run in one frame without a cap; the tick interval comes from the registry
+  (`GameConfig.GameSpeed`). A refused gate puts the accumulator back to one interval before the due time
+  (`Alpha(faithful)` follows the saw-tooth, refined holds 1). Hang reasons: the transport's, `NotStarted` (no tick
+  yet: the original drops commands before tick 0) and `NoTick` (2 s of real time without a tick); `Submit` drops
+  commands while hanging unless forced (`QueueGameCommand`). Net ticks: `S = NetTickLength × GameSpeed`, also offline
+  (length 1); on the tick that closes a net tick: the transport's boundary commands, net tick + 1, the checksum hook,
+  the transport exchange (`EndNetTick`), then the systems; net tick 0 is the world as built. Random and id fences are
+  checked before each tick and before gap commands. `ICommandTransport` (`Start`, `Pump`, `Submit`,
+  `TakeGapCommands`, `CanAdvance`, `TakeBoundaryCommands`, `EndNetTick`, `Waiting`, `Hang`) is the seam:
+  `OfflineTransport` is the original's DummyNetwork (commands run in the gap before the next tick with the previous
+  tick's counter, logged as tick, gap and order, their events published as a record of their own); a lockstep
+  transport implements `CanAdvance` as the original's `CanAdvanceTick` and exchanges packages in `EndNetTick`
+  without touching `SimHost`'s callers. `CommandLog` (`.sadkreplay`, versioned: registry checksum, mod set, setup,
+  the commands with tick, phase and sender, per-net-tick checksums) replays through `ReplayTransport`; the headless
+  runner's `replay --log=` compares the checksums.
+- **Pause** [open, decision for the maintainer]: the original sets the speed to 0, runs commands at once for about
+  2 s and then swallows input (`IsGameHanging`); the remake's pausable driver gets no time while `SceneTree.Paused`,
+  so commands submitted during a pause run before the first tick after it. Counting real time in the driver while
+  paused would restore the original's behaviour.
 - **Offline commands** execute in the gap between two ticks, with the tick counter of the previous tick, as the
   original executes them inside the UI call (GC §3.1). Network commands execute at the closing tick of net tick
   `N+2`, at the start of that tick before its subsystems (GC §3.2). Both are scheduled by `SimHost`; the UI only
@@ -249,6 +272,20 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 
 ## 7. The way back: commands [draft]
 
+**As built** [implemented 2026-10-15, sadk-remake a7a220c]: a command is a record with
+`[GameCommand("core.game.speed", Original = 0x20023, Version = 1)]` implementing `IGameCommand` (`Validate` without
+side effects, `Execute`). The sender is envelope data (`CommandContext.Sender`, the player index the session fills
+in, −1 the session itself), not a field, so a peer cannot act in another's name. `World.Execute` validates, executes
+and emits `CommandResolved(sender, id, result)` for every command. `SimulationCatalog` collects commands and systems
+(`[SimSystem(id, After, Before)]`, an order that must follow uniquely from the constraints) from the engine and every
+mod's simulation assemblies at mod-set load; ids are namespaced, a client assembly declaring one is a load error, the
+wire id is the original id or an FNV-1a hash of the id with the top bit set (collisions refused). The codec writes the
+record's constructor parameters (little endian, floats as raw bits, varint counts, UTF-8, enums, nullables, lists,
+nested record structs); fields may be added at the end with defaults. A command with an original id also maps to the
+original's event layout (GC §2.2; verified byte for byte for 0x20023, 0x20011, 0x20013–0x20016). The UI path: a
+button emits an intent (`core.game.cyclespeed`), its handler submits the command.
+
+
 - Every player action is a `GameCommand` carrying ids, cells and registry ids, executed at a tick boundary on every
   machine and validated again there [binding] §6.
 - **UI callbacks into map scripts** (`quest_cinematicDone`, `createQuestUi`, `destroyQuestUi`,
@@ -317,6 +354,10 @@ These matter more in the remake than in the original, because Harmony patches ca
    cinematic ends when every peer has sent `CinematicFinished`, or for everyone when the first does. **Decision for
    the maintainer.**
 2. Whether the scene handlers not yet re-read call a logic mutator (RE §10 Q18); the event table assumes not.
+3. RE gaps met while building the game server (2026-10-15): the military defaults are cited at two addresses
+   (game-commands §2.5 S 00553f40, §11 `ResetDefaults` S 005c0930); the unique id counter's initial value for the
+   first world of a process is not stated (assumed 0); a reconnect resets `S` to speed × 4 and the sub-tick to 0 on
+   every peer, which the network transport will need a way to do in `SimHost`.
 3. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 4. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.
