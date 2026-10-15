@@ -682,6 +682,9 @@ show the 1.5-unit facets.
 - **No overshoot** (the next-in-line comparison): where the steps on the two sides of a vertex along a line differ in
   sign or one is zero, the slope there is 0; otherwise it is limited to three times the smaller step (Fritsch–Carlson),
   so no ridge or dip appears that the samples do not have and plot borders stay crisp.
+- **What it is not**: the surface reconstructs the same height samples more cleanly (as bicubic upscaling does an
+  image); it adds no information. Detail finer than the samples (rough rock, rippled sand) is for later, through
+  displacement maps per pattern (maintainer, 2026-10-15), added on the CPU like the rest of the surface.
 - **A baked normal texture** at a finer resolution than the fine grid (e.g. 4×), computed once on the CPU from the
   curved surface (and on height edits), carries its light into the terrain shaders, so even the settings without extra
   triangles show the curvature in the light at one texture read per pixel (principle 14).
