@@ -103,6 +103,13 @@ Rules that follow:
   setting `gui/theme/default_font_multichannel_signed_distance_field` changes only Godot's embedded default font, and
   only while no custom default font is set (default_theme.cpp:1393) [source]; the remake copies these settings
   (MSDF, mipmaps, antialiasing, hinting, subpixel positioning) onto the vector fonts it loads itself.
+- A custom CanvasItem shader on MSDF text can read the distance field: the MSDF branch computes `COLOR.a` before the
+  user's fragment code runs, and `TEXTURE` and `UV` still point at the field (renderer_rd canvas.glsl:608 vs the
+  fragment code at :701; gles3 canvas.glsl:601 vs :697); the glyph quad includes the field's padding
+  (text_server_adv.cpp:1078). Canvas fragment shaders have no `VERTEX`, so such a look is per glyph [source].
+  `FontVariation.variation_embolden` tears holes into MSDF glyphs at overlapping contours (Ä, g, &, W), measured
+  2026-10-15; a heavier stroke comes from moving the MSDF edge in the shader instead. `Button` has no font shadow
+  theme items; type variations may derive from other variations [measured].
 - `Theme.MergeWith` merges items, type variations and the defaults; `Clear()` keeps the default font, font size and
   base scale [api; measured 2026-10-15]. The remake builds its UI theme by merging every layer's `ui/theme.tres`
   ([mods.md](mods.md) §6.6).

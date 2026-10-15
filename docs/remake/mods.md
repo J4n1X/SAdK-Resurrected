@@ -261,6 +261,16 @@ It is merged again when the conversion is mounted and when a mod set loads or un
 are constants in `ThemeVariations` (Heading, Note, ErrorText, Dialog, Hud, ModalShade, ...), so mods see them in
 IntelliSense. A theme does not pass a `CanvasLayer`, so the game's layers (modes, overlays) and a view's own layers
 (the map view's HUD) start with `UiTheme.Root(...)`.
+
+**The interface font** [implemented 2026-10-15]: `<Interface font="Vector|Original">` in settings.xml (Options,
+language tab). `Vector`, the default, is Instrument Serif (SIL Open Font License, shipped with its license in the
+engine's `fonts/instrument-serif/`), the maintainer's choice of a free look-alike of the original's Garamond; `Original`
+is the original's bitmap fonts from the language folder. The original's roles are type variations, `GaramondHead`,
+`GaramondChapter`, `GaramondSubline` (31, 19 and 15 px as in the original's layouts), with one shared `FontVariation`
+(widened 1.1×) and the shader `ui/text/garamond.gdshader`, which draws the original's look from the distance field:
+a heavier stroke, the dark outline, the relief lit from the upper left, the soft shadow; its colours, weight, outline,
+relief and shadow are the theme's `garamond_*` items, so a mod restyles them in its `ui/theme.tres`. Forms, the HUD
+and running text keep the plain theme font for legibility.
 3. **Parse** into the runtime objects (visual descriptors, layouts, UI parts).
 
 Registry entries are not XML and are never patched this way: they change in the data stage.
