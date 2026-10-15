@@ -268,8 +268,12 @@ engine's `fonts/instrument-serif/`), the maintainer's choice of a free look-alik
 is the original's bitmap fonts from the language folder. The original's roles are type variations, `GaramondHead`,
 `GaramondChapter`, `GaramondSubline` (31, 19 and 15 px as in the original's layouts), with one shared `FontVariation`
 (widened 1.1×) and the shader `ui/text/garamond.gdshader`, which draws the original's look from the distance field:
-a heavier stroke, the dark outline, the relief lit from the upper left, the soft shadow; its colours, weight, outline,
-relief and shadow are the theme's `garamond_*` items, so a mod restyles them in its `ui/theme.tres`. Forms, the HUD
+a heavier stroke; from the outside in a brown outline, a rim (orange facing the light from the upper left, deep brown
+facing away), a band (yellowish facing the light, warm gold facing away) and the body; the soft shadow. Its colours,
+weight, widths and shadow are the theme's `garamond_*` items (`garamond_body`, `_highlight`, `_shade`, `_rim`, `_edge`,
+`_outline`, `_weight`, `_bevel`, `_rim_width`, `_outline_width`, `_shadow_soft`), so a mod restyles them in its
+`ui/theme.tres`. The values were matched to the original glyphs' colour statistics at the menu's sizes (edge
+saturation and the share of dark to coloured edge pixels within a few percent). Forms, the HUD
 and running text keep the plain theme font for legibility.
 3. **Parse** into the runtime objects (visual descriptors, layouts, UI parts).
 
