@@ -200,7 +200,8 @@ push `globals[name]`, push the arguments (as numbers), `lua_pcall(L, nargs, 0, 0
   a comparison of `logic.pl_getSacrificeState(...)` with a number while no building has that sacrifice on order
   (§2.3)
   aborts the remaining statements of that tick's `onLogicTick` [known: S 005b0210 returns no value; data
-  `>= 1`].
+  `>= 1`]. In `C05.lua` that comparison is the last statement of `onLogicTick`, so nothing is skipped there; the
+  other comparison of this kind (`questTarget_sacrificeOrderState`) is in a target no map uses [known: data].
 - No engine callback uses a return value (`nResults = 0` everywhere) [known].
 - After a failed call the error message is **not popped**: `LuaScriptHost_DumpScriptError` only reads the stack
   and the three `CallGlobal*` functions return 0 without a `lua_settop` [known] S 005c9440, S 005c9780. Every
@@ -250,7 +251,7 @@ script calls it.
 | `pl_getStreetCount(p)` → int | `p < 8` only | number of entries in the street net's per-player street vector; 0 if empty | yes |
 | `pl_getRegionSize(p)` → int | P | `PlayerStatistics.regionSize` | yes |
 | `pl_getMilitaryStrength(p)` → int | P | latest value of statistics series 4 | yes |
-| `pl_getProducedGoodCount(p, good)` → int | `p < 8` only | last element of the good's statistics history | yes |
+| `pl_getProducedGoodCount(p, good)` → int | `p < 8` only | last element of the good's statistics history. The history exists only for the tribe's goods and jobs and the body reads the vector's last element with checked iterators and no empty test, so another good id ends the process (`_invalid_parameter_noinfo`) [inferred from S 005b0e80] | yes |
 | `pl_getBuildingProductivity(p, type)` → int | P | mean of the productivity of all finished buildings of the type, × 100, truncated; 0 when there is none (S 00533160) | yes |
 | `pl_hasCastle(p)` → bool | P | the village depot list holds a building of `p`, **finished or not**, whose type has `depot`, `casern` and `territoryBuilding` all set (property bytes +0x54, +0xf1, +0xf5; `FindPlayerBuildingWithDefFlags` S 005579a0) | yes |
 | `pl_hasReachedPlayer(p, q)` → bool | P on `p`, `q < 8` | `Player.reached[q]` | yes |
@@ -390,7 +391,8 @@ loop:
 
 The centre is visited first; ring `r` is entered by one SW step from the last cell of ring `r − 1` (that cell
 itself is not visited a second time) and then walked `r` steps each in directions 0..5, visiting after every
-step. Cells outside the map are skipped but the walk continues. The order decides which cell
+step. Cells outside the map are skipped but the walk continues. The radius is compared as an unsigned number,
+so a negative radius makes the walk run for about 2³² rings: the game hangs [known: S 005b1290]. The order decides which cell
 `map_searchConstructionPlace` returns and the order of `map_forEachDoodad` callbacks.
 
 #### 3.6.2 Construction place mask
@@ -420,12 +422,12 @@ without a finished depot-type building dereferences a null pointer [known: bodie
 | `menu.createBuildingWithSettler(p, type, x, y [, soldierGood])` S 005d9ac0 | if the type is a territory building: `AddTerritorySource(cell, radius 4, player)` first. Place and complete the building. If the type's `territoryBuilding` byte (+0xf5) is clear: spawn its worker; else create **three** soldiers of property `soldierGood` at the cell and link them. In both cases the territory updater is then activated. Nothing after the territory source happens if placement fails. The data passes the 5th argument for `fortress` and `tower` and omits it for temples, a forester and a catapult | yes |
 | `menu.createStreet(p, x1, y1, x2, y2)` S 005dada0 | street planner from cell 1 to cell 2, then `NNet::System::BuildStreet` | yes |
 | `menu.lockBuilding(p, type)`, `unlockBuilding`, `lockJob`, `unlockJob`, `lockSacrifice(p, s)`, `unlockSacrifice` | player lock maps 0, 3, 1 ([players-victory.md](players-victory.md) §3.10); the sacrifice variants also refresh an open sacrifice tab | yes (not saved) |
-| `menu.addSacrifice(p, s, notify)` S 005dac60 | lock map 2 (sacrifice available), refreshes an open sacrifice tab; if `notify` is true a type-4 message `!New Sacrifice available` to `p`. The campaign scripts pass the undefined global `sendMessage`, i.e. `nil`: no message | yes (not saved) |
+| `menu.addSacrifice(p, s, notify)` S 005dac60 | lock map 2 (sacrifice available), refreshes an open sacrifice tab; if `notify` is true a type-4 message `!New Sacrifice available` to `p`. In the campaign the argument is the parameter `sendMessage` of the map's own wrappers (`enableStoneToDustSacrifice`, `enableWaterSacrifice` in `C05.lua`, `addTreeExchange` in `C06.lua`, `addPacifySachmet`, `addGenerateBeer` in `C07.lua`): quest callbacks pass `true`, so the message is sent; `onLoaded` and the player set-up pass `false` [known: data] | yes (not saved) |
 | `menu.allowActions(type, allow [, code])` S 005d9570 | action-button override per building type: `allow = false` stores `code`, `true` removes it ([game-commands.md](game-commands.md) §5.1) | UI only |
 | `menu.createLetter(text)` S 005da720 | letter message to the local player | messages |
 | `menu.addMinimapSymbol(kind, x, y)` / `removeMinimapSymbol` | list of minimap markers (kind 2 = quest marker in the scripts); x, y read as floats | UI only |
 | `menu.openBookDialog(text)` S 005dd5e0 | if the book reports true from its vtable slot +0x10, calls slot +0xc ([inferred] closes an open book), then toggles game screen 2 and adds the first page; `menu.addPage(text)` adds a page; `menu.addPicture(name)` sets the picture | UI only |
-| `menu.startCinematic()` S 005dd3c0 | closes all dialogs and opens the cinematic screen; `menu.addCinematicPage(textKey, titleKey, cutscene [, x, y])` appends a page (x, y only if argument 4 is a number, else −1, −1); `menu.updateCinematic()` calls one method of the cinematic screen ([inferred] starts playback; target not read). The cutscene name is either a short name (`"1intro"` → `<map dir>\<map name>_1intro.lua`) or a full `[data]\...` path (§3.8) | UI; see §8 |
+| `menu.startCinematic()` S 005dd3c0 | closes all dialogs and opens the cinematic screen; `menu.addCinematicPage(textKey, titleKey, cutscene [, x, y])` appends a page (x, y only if argument 4 is a number, else −1, −1); `menu.updateCinematic()` calls slot 1 of the cinematic screen's `IUpdateable` face, `nMenu::Cinematic::Update` S 005fb3e0 (vtable S 007ef9bc): one page-timer step, synchronously inside the calling tick, which can start the first page and its camera path and write the local game speed [known: S 005dd5c0, S 007ef9bc]. The cutscene name is either a short name (`"1intro"` → `<map dir>\<map name>_1intro.lua`) or a full `[data]\...` path (§3.8) | UI; see §8 |
 | `menu.addTutorialPage(key)` S 005daa30 | adds tutorial page `key` with description key `key .. "_desc"` and shows it | UI only |
 | `menu.showSacrificeEffect()` | plays the sacrifice screen effect with no event | UI only |
 | `menu.showMinimap()` S 005d9530 | calls one method of the game screen's minimap object with argument 1 ([inferred] shows it); not used by the shipped scripts | UI only |
@@ -435,7 +437,11 @@ without a finished depot-type building dereferences a null pointer [known: bodie
 | `txt.isValid(key)` → bool S 005da660 | the localisation table contains the key | read only |
 | `gfx.createParticel(effect, x, y [, dx, dy, dz])` S 005aca40 | starts the named particle effect at the world position of the cell, plus the float offset when argument 4 is a number; looping; reseeded from the render clock. Does nothing if the effect name is unknown | presentation only |
 
-`ui.*` (quest log widgets, first argument = menu screen index, the scripts use `BOOKDIALOG = 24`):
+`ui.*` (quest log widgets, first argument = menu screen index, the scripts use `BOOKDIALOG = 24`; the index
+selects `nMenu::System + 0x10 + 4 × index`, where the book is index 2, so 24 reads `System + 0x70`, inside the pending
+map path string [known: S 005dc40a, S 005db458; inferred: the consequence]. In shipped play these calls do not run:
+the quest list is reached only through the book, which only `menu.openBookDialog` opens, and its only shipped caller
+chain starts at `openBriefing()`, which the binary never calls):
 `ui.createPicture(screen, name, x, y, texture, u, v, w, h)`, `ui.createLabel(screen, name, x, y, textKey, font)`,
 `ui.createTextBlock(screen, name, x, y, w, h, textKey, font)`, `ui.createCheckedButton(screen, name, x, y,
 caption)`, `ui.show(screen, name, bool)`, `ui.setContent(screen, name, textKey)` (label, button or text block),
@@ -490,15 +496,20 @@ they fix how the C functions are exercised [known: data]:
 - **AI attack limiter.** `ai.update(ticks)` computes `minute = ticks / 600` and, per player 1..6, when the stored
   minute is passed: `logic.ai_setAllowedAttackCount(player, 3)` and a new time `+ delay +
   logic.getRandom(randomMinutes)`. The stored time passes through `sd_setValue`, so it is truncated to an integer.
+  The limiter is inert in the shipped campaign: every `ai.setup` call of the maps is commented out, so no player is
+  registered and `logic.getRandom` is never executed [known: data].
 - **Quest machine** (`quests.lua`, `questTargets.lua`): quests are Lua tables `quests[MAINQUEST = 0]`,
   `quests[SUBQUEST = 1]`, numbered by a running `questIndex` (the `logic.q_*` slot index, so at most 40 per map).
   Each tick the sub quests, then (if none finished) the main quests are evaluated in definition order; the first
   quest whose target function returns true is finished and evaluation stops for that tick. A quest with briefing
   pages starts a cinematic and its `q_finish` is delayed until the engine calls `quest_cinematicDone` (§4.3).
   The key `showBookDelay` in the `sd_` store pauses quest evaluation while it is positive; winning or losing
-  sets it to 2000000000, which stops evaluation for good. The decrement `showBookDelay − 1 / getSpeed()` is
-  truncated by `sd_setValue`, so for speeds above 1 it still falls by a whole unit per tick [known: data +
-  S 005b28b0].
+  sets it to 2000000000, which stops evaluation for good. The decrement `showBookDelay − 1 / getSpeed()` (the
+  script clamps the speed to at most 3) is computed at single precision (§8): the spacing of float32 values at
+  2·10⁹ is 128, so `2000000000 − step` rounds back to 2000000000 for every step below 64, and the stored value
+  never changes. In double precision it would fall by one unit per tick after the truncation of `sd_setValue`.
+  2000000000 is the only positive value the shipped scripts store under this key (the 100-tick delay after
+  briefings is commented out in `quests.lua`) [known: data + S 005b28b0; inferred: the rounding].
 - `destroyAllBuildings(player)` in `tools.lua` loops `until x ~= nil`: it removes one building and never
   terminates when the player has none [known: data]. `ui.*` quest buttons name handlers `<name>_isPushed`, which
   the engine never calls (§4.4).
@@ -631,7 +642,7 @@ checksum compared between network peers; `menu.cfg` and the map folder's scripts
 | Map tool scripts | `scripts\mapTools\`: `quests.lua`, `questTargets.lua`, `tools.lua`, `cinematicFunctions.lua`, `aiLimiter.lua`, `spawnDepots.lua`, `tutorial.lua` | included by map scripts with `Default.CallScript` | `logic`, `menu`, `ui`, `txt`, `gfx` | yes |
 | Map scripts | `maps\campaignMaps\C01.lua` .. `C11.lua` (11), `map\Presentation.lua` | world build, §4.2; one per map, same base name as the `.s2m` | as above | yes |
 | Cutscene camera paths | `maps\campaignMaps\C<nn>_<n><name>.lua` (186), `scripts\mapTools\cutscene_circle.lua` | each cinematic page with a cutscene name | `cutscene` | no |
-| Info pages | `scripts\info\i_<hex>.lua` (95), `b_<hex>.lua` (29; each has an `i_` file of the same number) | `nMenu::Info::Open(owner, mode, index, id)` S 005f6310: mode 1 runs `[data]\scripts\info\i_` + lower-case hex of `index` + `.lua`, mode 2 runs `b_` + lower-case hex of `id` + `.lua`, each on the map-script thread (`GameScript_RunFile` S 005b1dc0); if the file does not exist the page shows `Database file i_<hex> not found!` (`b_` in mode 2) instead. Mode 0 runs no script: it shows the text key `dialog<index>_<id>`. **The only call of `Open` in the image (S 005d9776 in `nMenu::System::ToggleDialogInfo`) passes mode 0** [known: the function has one code reference and the two path strings are referenced only inside it], and `Open` has no data reference (no vftable or function-pointer slot holds it) [known: one `UNCONDITIONAL_CALL` reference], so modes 1 and 2 are unreachable and these files are never run. [inferred] the number is the object's property id: the files carry comments like `object 0x12E67603` | `ui.infoLabel`, `infoLabel2`, `infoPicture`, `infoText` | no |
+| Info pages | `scripts\info\i_<hex>.lua` (95), `b_<hex>.lua` (29; each has an `i_` file of the same number) | `nMenu::Info::Open(owner, mode, index, id)` S 005f6310: mode 1 runs `[data]\scripts\info\i_` + lower-case hex of `index` + `.lua`, mode 2 runs `b_` + lower-case hex of `id` + `.lua`, each on the map-script thread (`GameScript_RunFile` S 005b1dc0); if the file does not exist the page shows `Database file i_<hex> not found!` (`b_` in mode 2) instead. Mode 0 runs no script: it shows the text key `dialog<index>_<id>`. **The only call of `Open` in the image (S 005d9776 in `nMenu::System::ToggleDialogInfo`) passes mode 0** [known: the function has one code reference and the two path strings are referenced only inside it], and `Open` has no data reference (no vftable or function-pointer slot holds it) [known: one `UNCONDITIONAL_CALL` reference], so modes 1 and 2 are unreachable and these files are never run. The number is the `*_create` id of the object the page describes: `i_12e67603` is `guardHouse`, `b_154551b3` the smeltery, `b_154c1dae` the gold mine [known: data] | `ui.infoLabel`, `infoLabel2`, `infoPicture`, `infoText` | no |
 | Editor lists | `scripts\editor\scatter.lua`, `copypaste.lua` | map editor debug menu (`nMenu::Debug::RefillElementList` S 00608160 holds both path strings) | `editor` | editor only |
 | Unreferenced | `scripts\graphic_main.lua` (one `Default.WriteToLog` line) | no loader found | – | no |
 
@@ -663,13 +674,15 @@ data]. The goods enum uses bare names (`Invalid = −1`, `Ware = 0`, `Settler = 
 `EitherGroup = 3`), as does the tree-set enum of `patterns.lua`: a map script that assigns a global of such a
 name changes it for the rest of the process.
 
-All script files are plain ASCII except `patterns.lua`, which has bytes above 0x7f inside a string literal
-(`"\xa7\xa7Desert meadow"`, a pattern name) [known: data]; a loader must read script files as bytes, not as
-UTF-8.
+All script files are plain ASCII except `patterns.lua`, which has raw bytes above 0x7f (not escapes) in seven
+string literals, the pattern names on lines 274 and 289 to 314 (two bytes before `Desert …`, probably `0xA7 0xA7`)
+[known: data]; a loader must read script files as bytes, not as UTF-8.
 
 Map scripts add their own globals (`player0 = 0`, enemy slot numbers, positions) and the tool-script tables
-(`quests`, `ai`, `spawningDepots`, `tutorial_data`). A global that is read but never assigned is `nil`
-(`sendMessage`, §3.7) and behaves as false / 0 at the C boundary.
+(`quests`, `ai`, `spawningDepots`, `tutorial_data`). A global that is read but never assigned is `nil` and
+behaves as false / 0 at the C boundary; the shipped scripts read four: `unlockFarm` (`C09.lua`, a callback that is
+therefore skipped), `name` and `questType` (`quest_addToLogic` in `quests.lua`) and `triggers` (`Presentation.lua`,
+dead code) [known: data].
 
 A remake that converts the property scripts to another format must still expose these globals to the map scripts
 with the same names and values, because map scripts pass them to `logic.*`.
@@ -705,10 +718,11 @@ with the same names and values, because map scripts pass them to `logic.*`.
 Map scripts are part of the simulation: `onLogicTick` runs inside the logic tick and calls functions that change
 simulation state and draw from the simulation random generator.
 
-- **Random.** `logic.getRandom` is the only script access to randomness that the shipped scripts use; each call
-  consumes exactly one value of the shared sequence ([logic-core.md](logic-core.md) §3.3). `math.random` (C
-  `rand`) is available but unused; it is not seeded by the game and not part of the simulation [known: data;
-  inferred for the seed].
+- **Random.** `logic.getRandom` is the only script access to randomness by name; each call consumes exactly one
+  value of the shared sequence ([logic-core.md](logic-core.md) §3.3). Its one call site, in the AI limiter, is never
+  executed (§3.9), so the shipped scripts draw from the simulation generator only through `logic.map_createDeposit`
+  (one draw per call: `C04.lua` once, `C09.lua` every 1800 ticks). `math.random` (C `rand`) is available but
+  unused; it is not seeded by the game and not part of the simulation [known: data; inferred for the seed].
 - **Iteration order.** The shipped scripts iterate with `ipairs` (ascending 1..n) and numeric `for` only. The one
   generic `for i, _ in t` (in `getn`) computes a maximum, so its order does not matter. No shipped script uses
   `pairs` or `next`. A remake's Lua may therefore have any hash order **for the shipped scripts**; third-party

@@ -148,7 +148,7 @@ The chunk name passed to `luaL_loadbuffer` is the path string itself (no `@` pre
 | Start-up, `nMenu::System::Initialize` `005dda30` (`fn::nMenu::System::Initialize`), after registering `menu` / `ui` / `txt` | `RunFile` at `005ddfba` | temporary | `[data]\scripts\menu.cfg` (a Lua chunk: `menu.setLanguage`, `menu.setPlayerColor`, …) | [known] |
 | Any script calling `Default.CallScript(path)` | `LuaDefault_CallScript` `005cdfb0` (`fn::LuaDefault_CallScript`) | temporary | the path argument; shipped uses: `scripts\properties\*.lua`, `scripts\mapTools\{aiLimiter,quests,spawnDepots,tutorial,tools,questTargets,cinematicFunctions}.lua` | [known] loader; uses from data |
 | World build, `nGame::System::BuildWorld` `00784d40` → `GameFile_LoadMap` `005aa7b0` | `GameScript_LoadMapScript` `005b1fe0` (`fn::GameScript_LoadMapScript`) | map-script thread (long-lived) | the map file path with its extension replaced by `.lua` (e.g. `maps\campaignMaps\C01.s2m` → `C01.lua`, `map\Presentation.s2m` → `Presentation.lua`). If the file does not exist the map-script path is cleared and all map-script events become no-ops | [known] `".lua"` + `rfind`/`substr` in `005aa7b0`, `Fs_FileExists` in `005b1fe0`; [inferred] exact path rule |
-| Info / encyclopaedia screen, `nMenu::Info::Open` `005f6310` | `GameScript_RunFile` `005b1dc0` (`fn::GameScript_RunFile`) | map-script thread | `[data]\scripts\info\i_<hex>.lua` and `[data]\scripts\info\b_<hex>.lua` (95 `i_`, 29 `b_` shipped) | [known] strings `007ef52c`, `007ef568`; [TODO] what the hex is |
+| Info / encyclopaedia screen, `nMenu::Info::Open` `005f6310` | `GameScript_RunFile` `005b1dc0` (`fn::GameScript_RunFile`) | map-script thread | `[data]\scripts\info\i_<hex>.lua` and `[data]\scripts\info\b_<hex>.lua` (95 `i_`, 29 `b_` shipped); the hex is the `*_create` id of the object the page describes (`i_12e67603` = `guardHouse`) | [known] strings `007ef52c`, `007ef568`; the id [known: data]. The pages never run in this build (`docs/sim/lua-runtime.md` §6.1) |
 | Cutscene start, `ai::camera::CutsceneCamera::LoadScript` `0078ac10` (callers `PlayAtOffset` `0078aed0`, `0078aeb0`) | `RunFile` at `0078ae2f` | temporary (registers `cutscene` on it first) | `<map dir>\<map name>_<cutscene>.lua` built by `Cutscene_BuildScriptPath` `0078a940` (e.g. `C01_1intro.lua`) | [known] loader, strings `"_"`, `".lua"`; [inferred] exact path form |
 | Map editor debug menu, `nMenu::Debug::RefillElementList` `00608160` | `RunFile` at `00608765`, `006088c3` | temporary | `[data]\scripts\editor\scatter.lua`, `[data]\scripts\editor\copypaste.lua` | [known] |
 
@@ -205,11 +205,12 @@ are fields of a library table; apart from the base library nothing is registered
 before each call [known].
 
 **Cross-check with the shipped scripts** (every `lib.name(` / `lib:name(` in the decrypted `.lua` / `.cfg`):
-every library call in the shipped scripts resolves to a registered name; there are no calls to unregistered
-`lib.` names [known: data vs. binary]. Names that no shipped script calls are marked "no" in the tables (several
+every library call in the shipped scripts resolves to a registered name, with one exception: `triggers.removeTrigger`
+in `map\Presentation.lua`, inside the never-called `onTriggerIsActive` (dead code; `triggers` is never assigned)
+[known: data vs. binary]. Names that no shipped script calls are marked "no" in the tables (several
 `ui.*`, `editor.*`, `logic.se_*` NPC functions, etc.). The `ai` table the scripts use is defined in Lua
-(`scripts\mapTools\aiLimiter.lua`), not in C. Callbacks such as `onTriggerIsActive` are called from Lua only
-(no such string in the binary) [known].
+(`scripts\mapTools\aiLimiter.lua`), not in C. Functions such as `onTriggerIsActive` that the scripts define but the
+binary never names (no such string) are called from nowhere: no script calls them either [known: data].
 
 Unnamed functions in the tables (no sadkmod declaration yet): `menu.showSacrificeEffect` `005d9550`,
 `menu.showMinimap` `005d9530`, `logic.victory_setupQuests` `005af7e0` [known]. `menu.addDebriefing` and
@@ -547,7 +548,10 @@ Registered at start-up, before `menu.cfg` runs.
 ### 3.5 `ui` (widget functions) — `LuaUi_RegisterLibrary` `004c5ab0`
 
 Registered lazily: `LuaUi_EnsureRegistered` `004c5cc0` runs it once (guard bit at `00885db8`) the first time a
-button fires its Lua event (§4.2) [known]. Adds to the same `ui` table as §3.4 [inferred].
+button fires its Lua event (§4.2) [known]. Adds to the same `ui` table as §3.4 [inferred]. Widgets are found by name
+from `nUi::Root`; when no widget has the name, `ui.setVisible`, `ui.enableObject` and `ui.fadeIn` return −1 as their
+result count [known: `004c44d0`, `004c4bc0`, `004c5730`], which Lua 5.0.2 turns into one stale value taken from above
+the stack top [inferred: `luaD_poscall`].
 
 | Lua name | C function | Ghidra name | sadkmod declaration | used by shipped scripts |
 |---|---|---|---|---|
@@ -846,7 +850,8 @@ so every hook below sees the first call [inferred].
 
 - [TODO] Meaning of `NComm_Manager_IsRole0` for map-script registration in multiplayer.
 - [TODO] Rate and argument of `onLogicTick`.
-- [TODO] What the hex part of `scripts\info\i_<hex>.lua` / `b_<hex>.lua` encodes; who loads `graphic_main.lua`.
+- [TODO] Who loads `graphic_main.lua`. (The hex part of `scripts\info\i_<hex>.lua` / `b_<hex>.lua` is the object's
+  `*_create` id, §2.2.)
 - [TODO] Whether `sd_setValue` data is what a save game keeps of the map script (a loaded save gets only
   `onLoaded`, the Lua state itself is not saved) — `GameScript_InitMapScript` clears the store at `0088b340`.
 - [TODO] Live confirmation of everything above in the running game (Frida MCP: hook `CallGlobal`, `RunFile`,

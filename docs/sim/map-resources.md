@@ -761,7 +761,9 @@ Sign doodads have `lifeTime` 3000 (one has 30000), `deleteByStreet` false and ty
   `ttlWithoutOwner = property.lifeTime`; **one `LogicRandom` draw**: `dir = rnd % 6`, the display position is the
   cell's sample vertex stepped once in `dir`, used only if it is inside the vertex grid and the property has
   `randomFinePosOffsetState`, else the sample vertex itself (the draw happens in both cases); register in layer 3;
-  set grid bit 0x80, and 0x1 if the property is `blocking`. `growth` stays -1.0 unless `full` (then 1.0). The deposit
+  set grid bit 0x80, and 0x1 if the property is `blocking`. `growth` stays -1.0 unless `full` (then 1.0); the Lua
+  binding `map_createDeposit` S 005ad7e0 then sets `growingStartSize` when not `full` (`ResetAmountFromProperty`, mode 0
+  below). The deposit
   joins `deposits` and `depositById`, and `activeDeposits` if `depletedTicks != 0 || growth < 1.0 || ttl >= 0`.
   Then: doodads obstructed at the display position are removed (§3.11) and the construction flags around the cell
   are invalidated.
