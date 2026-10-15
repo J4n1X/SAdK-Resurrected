@@ -50,7 +50,7 @@ Godot has three renderers. The maintainer runs **Forward+** on Windows; unattend
 | FXAA, SMAA, TAA, FSR 1, FSR 2.2 | yes | some | FXAA only [check] | [viewer] Quality tab; FSR 2.2 and TAA Forward+ [godot] |
 | `RenderingDevice`: compute shaders and GLSL (`RDShaderFile`, `RDShaderSource`, SPIR-V from source) | yes | yes | **no** | [api]; [godot] |
 | `CompositorEffect` (custom post passes in GLSL) | yes | yes | **no** | [api]; [godot] |
-| `Decal` nodes (projected textures) | yes | yes | no [check for 4.5] | [api]; [godot] |
+| `Decal` nodes (projected textures) | yes | yes | no | [api]; renderer comparison table [godot] |
 | `GPUParticles3D` | yes | yes | yes [check] | [api]; [godot] |
 | Occlusion culling (`OccluderInstance3D`, `Viewport.UseOcclusionCulling`) | yes | yes | yes | [source]: a CPU ray cast in the shared cull code (renderer_scene_cull.cpp:2927), not a renderer feature |
 
@@ -280,8 +280,39 @@ nothing in the shipped game depends on the editor.
 | The editor import pipeline for game content | content arrives at run time from the player's installation and from mods; nothing is imported at build time |
 | Godot's physics step as the simulation clock | §6 |
 | `Skeleton3D` per character for crowds | §5 (video memory per instance) |
+| Environment screen-space reflection for water and ice | opaque materials only, Forward+ only, traces the previous frame, no lookup offsets (§2); the remake traces its own ([renderer.md](renderer.md) §8.3) |
+| An oblique near plane for the mirror camera | `Camera3D` has perspective, orthogonal and frustum projections only; the mirror pass cuts at the water by `discard` ([renderer.md](renderer.md) §8.3) [source] |
+| A visibility notifier to gate the mirror view | its answer arrives after the frame is drawn (§6), so water entering the view would miss its reflection for a frame; the remake's own box test costs microseconds |
+| Per-instance culling, LOD or sorting of a `MultiMesh` | Godot culls, picks the LOD and sorts a `MultiMesh` as one box (renderer_scene_cull.cpp:2004); the remake batches per region and sorts blended instances itself ([renderer.md](renderer.md) §4.2, §12) [source] |
+| Visibility ranges for the terrain and settler LOD bands | measured to the instance box's centre (renderer_scene_cull.cpp:1480), per `MultiMesh` too coarse; a fading range forces the alpha pass (render_forward_clustered.cpp:978); nothing stitches cracks [source] |
+| `FontFile.LoadBitmapFont` | opens real paths only, not `vfs://`, and applies kerning the original ignores (§3) [source] |
+| `Image.LoadDdsFromBuffer` for cube maps | returns the first face only (§3) [source] |
+| Godot's BC compression | missing from exported games (§3); the conversion compresses [source] |
+| Resource packs (`LoadResourcePack`) as the mod file system | cannot be unmounted, which in-process mod unloading needs; the remake's own layers ([assets.md](assets.md) §5) |
+| Physics raycasts for picking (`HeightMapShape3D`) | the fine grid shifts odd rows by half a step and the smooth surface exists only in the shader; one ray per frame is cheap without physics bodies, which thousands of movers would need updated every frame ([renderer.md](renderer.md) §18) |
+| Physics interpolation (`MultimeshSetBufferInterpolated`) | tied to physics ticks, which a time scale never adds (§6); the renderer interpolates with the simulation's tick fraction |
+| `GltfDocument` for models at run time | the converter and the headless runner need engine-neutral data, and the GPU skinning needs raw skeleton and animation tables |
+| `TranslationServer` fallback locale | read once from a project setting at start (translation_server.cpp:603), `set_fallback_locale` not exposed to C#; the base language differs per installation, so the remake merges it into every language ([assets.md](assets.md) §8) [source] |
 
 Node classes from mod assemblies: `Godot.Bridge.ScriptManagerBridge.LookupScriptsInAssembly(Assembly)` is public in
 GodotSharp 4.7.2 (and was in RedotSharp 26.2) [api]; the remake does not call it, its mods' node types work through
 the path-less scripts of §9.
 
+## 11. Checked for later systems [2026-10-15 audit]
+
+Facilities the remake does not use yet but that fit systems still to be built; facts from Godot 4.7.2's sources.
+
+| Facility | Fact | Where it fits |
+|---|---|---|
+| `render_mode depth_prepass_alpha` | a blended material casts shadows only with it, on all three renderers (scene_shader_forward_clustered.cpp:254, gles3 rasterizer_scene_gles3.cpp:258); the engine's alpha cut in the shadow pass is 0.1 (render_forward_clustered.cpp:2818) [source] | could replace the shadow-only copies of blended foliage ([renderer.md](renderer.md) §12); compare the look first, the depth prepass may change how overlapping leaves blend |
+| Automatic mesh LOD (`ImporterMesh.GenerateLods`, `Viewport.MeshLodThreshold`) | LODs can be generated at run time (importer_mesh.cpp:570; meshoptimizer is in export builds); the LOD is picked per instance, a whole `MultiMesh` counting as one, by distance to its box; threshold 0 turns it off (render_forward_clustered.cpp:1083) [source] | fewer triangles for map objects and buildings in the refined look, also in the shadow cascades; threshold 0 keeps the faithful look |
+| `GPUParticles3D` with a process shader | process shaders get `TIME`, `INDEX`, `NUMBER`, `RANDOM_SEED`, `USERDATA1-6`, `ACTIVE`, `LIFETIME` (shader_types.cpp:368); a system is processed only while culled visible (renderer_scene_cull.cpp:2992); view-depth sorting on the GPU on Forward+ and Mobile, on the CPU from two-frame-old data on Compatibility (gles3 particles_storage.cpp:824); Godot adds up frame deltas and freezes unseen systems, while the original computes particles from elapsed time, so a process shader with the closed-form life cycle is needed [source] | particles ([renderer.md](renderer.md) §16); follows game speed and pause by itself (§6) |
+| Sky radiance | Forward+ updates the radiance whenever the sky is drawn, even if nothing reads it (render_forward_clustered.cpp:2068); a sky shader reading `TIME` or `POSITION` re-renders every frame (sky.cpp:1003) [source] | the original dome sky as a mesh instead of a sky shader would save that work per viewport, the mirror's included (a GPU-load item) |
+| Occlusion culling (`ArrayOccluder3D.SetArrays`) | occluders can be built at run time (occluder_instance_3d.cpp:150); moving them rebuilds the tree; the raycast module is built for x86_64, arm64 and wasm32 except arm64 Windows with MSVC (modules/raycast/config.py) [source] | conservative occluders per region from the terrain's lowest heights on hilly maps; the gain for a camera looking down is unverified |
+| `ResourceLoader.LoadThreadedRequest` + `LoadThreadedGetStatus` | progress per request through `vfs://` (§3) [api] | the match's loading screen |
+| `Window.ContentScaleMode` (`canvas_items`), `ContentScaleSize` | scales the whole UI with the window [api] | UI scale, once the original's layout size is known; vector fonts with MSDF stay sharp at any scale |
+| `TranslationServer.PseudolocalizationEnabled` | lengthens and marks every translated text [api] | a test for texts that do not fit in other languages |
+| `OS.AddLogger` | a C# logger receives the engine's messages and errors [api] | showing engine errors (shader errors, for example) in the game instead of only in the log |
+| `Input.SetCustomMouseCursor` + a `Timer` that ignores the time scale | [api] | the original's cursors (`ui/layout/cursors.xml`, one animated at 5 fps) |
+| Audio | `AudioStreamWAV.LoadFromBuffer` accepts PCM (format 1) and IEEE float (format 3) only (audio_stream_wav.cpp:736), so the conversion turns the original's IMA ADPCM into PCM; `AudioServer.PlaybackSpeedScale` is separate from the time scale (audio_server.cpp:1229) [source] | buses, `AudioStreamPlayer3D`, `AudioStreamPolyphonic`, `AudioStreamRandomizer` (§7) when audio is built; whether the original picks random sound variants is open |
+| `ReflectionProbe` | captures a cube map at a point; materials using Godot's specular get it; that a custom shader cannot sample it directly is [check] | the maintainer's idea for reflective surfaces away from the water and for what screen-space reflection cannot see; would need the reflecting materials to output Godot's specular |
