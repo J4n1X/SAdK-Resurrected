@@ -966,8 +966,11 @@ moves the animal to state 8 [inferred from `animals.lua`].
 ### 3.11 Doodads
 
 **Adding** `System::AddDoodadAtFinePos(type, finePos)` S 00544e00 [known]: the object gets a new Unique; its cell is
-the nearest cell to the vertex (`FinePos::ToNearestPatternCursor` S 00675500; fallback: the vertex-to-cell formula
-of §2.1 clamped to the map); a `blocking` type is snapped to the cell's sample vertex. Then by property:
+the nearest cell to the vertex (`FinePos::ToNearestPatternCursor` S 00675500 / S 00675240 [known]: from the
+truncated cell `(cx0, cy0)` it scans the 5 × 5 block `b = 0..24` with `cy = cy0 + 2 − b / 5`, `cx = cx0 + 2 − b % 5`,
+keeps the in-map candidates whose sample vertex lies at fine hex distance < 5 from the vertex (dx decremented when dy
+is odd and dx > 0), returns at once on distance 0 and otherwise takes the first minimum; only without any candidate
+the vertex-to-cell formula of §2.1 clamped to the map); a `blocking` type is snapped to the cell's sample vertex. Then by property:
 `lifeTime >= 1` -> temporary map; else not `blocking` -> static map and index; else -> blocking map and index and
 **grid bit 0x400 on its cell**. `AddDoodadAtCell` S 00545150 uses the cell's sample vertex.
 

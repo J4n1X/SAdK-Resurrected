@@ -1257,7 +1257,7 @@ generator S 0088d4ec seeded 0x5432ace0 at program start and never reseeded (§8)
 **Creation order**, which fixes which draws an object gets [known] S 005273d0, S 005b3a90, S 0053ec60, S 00543f50,
 S 00683040, S 00682ec0: the map's objects reach the renderer through the logic callbacks of `NLogic::System::PostLoad`:
 the navy first (sea routes in stored order, each with its start buoy and, when both harbor ends are set, its end
-buoy; then the harbors in stored order), then the resources (deposits in stored order, those with growth above 0),
+buoy; then the harbors in stored order), then the resources (deposits in stored order, those with growth ≥ 0, S 00542f00),
 then the doodads (the static, temporary and blocking maps, each in ascending id), then the spawn points. A gfx name
 without an element creates nothing and draws nothing. Because the generator carries on across maps, a second map in
 one session gets other yaws than the first [inferred].

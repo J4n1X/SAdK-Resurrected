@@ -254,8 +254,10 @@ The original's order (LR §4.2), with the remake's state handling:
 3. The map script is located (`script/<name>.lua` in the map package; for an original map the `.lua` with the map's
    internal name) and its **top-level chunk runs**, before any player exists and, for a save, before the saved
    players and `sd_` values are read. A map without a script skips every callback.
-4. New game: players created from the match setup; then **`onStarted()`**. Save: the logic part read, the `sd_` store
-   and the 40 quest slots restored.
+4. New game: players created from the match setup (with their start castles and initial stock), the network chests
+   (only with a game seed: offline matches have none), `MapModifier_InitAfterMapLoad` S 00673000 and the close of the
+   map-update batch; then **`onStarted()`** (new-game types and `.a2m` maps, 0x65). Save: the logic part read, the
+   `sd_` store and the 40 quest slots restored.
 5. Always: **`onLoaded()`**. Both run before tick 0 with `logic.getTick() == −1` for a new game, so `q_add` posts
    no message there.
 

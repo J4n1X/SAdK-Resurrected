@@ -215,8 +215,9 @@ types to handlers, so a mod brings render and audio behaviour for its own events
   another's order (the original orders receivers by heap address, LC §8).
 - Emission never depends on whether anyone listens, and nothing about events enters the checksum or the save.
 - After a load the simulation publishes `LoadRebuildBegin`, an `EntityAdded(reason = Loaded)` for every entity in
-  the original's post-load order (navy routes and harbours, resources, doodads, spawn points, buildings, flags,
-  streets, ..., chests; SF §3.4), `MapChanged(Reinitialised)` per layer and `LoadRebuildEnd`. The presentation builds
+  the original's post-load order (SF §3.6: buildings, remains and orders, flags and streets, the navy, ..., chests,
+  then spawn points; a fresh map has only navy routes and harbours, deposits with growth ≥ 0, animals, doodads and
+  spawn points), `MapChanged(Reinitialised)` per layer and `LoadRebuildEnd`. The presentation builds
   its mirror the same way for a new game and a load: one code path.
 
 ## 6. Views and motion samples
@@ -365,10 +366,19 @@ These matter more in the remake than in the original, because Harmony patches ca
    cinematic ends when every peer has sent `CinematicFinished`, or for everyone when the first does. **Decision for
    the maintainer.**
 2. Whether the scene handlers not yet re-read call a logic mutator (RE §10 Q18); the event table assumes not.
-3. RE gaps met while building the game server (2026-10-15): the military defaults are cited at two addresses
-   (game-commands §2.5 S 00553f40, §11 `ResetDefaults` S 005c0930); the unique id counter's initial value for the
-   first world of a process is not stated (assumed 0); a reconnect resets `S` to speed × 4 and the sub-tick to 0 on
-   every peer, which the network transport will need a way to do in `SimHost`.
+3. Settled 2026-10-16 (Ghidra): the military defaults are one source, `NPlayer::Military::ResetDefaults` S 005c0930
+   calling `MilitaryConfig::GetDefaultDistanceAllocationFactor` S 00553f40 per tier (0.1 / 0.3 / 1.0; +0x14 and +0x18
+   set to 0; +0x1c from the float at 007d877c). The unique id counter (S 00889ad0, 0 in the image) is written only by
+   `AssignNew`, by `LogicId_ResetGlobal` at `Shutdown` and by `LogicId_LoadGlobal` from `NLogic::System::Load`, which
+   the map part runs too: an empty world starts at 0, a world from a map at the map's stored counter. Still open: a
+   reconnect resets `S` to speed × 4 and the sub-tick to 0 on every peer, which the network transport will need a way
+   to do in `SimHost`.
+4. Decisions taken for the night of 2026-10-16 while the maintainer was away (to confirm): exactness against the
+   original (ids, grids, order) wherever it does not need the AI; the building command validated at execution only in
+   the refined look (the original does not check lock, tribe or construction time there); no chests offline (as the
+   original); map scripts deferred to campaign maps (the 20 shipped free-game maps have none); user maps whose stored
+   ids collide with the counter behave as the original (a duplicate within a class replaces the earlier object) with a
+   warning; no start-position shuffle.
 3. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 4. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

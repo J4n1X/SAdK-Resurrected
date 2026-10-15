@@ -50,7 +50,7 @@ generic only where it is cheap now and expensive to add later; otherwise wait un
 
 | Thing | Engine | `base` / data |
 |---|---|---|
-| Building sizes | site computation over footprint shapes | the three shapes small, medium, large |
+| Building sizes | site computation over footprint shapes | the original's size bit mask (Small 7, Medium 6, Large 4, Mine 8, Ship 16, + 64 military; corrected 2026-10-16) with its two footprints (the anchor, or anchor, W, SW, SE) |
 | Tribes, goods, buildings, settler jobs | registry types | all entries |
 | Job behaviour, production, transport, combat | component framework, fixed tick order | the behaviour components |
 | Map grid | hex grid with its six directions | — |
@@ -80,7 +80,7 @@ Example (the original's Bavarian brewery, `brauhaus`):
 ```csharp
 registry.DefineBuilding("brauhaus", t =>
 {
-    t.Size = BuildingSize.Medium;
+    t.Size = 6;   // the original's mask: Medium
     t.NameKey = "!BUILDING_BREWERY!";
     t.Cost(frame: new() { ["plank"] = 2 }, cost: new() { ["stoneBav"] = 2 });
     t.Add(new WorkplaceDef { Job = "good_brewerBav" });
