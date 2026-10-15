@@ -721,7 +721,11 @@ show the 1.5-unit facets.
   blocks step down band by band. Smoother (k = 3) does not nest with 2 and 4: it steps 3 → 1.
 - **Selection** on the CPU every frame, from the block's distance to the point the camera looks at (as the original:
   `eye = camera + 0.7 × (target − camera)`, RE §3.3), with hysteresis so a block does not flicker between levels;
-  the band distances are settings.
+  the band distances are settings. Not Godot's visibility ranges for the blocks: they measure from the camera in 3D
+  to the box centre, not from the original's eye point horizontally, and the stitching needs each neighbour's level,
+  which the shader cannot learn from Godot's choice. They do serve the far band of the refined look: a region drawn
+  whole at the coarsest level as the `visibility_parent` of its blocks replaces sixteen draw calls by one where the
+  blocks are already morphed to that shape, so the switch shows nothing.
 - **No cracks**: a block next to a coarser neighbour moves its border vertices onto the neighbour's coarser edge in
   the vertex shader (the neighbours' levels come with the instance), the same idea as the original's stitching,
   which replaces odd edge vertices by the average of their neighbours (RE §3.3).
@@ -853,7 +857,10 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Upgrade**: the old type keeps `y ≥ plane`, the target type `y ≤ plane`, the target's frame grows first; started and
   cancelled by events; completion is a removal plus an addition that keeps the colour slot.
 - **LOD**: part 0 at the top detail setting, as the original (RE §3.9: at the top preset always part 0); the
-  `<mesh>LOD0` part as a performance switch.
+  `<mesh>LOD0` part as a performance switch. Switched by Godot's visibility ranges (maintainer's suggestion,
+  2026-10-15): the full part and the `LOD0` part are two mesh instances of the building's node with adjoining ranges,
+  without margin in the faithful look (the original switches hard) and with a margin as hysteresis in the refined one
+  ([godot-capabilities.md](godot-capabilities.md) §11).
 - **Door and work clips**: `Animation` resources converted from the building's clips, two layers per building (slot 0
   door, slot 1 work) on disjoint bones (the conversion records each bone's layer per building model), so the two
   play at once without blending (an `AnimationTree` with both, or one player per layer).
