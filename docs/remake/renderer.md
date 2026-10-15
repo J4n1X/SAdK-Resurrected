@@ -760,8 +760,11 @@ colour from `sadk_fog_range` (the distances after the zoom scaling above), and G
 sky fogs the point each ray meets by its view depth (`sadk_view_forward`; sky shaders have no camera basis); the
 remake's cloud layer is unchanged. The mirror is fogged as in the original, a switch (`<Reflections fog>`, on by
 default; `sadk_mirror_fog`). The border skirt takes the stronger of the fog in effect and the original's unscaled
-edge fade. Godot's depth fog stays on with the same distances only as the fallback for materials that write no `FOG`
-(a mod's `StandardMaterial3D`). A test checks that every spatial shader of the engine and core.game writes
+edge fade. **The curve is a setting** (`<Fog curve>`, maintainer 2026-10-15: "S curve fog is a bit prettier"):
+`Smooth`, the default, is Godot's own depth fog (`smoothstep` on the distance from the eye), `Linear` the original's;
+the include computes both (global `sadk_fog_smooth`), so every pass, the dome sky and the mirror follow the choice.
+Godot's depth fog stays on with the same distances as the fallback for materials that write no `FOG` (a mod's
+`StandardMaterial3D`); with the smooth curve it is exactly the same fog. A test checks that every spatial shader of the engine and core.game writes
 `FOG = sadk_fog…` or declares `fog_disabled`. Residual: Godot mixes the fog in linear light, the original in gamma
 space; both agree at no fog and at full fog, in between Godot's is lighter (black half fogged towards 0.5: 0.37
 instead of 0.25), and the final pixel colour is known only after Godot's light pass, so it cannot be pre-corrected.
@@ -924,7 +927,7 @@ The table of RR §2.3 stands. Added here:
 | Missing visual | nothing drawn | placeholder |
 | Building LOD | part 0 | LOD parts by distance |
 | Far plane, zoom range | 500, original steps | extended |
-| Fog | the map's fixed distances | scaled with the eye distance beyond the original's 84 units (§11.1); far plane, shadow range and LOD bands follow it |
+| Fog | the map's fixed distances, linear on the view depth | scaled with the eye distance beyond the original's 84 units (§11.1); far plane, shadow range and LOD bands follow it; smooth curve (the default) |
 | Terrain detail | Faithful: flat triangles of the fine grid | Smooth (4×), Smoother (9×), Smoothest (16×) triangles on cubic patches (§10.2) |
 | Shadow preset | one map, 2048, 2 × 2 taps; the default is a light preset close to it (§8.4) | cascades, larger maps, softer filter |
 | Shader animation clock | as the original's timer (open, §7.3) | simulation-scaled |
@@ -940,7 +943,7 @@ object. Every change applies at once, including the region size and blended foli
 | Element | Attributes |
 |---|---|
 | `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
-| `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
+| `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed, Off), `curve` (Smooth, Linear); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
 | `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |
 | `AmbientOcclusion`, `DepthOfField` | `enabled`, `intensity`, `radius`, `lightAffect`; `enabled`, `strength` (follows the eye distance, easing at the original's focus speed 3, S 00696d20) |
