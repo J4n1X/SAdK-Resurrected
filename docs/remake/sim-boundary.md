@@ -140,10 +140,21 @@ public sealed class TickRecord             // immutable once published
   without touching `SimHost`'s callers. `CommandLog` (`.sadkreplay`, versioned: registry checksum, mod set, setup,
   the commands with tick, phase and sender, per-net-tick checksums) replays through `ReplayTransport`; the headless
   runner's `replay --log=` compares the checksums.
-- **Pause** [open, decision for the maintainer]: the original sets the speed to 0, runs commands at once for about
-  2 s and then swallows input (`IsGameHanging`); the remake's pausable driver gets no time while `SceneTree.Paused`,
-  so commands submitted during a pause run before the first tick after it. Counting real time in the driver while
-  paused would restore the original's behaviour.
+- **Offline pause** [the maintainer's decision 2026-10-16: as the original; implemented, sadk-remake 57cca2a; known:
+  `TogglePause` S 005da400, `SetPaused` S 005ea9b0]: `SceneTree.Paused` stops the world's Godot animations; the tick
+  driver keeps processing and gets 0 simulation seconds plus the real delta, so no tick is due. Commands run at once
+  inside `Submit`, between ticks, as the original's `QueueGameCommand` runs them inside the UI call. After 2.0 s of real
+  time without a tick the session hangs: commands without `force` are dropped, and the game screen swallows character
+  keys and left clicks on the world except the pause key (`OnChar` S 005eb180, `OnMouseButton0Down`), while the camera
+  (key-down events, wheel, right and middle buttons) stays usable. Pause is allowed only in a local session with the
+  game screen open and no cinematic; it keeps the time scale and restores max(kept, 1.0), never touches the
+  simulation's speed and never goes through a command; the speed button does not act while paused; leaving the screen
+  unpauses. The pause panel (`menuingame.xml <pause>`, read at run time) fades in and out over 1.0 s with smootherstep
+  on alpha (`AnimationAlphaFade::Update` S 004d2220); its text pulses at alpha 0.7 to 1.0, 1 Hz (S 005ecaf0), on its
+  own, since a widget's opacity is set, not multiplied by its parent's (S 004a0630). The water and the map objects
+  freeze while paused: the scene's frame delta is the logic's `frame × speed` (S 0067f6b0), which
+  `UpdateWaterAnimation` S 006a65a0 sums. Not reproduced: the original latches a speed click made while paused and
+  sends it after unpausing. Open: whether the sky, environment and particles stop as well; the pulse's phase origin.
 - **Offline commands** execute in the gap between two ticks, with the tick counter of the previous tick, as the
   original executes them inside the UI call (GC §3.1). Network commands execute at the closing tick of net tick
   `N+2`, at the start of that tick before its subsystems (GC §3.2). Both are scheduled by `SimHost`; the UI only
