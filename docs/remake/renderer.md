@@ -37,9 +37,10 @@ From the binding documents:
 
 Added here [draft]:
 
-8. **Engine code holds mechanisms, `core.game` holds the look.** Render kinds (how a category of object is drawn) are
-   engine C#. The shaders that reproduce the original's look, and the descriptors that say which model and shader an
-   entry uses, are `core.game`'s assets, replaceable like any other asset.
+8. **Engine code holds mechanisms, `core.game` holds the renderer.** The engine loads assets, expands shader includes
+   and runs the file system; the renderer itself (render kinds, the map renderer, its services) is `core.game`'s
+   client assembly, and the shaders and descriptors that reproduce the original's look are `core.game`'s assets,
+   replaceable like any other asset. Another mod uses the renderer through a dependency on `core.game`.
 9. **Every look must work on all three renderers** (Forward+, Mobile, Compatibility); features that need
    `RenderingDevice` are optional extras with a switch ([redot-capabilities.md](redot-capabilities.md) §2).
 10. **Batching technique by count**: tens of thousands of map objects go into region MultiMeshes; hundreds of
@@ -50,7 +51,8 @@ Added here [draft]:
 
 ## 2. Place in the process [draft]
 
-The renderer is part of `Sadk.Presentation` (Godot). Per frame it runs in steps 3 and 4 of the presentation frame
+The renderer is `core.game`'s client assembly `Core.Game.Renderer` (namespace `Core.Game.Rendering`; [mods.md](mods.md)
+§11a), built on `Sadk.Presentation`'s mechanisms. Per frame it runs in steps 3 and 4 of the presentation frame
 ([sim-boundary.md](sim-boundary.md) §4.2): apply each tick record's events and motion samples, then interpolate,
 animate and draw. It runs on the main thread; CPU-heavy preparation (terrain region meshes, ground decals, street
 meshes, particle simulation) runs on worker threads, with the results handed to the main thread.
@@ -68,6 +70,34 @@ Inputs:
 
 Outputs: the frame, pick results for the next frame's input, world anchor positions for HUD overlays (building
 labels, fight markers), presentation events for audio (animation sound events, impacts).
+
+### 2.1 The public surface [implemented]
+
+Other mods use the renderer as the map view does:
+
+```csharp
+var rc = new RenderContext(ctx);                              // any mod's ModContext
+var map = MapData.Load(rc, "maps/MP_2P_steinfjord.sadkmap");  // or the package's name
+var renderer = new MapRenderer(rc, new RenderSettings());
+AddChild(renderer);
+renderer.Show(map);
+AddChild(new MapCamera(renderer));                             // or a camera controller of one's own
+```
+
+| Type | What it is |
+|---|---|
+| `RenderContext` | the mod set as the renderer reads it: file system, asset cache, frozen registry, presentation documents; the original's settings XML (`GameSettings`, merged and patched); original references (`[data]\map\textures\x.dds` = `game/map/textures/x.dds`, then the path as written, then the bare-name rule of [assets.md](assets.md) §5.4) to textures and cube maps |
+| `MapData` | one map: the package, the parsed `.s2m`, `world/environment.xml`, the water preset, `MapGeometry`, the terrain patterns by map pattern id (registry `PatternDef` gfx name → `<Pattern>`), the blocks that need the mirror; mounts the package's `assets/` as a layer while open |
+| `MapGeometry` | grid to world; `HeightAt` is the plane of the drawn terrain triangle (§10.1), used for placement, picking and the camera |
+| `MapRenderer` | the node that draws a map with its own camera (horizontal field of view 50°, near plane 1); `Show`, `Clear`, `SetView(focus, eyeDistance)`, `HeightAt`, `CellAt`, `Pick`, `Report`, the presentation clock (`Time`, `Paused`); each part of the picture is a file of its own joined by partial methods (`Show*`, `Clear*`, `Frame*`, `Apply*`, `Report*`) |
+| `MapCamera` | the free orbit camera on input actions (§8.1) |
+| `RenderSettings` | the switches of §19 with their defaults; `NotifyChanged` applies them |
+| `RenderGlobals` | the global shader parameters (§7.3) |
+| `RenderLayers` | the render layers: terrain, objects, water, border, particles, overlays, sun, mirror sun, mirror marker |
+
+The mode `core.game.mapview {map, back, x, z, yaw, pitch, distance}` shows a map outside a match with a HUD of the
+switches; the asset browser opens map packages in it, and `--emit=core.game.mapview?map=…` with `--shot-after` and
+`--shot` takes unattended pictures.
 
 ## 3. Structure [draft]
 
@@ -189,8 +219,8 @@ end be their own nodes you can inspect"), without giving up the batches:
   object is made on demand, when it is selected or inspected, and freed again.
 - Proxies are made and freed by the same events as render objects (`EntityAdded`, `EntityRemoved`) and keep no state
   of their own, so they cannot drift from the simulation.
-- Node classes need their scripts registered with Godot: the proxies live in the game's own assemblies; for mods see
-  [redot-capabilities.md](redot-capabilities.md) §10.
+- The proxy node classes are `core.game`'s renderer's own node types; mods may define node types of their own
+  ([mods.md](mods.md) §7.1).
 
 ## 5. Visual descriptors
 
@@ -370,7 +400,14 @@ depends on them.
   `Camera3D.KeepAspect = Width` makes its field of view horizontal ([api]). The far plane and the zoom range are
   switches of the refined look.
 - The camera controller (zoom steps, tilt, yaw offsets, smoothing, border clamp, cutscene splines) is presentation
-  code outside the renderer (CI §3.2, §3.7); the renderer only takes the pose.
+  code outside the renderer (CI §3.2, §3.7); the renderer only takes the pose and is told the ground focus point and
+  the eye distance (`MapRenderer.SetView`), which the environment blend and the fog are measured from.
+- **Controls are input actions** (Godot's `InputMap`): the mod that owns a control declares the action with its
+  default keys and buttons when it loads, unless an action of that name exists already (a player's own binding wins),
+  and erases the actions it declared when it unloads; every control can therefore be rebound. `core.game`'s free map
+  camera (`MapCamera`, used by the map view and available to a map editor) declares `core.game.camera.forward`,
+  `back`, `left`, `right`, `turn_left`, `turn_right`, `zoom_in`, `zoom_out`, `drag` and `orbit`. Saving a player's
+  bindings belongs to the settings, later.
 - Cutscene splines are converted to tracks by running the cutscene scripts against a recording `cutscene` table
   ([lua.md](lua.md) §6.2) and are sampled with the original's Hermite rule.
 
@@ -646,7 +683,10 @@ original's relation between the view and its haze.
 
 ## 13. Buildings [draft]
 
-Single instances (a few hundred per map), with instance uniforms; the parts:
+A few hundred per map, few enough for each building to be a node tree of its own: `MeshInstance3D` parts on a
+`Skeleton3D`, driven by an `AnimationPlayer`, with instance uniforms (`SetInstanceShaderParameter`) for the per-building
+values; it is then also the building's inspectable node (§4.6). The thousands of settlers, soldiers and animals keep
+the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-15] The parts:
 
 - **House**: `house_shader.fx` RenderHouse (RE §3.9): per-vertex light, light map blended by `saturate(1.5 − D)`,
   colour map of the variation (`instance number mod 8`, the render pool slot with LIFO reuse; an upgrade keeps it),
@@ -660,8 +700,9 @@ Single instances (a few hundred per map), with instance uniforms; the parts:
   cancelled by events; completion is a removal plus an addition that keeps the colour slot.
 - **LOD**: part 0 at the top detail setting, as the original (RE §3.9: at the top preset always part 0); the
   `<mesh>LOD0` part as a performance switch.
-- **Door and work clips**: through the skinning path of §9 with two animation layers per building (slot 0 door,
-  slot 1 work) chosen per vertex by its bone's layer, which the conversion records per building model.
+- **Door and work clips**: `Animation` resources converted from the building's clips, two layers per building (slot 0
+  door, slot 1 work) on disjoint bones (the conversion records each bone's layer per building model), so the two
+  play at once without blending (an `AnimationTree` with both, or one player per layer).
   Triggered by `ActionTimerStarted` of the worker and by settlers passing `enterDistance` (presentation logic over
   motion samples), as RE §3.9 describes.
 - **Ground decal**: the `GROUND` mesh clipped against the terrain triangles under it and laid 0.01 above (the viewer's

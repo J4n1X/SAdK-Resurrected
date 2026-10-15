@@ -161,6 +161,21 @@ Costs the viewer measured or ran into [viewer, `remake-rendering.md` §4.2]:
 The original's protocols (TinCat frames, NCOMM game protocol) are byte-exact formats; the remake implements them on
 .NET sockets in a Godot-free library, like the simulation, so the headless runner and the lobby tests use them too.
 
+How the presentation uses these facilities [draft; suggestions forwarded by the maintainer 2026-10-15]:
+
+- **Text**: the engine's text service is Godot-free (Lua, the headless runner and the server resolve text keys
+  through it); the presentation loads the same tables into `Translation` resources of the `TranslationServer`, so
+  controls translate their text themselves and a language switch updates every visible label
+  ([assets.md](assets.md) §8).
+- **Input**: controls are `InputMap` actions declared by the mod that owns them, so every control can be rebound
+  ([renderer.md](renderer.md) §8.1).
+- **Audio**: Godot's buses (one per volume setting, effects on the buses) and `AudioStreamPlayer3D` for positional
+  sounds; many short one-shots of one kind share an `AudioStreamPolyphonic` player.
+- **UI styling**: `Theme` resources, referenced by the XML layouts and replaceable or patchable by mods like any other
+  asset; the layouts themselves stay XML ([mods.md](mods.md) §6.6).
+- **Animation of few objects**: `AnimationPlayer` on a `Skeleton3D` for buildings and other single instances; the
+  thousands of characters keep the GPU skinning of [renderer.md](renderer.md) §9.
+
 ## 8. Editor
 
 `EditorPlugin`, `EditorImportPlugin` and `EditorInspectorPlugin` exist for C# [api, `RedotSharpEditor.xml`]. They

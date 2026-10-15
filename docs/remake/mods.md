@@ -300,7 +300,12 @@ public sealed class BreweryYeast : IMod
 change runs, and before the JIT has compiled callers that might inline the patched methods. `ModContext` gives
 the mod its id, its logger, its settings, its folder in the virtual file system and the registration APIs of
 §6.7. A client assembly has its own entry point (`IClientMod.OnLoad(ModContext)`), called after the
-simulation entry points, with the presentation registrations (render kinds, UI parts, input actions, audio).
+simulation entry points, with the presentation registrations (render kinds, UI parts, input actions, audio). Modes,
+overlays and client code read the mod set's frozen registry (`ModContext.Registry`) and its merged and patched
+presentation documents (`ModContext.Documents`, set once the data stage is done) [implemented]; with them any mod
+draws maps through `core.game`'s renderer (`new RenderContext(ctx)`, [renderer.md](renderer.md) §2.1). A client entry
+point takes back in `OnUnload` what it gave Godot (global shader parameters, input actions), so nothing of it is left
+after an in-process unload (§9.3).
 
 ### 7.3 Harmony [draft]
 
