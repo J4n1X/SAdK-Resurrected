@@ -274,9 +274,28 @@ no node each, the same notifier without a node through `RenderingServer`). What 
 - Region batches stay (they keep the draw calls few) and Godot still culls whole regions; the notifiers drop what lies
   outside the view within the visible ones. Buildings (§13) are single instances, which Godot culls one by one
   already; their notifier switches their animation players.
-- **To measure** before it is the default for every kind: the notifiers' cost in Godot's cull pass against the saved
-  vertex work and uploads (a panning camera moves objects in and out of batches), on the maintainer's GPU (§20). Map
-  objects come first, as they are the only kind drawn today.
+- **Built for map objects** [implemented 2026-10-15]: a node-free notifier per object
+  (`RenderingServer.VisibilityNotifierCreate`) on the objects' layer, which the main and the mirror camera both see; a
+  batch counts its members apart from its drawn slots and is freed only when it has none. Godot never reports a
+  notifier that was never in view, so a new object stays drawn until two frames were drawn with its notifier and none
+  reported it. Box growth: 3 units for the one-frame-late answer (about a frame's pan at distance 150 and 60 fps); the
+  shadow's reach towards the sun, height over the tangent of the sun's elevation, capped at 40 units, rebuilt when the
+  sun turns. A switch (`<Batching visibility>`, on by default) draws every object of a visible region instead, for
+  comparison. The map view's `stats=true` logs frame times, draw calls, primitives and the visibility bookkeeping
+  every 2 s; `orbit=<degrees per second>` turns the camera for measuring.
+- **Measured** on the maintainer's GPU (RTX 4080 SUPER, Forward+, 1920 × 1200, his settings: 8192 shadow map with
+  four cascades, MSAA 2×, SSAO), Steinfjord at distance 150, main view plus mirror per frame:
+
+  | | Primitives | GPU | Render CPU |
+  |---|---|---|---|
+  | standing, notifiers off | 2.14 M | 2.42 ms | 0.91 ms |
+  | standing, notifiers on | 1.59 M (−26 %) | 2.31 ms | 1.32 ms |
+  | turning 30°/s, off | 2.15 M | 2.70 ms | 1.03 ms |
+  | turning 30°/s, on | 1.75 M (−19 %) | 2.35 ms | 1.44 ms |
+
+  Godot's cull pass pays about 0.2 ms per camera for 4838 notifiers; the remake's own bookkeeping 0.02 to 0.04 ms;
+  no object was missed. The vertices saved matter little on this GPU, where terrain, shadows and SSAO dominate; they
+  matter more where the vertex work is heavier (skinned characters) or the GPU weaker.
 
 ## 5. Visual descriptors
 
