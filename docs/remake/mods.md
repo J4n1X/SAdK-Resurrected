@@ -442,8 +442,16 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 
 ## 11. Tooling for mod authors [draft]
 
-- **SDK**: reference assemblies of the engine and `core.game` as a NuGet package; a `dotnet new` template that builds a
-  mod folder with `mod.xml`; documentation generated from the XML doc comments.
+- **SDK** [implemented 2026-10-15]: the game's `sdk/` folder holds `Mod.props`, Redot's source generator and an
+  example mod. A mod's project sets `ModId` and imports `sdk/Mod.props`; it then references the game's assemblies
+  (from the exported `data_` folder, never copied), the generator (as a "tools project", §7.1; `ModUsesGodot=false`
+  for simulation-only code) and the assemblies of every mod its `mod.xml` names as `Requires` or `Optional` (from the
+  game's `mods/`, in a step the editor's design-time build runs too, so IntelliSense completes their types). A build
+  copies the mod into `mods/<id>/`. Checked with two mods built outside the repository: a tribe in C# with
+  core.game's `TribeDef`, and a client mod with its own node type, an overlay and a menu entry. The core mods in the
+  repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
+  helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
+  `mod.xml` and `intents.xml`, the mods' XML doc files next to their assemblies, a `dotnet new` template.
 - **Lua API reference** generated from the binding attributes ([lua.md](lua.md) §10), one page per table.
 - **`Sadk.Headless validate-mods [--game-folder=] [--mod-dir=] [--enable=a,b]`** [implemented]: loads a mod set like
   the game (without client code), prints the load order, the layers, the patch report, the startup settings, every
