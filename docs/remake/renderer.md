@@ -804,8 +804,9 @@ instead of 0.25), and the final pixel colour is known only after Godot's light p
 - **What the original draws at all** ([../sim/rendering.md](../sim/rendering.md) §3.11): no LOD meshes, but a
   priority gate (an element is drawn only if its `priority` is at most the detail level, 0 or 1 by preset, so
   priority 2 to 4 elements such as grass and small plants are inferred never to be drawn in the game) and a size cull
-  (small objects vanish at a distance by `objectDetails`). The remake draws every element today; the faithful look
-  follows both once the gate is confirmed live, the refined one may keep the extra detail as a switch.
+  (small objects vanish at a distance by `objectDetails`). **Not taken over** (maintainer, 2026-10-15): the size cull
+  makes objects pop in, which looks worse than the cost it saves, and the priority gate is left out with it; the remake
+  draws every element at every distance. The LOD plan for characters and buildings (§9, §13) is agreed.
 - Godot's generated levels do not serve map objects or buildings: its simplifier prunes small separate parts, so a
   tree loses its leaf cards (almost the whole crown) and a building gets holes in walls and frames (asset browser
   comparison, 2026-10-15). Buildings keep the original's `LOD0` parts (§13); the `…LOD0` files some trees have are
