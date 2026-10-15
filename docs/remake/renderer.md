@@ -976,6 +976,48 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   **ruins** with their own decal until the remains are removed (`burnTicks`).
 - **Building sites and farms**: goods on the site (§14) and farm animals at `boneLink<i>` bones by productivity.
 
+### 13.1 As built [implemented 2026-10-16, sadk-remake 6885d9e]
+
+- **Feed**: the simulation implements `IBuildingSource.Connect(IBuildingSink)` and hands over every building, then
+  feeds `Add(BuildingSpawn)`, `AddRemains`, `Update(id, BuildingState)` (every tick while constructing or upgrading,
+  else on change), `Remove(id, Vanish | Demolish)`, `Door(id)` and `Work(id, duration, offset, speed)`
+  (`Core.Game.Rendering.Buildings`, `Renderer/Buildings/BuildingFeed.cs`). `BuildingState` keeps the original's two
+  construction phases (`Frame = 1 − remainingB`, `Build = 1 − remainingA`, `FromRemaining`), an upgrade, health (the
+  fire level comes from it), the military flag and the selection; the layer runs the demolition sink itself after
+  `Remove(Demolish)` (0.35 per second).
+- **Nodes**: one `BuildingNode` per building under the renderer's pausable `Animated` node, inspectable (type, tribe,
+  stages, cut height, colour slot, flag, fires, demolition, in view, clip); part 0 on a `Skeleton3D` bound with weight 1
+  to each vertex's first bone; the `LOD0` part through visibility ranges (part 0 only by default, the original's hard
+  switch, a variant with hysteresis, or the LOD part only; a layer property for now, a `<Buildings lod>` setting is
+  next). Materials are shared per texture pair, per-building values are instance uniforms; colour-variation slots
+  reuse the slot freed last.
+- **Shaders** (`shaders/buildings/`): house, house_cut (the cut by including `cut_none` or `cut_plane`, no define),
+  frame (also ruins), decal, soldierflag; all write `FOG`. `sadk/light_original.gdshaderinc` is split into the model
+  (`light_original_model.gdshaderinc`) and its `light()` so the house shader supplies its own light function.
+- **Construction and upgrade**: frame stages from a per-vertex stage index; the cut in model space, interpolated within
+  the tick; during an upgrade the old building keeps the part above the plane and the target the part below (one
+  plane serves both: they share the model space); the target's frame and decal replace the old ones.
+- **Ground decal**: clipped against the drawn terrain triangles on worker threads, laid again when the terrain detail
+  changes (at Faithful and Low it lies on the triangle planes, at Moderate and above on the split surface). Lit with
+  the ground's normal [inferred: the original's decal normal is not documented].
+- **Clips**: door and work in two `AnimationPlayer`s; a visibility notifier switches them off while unseen and seeks
+  them to the clock's time on entering view (§4.7). Two types move the same bones from both clips (Bavarian_Fisher
+  `DOOR`, Scots_Smeltery 12 bones): the original averages them while both play, Godot lets the later one win; only the
+  short door clip is affected.
+- **Data facts** (checked by tests): 112 `<Building>` entries, 3 with `<Production>`, 106 model files, 36 with a `LOD0`
+  file, none with `LOD1`; root values lodBias −70, lodScale 1.2, numVariations 8; only Bavarian_Castle sets
+  enterDistance; every type uses heading −30. Gaps in the shipped data: Egyptian and Scots list OlympicFlame but
+  buildings.xml has only `Bavarian_OlympicFlame`; `MediumDummy` has no entry for any tribe. All building models have
+  unit scale 1. The houses' third UV set varies per vertex, and the sampled meshes land on white texels of the colour
+  map in all 8 variations (the original's colour variation is nearly invisible). Six skeletons repeat a bone name;
+  Godot rejects duplicates, so the second gets a `#<index>` suffix and indices stay the file's.
+- **Alpha test**: `ATEST127` is AlphaFunc Greater, AlphaRef 127 (`shared.inc:668`), so Godot's threshold is 128/255;
+  this settles §24 item 6 (the map-object shaders' 127/255 lets alpha 127 through, which the original rejects).
+- **Not drawn yet**: fire and demolition particles (counted), the ruin decal (the ruin models have no `GROUND` mesh;
+  S 006d4e00 [inferred]), farm animals at `boneLink` bones.
+- **Gallery**: `core.game.buildinggallery {map, tribe, progress, upgrade, health, lod, flags, ruins, door, work,
+  demolish, …}` places a tribe's types on the flattest dry ground of a map.
+
 ## 14. Goods [draft]
 
 `ItemKind`, MultiMeshes per good mesh and region:
