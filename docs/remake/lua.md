@@ -34,7 +34,7 @@ scripts of the reference installation on 2026-10-15; **[binary]** = read in the 
 
 ### 2.1 Package: MoonSharp, in a fork of our own [draft]
 
-**MoonSharp** (Lua 5.2 dialect, pure C#, MIT) fits best:
+**MoonSharp** (Lua 5.2 dialect, pure C#, BSD 3-clause) fits best:
 
 | Need | MoonSharp |
 |---|---|
