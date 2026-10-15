@@ -3,7 +3,7 @@
 Draft of 2026-10-15. Part of the remake design set ([README.md](README.md)). What the remake's Lua layer must
 provide so that:
 
-1. `base` runs the original's property scripts in the data stage and gets the original's registry
+1. `core.game` runs the original's property scripts in the data stage and gets the original's registry
    ([binding] architecture §8);
 2. the original's map scripts (the campaign, its tool libraries, the cutscene paths) run unchanged and produce the
    original's results;
@@ -28,7 +28,7 @@ scripts of the reference installation on 2026-10-15; **[binary]** = read in the 
 - Lua numbers round like the original's: every arithmetic result in single precision, at least for scripts that
   change simulation state.
 - Simulation scripts see ordered iteration only (architecture §3, §7).
-- The engine owns the runtime and the API mechanism; `base` defines the `logic.*` functions (architecture §4).
+- The engine owns the runtime and the API mechanism; `core.game` defines the `logic.*` functions (architecture §4).
 
 ## 2. The runtime
 
@@ -213,13 +213,13 @@ mods); it reports constructs it had to rewrite.
 
 ### 3.3 The property scripts in the data stage [draft]
 
-- `base`'s definitions sub-stage runs `data.lua`, which loads the 21 others with `Default.CallScript` in their fixed
+- `core.game`'s definitions sub-stage runs `data.lua`, which loads the 21 others with `Default.CallScript` in their fixed
   order (`defineTribes`, `doodads`, `goods`, `config`, `patterns`, `animals`, `jobs`, `deposits`, `remains`,
   `buildings`, `sacrifices` with `_goodExchange` and `_campaign`, `signs`, `military`, `ship`, `sounds`, `ai`,
   `harbors`, `tribes`, `spawnpoints`; LR §4.1). File names resolve case-insensitively by name (`goods` →
   `Goods.lua`).
 - The 243 `properties.*` bindings (224 of them called by the shipped scripts, 7 739 call sites [data]) are C# in
-  `Sadk.Base`, with the original's conventions (LR §3.5): `X_create("hex")` parses up to 32 hex digits, creates the
+  `core.game` (`Core.Game`), with the original's conventions (LR §3.5): `X_create("hex")` parses up to 32 hex digits, creates the
   record with the original's defaults (`../sim/properties-data.md`) and returns the id as a signed number; setters and
   adders return nothing; `pa_create` over an existing id replaces the record, losing every earlier value, as the
   original does; a setter on an id that was never created is a Lua error (the original crashes or silently creates a
@@ -228,7 +228,7 @@ mods); it reports constructs it had to rewrite.
   `__newindex` hook; the first global that is assigned the id of a create call not yet named gives the entry its
   key (`brauhaus = properties.bp_create("...")` → key `brauhaus`). An entry no global names gets `<kind>_<hex id>`.
 - The order of create calls is recorded for the vocabulary replay (§2.2) and for the registry's definition order.
-- Property mods for the original run unchanged as `data-updates.lua` of a remake mod; they see base's globals, as
+- Property mods for the original run unchanged as `data-updates.lua` of a remake mod that requires `core.game`; they see its globals, as
   they do under sadkmod today (`../data-loading.md` §1).
 
 ## 4. Map scripts: when what runs
@@ -289,7 +289,7 @@ The original's map scripts are single-machine logic (LR §8): quest targets eval
   file-name index over all layers of the virtual file system; the folders decide only between equal names; a missing
   file runs an empty chunk ([assets.md](assets.md) §5.4).
 - `remake-1`: `require("quests")` resolves module names in the map package's `script/` folder, then the mods'
-  `scripts/` folders in load order, then `base`'s converted `scripts/mapTools/`.
+  `scripts/` folders in load order, then the converted installation's `scripts/mapTools/`.
 - An included file runs in the same state, with the same globals (the original: a new thread of the same
   `lua_State`, LR §3.2).
 
@@ -304,7 +304,7 @@ From LR §2.2 and §2.3, implemented once in the binding helpers so no binding g
   `nil` is a Lua error where the original crashes); extra arguments are ignored;
 - results: **no value** on a failed guard (`nil` in an expression, so `x == false` is not satisfied), never `false`
   or 0; positions as two integers `x, y`; players 0-based slot indices 0..7; types as the original's signed 32-bit ids
-  (resolved through the id table `base` keeps, [mods.md](mods.md) §6.4);
+  (resolved through the id table `core.game` keeps, [mods.md](mods.md) §6.4);
 - guards: player `(uint)p < 8` and active; AI player active; cell inside the map; quest slot `< 40` and in use.
 
 **Classes** of the tables below:
@@ -321,7 +321,7 @@ From LR §2.2 and §2.3, implemented once in the binding helpers so no binding g
 
 ### 5.2 `logic` and `gfx` [draft]
 
-102 + 1 functions (LS §3.6); the semantics are LR §3.6 and §3.7. The remake implements them in `Sadk.Base` over
+102 + 1 functions (LS §3.6); the semantics are LR §3.6 and §3.7. The remake implements them in `core.game` over
 the simulation's services. "Calls" counts the call sites in the shipped scripts [data], comments included; a
 function without calls is implemented with the same guards and results, but tested only by unit tests.
 

@@ -31,7 +31,7 @@ Reading order: this file, then `sim-boundary.md` (the interface everything else 
 Sadk.Formats  ──►  Sadk.Convert                                   (no Godot)
 Sadk.Engine   ──►  Sadk.Session                                   (no Godot)
      ▲                 ▲
-     │      base: Sadk.Base (no Godot) ─── Sadk.Base.Client (Godot)
+     │      mods: core.game (no Godot) ─── its client assembly (Godot); core.mainmenu, … (Godot)
      │                 ▲                          ▲
 Sadk.Presentation (Godot: renderer, audio, UI) ───┘
      ▲
@@ -42,9 +42,9 @@ Sadk.Game (the executable)          Sadk.Headless (conversion, validation, repla
 
 1. Start: settings; the installation is found and checked; the first start converts it into open formats
    ([assets.md](assets.md) §4).
-2. Mods are resolved and ordered, the virtual file system mounted (converted installation, `base`, `refined`, mods),
+2. Mods are resolved and ordered, the virtual file system mounted (converted installation, then the mods),
    assemblies loaded and their Harmony patches applied ([mods.md](mods.md) §5, §6).
-3. Settings stage; data stage (`base` runs the original's property scripts through its `properties.*` bindings; mods
+3. Settings stage; data stage (`core.game` runs the original's property scripts through its `properties.*` bindings; mods
    change entries in C# and Lua); the registry is frozen and checksummed; presentation documents (the original's
    settings XML as visual descriptors, layouts) are merged and patched.
 4. Main menu.
@@ -74,7 +74,8 @@ The proposals that change direction or cost real work, bundled:
    original process does, or refuse them ([lua.md](lua.md) §4.5).
 4. **End of a cinematic in a remake multiplayer match**: when every peer has finished it, or for everyone when the
    first does ([sim-boundary.md](sim-boundary.md) §11).
-5. **`refined` as a built-in simulation mod**: refined mode = `{base, refined}`, compatibility mode = `{base}`
+5. **`refined` as a simulation mod shipped with the game**: refined mode = `{core.game, refined}`, compatibility mode
+   = `{core.game}`
    ([mods.md](mods.md) §9.4).
 6. **Data-stage formats**: C# and Lua only in the first version ([mods.md](mods.md) §6.3).
 7. **DXT1 textures with one-bit alpha** — decided 2026-10-15: transcoded to BC3 (twice the size of BC1) instead of

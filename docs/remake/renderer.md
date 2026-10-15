@@ -37,9 +37,9 @@ From the binding documents:
 
 Added here [draft]:
 
-8. **Engine code holds mechanisms, `base` holds the look.** Render kinds (how a category of object is drawn) are
+8. **Engine code holds mechanisms, `core.game` holds the look.** Render kinds (how a category of object is drawn) are
    engine C#. The shaders that reproduce the original's look, and the descriptors that say which model and shader an
-   entry uses, are `base`'s assets, replaceable like any other asset.
+   entry uses, are `core.game`'s assets, replaceable like any other asset.
 9. **Every look must work on all three renderers** (Forward+, Mobile, Compatibility); features that need
    `RenderingDevice` are optional extras with a switch ([redot-capabilities.md](redot-capabilities.md) §2).
 10. **Batching technique by count**: tens of thousands of map objects go into region MultiMeshes; hundreds of
@@ -233,7 +233,7 @@ Optional attributes the remake understands on every descriptor element; without 
 ### 5.3 Resolution [draft]
 
 `VisualResolver` turns `(entity kind, registry entry)` into a descriptor with the original's rules (the table
-above), implemented in `Sadk.Base.Client` per entity kind, replaceable by mods (Harmony, or registering a resolver
+above), implemented in core.game's client assembly per entity kind, replaceable by mods (Harmony, or registering a resolver
 for their own entity kinds). A miss is logged once per name; the faithful mode then draws nothing, as the original
 does, the refined mode a placeholder.
 
@@ -255,7 +255,7 @@ does, the refined mode a placeholder.
 
 ### 7.1 The library [draft]
 
-`base`'s shaders, under `base/assets/shaders/` (logical `shaders/...`):
+`core.game`'s shaders, under `core.game/assets/shaders/` (logical `shaders/...`):
 
 | File | Holds |
 |---|---|

@@ -49,7 +49,7 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 | `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
 | the game's folder: `settings.xml` | the game, at the first start | the installation's path and the conversion folder [implemented, maintainer 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
-| the game's folder | the installer | the engine, the built-in mods `base` and `refined` (assemblies, shaders, the remake's own layouts) |
+| the game's folder | the installer | the engine and, in `mods/`, the mods that ship with it: `core.game`, `core.mainmenu`, `core.lobby`, `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
 | `<user data>/maps/`, `maps-received/` | the editor / transfers | map packages (§7) |
 | `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
@@ -92,7 +92,7 @@ convert side by side. A conversion folder holds [implemented]:
      state, so any further change is asked about again.
    - The record keeps two **base game hashes**: one over every converted source (content) and one over the files the
      original's build checksum covers (`scripts/**/*.lua`, `settings/**/*.xml`: the rules). They are the identity of
-     `base` that network games compare (mods.md §9.1), so a modified installation cannot pass for an original one;
+     base game that network games compare (mods.md §9.1), so a modified installation cannot pass for an original one;
      a presentation-only change (textures, sounds, texts) leaves the rules hash alone.
    - [measured] The original installation converts with 0 differences. A patched copy (fog values raised in all 31
      map `.bin` sidecars, a changed `daytimes.xml`, three ini files) shows those 34 files; `daytimes.xml` changes the
@@ -145,11 +145,10 @@ block-compressed textures; §6.2 keeps that to the DXT1 textures with one-bit al
 
 All assets are read through one virtual file system of **logical paths**. Layers, from bottom to top:
 
-1. the converted installation (`base`'s content from the player's copy);
-2. `base`'s own files (the remake's shaders, layouts, UI parts, visual-descriptor extensions);
-3. `refined`, when active;
-4. the mods' `assets/` folders, in load order ([mods.md](mods.md) §5);
-5. the current map package's `assets/` folder, while that map is loaded [binding: a map's files before the base
+1. the converted installation (the base game's content from the player's copy);
+2. the mods' `assets/` folders, in load order ([mods.md](mods.md) §5): first `core.game`'s (the remake's shaders,
+   layouts, UI parts, visual-descriptor extensions), then `refined`'s when active, then the others;
+3. the current map package's `assets/` folder, while that map is loaded [binding: a map's files before the base
    game's].
 
 A file in a higher layer **shadows** the file with the same logical path below it. That is how a texture pack
@@ -228,7 +227,7 @@ building's door clip.
   read during play (the original reads `.pfx` files at every effect start and models when objects are created).
 - **Threads**: file reading, decoding and mesh building run on worker threads; GPU resources are created on the
   main thread.
-- **Development mode**: files of mods and of `base` are watched; a changed asset is reloaded and its users notified.
+- **Development mode**: files of the mods are watched; a changed asset is reloaded and its users notified.
 
 ### 5.6 Packed assets and overlay folders [implemented, maintainer 2026-10-15]
 
@@ -275,7 +274,7 @@ everything the original's look depends on; engine-native forms only in the dispo
 | `.lua`, `menu.cfg` | converted Lua ([lua.md](lua.md) §3) | Lua host | the original source is kept beside it as `<path>.orig` for error reports |
 | `.s2m` + `.bin`, `.bmp`, `.lua`, cutscenes, briefing texts | map package (§7) | map loader | |
 | `.npc` | `.json` + palette `.png` | lobby / avatars | only when the remake has the 3D lobby |
-| `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in `base`; the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
+| `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in `core.game`; the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
 | `.psd`, `.lep`, `.ico`, `.html`, `.sav`, `.fx`, `.inc`, `.npc`, unused text tables and ini copies, the installer pictures, the two prototype maps (124 files) | not converted; the report lists each with its reason | — | FI §3.14; the prototype maps need `tools/s2m_upgrade.py` first (MF §9) |
 
 ### 6.2 Textures [draft]
@@ -400,7 +399,7 @@ change or add files without touching it (§5.6).
 
 The `.s2m` stays the format of original maps, read bit-exactly for compatibility mode. Maps made with the remake's
 editor need room for layers that mods add, so the remake's own format is a list of named, versioned sections, each
-owned by a system (engine grid layers, `base` sections, a mod's sections). A section of a mod that is not present is
+owned by a system (engine grid layers, `core.game` sections, a mod's sections). A section of a mod that is not present is
 kept unread and written back unchanged. Designing it belongs with the map editor.
 
 ## 8. What is loaded when [draft]

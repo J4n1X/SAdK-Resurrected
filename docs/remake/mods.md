@@ -10,19 +10,20 @@ here, to be confirmed; facts about the original keep the tags of the document th
 
 ## 1. What is already fixed [binding]
 
-- The base game is a mod (`base`); the engine knows no content.
+- The base game is mods: `core.game`, `core.mainmenu`, `core.lobby` (§11a); the engine knows no content. Every mod,
+  these included, can be switched off (maintainer, 2026-10-15); there is no built-in mod.
 - Load stages over all mods in dependency order: settings, data (definitions, updates, final fixes), frozen
   registry, runtime. One registry; any mod may change any entry during the data stages.
 - A manifest per mod: name, version, dependencies (required, optional, incompatible), whether it changes the
   simulation. Multiplayer requires the same simulation mods in the same versions; missing mods are transferred.
 - Three levels of change: values of registry entries, components added to types, Harmony patches.
-- Mods are precompiled assemblies loaded through `AssemblyLoadContext`; JIT runtime, no NativeAOT. Mods define no
-  Godot node classes; UI comes as `IInspectable` descriptions and XML layouts. Source mods (Roslyn) are optional and
-  later.
+- Mods are precompiled assemblies loaded through `AssemblyLoadContext`; JIT runtime, no NativeAOT. Mods may define
+  their own Godot node types (maintainer, 2026-10-15, §7.1); moddable UI comes as `IInspectable` descriptions and XML
+  layouts. Source mods (Roslyn) are optional and later.
 - The renderer is moddable through the asset lookup (assets, shaders) and Harmony, not through registry entries of
   its own.
-- `base` builds its registry entries by running the original's property scripts against its own `properties.*`
-  bindings.
+- `core.game` builds its registry entries by running the original's property scripts against its own
+  `properties.*` bindings.
 
 ## 2. The mod package [draft]
 
@@ -58,10 +59,11 @@ The manifest's simulation flag must agree with the contents: the engine refuses 
 client-only but carries a simulation assembly, a `data/` script or a `scripts/` library. The registry checksum
 (§6.5) catches anything the flag misses.
 
-`base` is a built-in mod with the same layout. Its assemblies are compiled with the game [binding]; its
-`assets/` holds the remake's own files (shaders, the remake's layouts and UI parts); the content converted from
-the player's installation is mounted below it as a layer of its own (assets.md §5.1). A second built-in mod,
-`refined`, carries the refined mode's simulation fixes (§9.4).
+The core mods (§11a) are ordinary mods with this layout that ship with the game in `<game folder>/mods/`
+[implemented 2026-10-15]. `core.game`'s
+`assets/` will hold the remake's own files (shaders, the remake's layouts and UI parts); the content converted from
+the player's installation is mounted below all mods as a layer of its own (assets.md §5.1). `refined`, a mod that
+ships with the game as well, carries the refined mode's simulation fixes (§9.4).
 
 ## 3. Manifest (`mod.xml`) [draft]
 
@@ -73,7 +75,7 @@ the player's installation is mounted below it as a layer of its own (assets.md �
   <Engine min="1.0" max="1.*"/>
   <Simulation>true</Simulation>
   <Dependencies>
-    <Requires id="base" version="^1.0"/>
+    <Requires id="core.game" version="^1.0"/>
     <Optional id="more-goods" version="^2.1"/>
     <Incompatible id="old-brewery"/>
   </Dependencies>
@@ -108,8 +110,7 @@ editor tooling. Machine-written files (conversion records, caches) are JSON.
 
 | Source | Location | Notes |
 |---|---|---|
-| built-in | inside the game (`base`, `refined`): their code is part of the game's assemblies, their own assets in `<game folder>/mods/<id>/` | always present, never transferred |
-| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip` | enabled per profile |
+| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip`; the mods that ship with the game (`core.*`, `refined`, `tools.assetbrowser`) are among them | enabled per profile; a mod with `<EnabledByDefault>true</EnabledByDefault>` is on unless the profile switches it off |
 | received from peers | `<game folder>/mods/received/<id>-<version>-<hash>/` | kept apart from the player's own; used only for matches that need them; pruned by age |
 | development | folders given with `--mod-dir=<folder>[;<folder>]` | for working on a mod without copying it; wins over a player mod of the same id |
 
@@ -121,12 +122,13 @@ problem on the mods screen; the other mods stay usable.
 
 ## 5. Load order [draft]
 
-1. Collect the enabled mods and `base`; check `Requires` (present, version in range) and `Incompatible`; any failure
-   stops with a message that names both mods.
+1. Collect the enabled mods (no mod is added by force); check `Requires` (present, version in range) and
+   `Incompatible`; any failure stops with a message that names both mods.
 2. Sort topologically: every `Requires` and every present `Optional` dependency comes before the dependent mod.
    Ties are broken by the ordinal order of the ids, so every machine computes the same order from the same set. A
    cycle stops with a message listing it.
-3. `base` is always first; `refined`, when active, comes right after `base`.
+3. `refined`, when active, comes before every mod that is not one of its own dependencies (so right after
+   `core.game`). [implemented]
 
 This one order is used everywhere a mod's position matters: the data stages, the order in which Harmony patches are
 applied, the virtual file system's layers (a later mod's file shadows an earlier one's), the merge and patch order
@@ -141,7 +143,7 @@ the counterpart of today's "hook order = load order" rule for sadkmod mods.
 |---|---|---|
 | 0 | settings, installation check, first-start conversion ([assets.md](assets.md) §4) | engine |
 | 1 | discover and resolve mods (§4, §5) | engine |
-| 2 | mount the virtual file system: converted installation, then `base`, then the mods in order ([assets.md](assets.md) §5) | engine |
+| 2 | mount the virtual file system: converted installation, then the mods in order ([assets.md](assets.md) §5) | engine |
 | 3 | load assemblies, call each mod's entry point: Harmony patches, registrations (§7) | each mod in order |
 | 4 | settings stage (§6.2) | each mod in order |
 | 5 | data stage: definitions, then updates, then final fixes (§6.3) | each mod in order, per sub-stage |
@@ -169,9 +171,9 @@ Three sub-stages; each runs over all mods in load order before the next starts [
 mod's C# part runs first (`IDataStage.Definitions` / `Updates` / `FinalFixes`), then its Lua file (`data.lua` /
 `data-updates.lua` / `data-final-fixes.lua`).
 
-`base`'s definitions sub-stage runs the original's property scripts from the converted installation
+`core.game`'s definitions sub-stage runs the original's property scripts from the converted installation
 ([lua.md](lua.md) §3): `data.lua` with the 21 files it loads, through the `properties.*` bindings, which create
-and fill registry entries. Afterwards `base` applies what the original keeps outside the property scripts
+and fill registry entries. Afterwards `core.game` applies what the original keeps outside the property scripts
 (settings XML values that the simulation reads, §8.3) and its own C# definitions (the behaviour components the
 property values configure).
 
@@ -198,7 +200,7 @@ naming the mod, file and line.
 
 - Keys are strings, unique per entry kind (`building`, `good`, `job`, `tribe`, `doodad`, `deposit`, `pattern`,
   `animal`, `sacrifice`, `sound`, `aiProfile`, ...).
-- `base`'s keys are the global variable names the original's property scripts assign the ids to (`brauhaus`,
+- `core.game`'s keys are the global variable names the original's property scripts assign the ids to (`brauhaus`,
   `woodCutter`); how they are found is in [lua.md](lua.md) §3.3. Each entry also keeps its original id (signed
   32 bit) as data [binding].
 - A mod's new entries take the prefix `<mod id>.` by convention. Defining a key that exists is an error; changing
@@ -210,7 +212,7 @@ After the final fixes:
 
 1. every reference by key (a building's job, a cost's good) is resolved to the entry; an unknown key stops loading
    with the mod and entry that named it;
-2. entries get dense runtime indices per kind. The order is definition order, which for `base` is the original's
+2. entries get dense runtime indices per kind. The order is definition order, which for `core.game` is the original's
    record creation order; tables the original iterates in **signed id order** keep a second order list, since that
    order changes simulation results ([binding] §8, `../sim/properties-data.md` §2.1);
 3. validation by each definition class (`Validate()`), e.g. a production needs a workplace;
@@ -254,7 +256,7 @@ registration first:
 ### 7.1 Assembly loading [draft]
 
 - **One `AssemblyLoadContext` per mod**, collectible (the mod set can be unloaded, §9.3). It resolves the engine,
-  `base`, Harmony, GodotSharp and the .NET libraries to the instances already loaded, in the context that loaded the
+  Harmony, GodotSharp and the .NET libraries to the instances already loaded, in the context that loaded the
   engine (in an exported Redot game that is not .NET's default context), and everything else from the mod's own
   `bin/` folder, so two mods may carry different versions of the same private library. Assemblies are read into
   memory, so zip mods work the same and no file stays locked. [implemented]
@@ -262,7 +264,7 @@ registration first:
   never its own copy of `GodotSharp` or `Sadk.Engine`.
 - Simulation assemblies must not reference Godot: the headless runner (tests, replays, checksum comparison against
   the original, [binding] §2) loads only them. The engine checks the references at load time.
-- **No ReadyToRun and no trimming** for the engine, `base` and mods. Trimming removes code mods may need;
+- **No ReadyToRun and no trimming** for the engine and the mods. Trimming removes code mods may need;
   ReadyToRun precompiles call sites with inlined callees, which Harmony cannot reach. Everything is JIT-compiled.
 - A simulation assembly that references GodotSharp is refused with a message naming the mod [implemented].
 - **Mods may define their own Godot node types** (maintainer, 2026-10-15) [implemented]. A mod project runs Redot's
@@ -281,7 +283,7 @@ public sealed class BreweryYeast : IMod
     public void OnLoad(ModContext ctx)
     {
         ctx.Harmony.PatchAll(typeof(BreweryYeast).Assembly);      // Harmony id = mod id
-        ctx.Systems.Add<YeastSpoilageSystem>(after: "base.production");
+        ctx.Systems.Add<YeastSpoilageSystem>(after: "core.game.production");
         ctx.Commands.Add<DumpYeastCommand>();
         ctx.Lua.Simulation.AddLibrary("yeast", new YeastLuaLibrary());
     }
@@ -359,7 +361,7 @@ The simulation takes everything from the registry, never from an asset file. The
 presentation file either as far as the documents show: it never waits for an animation
 (`../sim/animation-models.md` §8), and sizes, door offsets and timings come from the property scripts. Should a value
 turn up that the original's simulation takes from a presentation file (the settings XML is covered by the original's
-build checksum, `../data-loading.md` §3, which makes it worth checking), `base` extracts it into registry data during
+build checksum, `../data-loading.md` §3, which makes it worth checking), `core.game` extracts it into registry data during
 the data stage, where the registry checksum covers it. A texture pack or a replaced model therefore can never
 desynchronise a match, and the simulation runs headless without any asset.
 
@@ -404,17 +406,17 @@ whole; nothing of a mod may outlive its set:
   code is still referenced (a static event of the engine it never left, an object of it some screen still holds) is
   named; its code stays in memory until the game restarts, and the mods screen says so. Code that keeps mod objects
   must not outlive the set: a stack frame that holds a mod's object while unloading pins it, too;
-- the registry is rebuilt from scratch for the new set (data stage again; milliseconds for `base`).
+- the registry is rebuilt from scratch for the new set (data stage again; about a second for `core.game`'s property scripts).
 
 A different simulation set for a match (§9.2) is the same unload-and-load; the game does not restart.
 
 ### 9.4 Compatibility mode, refined mode [draft]
 
-- **Compatibility mode** is the match set `{base}` with presentation-only differences allowed, so the simulation is
+- **Compatibility mode** is the match set `{core.game}` with presentation-only differences allowed, so the simulation is
   the original's tick by tick. Talking to original clients additionally needs the original's build checksum of the
   installation's `scripts\**\*.lua` and `settings\**\*.xml` (`../data-loading.md` §3), which the remake computes
   from the same installation.
-- **Refined mode** is `{base, refined}`: `refined` is a built-in simulation mod holding the fixes of the original's
+- **Refined mode** is `{core.game, refined}`: `refined` is a simulation mod shipped with the game, holding the fixes of the original's
   simulation bugs (the navalcombatfix rules and their successors). Presentation refinements are not part of it:
   they are switches ([binding] rendering §2.3).
 - Further simulation mods turn a match into a modded match; it can still be refined or not.
@@ -429,12 +431,12 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   not shift anything. Each component state writes a version number with its `Save` and reads older versions in
   `Load`.
 - A component state of a mod that is absent is not dropped silently: the load is refused, naming the mod.
-- Saves of the original (compatibility mode, `../sim/save-format.md`) store original ids; `base` maps them to keys
+- Saves of the original (compatibility mode, `../sim/save-format.md`) store original ids; `core.game` maps them to keys
   through the original ids it keeps.
 
 ## 11. Tooling for mod authors [draft]
 
-- **SDK**: reference assemblies of the engine and `base` as a NuGet package; a `dotnet new` template that builds a
+- **SDK**: reference assemblies of the engine and `core.game` as a NuGet package; a `dotnet new` template that builds a
   mod folder with `mod.xml`; documentation generated from the XML doc comments.
 - **Lua API reference** generated from the binding attributes ([lua.md](lua.md) §10), one page per table.
 - **`Sadk.Headless validate-mods [--game-folder=] [--mod-dir=] [--enable=a,b]`** [implemented]: loads a mod set like
@@ -459,7 +461,7 @@ emits `engine.start`; from there the mods decide what shows. The remake itself i
 
 | Mod | Side | Holds |
 |---|---|---|
-| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). Takes over the role of `base`; `refined` requires it [planned] |
+| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. [implemented: the simulation assembly `Core.Game` with the data stage (the original's property scripts, 892 records); the rest planned] |
 | `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
