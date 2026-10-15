@@ -695,8 +695,8 @@ show the 1.5-unit facets.
   | Setting (maintainer, 2026-10-15) | k | Terrain triangles near the camera | Surface |
   |---|---|---|---|
   | Faithful | 1 | 1×, the original's three levels by distance (§10.3) | the original's flat triangles |
-  | Low | 1 | 1× | cubic patches (smoothed shape and light, no extra triangles) |
-  | Moderate (the default) | 2 | 4× | cubic patches |
+  | Low (the default, maintainer 2026-10-16) | 1 | 1× | cubic patches (smoothed shape and light, no extra triangles) |
+  | Moderate | 2 | 4× | cubic patches |
   | High | 3 | 9× | cubic patches |
   | Very High | 4 | 16× | cubic patches |
 
@@ -1086,5 +1086,29 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
    §10 Q3), the texture particle passes 1 and 2 sample (Q1), what drives the tree sway and fall states.
 6. The object alpha-test threshold: 0.5 in the viewer against "AlphaTest ≥ 127" in `map_objects.xml`, an
    off-by-one at 127 to check against the `.fx` files.
-7. The smooth terrain's density default and its cost with shadows and the mirror view (§10.2): to be measured in the
-   viewer.
+7. The smooth terrain's density default: **Low** (maintainer, 2026-10-16). Measured in the game (compat, Icebound near
+   view, 2026-10-16): Very High against Faithful changes 9 % of the pixels by more than 8 of 255 levels, the mean by
+   3.9; only 14 of 625 blocks lie in the 16× band (to 34 units from the eye point), most of the view in the original's
+   band, and where the surface does refine, the samples (one every 1.5 units) already describe hills far larger than a
+   facet. The extra triangles pay off only with detail the heightmap does not have (§25).
+
+## 25. Graphics improvements to do [the maintainer's list, 2026-10-16]
+
+The terrain looks like the original's because its information is the original's (§24 item 7). What would change the
+picture, by effect per cost, all as refined-look switches beside the faithful look:
+
+1. **Shading baked from the heightmap**: ambient occlusion or horizon shading of the terrain (valleys, creases and the
+   foot of slopes darker), computed once on the CPU per map and on height edits, read as one texture per pixel
+   (principle 14). The largest gain in depth for the least GPU.
+2. **Texture on steep slopes**: the original projects every pattern from above, so cliffs and steep slopes show
+   stretched streaks; triplanar (or slope-aligned) mapping only where the slope is steep.
+3. **Displacement per pattern** (§10.2): the detail the fine terrain levels need to pay off. Not painted by hand
+   (maintainer: "insanely annoying to make by hand"): derived from data, e.g. by integrating the original's pattern
+   normal maps into heights in the conversion, or generated from the pattern textures by a tool (CHORD, tested
+   2026-10-15 and set aside: no height output, weak terrain normals).
+4. **Less visible tiling**: variation of the patterns over large areas (macro variation, randomised tiles).
+5. **A PBR path** (roughness and normals per material, Godot's lighting) for new assets; CHORD gives usable
+   roughness and building normals (2026-10-15), set aside for now.
+6. **The interface**: scaling with the window (content scale), the original's hover look of the menu entries
+   (Head_Garamond in capitals), backgrounds for the shell and mods screens.
+
