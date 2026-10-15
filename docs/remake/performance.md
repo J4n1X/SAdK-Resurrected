@@ -2,7 +2,7 @@
 
 Draft of 2026-10-15. Part of the remake design set ([README.md](README.md)). How fast the remake has to be, how that
 is measured, and every technique the original uses to save CPU, GPU, memory or load time, with what the remake does
-with each one: keep it exactly, adopt the idea with modern means, leave it to Redot, or drop it. Rendering details are
+with each one: keep it exactly, adopt the idea with modern means, leave it to Godot, or drop it. Rendering details are
 in [renderer.md](renderer.md), the simulation interface in [sim-boundary.md](sim-boundary.md).
 
 Tags: **[binding]**, **[draft]**, and the source tags of the cited documents (sections of `../sim/*.md`);
@@ -57,7 +57,7 @@ most of them.
 ## 3. The original's techniques
 
 Recommendation codes: **keep** = reproduce exactly (simulation results, saves, the checksum or the faithful look
-depend on it); **adopt** = take the idea, implement with modern means; **Redot** = an engine mechanism does it;
+depend on it); **adopt** = take the idea, implement with modern means; **Godot** = an engine mechanism does it;
 **drop**.
 
 ### 3.1 Simulation: keep exactly

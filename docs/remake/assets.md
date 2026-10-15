@@ -19,7 +19,7 @@ AM = `../sim/animation-models.md`.
   file is hashed and converted again; a missing installation stops the game.
 - Maps bring their own assets, searched before the base game's and transferred with the map.
 - Models are not bound to `.KEX`: the asset lookup chooses the loader by format.
-- Shaders may be loaded from files, GLSL included (read as in [redot-capabilities.md](redot-capabilities.md) §2).
+- Shaders may be loaded from files, GLSL included (read as in [godot-capabilities.md](godot-capabilities.md) §2).
 
 ## 2. The original's installation [measured]
 
@@ -290,7 +290,7 @@ everything the original's look depends on; engine-native forms only in the dispo
 | `.tga` | `.png` (top-left origin; grey, RGB or RGBA as the source) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels; also `game/animals/pig.dds`, which holds a BMP, and the one encrypted `.png` |
 | `.bmp` map previews | `.png` inside the map package | — | §7 |
 | `.ogg`, PCM16 `.wav` | unchanged | `AudioStreamOggVorbis`, `AudioStreamWav` | |
-| IMA ADPCM and float `.wav` (23) | PCM16 `.wav` | `AudioStreamWav` | converted always, so the question whether Redot reads them as they are (AU §10 Q11) does not arise |
+| IMA ADPCM and float `.wav` (23) | PCM16 `.wav` | `AudioStreamWav` | converted always, so the question whether Godot reads them as they are (AU §10 Q11) does not arise |
 | `.fnt` + `_00.tga` page | `.fnt` with glyph ids mapped from Windows-1252 to Unicode, the original's padding arithmetic applied (padding and spacing then 0), a `page` line naming the page, kerning kept; page as `.png` | own reader building a `FontFile` (Godot's `LoadBitmapFont` reads only real files) | the original's glyph ids are cp1252 bytes and its reader ignores kerning and the `page` line (FI §3.6) |
 | language `.txt` tables | UTF-8 `.txt` with the original's syntax (`key<TAB>value`, later wins, `\n`) | own loader | keys verbatim, `!` included; a missing key shows the key, as in the original; `info.txt` and `dialogs.txt` are loaded by no code and not converted |
 | `engine.ini`, `network.ini`, `LobbySettings.ini`, the lobby's `;`-separated tables (`lobby/config/*.txt`) | copied as they are | — | |
@@ -435,8 +435,8 @@ content, code.
   simulation parts are in the match set ([mods.md](mods.md) §9.1), so every peer that has the map has its mods.
 - **Trust**: data-only bundled mods load without asking; code needs the player's confirmation per content hash, as a
   mod received from a peer ([mods.md](mods.md) §7.4).
-- **Godot resources in the package**: materials, themes and scenes inside a zip need the `vfs://` loader to read
-  Godot's own resource files from zip layers (in work, [redot-capabilities.md](redot-capabilities.md) §4).
+- **Godot resources in the package**: materials, themes and scenes inside a zip load through the `vfs://` loader's
+  cache copy (§5.3b).
 - **Compatibility mode**: a map with bundled simulation mods cannot be played with original clients.
 - Open: an installed mod with the same id but another content hash — the map's copy for that map (what the map was
   made with), or the installed one.

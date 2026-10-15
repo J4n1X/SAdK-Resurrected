@@ -112,7 +112,7 @@ public sealed class TickRecord             // immutable once published
 
 - The accumulator semantics are the original's (they decide the feel of speed changes). The simulation does not
   run in Godot's physics step: a lockstep stall or a pause must not produce physics frames that Godot would
-  interpolate across ([redot-capabilities.md](redot-capabilities.md) §6).
+  interpolate across ([godot-capabilities.md](godot-capabilities.md) §6).
 - **Offline commands** execute in the gap between two ticks, with the tick counter of the previous tick, as the
   original executes them inside the UI call (GC §3.1). Network commands execute at the closing tick of net tick
   `N+2`, at the start of that tick before its subsystems (GC §3.2). Both are scheduled by `SimHost`; the UI only

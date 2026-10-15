@@ -1,13 +1,14 @@
-# Redot: what the remake can work with
+# Godot: what the remake can work with
 
 Reference of 2026-10-15 for the remake design set ([README.md](README.md)): which engine version the remake builds
 on, which of its facilities the design relies on, which renderer offers what, and the engine's pitfalls the testbed
 viewer ran into. The design documents cite this file instead of repeating engine facts.
 
-Tags: **[api]** = the type or member is in the C# API reference of the installed Redot 26.2
-(`GodotSharp/Api/Release/RedotSharp.xml`, 49,813 documented members; editor types in `RedotSharpEditor.xml`);
+Tags: **[api]** = the type or member is in the C# API reference of the engine (checked against Redot 26.2, the
+engine until 2026-10-15: `RedotSharp.xml`, 49,813 documented members; editor types in `RedotSharpEditor.xml`; the
+move to Godot 4.7.2 was checked by building and running everything, §1);
 **[viewer]** = used by the testbed viewer (`sadk-remake`, commit `ea6b13e`) and seen working there;
-**[godot]** = Godot 4.5 behaviour as Godot's documentation states it, not checked against Redot here;
+**[godot]** = Godot behaviour as Godot's documentation states it, not checked here;
 **[check]** = to verify before a design depends on it. An [api] tag says the member exists, not that it behaves as
 its name suggests.
 
@@ -15,12 +16,19 @@ its name suggests.
 
 | Fact | Value | Evidence |
 |---|---|---|
-| Engine | Redot 26.2 stable, .NET build (`26.2.stable.mono.official.4f5b14aba`) | `--version` of the editor binary |
-| Godot base | **Godot 4.5.2** (`Godot Engine v4.5.2.stable.mono.redot.official` in the binary) | string in `redot.linuxbsd.editor.x86_64.mono` |
-| C# SDK | `Redot.NET.Sdk/26.2.0`; the viewer targets `net8.0` with `RollForward=Major` and `EnableDynamicLoading` | `Sadk.Viewer.csproj` [viewer] |
-| C# API assembly | `RedotSharp.dll`; namespace `Godot` (types keep Godot's names) | API reference |
+| Engine | **Godot 4.7.2 stable**, .NET build (`Engine.GetVersionInfo()["string"]` = `4.7.2-stable (official)`) | the maintainer's decision 2026-10-15 |
+| C# SDK | `Godot.NET.Sdk/4.7.2`; the packages `GodotSharp` and `Godot.SourceGenerators` 4.7.2 from nuget.org (the editor download carries the same in `GodotSharp/Tools/nupkgs`); projects target `net8.0` with `RollForward=Major` and `EnableDynamicLoading` | the project files |
+| C# API assembly | `GodotSharp.dll`; namespace `Godot` | API reference |
 
-Godot's documentation for 4.5 is the reference for engine behaviour; where Redot differs, its changelog says so.
+Godot's documentation for 4.7 is the reference for engine behaviour.
+
+**The move from Redot 26.2 (Godot 4.5.2 base) to Godot 4.7.2** (2026-10-15) changed project files, package names
+and scripts; the code needed one change: `Animation.Length` is a `double` in 4.7. Checked on 4.7.2 after the move:
+every test, the map view and the viewer giving the same pictures, the asset check, unloading the mod set in the
+process (mod node types included), the Linux and Windows exports, the custom `ResourceFormatLoader` with shader
+includes through it, `CAMERA_VISIBLE_LAYERS`, global shader parameters added at run time, and threaded loading:
+Godot 4.7 has the fix of PR #118824, and concurrent `LoadThreadedRequest` through the `vfs://` loader ran 0 crashes
+in 120 runs, against 4 in 40 on Redot 26.2 for requests sharing a sub-resource (Godot issues #111202, #118185).
 
 ## 2. Renderers
 
@@ -69,7 +77,7 @@ through the editor's import pipeline. Godot offers:
 | Video | `VideoStreamTheora` (Ogg Theora only; other codecs need a native plugin) | [api]; [godot] |
 | Archives | `ZipReader`, `ZipPacker` | [api] |
 | Resource packs | `ProjectSettings.LoadResourcePack` (mounts a `.pck` into `res://`) | [api] |
-| Godot resources | `ResourceLoader.Load`, `LoadThreadedRequest`; `ResourceSaver`; custom `ResourceFormatLoader` | [api] |
+| Godot resources | `ResourceLoader.Load`, `LoadThreadedRequest`; `ResourceSaver`; custom `ResourceFormatLoader`. Through the remake's loader they reach every asset kind under `vfs://` and merged documents under `doc://` ([assets.md](assets.md) §5.3b); concurrent threaded requests that share a sub-resource are safe from Godot 4.7 on (PR #118824) | [api]; [measured] |
 | Files | `FileAccess`, `DirAccess`; .NET `System.IO` works as well | [api]; `System.IO` [viewer] |
 
 Rules that follow:
@@ -184,23 +192,24 @@ How the presentation uses these facilities [draft; suggestions forwarded by the 
 
 ## 8. Editor
 
-`EditorPlugin`, `EditorImportPlugin` and `EditorInspectorPlugin` exist for C# [api, `RedotSharpEditor.xml`]. They
+`EditorPlugin`, `EditorImportPlugin` and `EditorInspectorPlugin` exist for C# [api]. They
 serve the remake's own tooling, for example a preview of XML layouts inside the editor ([binding] architecture §6);
 nothing in the shipped game depends on the editor.
 
 ## 9. Project and build facts
 
 - C# only; no GDScript [binding].
-- Godot registers C# node classes from the project's own assembly when it is built; classes in assemblies loaded
-  later (mods) are not registered reliably [binding] architecture §9. Mods therefore bring no node classes.
+- Godot registers C# node classes from the project's own assembly when it is built; a mod's node classes become
+  scripts without a path when their first object is made, and leave Godot's type map with their last object, so mods
+  may bring node classes and still unload ([mods.md](mods.md) §7.1) [measured on Redot 26.2 and Godot 4.7.2].
 - Exports ship the .NET runtime; mods and Harmony need the JIT, so no NativeAOT [binding] architecture §9; no
   trimming and no ReadyToRun either ([mods.md](mods.md) §7.1).
 - The repository is shared by Linux and Windows through Samba: build output goes to per-OS folders
   (`Directory.Build.props`: `obj/$(OS)`, `bin/$(OS)`, `.godot/mono/temp/obj/$(OS)`); `.uid` files belong in the
   repository [viewer].
-- Unattended checks: `redot --path <project> --rendering-driver opengl3 --rendering-method gl_compatibility -- <args>`
+- Unattended checks: `godot --path <project> --rendering-driver opengl3 --rendering-method gl_compatibility -- <args>`
   under `xvfb-run` [viewer].
-- Not available: DLSS (Redot has none) [viewer README].
+- Not available: DLSS (Godot has none) [viewer README].
 
 ## 10. Not used, and why
 
@@ -214,7 +223,6 @@ nothing in the shipped game depends on the editor.
 | `Skeleton3D` per character for crowds | §5 (video memory per instance) |
 
 Node classes from mod assemblies: `Godot.Bridge.ScriptManagerBridge.LookupScriptsInAssembly(Assembly)` is public in
-RedotSharp 26.2 [api, checked by reflection 2026-10-15], so a mod assembly loaded at run time can have its node
-classes registered as scripts. Not yet tried in an exported game; architecture §9 keeps mods without node classes
-until it is.
+GodotSharp 4.7.2 (and was in RedotSharp 26.2) [api]; the remake does not call it, its mods' node types work through
+the path-less scripts of §9.
 

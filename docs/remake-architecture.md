@@ -13,8 +13,9 @@ The renderer's own decisions and what the testbed viewer found: [`remake-renderi
 
 ## 2. Platform
 
-- **Redot** (the Godot fork) with .NET; "Godot" in this document means Redot. Rendering, input, audio, UI and
-  tools use it.
+- **Godot 4.7.2** with .NET (the maintainer's decision 2026-10-15; until then Redot 26.2, the Godot fork, on which
+  the findings of [`remake-rendering.md`](remake-rendering.md) §4 were made). Rendering, input, audio, UI and tools use
+  it.
 - The **simulation is a plain C# library** without Godot nodes. It runs headless: for tests, for replays and for
   the tick-by-tick comparison against the original's checksum (`sim/logic-core.md` §3.6).
 - **C# everywhere:** simulation, presentation, UI, tools and mods. No GDScript. One language means one build, one
@@ -115,7 +116,7 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
     remove (the RimWorld model).
 - **UI parts are components** (maintainer, 2026-10-14): the pieces panels are made of (a goods row, a progress bar
   with its label, a production section, a list of items) are reusable parts with their own layout, and screens are
-  assembled from them, so mods reuse and extend them. Editing them comfortably in the Redot editor (a preview of the
+  assembled from them, so mods reuse and extend them. Editing them comfortably in the Godot editor (a preview of the
   layout files there) is a goal for the tooling.
 - Godot's scene files (`.tscn`) serve the remake's own development, not moddable UI: they are not made for several
   mods changing one scene, and their scripts are node classes.
@@ -195,7 +196,7 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
 ## 12. Development
 
 - Repository `~/projects/sadk-remake`, local only for now (no remote).
-- The maintainer tests on a Windows PC with Redot. The Linux box shares the home folders by Samba (`[homes]`, LAN
+- The maintainer tests on a Windows PC with Godot. The Linux box shares the home folders by Samba (`[homes]`, LAN
   only), so the PC opens the repository's project through that share directly.
 - **First milestone: a model viewer.** It converts `.KEX` scenes (meshes, skeletons, animations;
   `asset-formats.md`, `sim/animation-models.md`) and shows them, so the conversion is checked by eye before

@@ -132,7 +132,7 @@ What the viewer had to get right beyond the formulas of the `sim/` documents:
   keeping its last (`animation-models.md` §3.14). The meshes' own material textures are never used, and some are not
   in the install (`Scot.bmp`, `bavarian.b3d (Copy).bmp`).
 
-## 4. Redot findings
+## 4. Engine findings (made on Redot 26.2, the engine until 2026-10-15)
 
 ### 4.1 Pitfalls
 

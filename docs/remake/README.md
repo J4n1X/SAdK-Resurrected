@@ -1,6 +1,6 @@
 # Remake design set (draft)
 
-Draft of 2026-10-15 for the remake of *Die Siedler: Aufbruch der Kulturen* in Redot/C#. It builds on the two binding
+Draft of 2026-10-15 for the remake of *Die Siedler: Aufbruch der Kulturen* in Godot/C#. It builds on the two binding
 documents, [`../remake-architecture.md`](../remake-architecture.md) and [`../remake-rendering.md`](../remake-rendering.md),
 and on the behaviour specifications in [`../sim/`](../sim/README.md), and turns them into a design for the parts the
 game is built from first: the renderer, the asset pipeline, the mod system and the Lua surface. It was written after
@@ -13,7 +13,7 @@ marked **[binding]**. Facts about the original carry the tags of the documents t
 
 | Document | What it fixes |
 |---|---|
-| [redot-capabilities.md](redot-capabilities.md) | Redot 26.2 (Godot 4.5.2): which engine facilities the design relies on, checked against the installed API; what each renderer offers; the pitfalls the viewer found |
+| [godot-capabilities.md](godot-capabilities.md) | Godot 4.7.2 (Redot 26.2 until 2026-10-15): which engine facilities the design relies on, checked against the installed API; what each renderer offers; the pitfalls the viewer found |
 | [sim-boundary.md](sim-boundary.md) | the boundary between the deterministic simulation and the presentation: clock, tick records (events and motion samples), read-only views, commands as the only way back, random streams, guards |
 | [renderer.md](renderer.md) | the world renderer: render objects with identity in batches, render kinds, visual descriptors, the shader library and its loading, views and passes, GPU skinning, every kind of object, picking, switches, moddability, what is taken over from the viewer |
 | [assets.md](assets.md) | the first-start conversion and the check at every start, the virtual file system with its layers, formats after conversion, map packages, what is loaded when |

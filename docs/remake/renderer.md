@@ -1,7 +1,7 @@
 # Remake: renderer
 
 Draft of 2026-10-15. Part of the remake design set ([README.md](README.md)). The architecture of the remake's world
-renderer in Redot: how it follows the simulation, how objects get identity and are still drawn in batches, how
+renderer in Godot: how it follows the simulation, how objects get identity and are still drawn in batches, how
 content chooses what is drawn (visual descriptors), how shaders are organised and loaded, how every kind of thing on
 the map is drawn, and what is moddable at which level. The testbed viewer (`sadk-remake/src/Sadk.Viewer`) proved
 that the picture can be made; this document says how the game's renderer is built, and which of the viewer's parts
@@ -12,7 +12,7 @@ components, C# only) and [`../remake-rendering.md`](../remake-rendering.md) (sha
 animation, faithful look with switches, not reproduced features, findings). Behaviour to reproduce:
 [`../sim/rendering.md`](../sim/rendering.md), [`../sim/world-objects-rendering.md`](../sim/world-objects-rendering.md),
 [`../sim/particles.md`](../sim/particles.md), [`../sim/animation-models.md`](../sim/animation-models.md). Engine facts:
-[redot-capabilities.md](redot-capabilities.md). Simulation interface: [sim-boundary.md](sim-boundary.md).
+[godot-capabilities.md](godot-capabilities.md). Simulation interface: [sim-boundary.md](sim-boundary.md).
 
 Tags: **[binding]**, **[draft]**, source tags of the cited documents; RE = `../sim/rendering.md`, WO =
 `../sim/world-objects-rendering.md`, PA = `../sim/particles.md`, AM = `../sim/animation-models.md`, RR =
@@ -44,7 +44,7 @@ Added here [draft]:
    adds the map renderer and its layers, and its shaders and descriptors reproduce the original's look, replaceable
    like any other asset. A later lobby renderer builds on the same base.
 9. **Every look must work on all three renderers** (Forward+, Mobile, Compatibility); features that need
-   `RenderingDevice` are optional extras with a switch ([redot-capabilities.md](redot-capabilities.md) §2).
+   `RenderingDevice` are optional extras with a switch ([godot-capabilities.md](godot-capabilities.md) §2).
 10. **Batching technique by count**: tens of thousands of map objects go into region MultiMeshes; hundreds of
     buildings are single instances; thousands of characters go into skinned MultiMeshes. One technique does not fit
     all three.
@@ -305,7 +305,7 @@ does, the refined mode a placeholder.
   `RenderingServer` mesh per sub-mesh and variant. Not into node trees: glTF scene nodes are only an intermediate.
 - **Vertex channels**: position, normal, UV (diffuse), UV2 (light map), `CUSTOM0` (bone indices, or the colour-map
   texel for buildings), `CUSTOM1` (bone weights), `COLOR` (vertex colour, used by trees). Custom channels are
-  declared with their explicit format flag ([redot-capabilities.md](redot-capabilities.md) §3).
+  declared with their explicit format flag ([godot-capabilities.md](godot-capabilities.md) §3).
 - **Skeletons and animations**: kept as C# tables for the GPU skinning of §9 and for CPU queries (attachment bones);
   no `Skeleton3D`.
 - **Textures**: `Texture2D` per logical path; colour-index maps flagged for point sampling.
@@ -360,7 +360,7 @@ including `objects/doodad.gdshaderinc`). The viewer's wrapper files are this sha
   AssetKinds.Shader)` and `ResourceLoader.Load<Shader>("vfs://shaders/x.gdshader")` give the same resource, and
   Godot's own preprocessor resolves `#include "vfs://shaders/sadk/globals.gdshaderinc"` or an include relative to the
   including file through the file system, once per file, with errors listed per include file and line
-  ([redot-capabilities.md](redot-capabilities.md) §4).
+  ([godot-capabilities.md](godot-capabilities.md) §4).
 - A mod that replaces `sadk/light_original.gdshaderinc` changes the light of every object shader; one that
   replaces `objects/tree.gdshader` changes trees only. A shader recompiles when one of its includes changes.
 - Shaders compile at match load (behind the loading screen) for every descriptor of the match, so no frame stalls.

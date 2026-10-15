@@ -272,7 +272,7 @@ registration first:
 
 - **One `AssemblyLoadContext` per mod**, collectible (the mod set can be unloaded, §9.3). It resolves the engine,
   Harmony, GodotSharp and the .NET libraries to the instances already loaded, in the context that loaded the
-  engine (in an exported Redot game that is not .NET's default context), and everything else from the mod's own
+  engine (in an exported Godot game that is not .NET's default context), and everything else from the mod's own
   `bin/` folder, so two mods may carry different versions of the same private library. Assemblies are read into
   memory, so zip mods work the same and no file stays locked. [implemented]
 - A mod references the engine through reference assemblies of the engine SDK (a NuGet package for mod authors),
@@ -282,11 +282,11 @@ registration first:
 - **No ReadyToRun and no trimming** for the engine and the mods. Trimming removes code mods may need;
   ReadyToRun precompiles call sites with inlined callees, which Harmony cannot reach. Everything is JIT-compiled.
 - A simulation assembly that references GodotSharp is refused with a message naming the mod [implemented].
-- **Mods may define their own Godot node types** (maintainer, 2026-10-15) [implemented]. A mod project runs Redot's
+- **Mods may define their own Godot node types** (maintainer, 2026-10-15) [implemented]. A mod project runs Godot's
   source generators as a "tools project" (`IsGodotToolsProject=true`): the method, property and signal bridges are
   generated, so `_Ready` and `_Process` overrides are called, but no `res://` script paths (a mod's files are not in
   the game's project, and the paths of two mods would collide) and no game entry point. A mod's node type becomes a
-  script without a path when its first object is made; such a script is reference-counted and leaves Redot's type map
+  script without a path when its first object is made; such a script is reference-counted and leaves Godot's type map
   with its last object, so the mod's code unloads once its views are freed, in editor runs and exports alike
   [tested 2026-10-15]. The shared build rules are `src/Mods/Mod.props` in sadk-remake.
 - **A mod may use the types of the mods it depends on** [implemented]. Its reference to an assembly of a dependency
@@ -465,21 +465,21 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 
 ## 11. Tooling for mod authors [draft]
 
-- **SDK** [implemented 2026-10-15]: the game's `sdk/` folder holds `Mod.props`, Redot's source generator and an
+- **SDK** [implemented 2026-10-15]: the game's `sdk/` folder holds `Mod.props`, Godot's source generator and an
   example mod. A mod's project sets `ModId` and imports `sdk/Mod.props`; it then references the game's assemblies
   (from the exported `data_` folder, never copied), the generator (as a "tools project", §7.1; `ModUsesGodot=false`
   for simulation-only code) and the assemblies of every mod its `mod.xml` names as `Requires` or `Optional` (from the
   game's `mods/`, in a step the editor's design-time build runs too, so IntelliSense completes their types). A build
   copies the mod into `mods/<id>/`; `dotnet run` starts the game with the mod switched on for that run (the game's
-  `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Redot's options, for instance the
+  `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Godot's options, for instance the
   installation and conversion folder when the game folder has no `settings.xml` yet). `sdk/README.md` is the guide
   for mod authors. In the source repository the SDK builds against the repository's projects (a repository-only
-  `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Redot editor.
+  `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Godot editor.
   **The editor's view is checked** [implemented]: `tools/check-sdk.sh <game folder>` opens mod projects with Roslyn's
   `MSBuildWorkspace`, the loader of the editor's language server (a design-time build, then the compiler with the
   generators and analyzers), and compares references and diagnostics: the shipped example clean with `Core.Game`
   referenced, a misspelled `TribeDef` member exactly CS0117, a client mod with its own node type clean, the same
-  without `partial` exactly Redot's GD0001, the repository's example clean. `tools/export-game.sh` runs it after
+  without `partial` exactly Godot's GD0001, the repository's example clean. `tools/export-game.sh` runs it after
   every export; with only the SDK and the game files, a mod author's machine needs nothing else but .NET's
   reference packs. **Descriptions** [implemented]: the code's doc comments are XML (`<summary>`, `<para>`, `<c>`,
   `<code>`), every assembly writes its documentation file, and the files travel with the dlls (the mods' `bin/`, the
