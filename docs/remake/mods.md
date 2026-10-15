@@ -38,7 +38,8 @@ the manifest.
                               shaders, presentation XML (visuals, layouts, UI parts), localisation, fonts
   patches/                    XML patch files applied to the merged presentation documents (§6.6)
   scripts/                    Lua libraries that map scripts may `require` (lua.md §4.6)
-  maps/                       map packages the mod ships (campaigns, scenarios)
+  assets/maps/<name>.sadkmap  map packages the mod ships (campaigns, scenarios); a folder of that name changes another
+                              map's package (assets.md §5.6)
 ```
 
 What a part changes, and therefore whether the mod is a simulation mod:
@@ -335,7 +336,8 @@ for it.
 - **Render kinds**: new drawing techniques as C# classes registered from a client assembly
   ([renderer.md](renderer.md) §4.4). This is code registration, not a registry entry, in line with [binding] §3.
 - **UI**: layouts and UI parts (XML plus patches), component panels through `IInspectable` [binding §6].
-- **Audio, localisation, fonts**: assets and merged tables.
+- **Audio, localisation, fonts**: assets and merged tables; texts per key in a game and a map scope
+  ([assets.md](assets.md) §8), maps' texts and files through overlay folders (assets.md §5.6).
 
 ### 8.3 The simulation never reads an asset [draft]
 

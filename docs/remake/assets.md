@@ -230,6 +230,23 @@ building's door clip.
   main thread.
 - **Development mode**: files of mods and of `base` are watched; a changed asset is reloaded and its users notified.
 
+### 5.6 Packed assets and overlay folders [implemented, maintainer 2026-10-15]
+
+A zip in the file system, such as a map package (`maps/<name>.sadkmap`), is a **packed asset**: opened, it is a file
+system of its own. A **folder with the same logical path** as the packed asset, in any layer, is laid over its
+contents: a file there shadows the package's file of the same inner path, a new one adds to it. Overlay folders
+stack in layer order on top of the package, so a later mod wins; the package file itself is never changed.
+
+```
+english/assets/maps/MP_2P_steinfjord.sadkmap/locale/en/map.txt   adds an English text table to the map
+fixes/assets/maps/C01.sadkmap/locale/de/map.txt                  shadows the map's own German texts
+```
+
+What a map package's overlay changes counts like the package's own content: an overlay of `world/` or `script/` makes
+a different map, so the map's identity in multiplayer is computed over the package as seen through its overlays
+(§7); texts, previews and the map's own assets only change the presentation. The game's file system mounts the
+`assets/` folder of the opened package, overlays included, as layer 5 (§5.1) while the map is loaded.
+
 ## 6. Formats after conversion
 
 Answers [binding] architecture §13 item 4. The rule: open formats that modders can edit with common tools, keeping
@@ -339,7 +356,9 @@ everything the original's look depends on; engine-native forms only in the dispo
 ## 7. Map packages [draft]
 
 A map is one file, `<name>.sadkmap` (a zip; a folder in development), so that it is shared, hashed and cached as a
-unit.
+unit. It lives in the file system at `maps/<name>.sadkmap`: the converted original maps in the converted tree, a
+mod's maps in its `assets/maps/`, received and editor maps in their own layers; overlay folders of the same name
+change or add files without touching it (§5.6).
 
 ```
 <name>.sadkmap
@@ -399,6 +418,21 @@ kept unread and written back unchanged. Designing it belongs with the map editor
 
 **Language**: one shipped folder (`de`) in the reference installation; the remake's language is its own setting,
 defaulting to the installed folder. Text tables, fonts, localised textures and the 540 voice files follow it.
+[draft, agreed with the maintainer 2026-10-15] Texts are looked up per key in two scopes:
+
+- **game scope**: `game/language/<lang>/*.txt` of every layer, merged per key in layer order (a mod's table wins over
+  the base game's);
+- **map scope**: the map's `locale/<lang>/map.txt`, as seen through its overlay folders (§5.6).
+
+A map's script and briefings look in map scope first, then game scope; the game's own UI only in game scope. Each
+lookup falls back per key: the chosen language, then the installation's language, then the key itself, as the
+original shows a missing key. A translation mod therefore ships `game/language/en/` (which also makes the language
+selectable) and needs map-scoped files only for a map's keys of its own; the campaign's keys (`B<n>_…`, `C<nn>…`)
+are global, so a translated `briefings.txt` covers the campaign. Texts never change the simulation, so a translation
+is a client-only mod; the one text-derived value the simulation uses, the number of briefing pages
+(`txt.isValid`, [lua.md](lua.md) §6), comes from the map's base language. Voices
+(`game/language/<lang>/voices/<key>.ogg`) fall back the same way; a text-only translation keeps the original voices.
+The original fonts hold Windows-1252 glyphs only: a translation into another script brings its own font.
 
 ## 9. Open points
 
