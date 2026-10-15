@@ -1024,7 +1024,8 @@ use them as model ids [known for the cached decompile].
 1. `CanSearch(from, to, arg)` false -> state 3;
 2. store `from`, `to`; if `HexDistance(to, from) == 1` -> state 2 without a search;
 3. `PrepareSearch()`; reset: `bestG` = -1 everywhere, both lists emptied, open list = the node of **`to`** with
-   `g = 0` [inferred: the arguments are garbled in the decompile], `bestG[to] = g`;
+   `g = 0` and `h = f = HexDistance(to, from)` [known: disassembly S 0067696f..0067699c, the node is built from
+   the second argument], `bestG[to] = g`;
 4. repeat `Step` until it returns false.
 
 `Step` S 00676700 [known]:
@@ -1067,8 +1068,9 @@ end is a building and the other end is that building's own flag the path is [to,
 `NMap::AStar` with the path's mode byte as `arg`, and `BuildPathReversed(randomize = true)`. The mode byte is
 `FreePath.astarMode` (+0x20, 0 at construction S 007750d0); as `arg` of the base step cost it is `ignoreBlocking`,
 so a set byte lets the path cross cells that are not walkable. It is set from the `bool` argument of the settler's
-`MoveToCell` S 00658000 [inferred: that function stores the bool in a byte of the settler's movement; that this
-byte is `FreePath.astarMode` was not followed here]; which callers pass it is `docs/sim/settlers-jobs.md` §3.8.3.
+`MoveToCell` S 00658000, which writes 1 to `movement +0x70` = `Movement.rough` (+0x10) `.path` (+0x30)
+`.freePath` (+0x10) `.astarMode` (+0x20) when the argument is true [known: disassembly S 0065804c]; which callers
+pass it is `docs/sim/settlers-jobs.md` §3.8.3.
 
 **Animals** `NResources::AnimalAStar::GetStepCost` S 00543490 [known]: base cost; then +4 if `b` has the mining bit
 0x10, +2 if `b` has the street bit 0x2, +2 if an animal is on `b`; and with `avoidBuildings`: +2 if a flag is on
