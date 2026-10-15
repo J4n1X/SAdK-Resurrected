@@ -227,7 +227,18 @@ mods); it reports constructs it had to rewrite.
 - **Registry keys** come from the globals ([mods.md](mods.md) §6.4): during the data stage the globals table has a
   `__newindex` hook; the first global that is assigned the id of a create call not yet named gives the entry its
   key (`brauhaus = properties.bp_create("...")` → key `brauhaus`). An entry no global names gets `<kind>_<hex id>`.
-- The order of create calls is recorded for the vocabulary replay (§2.2) and for the registry's definition order.
+- **`X_createNamed(name)`** [implemented, the maintainer's request 2026-10-15], the remake's addition beside every
+  `X_create` (13 functions): the same record, its id derived from its name, so a mod needs no hex id of its own and
+  two mods do not collide by accident. The key is the name when it holds a dot (`"marble.marble_00"`), else the
+  running mod's id, a dot and the name. The id is the 32-bit FNV-1a hash of `<kind>:<key>`; when that id is taken, the
+  next value of a full-period linear congruential sequence (`x · 1664525 + 1013904223 mod 2³²`) is tried, which visits
+  every 32-bit value once, so a free id is always found while one exists; `-1`, the original's "no record", is never
+  handed out; a kind whose ids are all taken is a Lua error. The same name gives the same id again (over it a pointer
+  table gets a new record, as `X_create` over an existing id); a global assigned the id does not rename a named
+  record. The result depends only on the name and on which ids are taken, which the load order fixes: two mods whose
+  names hash to the same id get their ids in load order.
+- The order of create calls (named ones included) is recorded for the vocabulary replay (§2.2) and for the registry's
+  definition order.
 - Property mods for the original run unchanged as `data-updates.lua` of a remake mod that requires `core.game`; they see its globals, as
   they do under sadkmod today (`../data-loading.md` §1).
 
