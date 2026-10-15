@@ -46,7 +46,8 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 | Location | Written by | Holds |
 |---|---|---|
 | the installation | never | the player's copy of the original |
-| `<user data>/converted/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from) |
+| `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
+| the game's folder: `settings.xml` | the game, at the first start | the installation's path and the conversion folder [implemented, maintainer 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
 | the game's folder | the installer | the engine, the built-in mods `base` and `refined` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
@@ -54,7 +55,12 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 | `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
 
 `<user data>` is Godot's `user://` of the remake, a custom user folder named `sadk-remake` (`%APPDATA%\sadk-remake`
-on Windows, `~/.local/share/sadk-remake` on Linux); the headless runner computes the same folder. The `<install id>`
+on Windows, `~/.local/share/sadk-remake` on Linux); the headless runner computes the same folder. **The conversion
+folder** is the player's choice at the first start (maintainer, 2026-10-15): the game suggests
+`%LOCALAPPDATA%\sadk-remake\converted` on Windows (not the roaming folder, for 1.3 GB) and `<user data>/converted`
+elsewhere, shows the free space, and keeps the choice with the installation's path in `settings.xml` next to the
+executable (the project folder when run from the editor; the user folder when the game folder is not writable).
+Deleting `settings.xml` makes the next start ask again; `--conversion=<folder>` sets it for unattended runs. The `<install id>`
 is a hash of the installation's path and its identity, so two installations (another language, another patch)
 convert side by side. A conversion folder holds [implemented]:
 
@@ -267,7 +273,9 @@ everything the original's look depends on; engine-native forms only in the dispo
   end points, opaque texels first. The largest opaque error is 42 (0.34 % of the opaque texels differ by more than
   16); 85.8 % of the transparent texels stay black, the others take the block colour nearest to black, which only
   shows as the colour bilinear filtering blends in at cut-out edges (the original blends black there). The report
-  gives both errors per texture; RGBA8 stays the fallback should a fringe ever be visible (§9).
+  gives both errors per texture. The maintainer compared originals and transcodes side by side (2026-10-15): the
+  difference is barely noticeable, BC3 stays. Keeping the BC1 bytes exactly would need an own upload through
+  `RenderingDevice` as BC1 with alpha (Godot's `ImageTexture` path uses the RGB variant on Vulkan); not needed now.
 - **Missing mip chains** of 3D textures are completed at conversion: the last level present is decoded, box-filtered
   down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3 or A8R8G8B8). [measured] 226
   textures have no chain and `game/map/objects/buoy.dds` stops after three levels; 114 are completed (the 95
@@ -402,8 +410,6 @@ defaulting to the installed folder. Text tables, fonts, localised textures and t
    (`../sim/tribes-content.md` §10 Q5, Q6; `../sim/particles.md` §10 Q3).
 3. Reference editions of other languages and patch levels (§4.1): an English or French installation would add its
    fingerprint and settle §9 item 5 at the same time.
-4. The colour the BC3 transcode gives transparent texels (§6.2): the nearest block colour, or black at the cost of
-   opaque error, or RGBA8 for the 234 textures.
 5. Other retail languages: folder names and whether their installations differ beyond `language\` (an English or
    French installation would settle it).
 6. The water-preset index of `MapInfo +0x1cc` and the `.bin` field names (MF §4.2, §4.17).
