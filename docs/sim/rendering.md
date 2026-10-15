@@ -487,23 +487,104 @@ ones too) becomes `d2` (flag bit 1 clear) or `1 - d2` (flag bit 1 set) with
 `TERRAIN_TRANSITION_2TEX` state block in `shared.inc` takes alpha from the vertex colour; the shader path never
 uses it.
 
-**Level of detail and stitching** [known] S 006b55e0 (disassembly), S 0068a4a0, S 006bd940; the `eye` line is
-read from a decompile with lost stack variables [inferred]. Per visible block:
+**Level of detail and stitching.** The unit is the terrain block (`TerrainCell`): 4 × 4 cells (S 00881e7c,
+S 00881e80, constant), clamped at the map's last row and column (`CTerrainCellMgr::CreateTerrainCells`
+S 006b73b0) [known].
+
+*Selection* (`CLandscape::UpdateVisibleCells` S 0068a4a0, `GridQuadTree::Cull` S 006db440,
+`TerrainCell::UpdateLOD` S 006b55e0) [known, disassembly], once per frame from the main camera (the only caller
+chain is `Scene::Update` S 006805e0 → `CMapRenderer::Update` S 006888f0, besides the preview texture
+S 00681300), so the shadow and reflection passes draw the levels chosen for the main view [inferred]:
 
 ```
-eye         = cameraPos + 0.7 * (cameraTarget - cameraPos)
-lodDistance = lodDistanceSetting * (detailFactor * 5 + 0.25) + 1.15 * sqrt((4*stepX)^2 + (4*stepZ)^2)
-lod         = min(2, trunc(distanceXZ(eye, blockCentre) / lodDistance + 0.5))       // 0 if lodDistance <= 0
+eye         = A + 0.7 * (B - A)        // A, B: device+0x1b4 methods +8 and +0xc (position, target [inferred])
+lodDistance = landscape+0x38 * landscape+0x3c + 1.15 * sqrt((4*stepX)^2 + (4*stepZ)^2)
+d           = sqrt((c.x - eye.x)^2 + (c.z - eye.z)^2)     // c: centre of the block's bounding box; y ignored
+lod         = min(2, trunc(d / lodDistance + 0.5))         // FPU control word 0xC00 (chop) around FISTP
 ```
 
-`lodDistanceSetting` is `CLandscape +0x38`, set from a global that holds `<Landscape lodDistance="50.0">`
-[inferred from the global's name; known, file for the value]; `detailFactor` is the detail setting clamped to
-0..1 S 00688220. The same sum is the radius argument of the block culling. The draw batch has per-LOD index
-and vertex tables; when a visible neighbour has a lower `lod` value than the block, the neighbour gets the
-stitch bit of the shared edge, and a patch of a block with `lod` < 2 that touches a stitched edge has its odd
-edge vertices replaced by the average of their two neighbours (height and normal) so that no crack opens.
-[TODO] not established: the vertex counts per LOD (tables at `TerrainDrawBatch +0x74`, `+0x80`); read the
-table builder.
+- `landscape+0x38` is copied by the `CLandscape` constructor (S 0068ada8) from `g_Landscape_LodDistance`
+  (S 0088d478, 0 until `<Landscape lodDistance>` is read; `Landscape_LoadSettingsXml` S 00689bf0;
+  `game/settings/graphics.xml`: 50.0, one global value) [known].
+- `landscape+0x3c` = `groundDetail * 5 + 0.25`, with `groundDetail` clamped to 0..1 (`CMapRenderer::SetDetailFactor`
+  S 00688220; constructor value 1.0). `groundDetail` is `Settings+0x20`, read through `SceneSettings` method +4
+  (S 00695c50; vtable S 007f9bfc) by `Scene::ApplySceneSettings` S 0067f500; the presets 0..4 set it to 0, 0.25,
+  0.5, 0.75, 1 (`Settings::ApplyQualityPreset` S 00695860). It is not `Settings.detail` (method +0x5c), which
+  drives the map objects' priority gate [known].
+- `stepX`, `stepZ` are the map scaling (`g_MapTileStepX` S 0088cf4c and +8; `graphics.xml <Map scaling="1.5 0.001
+  1.2990375">`), so the second term is 9.128 units. The same `lodDistance` is the radius argument of the block
+  culling [known].
+- The level is computed anew every frame, without hysteresis, for culled blocks as well
+  (`GridQuadTree::HideSubtree` S 006da740), and switches hard: a change of level clears the "vertices built" flag
+  (bit 3) of every patch of the block, and the next draw rebuilds them [known].
+- Bands: level 0 while `d < 0.5 · lodDistance`, level 1 while `d < 1.5 · lodDistance`, else level 2. Per preset
+  (`lodDistance` / the two borders, world units): 0: 21.6 / 10.8, 32.4; 1: 84.1 / 42.1, 126.2; 2: 146.6 / 73.3,
+  219.9; 3: 209.1 / 104.6, 313.7; 4: 271.6 / 135.8, 407.4 [known, computed]. At the top preset and the original's
+  zoom (eye at most 84 units from the focus, so the selection point at most about 25 units from it) the view near
+  the focus is level 0; levels 1 and 2 lie toward the horizon, mostly in the fog.
+
+*Geometry per level* (`TerrainDrawBatch::BuildStitchIndexTables` S 006bbfe0, `TerrainDrawBatch::AddPatch`
+S 006bd940) [known]. A patch is one cell triangle. Its vertices are a subset of the fine mesh's own vertices
+(position, normal and tangent as stored; no filtering), given as offsets `row * meshWidth + column` from the cell's
+base vertex `(4x + 2*(y & 1), 4y)`; a fine row's vertices sit half a step to the right of the row below. Four
+variants, `kind = (cellY & 1) + 2 * (patch.flags & 1)`: kinds 0 and 1 are the upward triangles (base row below,
+apex above: `c0 c1 c2` in even rows, `c0 c1 c3` in odd rows), kinds 2 and 3 the downward ones (`c2 c1 c3`,
+`c3 c2 c0`); kinds 0/1 and 2/3 share their tables. Counts per level (S 007fb0c0, S 007fb0cc, S 007fb0d8):
+
+| Level | Subdivision of the cell triangle | Vertices | Triangles | Indices |
+|---|---|---|---|---|
+| 0 | 4-fold | 15 | 16 | 48 |
+| 1 | 2-fold (every second fine vertex) | 6 | 4 | 12 |
+| 2 | none (the three cell corners) | 3 | 1 | 3 |
+
+Vertices (column, row) and triangles:
+
+- level 0, upward: rows of 5, 4, 3, 2, 1 from the base: (0..4, 0), (0..3, 1), (1..3, 2), (1..2, 3), (2, 4);
+  triangles `0 1 5, 6 5 1, 1 2 6, 7 6 2, 2 3 7, 8 7 3, 3 4 8, 5 6 9, 10 9 6, 6 7 10, 11 10 7, 7 8 11, 9 10 12,
+  13 12 10, 10 11 13, 12 13 14`;
+- level 0, downward: rows of 1, 2, 3, 4, 5 from the apex: (4, 0), (3..4, 1), (3..5, 2), (2..5, 3), (2..6, 4) for
+  kind 2, columns 4 less for kind 3; triangles `2 1 0, 4 3 1, 1 2 4, 5 4 2, 7 6 3, 3 4 7, 8 7 4, 4 5 8, 9 8 5,
+  11 10 6, 6 7 11, 12 11 7, 7 8 12, 13 12 8, 8 9 13, 14 13 9`;
+- level 1, upward: (0,0) (2,0) (4,0) (1,2) (3,2) (2,4); triangles `0 1 3, 4 3 1, 1 2 4, 3 4 5` (S 007fb17c);
+- level 1, downward: (4,0) (3,2) (5,2) (2,4) (4,4) (6,4) for kind 2 (columns 4 less for kind 3); triangles
+  `2 1 0, 4 3 1, 1 2 4, 5 4 2` (S 007fb164);
+- level 2, upward: (0,0) (4,0) (2,4), triangle `0 1 2` (S 007fb15c); downward: (4,0) (2,4) (6,4) for kind 2
+  (columns 4 less for kind 3), triangle `0 2 1` (S 007fb154).
+
+Solid and blend patches are built once per block, whatever the level (above); the level only picks the template when
+a patch's 0x40-byte vertices are rebuilt (position, normal, colour, world xz, mask uv, map uv, tangent). The mask
+coordinates are a linear function of x and z around the blend vertex, so the transition masks look the same at every
+level; what changes with the level is the shape, the interpolation of the stored normals across larger triangles,
+the under-water tint (computed per drawn vertex for under-water patterns), and, below shader level 2 only, the radial
+alpha (also per drawn vertex) [known; the visibility of the change is inferred].
+
+*Stitching* [known]. A block's four neighbours are x−1, x+1, y−1, y+1 (slots 0..3, own bits 1, 2, 4, 8, the
+neighbour's opposite bits 2, 1, 8, 4). In `UpdateLOD` of block B, for every visible neighbour N (`+0x54`): if N's
+level is finer (lower) than B's, N gets the stitch bit of the shared edge and B loses its own; otherwise, only if N
+holds a stitch bit toward B, that bit is cleared and B's bit toward N is set when N is coarser (cleared when the levels
+are equal). N's own update sets the remaining case. So of two visible neighbours with different levels, the finer one
+stitches; equal levels never stitch. A change invalidates the neighbour's patch
+vertices. Neighbours are read as they stand when B is updated, so a bit may lag by a frame [inferred].
+
+In `AddPatch`, for a block of level 0 or 1 (a level-2 block never stitches) and every edge `i` that both the stitch
+mask and the patch's own edge mask (`patch+4`, the block edges the cell triangle lies on) contain, the odd vertices
+of that edge get the average of their two neighbours on the edge: the height and the normal; x, z, the tangent and
+the other attributes stay. Two vertices at level 0 (the second and fourth of the five), one at level 1 (the middle of
+three) (S 007fb1b4). The y−1 edge is the base row of upward patches (vertices 1, 3 at level 0; 1 at level 1), the
+y+1 edge the base row of downward patches (row starting at vertex 10 at level 0, 3 at level 1; S 007fb1b0); the x
+edges are slanted triangle edges, taken from triples (previous, target, next) per kind and level from S 007fb1b8:
+
+| Kind | Level 0 | Level 1 |
+|---|---|---|
+| 0 (upward, even row; left edge) | (0,5,9) (9,12,14) | (0,3,5) |
+| 1 (upward, odd row; right edge) | (4,8,11) (11,13,14) | (2,4,5) |
+| 2 (downward, even row; right edge) | (0,2,5) (5,9,14) | (0,2,5) |
+| 3 (downward, odd row; left edge) | (0,1,3) (3,6,10) | (0,1,3) |
+
+Consequence [inferred]: the averaging matches a neighbour exactly one level coarser. A level-0 block next to a
+level-2 block keeps its edge's middle vertex at its true height while the coarse edge is straight, so a crack can
+open; with blocks 24 units wide this needs a band narrower than a block, which happens only at the lowest
+`groundDetail` (`lodDistance` 21.6).
 
 **Culling** [inferred] S 0068a4a0, S 006db440: quadtree over the blocks, frustum test with six planes, plus a
 horizon occlusion buffer fed with the ground edges of accepted blocks, used only while the view direction's y
