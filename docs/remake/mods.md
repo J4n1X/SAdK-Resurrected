@@ -108,14 +108,16 @@ editor tooling. Machine-written files (conversion records, caches) are JSON.
 
 | Source | Location | Notes |
 |---|---|---|
-| built-in | inside the game's installation folder (`base`, `refined`) | always present, never transferred |
-| the player's mods | `<user data>/mods/<id>/` or `<user data>/mods/<id>.zip` | enabled per profile |
-| received from peers | `<user data>/mods-received/<id>-<version>-<hash>/` | kept apart from the player's own; used only for matches that need them; pruned by age |
-| development | folders given with `--mod-dir=<folder>` | for working on a mod without copying it |
+| built-in | inside the game (`base`, `refined`): their code is part of the game's assemblies, their own assets in `<game folder>/mods/<id>/` | always present, never transferred |
+| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip` | enabled per profile |
+| received from peers | `<game folder>/mods/received/<id>-<version>-<hash>/` | kept apart from the player's own; used only for matches that need them; pruned by age |
+| development | folders given with `--mod-dir=<folder>[;<folder>]` | for working on a mod without copying it; wins over a player mod of the same id |
 
-`<user data>` is Godot's `user://` folder of the remake. A **profile** is a named set of enabled mods with their
-startup settings (`<user data>/profiles/<name>.xml`); the game starts with the last profile used. A match runs with
-the host's simulation set (§9.2).
+[implemented, maintainer 2026-10-15] Mods live in the **game folder**, next to its `settings.xml` (assets.md §3), not
+in the user folder. A **profile** is a named set of enabled mods with their startup settings
+(`<game folder>/profiles/<name>.xml`); the game starts with `default`. A match runs with the host's simulation set
+(§9.2). A folder or zip whose manifest is unreadable, or a second mod with an id already found, is listed as a
+problem on the mods screen; the other mods stay usable.
 
 ## 5. Load order [draft]
 
@@ -251,16 +253,18 @@ registration first:
 
 ### 7.1 Assembly loading [draft]
 
-- **One `AssemblyLoadContext` per mod**, not collectible. It resolves the engine, `base`, Harmony, GodotSharp and
-  the .NET libraries to the instances already loaded (shared type identity) and everything else from the mod's
-  own `bin/` folder, so two mods may carry different versions of the same private library.
+- **One `AssemblyLoadContext` per mod**, collectible (the mod set can be unloaded, §9.3). It resolves the engine,
+  `base`, Harmony, GodotSharp and the .NET libraries to the instances already loaded, in the context that loaded the
+  engine (in an exported Redot game that is not .NET's default context), and everything else from the mod's own
+  `bin/` folder, so two mods may carry different versions of the same private library. Assemblies are read into
+  memory, so zip mods work the same and no file stays locked. [implemented]
 - A mod references the engine through reference assemblies of the engine SDK (a NuGet package for mod authors),
   never its own copy of `GodotSharp` or `Sadk.Engine`.
 - Simulation assemblies must not reference Godot: the headless runner (tests, replays, checksum comparison against
   the original, [binding] §2) loads only them. The engine checks the references at load time.
 - **No ReadyToRun and no trimming** for the engine, `base` and mods. Trimming removes code mods may need;
   ReadyToRun precompiles call sites with inlined callees, which Harmony cannot reach. Everything is JIT-compiled.
-- Assemblies stay loaded until the process ends; a different mod set means a new process (§9.3).
+- A simulation assembly that references GodotSharp is refused with a message naming the mod [implemented].
 
 ### 7.2 Entry point [draft]
 
@@ -285,8 +289,11 @@ simulation entry points, with the presentation registrations (render kinds, UI p
 
 ### 7.3 Harmony [draft]
 
-- The engine ships one Harmony version (`Lib.Harmony`) and loads it into the shared context; mods do not bundle
-  their own.
+- The engine ships one Harmony and loads it into the shared context; mods do not bundle their own. [implemented]
+  It is **HarmonyX 2.16.1** (BepInEx's fork, Harmony 2's API): Lib.Harmony 2.4.3 keeps an unloaded mod's code alive
+  after `UnpatchAll` (its shared state keeps the replacement methods, which call the mod's patches), HarmonyX and
+  Lib.Harmony 3.0 (release candidate) release it [tested 2026-10-15]. A test loads, patches, unloads and collects a
+  mod in three rounds, so an update cannot bring the leak back unnoticed.
 - At start-up the engine writes a **patch report** to the log: every patched method with the mods that patch it
   and the patch kinds (prefix, postfix, transpiler, finalizer). Two transpilers on one method are listed as a
   warning. This replaces sadkmod's "conflicts stop the game" rule, which fits fixed-address byte patches but not
@@ -375,19 +382,24 @@ The host's simulation set wins, as with today's server mods (`server-mods` desig
 
 Client-only mods of either side are untouched.
 
-### 9.3 Changing the mod set restarts the process [draft]
+### 9.3 Changing the mod set unloads it in the process [implemented, maintainer 2026-10-15]
 
-The remake does not unload mods. Harmony patches, the JIT's inlining decisions, static state in mod assemblies and
-the frozen registry make reliable unloading in one .NET process a research problem; a restart is simple and
-always correct. To keep it cheap:
+The maintainer chose in-process unloading over the draft's restart. A mod set (`ModSet`) is loaded and unloaded as a
+whole; nothing of a mod may outlive its set:
 
-- the conversion of the installation is cached and only checked at start (milliseconds, [binding] §11);
-- the game relaunches itself with `--profile=<match set>` and `--join=<session>` / `--load=<save>` so the player
-  lands back where the switch started (lobby room, match, save);
-- data-only switches (no assemblies involved) could later rebuild the registry in-process, as an optimisation.
+- every registration goes through the mod's `ModContext` and carries the mod as owner: Lua libraries, asset loaders
+  (a replaced loader comes back when the replacing mod goes), settings and data stages; systems, commands and render
+  kinds follow the same rule when they exist;
+- unloading runs in reverse load order: `OnUnload` of every entry point, registrations removed, Harmony patches
+  removed by owner (`UnpatchSelf`), the mods' layers unmounted, the registry, presentation documents and asset
+  cache dropped, then every mod's load context unloaded;
+- **the leak check**: afterwards the engine collects and checks every context through a weak reference. A mod whose
+  code is still referenced (a static event of the engine it never left, an object of it some screen still holds) is
+  named; its code stays in memory until the game restarts, and the mods screen says so. Code that keeps mod objects
+  must not outlive the set: a stack frame that holds a mod's object while unloading pins it, too;
+- the registry is rebuilt from scratch for the new set (data stage again; milliseconds for `base`).
 
-This differs from today's sadkmod design, where unloading per match was required because restarting the original
-game in the middle of the lobby flow is not possible. **To confirm with the maintainer.**
+A different simulation set for a match (§9.2) is the same unload-and-load; the game does not restart.
 
 ### 9.4 Compatibility mode, refined mode [draft]
 
@@ -418,8 +430,10 @@ game in the middle of the lobby flow is not possible. **To confirm with the main
 - **SDK**: reference assemblies of the engine and `base` as a NuGet package; a `dotnet new` template that builds a
   mod folder with `mod.xml`; documentation generated from the XML doc comments.
 - **Lua API reference** generated from the binding attributes ([lua.md](lua.md) §10), one page per table.
-- **`--validate-mods`**: headless run of steps 1-8 for a mod set, printing the load order, the patch report, every
-  data-stage error and the registry checksum; also usable in a mod's CI.
+- **`Sadk.Headless validate-mods [--game-folder=] [--mod-dir=] [--enable=a,b]`** [implemented]: loads a mod set like
+  the game (without client code), prints the load order, the layers, the patch report, the startup settings, every
+  patched document with the patches that miss, the data-stage errors and the registry checksum, then unloads it and
+  checks the leak check; exit code 1 on any problem; also usable in a mod's CI.
 - **Development mode**: assets and presentation documents reload when their files change; the data stage reruns on
   request (registry rebuilt, current match ended).
 - **Logs**: one log file; every line from mod code carries the mod id; Lua errors with file and line (the original
@@ -438,8 +452,8 @@ game in the middle of the lobby flow is not possible. **To confirm with the main
 
 ## 13. Open decisions
 
-1. Restart instead of unloading when the mod set changes (§9.3).
-2. Lua (with the original `properties.*` API and a `registry` view) as the data-file format for registry entries,
+1. Decided 2026-10-15 (instead of the draft's restart): unloading in the process, with the leak check (§9.3).
+2. Decided 2026-10-15: C# and Lua (the original `properties.*` API and a `registry` view) for registry entries,
    no XML/JSON definitions in the first version (§6.3); answers [binding] §13 item 1.
 3. XML for manifests and every patchable presentation document; JSON only for machine-written files (§3).
 4. `refined` as a built-in simulation mod (§9.4).
