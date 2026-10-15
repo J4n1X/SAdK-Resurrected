@@ -450,7 +450,15 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   copies the mod into `mods/<id>/`; `dotnet run` starts the game with the mod switched on for that run (the game's
   `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Redot's options, for instance the
   installation and conversion folder when the game folder has no `settings.xml` yet). `sdk/README.md` is the guide
-  for mod authors. Checked with two mods built outside the repository: a tribe in C# with
+  for mod authors. In the source repository the SDK builds against the repository's projects (a repository-only
+  `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Redot editor.
+  **The editor's view is checked** [implemented]: `tools/check-sdk.sh <game folder>` opens mod projects with Roslyn's
+  `MSBuildWorkspace`, the loader of the editor's language server (a design-time build, then the compiler with the
+  generators and analyzers), and compares references and diagnostics: the shipped example clean with `Core.Game`
+  referenced, a misspelled `TribeDef` member exactly CS0117, a client mod with its own node type clean, the same
+  without `partial` exactly Redot's GD0001, the repository's example clean. `tools/export-game.sh` runs it after
+  every export; with only the SDK and the game files, a mod author's machine needs nothing else but .NET's
+  reference packs. Checked with two mods built outside the repository: a tribe in C# with
   core.game's `TribeDef`, and a client mod with its own node type, an overlay and a menu entry. The core mods in the
   repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
