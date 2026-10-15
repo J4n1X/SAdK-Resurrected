@@ -677,7 +677,7 @@ show the 1.5-unit facets.
   | Setting (maintainer, 2026-10-15) | k | Terrain triangles near the camera | Surface |
   |---|---|---|---|
   | Faithful | 1 | 1×, the original's three levels by distance (§10.3) | the original's flat triangles |
-  | Very Low | 1 | 1× | cubic patches (smoothed shape and light, no extra triangles) |
+  | Low | 1 | 1× | cubic patches (smoothed shape and light, no extra triangles) |
   | Moderate (the default) | 2 | 4× | cubic patches |
   | High | 3 | 9× | cubic patches |
   | Very High | 4 | 16× | cubic patches |
