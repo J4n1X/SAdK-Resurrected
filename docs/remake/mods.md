@@ -55,9 +55,10 @@ What a part changes, and therefore whether the mod is a simulation mod:
 | `scripts/` | yes | run inside the simulation when a map script requires them |
 | `assets/maps/` | per map | a map is compared and transferred as a map, not as part of the mod set; an overlay folder that changes a map's `world/` or `script/` changes that map (assets.md §5.6) |
 
-The manifest's simulation flag must agree with the contents: the engine refuses a mod that declares itself
-client-only but carries a simulation assembly, a `data/` script or a `scripts/` library. The registry checksum
-(§6.5) catches anything the flag misses.
+Whether a mod changes the simulation is read from its contents [implemented 2026-10-15]: a simulation assembly, a
+data-stage script (`data/data.lua`, `data/data-updates.lua`, `data/data-final-fixes.lua`) or a `scripts/` library
+makes it a simulation mod; `mod.xml` has no flag for it. The registry checksum (§6.5) catches anything the contents
+miss.
 
 The core mods (§11a) are ordinary mods with this layout that ship with the game in `<game folder>/mods/`
 [implemented 2026-10-15]. `core.game`'s
@@ -73,7 +74,6 @@ ships with the game as well, carries the refined mode's simulation fixes (§9.4)
   <Description>The brewery also produces yeast.</Description>
   <Authors><Author>someone</Author></Authors>
   <Engine min="1.0" max="1.*"/>
-  <Simulation>true</Simulation>
   <Dependencies>
     <Requires id="core.game" version="^1.0"/>
     <Optional id="more-goods" version="^2.1"/>
@@ -94,7 +94,6 @@ ships with the game as well, carries the refined mode's simulation fixes (§9.4)
 - **version**: semantic version. Multiplayer and saves compare the exact version plus a content hash (§9.1).
 - **Engine**: the range of engine API versions the mod was built against. The engine refuses mods outside the
   range with a message instead of failing inside the mod.
-- **Simulation**: the [binding] flag "changes the simulation".
 - **Dependencies**: `Requires` must be present in a matching version; `Optional` is ordered before this mod when
   present; `Incompatible` must be absent. Version ranges use the npm/Cargo syntax (`^1.0`, `>=1.2 <2`).
 - **Assemblies**: the entry assemblies per side; their private dependencies sit next to them in `bin/`.

@@ -316,7 +316,8 @@ does, the refined mode a placeholder.
 
 ### 7.1 The library [draft]
 
-`core.game`'s shaders, under `core.game/assets/shaders/` (logical `shaders/...`):
+The shared includes `sadk/*` and the sky shaders come with the engine (`engine/shaders/`, [assets.md](assets.md)
+§5.3a); the kinds' shaders are `core.game`'s, under `core.game/assets/shaders/` (logical `shaders/...`):
 
 | File | Holds |
 |---|---|
@@ -328,6 +329,7 @@ does, the refined mode a placeholder.
 | `sadk/fow.gdshaderinc` | §4.5 |
 | `sadk/fog.gdshaderinc` | the original's linear table fog on view depth, and the particle alpha fade on the same range |
 | `sadk/mirror.gdshaderinc` | `is_mirror_pass()` from `CAMERA_VISIBLE_LAYERS` (§8.3), the projective lookup into the mirror picture, the capped 1 / depth offset |
+| `sadk/reflection.gdshaderinc` | the view a reflecting pixel needs (`SadkView`, `sadk_view(...)`); `sadk_reflect(view, world, normal, offset)` comes from one of `reflection_planar` (the mirror picture), `reflection_ssr` (traced through the screen and depth textures, the sky where the ray leaves the screen) and `reflection_none` (nothing found), picked by the reflection mode through the material's `<Reflection>` variants |
 | `sadk/haze.gdshaderinc` | the water haze of rocks, water plants, lilies and ducks |
 | `sadk/instance.gdshaderinc` | decoding `INSTANCE_CUSTOM` and `COLOR` per the layout of §7.4 |
 | `sadk/skin.gdshaderinc` | GPU skinning from the animation texture (§9) |
@@ -353,6 +355,14 @@ needs:
 blend modes gets one thin wrapper per mode (`objects/doodad.gdshader`, `objects/doodad_blend.gdshader`, both
 including `objects/doodad.gdshaderinc`). The viewer's wrapper files are this shape. A wrapper sets
 `render_mode` and includes; it contains no `#define`.
+
+**No matrices as varyings** [implemented 2026-10-15]: Forward+ and Mobile give a shader 32 varying slots (a `vec4`
+each, a `mat4` four); the Compatibility renderer does not count them. A shader over the limit compiles there and fails
+on Forward+ with "Too many varyings used in shader (33 used, maximum supported is 32)", and every material using it
+draws white. The view a reflecting pixel needs is therefore built in the fragment function from Godot's built-ins,
+`SadkView view = sadk_view(VERTEX, VIEW_MATRIX, INV_VIEW_MATRIX, PROJECTION_MATRIX, INV_PROJECTION_MATRIX)`, and handed
+on as a parameter (`sadk_reflect(view, ...)`, a terrain type's `terrain_surface(view, ...)`). A shader change is
+checked on Forward+ before it is merged.
 
 ### 7.2 Loading [draft]
 
