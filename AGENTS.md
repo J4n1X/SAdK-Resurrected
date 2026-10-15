@@ -1,44 +1,25 @@
-# AGENTS.md — agent entrypoint for `sadk-resurrected`
+# AGENTS.md — entry point for every coding agent
 
-> **Mandatory:** Before doing any work in this repository, every agent must read
-> [`CLAUDE.md`](CLAUDE.md) in full.
->
-> **`CLAUDE.md` is the authoritative agent instructions file for this repo.**
-> If anything in this file and `CLAUDE.md` ever disagree, **`CLAUDE.md` wins**.
+The instructions for this repository are in **[`CLAUDE.md`](CLAUDE.md)**. They apply to every agent, whatever
+tool runs it. Read it in full before doing anything, then **[`HARNESS.md`](HARNESS.md)** (the binding rules) and
+**[`MEMORY.md`](MEMORY.md)** (what is established and what is open). If this file and `CLAUDE.md` ever disagree,
+`CLAUDE.md` wins.
 
----
+The rules that are most costly to miss:
 
-## Required startup order for every agent
-
-1. **Read `CLAUDE.md` first. Do not start work before reading it.**
-2. Read **`HARNESS.md`** and follow its rules for any RE, debugging, or stub change.
-3. Use **`MEMORY.md`** for persistent project context (proven facts + TODOs).
-4. Then consult the project docs relevant to the task.
-
----
-
-## What this file is for now
-
-This file is intentionally short. It exists only as a current pointer so that:
-- no agent starts from stale onboarding material,
-- all agents converge on the same rules of engagement,
-- and the repository has a single authoritative agent brief.
-
-The detailed project guidance that used to live here has been consolidated into
-`CLAUDE.md` where it belongs.
-
----
-
-## Key project pointers
-
-- **Primary agent instructions:** `CLAUDE.md`
-- **Binding rules of engagement:** `HARNESS.md`
-- **Persistent context (proven facts + TODOs):** `MEMORY.md`
-- **Protocol reference:** `docs/LOBBY_PROTOCOL.md`, `docs/SOURCEMAP.md`
-- **Quick-start / package overview:** `README.md`
-
----
-
-## Non-negotiable reminder
-
-If you are an agent reading this file: **stop here and read `CLAUDE.md` now before doing anything else.**
+- **Understanding is the deliverable.** The project reverse-engineers the 2008 game client and documents it; the
+  lobby server, the mods and the coming remake demonstrate that model. Don't make something "work" without an
+  evidence-backed reason.
+- **Reverse engineering and live debugging go through the Ghidra MCP and the Frida MCP.** Standalone scripts that
+  do RE, read or write process memory, trace, inject or patch are forbidden; a new tool needs a stated reason
+  (`HARNESS.md` §3).
+- **Never map Ghidra's `/SADK.exe`** (a different build): the game exe is `/sadk_noav.exe`.
+- **No faked results, no flag-gating, no hacks without permission.** Tag claims honestly: `[PROVEN]` = binary
+  address + live evidence; `[known]`, `[inferred]`, `[TODO]` otherwise.
+- **Read the client before implementing** server or mod behaviour, and map before writing mod code.
+- **Live tests only when the code cannot answer** (`HARNESS.md` §7).
+- **Docs state the current model as clean fact**; no session logs or hand-off notes (`HARNESS.md` §8).
+- **Public repository:** no real names, e-mail addresses, IPs, host names or home paths in commits; the git
+  identity is repo-local (`CLAUDE.md`, "How to work here"). Branch `master`; `lobby/` and `sadkmod/` are
+  submodules with their own repositories.
+- **Never touch `sadk_players.json` / `sadk_mail.json`**: they are the live players' saves.

@@ -667,7 +667,8 @@ draw pass reads the live child vector, not a copy.
   ([lua-runtime.md](lua-runtime.md) §4.4). Lua drives widgets with the `ui.*` library
   ([lua-runtime.md](lua-runtime.md) §3.7, [../lua-surface.md](../lua-surface.md)).
 - **Network**: none. The toolkit sends and handles no message; chat lines and inventory actions are sent by the
-  lobby code that owns the widgets ([../LOBBY_PROTOCOL.md](../LOBBY_PROTOCOL.md)).
+  lobby code that owns the widgets ([../message-catalog.md](../message-catalog.md), "UC / chat connection
+  (:7071): token login and chat" and "Inventory").
 
 ## 6. Data-driven parameters
 
@@ -727,7 +728,7 @@ call [inferred]. A remake should give the flicker its own presentation-side gene
   whole line without a selection), caret blink 500 / 1000 ms, Enter passing through when single-line, Tab moving
   between sibling edits by z-order. Text is one byte per character in the original; a remake may accept Unicode
   but must keep the length and filter rules where the server checks them (account names, passwords:
-  [../LOBBY_PROTOCOL.md](../LOBBY_PROTOCOL.md)).
+  [../message-catalog.md](../message-catalog.md), 0x0CB SelfRegistration and 0x0CC AuthenticateUser).
 - **Sliders**: `Slider2` → `HSlider` / `VSlider` with step 1 ÷ (snapCount − 1) plus the two step buttons and the
   double-click reset to 0.5; `SliderEx` → `ScrollBar` with integer range and the 2 px margins.
 - **ListBox2** → `ScrollContainer` + `VBoxContainer` of toggle buttons with single selection; scrolling is by

@@ -1,13 +1,3 @@
 {
-  "mcpServers": {
-    "ghidra": {
-      "command": ".venv/bin/python",
-      "args": [
-        "decomp/bridge_mcp_ghidra.py"
-      ],
-      "env": {
-        "GHIDRA_MCP_AUTOSTART": "1"
-      }
-    }
-  }
+  "mcpServers": {}
 }

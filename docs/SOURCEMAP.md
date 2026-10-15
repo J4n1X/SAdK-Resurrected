@@ -271,6 +271,8 @@ Leaving the village `[PROVEN]` (live trace of 2026-07-26, `decomp/RENAME_LIST.md
   match is starting. Answering 2002 with EnterWorld (1000) re-enters the lobby world instead.
 - `HandleMessage` does not dispatch 2002 or any logout id: LoggedOut is a connection-state callback, not
   a village message.
+- Server side (the stub's two 1006, why a socket close is wrong): `docs/village-and-character-protocol.md` §7;
+  the leave at match start: `docs/MATCH_START.md`, "What the server must do", step 2.
 
 | Addr | Name | Msg / role |
 |------|------|------------|
@@ -378,6 +380,8 @@ Factory vtable @ **`0x1004DE84`**: `+0x04 RegisterPropertySet · +0x08 Unregiste
 | 0x10017ba0 | `CommLayer::ChatChannelManager::HandleCellMessage` | dispatcher for a NETMSG relayed through the CellManager: builds the template with `CreatePropertySet(msgType)`, deserialises, then routes the built-in system types (chat, presence, kick, mail, Result 42) |
 | 0x1002f5a0 / 0x1002fda0 | `CommLayer::ConnectionBC::OnTinCatEvent` / `CommLayer::ConnectionLANLobby::OnTinCatEvent` | LAN server discovery sinks; decode a GameServerData (170) payload with `CreatePropertySet(0xAA)` on the same factory |
 | 0x10023cc0 | `CommLayer::HandlerLobby::HandleMessage` | receive handler of the client's main lobby connection. Its `0xAA` case is the internet-lobby decoder of GameServerData (170): it fills a 0x5c-byte descriptor and routes it by the ticket's request type to `GameServerManager::AddKnownServerAndNotify` `0x10020790` / `NotifyServerUpdated` `0x100207d0` (observer push), `QueueServerListEntry` `0x10020990` (RequestServers 166), `MachineManager::OnGameServerData` `0x10028470` (167) or `GameServerManager::OnGameServerAssigned` `0x10021520` (AssignServer 189) |
+| 0x10021830 | `CommLayer::GameServerManager::AssignServer` | sends 189 AssignServer on a ticket of request type 0x108 (AssignServerTicketData {type, subtype}); refuses types other than 3, 4 and 5 |
+| 0x10021520 | `CommLayer::GameServerManager::OnGameServerAssigned` | the 170 answer on a 0x108 ticket: type 4 / subtype 5 → the RankingManager (`ConnectRankingServer` 0x10029a20), the game is not told; any other pair → the listener's vtbl `+0x28` = `ServerList::GameServerAssigned` 0x469ad0 (`docs/MATCH_START.md`, server duty 1) |
 | 0x10019430 | `CommLayer::ConnectionManager::SetCallback` | vtable slot 1: stores the application's `IConnectionCallback` at ConnectionManager `+0x08`; the game registers its `LobbyComm::System` |
 | 0x1001f6e0 / 0x10019ad0 | `CommLayer::ConnectionManager::LoadMsgDefs` / `CommLayer_RegisterBuiltinMsgDefs` | load the message schema from `msgdefs.ini` into the property factory; without an ini path the schema compiled into the DLL is registered: 221 message types (ids 1..262), 1106 fields, identical to the shipped `msgdefs.ini` |
 | 0x100268e0 | `CommLayer::HandlerStatSurf::HandleMessage` | receive handler of the ranking connection. Message 255 reaches the RankingManager's slot 10 as (ranktable, perm_id, nick, rank, points, played, won, lost, tie, disconnected), with `played` computed as won + lost + tie + disconnected. Client defect: after a refused token it calls `OnError`, disconnects and still calls `OnLoggedIn` (`0x10026d25`) |
@@ -402,6 +406,11 @@ All `[known]` (address and static value read from the binary).
 
 **SADK.exe:**
 - `g_pLobbyManager` @ `0x00885890` — `LobbyComm::System` singleton pointer (getter `LobbyManager_GetInstance` `0x462420`)
+- `0x0088592c` — source line of the developer log: lobby functions open a log scope that stores `__LINE__`
+  here and names their `.cpp` file and `Namespace::Class::Method`. So a `LobbyComm.log` line `An error
+  occured in <file>.cpp at Line N` leads to the function that stores N: `LobbyManager.cpp` line 907 is
+  `MOV [0x0088592c], 0x38b` at `0x464aeb` in `LobbyComm::System::OnLoginFailed` (`docs/sim/lobby-client-state.md`
+  §3.8) `[known]`; the same log-scope prologue in the other lobby functions `[inferred]`
 - `g_ClientProtocolVersion` @ `0x0087aed8` (static value 1000) — compared with a village server
   entry's `+0x30` by `AvatarScreen::Update`, `SelectVillageServerDialog::OnServerAddedOrChanged` and the
   version check (`LobbyComm::System::OnVersionChecked_State4to5` `0x464e70`)

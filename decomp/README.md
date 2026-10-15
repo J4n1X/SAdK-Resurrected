@@ -1,37 +1,21 @@
-# decomp/ — Ghidra link + RE references
+# decomp/ — how the Ghidra map is made
 
-Reverse-engineering is done through the **Ghidra MCP** (see `GHIDRA_MCP_SETUP.md`).
-All decompilation, xrefs, renaming, struct/enum work, and live debugging go through
-the MCP — not standalone scripts (HARNESS §1).
-
-## Files
+Reverse engineering runs through the **Ghidra MCP** (static) and the **Frida MCP** (live), never through
+standalone scripts (`HARNESS.md` §1). The map itself is the Ghidra Server repository `sadk` (programs
+`/sadk_noav.exe`, `/tincat3.dll`, `/NXCHARACTER.DLL`; never `/SADK.exe`), published as `sadkmod/sourcemap/`.
 
 | File | What |
 |------|------|
-| `GHIDRA_MCP_SETUP.md` | Runbook to connect Claude to Ghidra over the MCP (bethington/ghidra-mcp, ~245 tools incl. `debugger_*`). |
-| `RE_PRACTICES.md` | **Mandatory** RE standard: typing, vtable structs, RTTI-first, one-layer rule, runtime-virtual escalation, map upkeep. |
-| `DEBUGGER_PLAN.md` | How to drive the Ghidra MCP debugger (launch/attach, breakpoints, read regs/mem). |
-| `RENAME_LIST.md` | Applied labels, structs (`LobbyManager`, `VillageServerConnection`, …), and the `LobbyManagerState` enum. |
-| `bridge_mcp_ghidra.py` | The MCP bridge `.mcp.json` points at. Infrastructure, not an RE script. |
+| `RE_PRACTICES.md` | **Mandatory.** The RE standard behind `HARNESS.md` §6: where the map lives and what is authoritative, typing and calling conventions, vftable structs, measure-then-read, writing to the map (one writer per struct, check-in), keeping the sourcemap current, map before mod code, runtime-resolved calls, class hygiene. |
+| `RENAME_LIST.md` | A dated log of hand renames and their evidence, 2026-06 to 2026-10. History only: nothing new is added to it, and its older addresses may be dump-base ones. Read it as evidence to check. |
 
-Offline "Export as C/C++" dumps of `SADK.exe` / `tincat3.dll` are **gitignored** (large,
-game-derived). If you keep local copies, treat them only as a grep convenience; the
-authoritative, current view is the loaded program via the MCP.
+Elsewhere:
+- Setup of the Ghidra MCP, the Ghidra Server and troubleshooting: `docs/HEADLESS_SETUP.md`.
+- The mapping pipeline (inventory, batches, the change queue and its single writer, measurement scripts):
+  `mapping/README.md`, `mapping/AGENT_GUIDE.md`.
+- Names and roles of the lobby, village and match-network code: `docs/SOURCEMAP.md`; classes and structs:
+  `docs/types.md`.
+- Live debugging: `docs/LIVE_DEBUG_RUNBOOK.md`.
 
-## How to navigate
-
-1. **Start from strings.** The compiler left `__FILE__` / log strings in (e.g.
-   `LobbyVillageServerList.cpp`, `LobbyComm::System::CreateVillageServerConnection`),
-   which reveal real class/file names even on auto-named functions. Search them via the
-   MCP.
-2. **String → function → callers/callees.** Follow xrefs through the MCP.
-
-### Key leads (lobby-world entry) `[PROVEN]`
-
-The greyed "Suche Server…" button is internally the **VILLAGE** (3D lobby world) — search
-`VILLAGE`. It enables once the client holds a ready village server list, then connecting
-needs a listed entry whose roomId matches the selected `g_SelectedVillageRoomId`
-(`DAT_0087d580`). Anchor functions: `FUN_00439e80` UpdateEnterButton ·
-`FUN_0043ab10` OnVillageConnectFailed · `FUN_00462bc0` LobbyManager::GetStateName ·
-`FUN_00463750` CreateVillageServerConnection · `FUN_00468d80` FindByRoomId. Struct
-offsets + the `LobbyManagerState` enum are in `RENAME_LIST.md`.
+Offline "Export as C/C++" dumps of the binaries are gitignored (large, game-derived). Treat a local copy only as a
+grep convenience; the current view is the program through the MCP.

@@ -1,10 +1,16 @@
-# SADK.exe — Win10/11 SecuROM boot fix (release note)
+# SADK.exe — binary patches and in-memory changes
+
+What the project changes in `SADK.exe`, on disk or in memory: the SecuROM boot fix for the retail exe, the
+optional developer (CVar) patch, and the in-memory changes each mod makes.
+
+## SecuROM boot fix (retail exe only)
 
 The genuine SecuROM-protected `SADK.exe` crashes at startup / world-entry on Win7/10/11
 (`0xC0000005` at `0x7C81320C`). Two **runtime** patches explain and fix it. They are applied to the
 freshly-decrypted process while it runs under a debugger — no static binary edit is involved (the
-regions only exist in the running, decrypted image). Apply them via the **Ghidra MCP debugger**
-(`debugger_*` tools), not a standalone loader script (HARNESS §1).
+regions only exist in the running, decrypted image). They were applied through the Ghidra MCP's debugger,
+which is retired; the same two writes through the Frida MCP are `[TODO]` (untried, and SecuROM may object to
+the attach). A standalone loader script is not an option (HARNESS §1).
 
 - **P1 — World-entry DRM dispatch (OpenFileMappingA).** A SecuROM encrypted-import dispatch computes a
   hardcoded *WinXP* kernel32 address (`0x7C81320C`, unmapped on Win7+) and `call`s it to invoke
@@ -16,13 +22,14 @@ regions only exist in the running, decrypted image). Apply them via the **Ghidra
 
 Together P1 + P2 are *why* the Win10/11 SecuROM crash happened and *how* it is handled.
 
-> **Go-forward base.** The clean **2014 magazine `SADK.exe`** (SecuROM-free) is the current RE/run base;
-> runtime-patching the genuine exe under the debugger remains the path for the protected build. The
-> retired `SADK_glass.exe` unpack pipeline and live memory dumps are gone and no longer relevant.
+The project's base is the publisher's DRM-free **2014 magazine `SADK.exe`** (MD5
+`d4832bc5103c14f5445471af29b8d778`): it runs on Windows 10/11 as is, and the shim, the mods and the Ghidra map
+(`sadk_noav.exe`) all target it. The fix above is only needed for the protected retail build.
 
 ## Server-side (NOT a binary patch)
-- `LobbySettings.ini` → `Host = "127.0.0.1"` (point the client at the revival server). Config, not code.
-- Credentials: any user/pass works at login (serial only checked at registration).
+- `LobbySettings.ini` → `Host` = the revival server's address (SAdK-ServerConfig writes it). Config, not code.
+- Credentials: a new name is registered by the server at its first login with the password used; after that
+  the password must match. The client's own registration form (it needs a CD key) is not used.
 
 ## Optional developer patch: enable the built-in tweak (CVar) server
 

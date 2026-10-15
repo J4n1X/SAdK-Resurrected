@@ -194,8 +194,8 @@ and 5. [known]
 A `170` on a 0x108 ticket is handled by `OnGameServerAssigned` T 10021520, which routes it by the
 descriptor's type and subtype [known]:
 - **type 4 / subtype 5** is diverted to RankingManager `ConnectRankingServer` T 10029a20. The game is
-  never told, so LobbyManager+0x580 never latches. [PROVEN] (silent failure, engagement record
-  2026-07-27)
+  never told, so LobbyManager+0x580 never latches. [PROVEN] (silent failure, TTD trace of 2026-07-27;
+  `docs/MATCH_START.md`, "What the server must do")
 - **Any other pair** reaches `ServerList::GameServerAssigned` S 00469ad0, which calls the pending
   callback with `server_id` -> LM+0x580. [PROVEN] (4/4)
 
@@ -246,7 +246,8 @@ LobbyMessage body inside it.
 ### NComm P2P events
 
 Pre-game room and match events go host to peers over the peers' own TinCat session, module 0x27d9,
-msgType 1000. They are not lobby traffic and the stub does not carry them. Each body is a raw
+msgType 1000. They are not lobby traffic: the stub neither reads nor answers them, and its host bridge
+only forwards the TCP stream of a host that cannot accept connections. Each body is a raw
 little-endian memory dump: `u32 classSig | u32 typeId | u32 srcNetId | i32 playerIndex | body`.
 Strings are a u16 length + bytes with no NUL. A NetGUID is 20 raw bytes, including the in-memory
 4-byte vptr. [known] (S 00408b60, board #539/#564)
@@ -299,12 +300,12 @@ Ids 204, 209, 216-222 appear twice: once as lobby NETMSG ids and once as village
 | 0x0D3 | 211 | StartValidateTokenSession | C->S | UC, server-id | [login](#0x0d3-211-startvalidatetokensession--c-s) | implemented |
 | 0x0D4 | 212 | AckValidateTokenSession | S->C | UC, server-id | [login](#0x0d4-212-ackvalidatetokensession--s-c) | implemented |
 | 0x0D5 | 213 | SendToken | C->S | UC, server-id | [login](#0x0d5-213-sendtoken--c-s) | implemented |
-| 0x0E0 | 224 | TANLogin | C->S | server-id | [login](#0x0e0-224-tanlogin--c-s-server-id-connections-only) | missing |
+| 0x0E0 | 224 | TANLogin | C->S | server-id | [login](#0x0e0-224-tanlogin--c-s-server-id-connections-only) | implemented |
 | 0x011 | 17 | RequestJoinChannel | C->S | UC | [login](#0x011-17-requestjoinchannel--c-s-netmsg-layer-on-uc) | implemented |
-| 0x103 | 259 | RequestLeaveChannel | C->S | UC | [login](#0x103-259-requestleavechannel--c-s-netmsg-layer-on-uc) | differs |
+| 0x103 | 259 | RequestLeaveChannel | C->S | UC | [login](#0x103-259-requestleavechannel--c-s-netmsg-layer-on-uc) | implemented |
 | 0x002 | 2 | ChatMessage | both | UC (cell) | [login](#0x002-2-chatmessage--c-s-relayed-s-c-inside-cellmanager) | implemented |
-| 0x01E | 30 | WhisperChatMessage | C->S | UC (cell) | [login](#0x01e-30-whisperchatmessage--c-s-inside-cellmanager) | differs |
-| 0x003 | 3 | PrivateChatMessage | S->C | UC (cell) | [login](#0x003-3-privatechatmessage--s-c-inside-cellmanager) | missing |
+| 0x01E | 30 | WhisperChatMessage | C->S | UC (cell) | [login](#0x01e-30-whisperchatmessage--c-s-inside-cellmanager) | implemented |
+| 0x003 | 3 | PrivateChatMessage | S->C | UC (cell) | [login](#0x003-3-privatechatmessage--s-c-inside-cellmanager) | implemented |
 | 0x005 | 5 | UserJoinedChannel | S->C | UC (cell) | [login](#0x005-5-userjoinedchannel--s-c-inside-cellmanager) | implemented |
 | 0x006 | 6 | UserLeftChannel | S->C | UC (cell) | [login](#0x006-6-userleftchannel--s-c-inside-cellmanager) | implemented |
 | 0x04C | 76 | BeenKicked | S->C | UC (cell) | [login](#0x04c-76-beenkicked--s-c-inside-cellmanager) | optional |
@@ -315,9 +316,9 @@ Ids 204, 209, 216-222 appear twice: once as lobby NETMSG ids and once as village
 | tpl 0 | — | CellManager ChannelInfo / PublishCell | S->C | UC (0x62) | [login](#cellmanager-template-0-channelinfo--publishcell--s-c) | implemented |
 | tpl 2 | — | CellManager CellMessage | C->S | UC (0x62) | [login](#cellmanager-template-2-cellmessage--c-s) | implemented |
 | tpl 3 | — | CellManager CellMessage relay | S->C | UC (0x62) | [login](#cellmanager-template-3-cellmessage-relay--s-c) | implemented |
-| tpl 7 | — | CellManager requestCreateCell | C->S | UC (0x62) | [login](#cellmanager-template-7-requestcreatecell--c-s) | differs |
+| tpl 7 | — | CellManager requestCreateCell | C->S | UC (0x62) | [login](#cellmanager-template-7-requestcreatecell--c-s) | implemented |
 | tpl 9 / 10 | — | CellManager Joined / Left | S->C | UC (0x62) | [login](#cellmanager-templates-9--10-joined--left--s-c) | implemented |
-| tpl 11 | — | CellManager StatusReply | both | UC (0x62) | [login](#cellmanager-template-11-statusreply--both) | differs |
+| tpl 11 | — | CellManager StatusReply | both | UC (0x62) | [login](#cellmanager-template-11-statusreply--both) | implemented |
 | 0x007 | 7 | ChannelInfo (NETMSG) | — | UC | not catalogued | open |
 | 0x010 | 16 | InviteToChannel | — | UC | not catalogued | open |
 | 0x012 | 18 | RequestKickFromChannel | — | UC | not catalogued | open |
@@ -325,10 +326,10 @@ Ids 204, 209, 216-222 appear twice: once as lobby NETMSG ids and once as village
 | 0x0AB | 171 | RegObserverServerList | C->S | lobby | [hosting](#0x0ab-171-regobserverserverlist--c-s) | implemented |
 | 0x0AC | 172 | DeregObserverServerList | C->S | lobby | [hosting](#0x0ac-172-deregobserverserverlist--c-s) | differs |
 | 0x0A6 | 166 | RequestServers | — | lobby | [hosting](#0x0a6-166-requestservers--c-s-not-used-by-sadk) | unused |
-| 0x0AA | 170 | GameServerData | S->C | lobby | [hosting](#0x0aa-170-gameserverdata--s-c) | differs |
+| 0x0AA | 170 | GameServerData | S->C | lobby | [hosting](#0x0aa-170-gameserverdata--s-c) | implemented |
 | 0x0A8 | 168 | AddGameServer | C->S | lobby | [hosting](#0x0a8-168-addgameserver--c-s) | implemented |
-| 0x0B1 | 177 | ChangeGameServer | C->S | lobby | [hosting](#0x0b1-177-changegameserver--c-s) | differs |
-| 0x0A9 | 169 | RemoveServer | both | lobby | [hosting](#0x0a9-169-removeserver--c-s-and-s-c-push) | differs |
+| 0x0B1 | 177 | ChangeGameServer | C->S | lobby | [hosting](#0x0b1-177-changegameserver--c-s) | implemented |
+| 0x0A9 | 169 | RemoveServer | both | lobby | [hosting](#0x0a9-169-removeserver--c-s-and-s-c-push) | implemented |
 | 0x0DD | 221 | RequestConnectionData | C->S | lobby | [hosting](#0x0dd-221-requestconnectiondata--c-s) | implemented |
 | 0x0DE | 222 | ConnectionData | S->C | lobby | [hosting](#0x0de-222-connectiondata--s-c) | implemented |
 | 0x092 | 146 | EnterServer | — | lobby | not catalogued | open |
@@ -348,73 +349,73 @@ Ids 204, 209, 216-222 appear twice: once as lobby NETMSG ids and once as village
 | 0xDB6 | 3510 | RegisterGame | C->S | referee | [hosting](#0xdb6-3510-registergame--c---referee) | implemented |
 | 0xDB7 | 3511 | RegisterGameAcknowledge | S->C | referee | [hosting](#0xdb7-3511-registergameacknowledge--referee---c) | implemented |
 | 0xDB8 | 3512 | RegisterGameResult | S->C | referee | [hosting](#0xdb8-3512-registergameresult--referee---c) | implemented |
-| 0xDC0 | 3520 | FinishGame | C->S | referee | [hosting](#0xdc0-3520-finishgame--c---referee) | missing |
-| 0xDC1 | 3521 | FinishGameAcknowledge | S->C | referee | [hosting](#0xdc1-3521-finishgameacknowledge--referee---c) | missing |
-| 0xDC2 | 3522 | FinishGameResult | S->C | referee | [hosting](#0xdc2-3522-finishgameresult--referee---c) | missing |
-| 0xDD4 | 3540 | GiveUpGame | C->S | referee | [hosting](#0xdd4-3540-giveupgame--c---referee) | missing |
-| 0xDD5 | 3541 | GiveUpGameAcknowledge | S->C | referee | [hosting](#0xdd5-3541-giveupgameacknowledge--referee---c) | missing |
-| 0xDAC | 3500 | ClaimChest | C->S | referee | [hosting](#0xdac-3500-claimchest--c---referee) | missing |
-| 0xDAD | 3501 | ClaimChestAcknowledge | S->C | referee | [hosting](#0xdad-3501-claimchestacknowledge--referee---c) | missing |
-| 0xDAE | 3502 | ClaimChestResult | S->C | referee | [hosting](#0xdae-3502-claimchestresult--referee---c) | missing |
+| 0xDC0 | 3520 | FinishGame | C->S | referee | [hosting](#0xdc0-3520-finishgame--c---referee) | implemented |
+| 0xDC1 | 3521 | FinishGameAcknowledge | S->C | referee | [hosting](#0xdc1-3521-finishgameacknowledge--referee---c) | implemented |
+| 0xDC2 | 3522 | FinishGameResult | S->C | referee | [hosting](#0xdc2-3522-finishgameresult--referee---c) | implemented |
+| 0xDD4 | 3540 | GiveUpGame | C->S | referee | [hosting](#0xdd4-3540-giveupgame--c---referee) | implemented |
+| 0xDD5 | 3541 | GiveUpGameAcknowledge | S->C | referee | [hosting](#0xdd5-3541-giveupgameacknowledge--referee---c) | implemented |
+| 0xDAC | 3500 | ClaimChest | C->S | referee | [hosting](#0xdac-3500-claimchest--c---referee) | implemented |
+| 0xDAD | 3501 | ClaimChestAcknowledge | S->C | referee | [hosting](#0xdad-3501-claimchestacknowledge--referee---c) | implemented |
+| 0xDAE | 3502 | ClaimChestResult | S->C | referee | [hosting](#0xdae-3502-claimchestresult--referee---c) | implemented |
 | 0x04A | 74 | SendGameData | both | village, referee | [village](#0x04a-74-sendgamedata--both) | implemented |
 | 0x049 | 73 | SendGameDataBundle | S->C | village | [village](#0x049-73-sendgamedatabundle--s-c) | optional |
 | 0x3E8 | 1000 | EnterWorld | S->C | village | [village](#0x3e8-1000-enterworld--s-c) | implemented |
 | 0x3ED | 1005 | WorldTick | S->C | village | [village](#0x3ed-1005-worldtick--s-c) | implemented |
 | 0xED6 | 3798 | PingCode | C->S | village | [village](#0xed6-3798-pingcode--c-s-wire-type-0x2ed6) | implemented |
 | 0xED7 | 3799 | PongCode | S->C | village | [village](#0xed7-3799-pongcode--s-c) | implemented |
-| 0x3E9 | 1001 | AvatarData | S->C | village | [village](#0x3e9-1001-avatardata--s-c) | differs |
+| 0x3E9 | 1001 | AvatarData | S->C | village | [village](#0x3e9-1001-avatardata--s-c) | implemented |
 | 0x3EA | 1002 | AvatarLoggedIn | S->C | village | [village](#0x3ea-1002-avatarloggedin--s-c) | optional |
 | 0x3EB | 1003 | AvatarRemove | S->C | village | [village](#0x3eb-1003-avatarremove--s-c) | implemented |
 | 0x7D0 | 2000 | AvatarLocation | C->S | village | [village](#0x7d0-2000-avatarlocation--c-s-wire-type-0x27d0) | implemented |
-| 0xF6E | 3950 | AvatarColorChange | C->S | village | [village](#0xf6e-3950-avatarcolorchange--c-s-wire-type-0x2f6e) | missing |
+| 0xF6E | 3950 | AvatarColorChange | C->S | village | [village](#0xf6e-3950-avatarcolorchange--c-s-wire-type-0x2f6e) | implemented |
 | 0xC80 | 3200 | LevelExpUpdate | S->C | village | [village](#0xc80-3200-levelexpupdate--s-c) | optional |
-| 0xC81 | 3201 | StatsUpdate | S->C | village | [village](#0xc81-3201-statsupdate--s-c) | missing |
-| 0x3EC | 1004 | NPCData | S->C | village | [village](#0x3ec-1004-npcdata--s-c) | differs |
-| 0xBB9 | 3001 | MoveItem | C->S | village | [village](#0xbb9-3001-moveitem--c-s-wire-type-0x2bb9) | missing |
-| 0xBBA | 3002 | DeleteItemRequest | C->S | village | [village](#0xbba-3002-deleteitemrequest--c-s-wire-type-0x2bba) | missing |
-| 0xC1C | 3100 | ActiveItemsUpdate | S->C | village | [village](#0xc1c-3100-activeitemsupdate--s-c) | missing |
-| 0xC1D | 3101 | InventoryUpdate | S->C | village | [village](#0xc1d-3101-inventoryupdate--s-c) | missing |
-| 0xC1E | 3102 | ItemsFullSync | S->C | village | [village](#0xc1e-3102-itemsfullsync--s-c) | missing |
-| 0xE10 | 3600 | OpenShop | C->S | village | [village](#0xe10-3600-openshop--c-s-wire-type-0x2e10) | missing |
-| 0xE11 | 3601 | ShopInventoryData | S->C | village | [village](#0xe11-3601-shopinventorydata--s-c) | missing |
-| 0xE1A | 3610 | ShopBuy | C->S | village | [village](#0xe1a-3610-shopbuy--c-s-wire-type-0x2e1a) | missing |
-| 0xE1B | 3611 | ShopBuyResult | S->C | village | [village](#0xe1b-3611-shopbuyresult--s-c) | missing |
-| 0xE24 | 3620 | ShopSell | C->S | village | [village](#0xe24-3620-shopsell--c-s-wire-type-0x2e24) | missing |
-| 0xE25 | 3621 | ShopSellResult | S->C | village | [village](#0xe25-3621-shopsellresult--s-c) | missing |
+| 0xC81 | 3201 | StatsUpdate | S->C | village | [village](#0xc81-3201-statsupdate--s-c) | implemented |
+| 0x3EC | 1004 | NPCData | S->C | village | [village](#0x3ec-1004-npcdata--s-c) | implemented |
+| 0xBB9 | 3001 | MoveItem | C->S | village | [village](#0xbb9-3001-moveitem--c-s-wire-type-0x2bb9) | implemented |
+| 0xBBA | 3002 | DeleteItemRequest | C->S | village | [village](#0xbba-3002-deleteitemrequest--c-s-wire-type-0x2bba) | implemented |
+| 0xC1C | 3100 | ActiveItemsUpdate | S->C | village | [village](#0xc1c-3100-activeitemsupdate--s-c) | implemented |
+| 0xC1D | 3101 | InventoryUpdate | S->C | village | [village](#0xc1d-3101-inventoryupdate--s-c) | optional |
+| 0xC1E | 3102 | ItemsFullSync | S->C | village | [village](#0xc1e-3102-itemsfullsync--s-c) | implemented |
+| 0xE10 | 3600 | OpenShop | C->S | village | [village](#0xe10-3600-openshop--c-s-wire-type-0x2e10) | implemented |
+| 0xE11 | 3601 | ShopInventoryData | S->C | village | [village](#0xe11-3601-shopinventorydata--s-c) | implemented |
+| 0xE1A | 3610 | ShopBuy | C->S | village | [village](#0xe1a-3610-shopbuy--c-s-wire-type-0x2e1a) | implemented |
+| 0xE1B | 3611 | ShopBuyResult | S->C | village | [village](#0xe1b-3611-shopbuyresult--s-c) | implemented |
+| 0xE24 | 3620 | ShopSell | C->S | village | [village](#0xe24-3620-shopsell--c-s-wire-type-0x2e24) | differs |
+| 0xE25 | 3621 | ShopSellResult | S->C | village | [village](#0xe25-3621-shopsellresult--s-c) | implemented |
 | 0xF46 | 3910 | TradeRequest | S->C | village | [village](#0xf46-3910-traderequest--s-c) | unused |
 | 0xF5A | 3930 | TradeOffer | S->C | village | [village](#0xf5a-3930-tradeoffer--s-c) | unused |
 | 0xFA0 | 4000 | ChatCommand | C->S | village | [village](#0xfa0-4000-chatcommand--c-s-wire-type-0x2fa0) | optional |
-| 0x7D1 | 2001 | CreateMiniGameTable | C->S | village | [village](#0x7d1-2001-createminigametable--c-s-wire-type-0x27d1) | missing |
-| 0x0DA | 218 | MiniGameTableCreate | S->C | village | [village](#0x0da-218-minigametablecreate--s-c) | missing |
-| 0x0D9 | 217 | MiniGameTableUpdate | S->C | village | [village](#0x0d9-217-minigametableupdate--s-c) | missing |
-| 0x0D8 | 216 | MiniGameTableRemove | S->C | village | [village](#0x0d8-216-minigametableremove--s-c) | missing |
-| 0x0DB | 219 | MiniGameNoTableLeft | S->C | village | [village](#0x0db-219-minigamenotableleft--s-c) | missing |
-| 0x0DC | 220 | MiniGameNoPlayerSlotLeft | S->C | village | [village](#0x0dc-220-minigamenoplayerslotleft--s-c) | missing |
-| 0x0D1 | 209 | JoinTable (cat. 5) | C->S | village | [village](#0x0d1-209-jointable--c-s-category-5-wire-type-0x50d1) | missing |
-| 0x0CC | 204 | LeaveTable (cat. 5) | C->S | village | [village](#0x0cc-204-leavetable--c-s-category-5-wire-type-0x50cc) | missing |
-| 0x0DE | 222 | Amount (cat. 5) | C->S | village | [village](#0x0de-222-amount--c-s-category-5-wire-type-0x50de) | missing |
-| 0x0DC | 220 | Dice PlaceBets (cat. 5) | C->S | village | [village](#0x0dc-220-dice-placebets--c-s-category-5-wire-type-0x50dc) | missing |
-| 0x0DD | 221 | Dice Roll (cat. 5) | C->S | village | [village](#0x0dd-221-dice-roll--c-s-category-5-wire-type-0x50dd) | missing |
-| 0x12C | 300 | Poker Action (cat. 5) | C->S | village | [village](#0x12c-300-poker-action--c-s-category-5-wire-type-0x512c) | missing |
-| 0x12D | 301 | Poker ActionWithWager (cat. 5) | C->S | village | [village](#0x12d-301-poker-actionwithwager--c-s-category-5-wire-type-0x512d) | missing |
-| 0x12E | 302 | Poker SitOut (cat. 5) | C->S | village | [village](#0x12e-302-poker-sitout--c-s-category-5-wire-type-0x512e) | missing |
-| 0x12F | 303 | MiniGameHand | S->C | village | [village](#0x12f-303-minigamehand--s-c) | missing |
-| 0x190-0x193 | 400-403 | PawnChess Move / Capture / PlaceKing / NewGame (cat. 5) | C->S | village | [village](#0x190-0x193-400-403-pawnchess-actions--c-s-category-5-wire-types-0x5190-0x5193) | missing |
+| 0x7D1 | 2001 | CreateMiniGameTable | C->S | village | [village](#0x7d1-2001-createminigametable--c-s-wire-type-0x27d1) | implemented |
+| 0x0DA | 218 | MiniGameTableCreate | S->C | village | [village](#0x0da-218-minigametablecreate--s-c) | implemented |
+| 0x0D9 | 217 | MiniGameTableUpdate | S->C | village | [village](#0x0d9-217-minigametableupdate--s-c) | implemented |
+| 0x0D8 | 216 | MiniGameTableRemove | S->C | village | [village](#0x0d8-216-minigametableremove--s-c) | implemented |
+| 0x0DB | 219 | MiniGameNoTableLeft | S->C | village | [village](#0x0db-219-minigamenotableleft--s-c) | implemented |
+| 0x0DC | 220 | MiniGameNoPlayerSlotLeft | S->C | village | [village](#0x0dc-220-minigamenoplayerslotleft--s-c) | implemented |
+| 0x0D1 | 209 | JoinTable (cat. 5) | C->S | village | [village](#0x0d1-209-jointable--c-s-category-5-wire-type-0x50d1) | implemented |
+| 0x0CC | 204 | LeaveTable (cat. 5) | C->S | village | [village](#0x0cc-204-leavetable--c-s-category-5-wire-type-0x50cc) | implemented |
+| 0x0DE | 222 | Amount (cat. 5) | C->S | village | [village](#0x0de-222-amount--c-s-category-5-wire-type-0x50de) | implemented |
+| 0x0DC | 220 | Dice PlaceBets (cat. 5) | C->S | village | [village](#0x0dc-220-dice-placebets--c-s-category-5-wire-type-0x50dc) | implemented |
+| 0x0DD | 221 | Dice Roll (cat. 5) | C->S | village | [village](#0x0dd-221-dice-roll--c-s-category-5-wire-type-0x50dd) | implemented |
+| 0x12C | 300 | Poker Action (cat. 5) | C->S | village | [village](#0x12c-300-poker-action--c-s-category-5-wire-type-0x512c) | implemented |
+| 0x12D | 301 | Poker ActionWithWager (cat. 5) | C->S | village | [village](#0x12d-301-poker-actionwithwager--c-s-category-5-wire-type-0x512d) | implemented |
+| 0x12E | 302 | Poker SitOut (cat. 5) | C->S | village | [village](#0x12e-302-poker-sitout--c-s-category-5-wire-type-0x512e) | implemented |
+| 0x12F | 303 | MiniGameHand | S->C | village | [village](#0x12f-303-minigamehand--s-c) | implemented |
+| 0x190-0x193 | 400-403 | PawnChess Move / Capture / PlaceKing / NewGame (cat. 5) | C->S | village | [village](#0x190-0x193-400-403-pawnchess-actions--c-s-category-5-wire-types-0x5190-0x5193) | implemented |
 | 0x7D2 | 2002 | LeaveVillageRequest | C->S | village | [village](#0x7d2-2002-leavevillagerequest--c-s-wire-type-0x27d2) | implemented |
 | 0x3EE | 1006 | WorldLoginAck | S->C | village | [village](#0x3ee-1006-worldloginack--s-c) | implemented |
 | 0x093 | 147 | RequestPrivateMessageList | C->S | lobby | [tincat3](#0x093-147-requestprivatemessagelist--c-s) | implemented |
-| 0x095 | 149 | PrivateMessage | S->C | lobby | [tincat3](#0x095-149-privatemessage--s-c) | missing |
+| 0x095 | 149 | PrivateMessage | S->C | lobby | [tincat3](#0x095-149-privatemessage--s-c) | implemented |
 | 0x094 | 148 | ChangePrivateMessage | C->S | lobby | [tincat3](#0x094-148-changeprivatemessage--c-s) | implemented |
 | 0x097 | 151 | RemovePrivateMessage | C->S | lobby | [tincat3](#0x097-151-removeprivatemessage--c-s) | implemented |
-| 0x096 | 150 | AddPrivateMessage | C->S | lobby | [tincat3](#0x096-150-addprivatemessage--c-s) | differs |
+| 0x096 | 150 | AddPrivateMessage | C->S | lobby | [tincat3](#0x096-150-addprivatemessage--c-s) | implemented |
 | 0x01F | 31 | EmailMessage | — | lobby | [tincat3](#0x01f-31-emailmessage--0x02b-43-emailnotification) | unused |
 | 0x02B | 43 | EmailNotification | — | lobby | [tincat3](#0x01f-31-emailmessage--0x02b-43-emailnotification) | unused |
 | 0x038 | 56 | RequestUserBuddyList | C->S | lobby | [tincat3](#0x038-56-requestuserbuddylist--c-s) | implemented |
-| 0x03D | 61 | UserBuddyConn | S->C | lobby | [tincat3](#0x03d-61-userbuddyconn--s-c) | missing |
+| 0x03D | 61 | UserBuddyConn | S->C | lobby | [tincat3](#0x03d-61-userbuddyconn--s-c) | implemented |
 | 0x062 | 98 | AddUserBuddy | C->S | lobby | [tincat3](#0x062-98-adduserbuddy--0x063-99-removeuserbuddy--c-s) | implemented |
 | 0x063 | 99 | RemoveUserBuddy | C->S | lobby | [tincat3](#0x062-98-adduserbuddy--0x063-99-removeuserbuddy--c-s) | implemented |
-| 0x0AF | 175 | RegObserverBuddylist | C->S | lobby | [tincat3](#0x0af-175-regobserverbuddylist--0x0b0-176-deregobserverbuddylist--c-s) | differs |
-| 0x0B0 | 176 | DeregObserverBuddylist | C->S | lobby | [tincat3](#0x0af-175-regobserverbuddylist--0x0b0-176-deregobserverbuddylist--c-s) | differs |
+| 0x0AF | 175 | RegObserverBuddylist | C->S | lobby | [tincat3](#0x0af-175-regobserverbuddylist--0x0b0-176-deregobserverbuddylist--c-s) | implemented |
+| 0x0B0 | 176 | DeregObserverBuddylist | C->S | lobby | [tincat3](#0x0af-175-regobserverbuddylist--0x0b0-176-deregobserverbuddylist--c-s) | implemented |
 | 0x09C | 156 | RequestUserBuddyRefs | — | lobby | [tincat3](#0x09c-156-requestuserbuddyrefs--c-s) | unused |
 | 0x09D | 157 | RequestUserIgnoreList | C->S | lobby | [tincat3](#0x09d-157-requestuserignorelist--c-s) | implemented |
 | 0x0A0 | 160 | UserIgnoreConn | S->C | lobby | [tincat3](#0x0a0-160-userignoreconn--s-c) | optional |
@@ -696,7 +697,9 @@ The account e-mail is **not** in 203. It is sent after login through CharacterMa
 - To accept: send **207 SessionKey**. The creation completes exactly like a login. [known]
 - To refuse: send **Result(42)** with any errorcode. The client fails and closes. [known]
 
-Stub: `_h_auth_cipher` decrypts the blob, logs the name and key, and always sends 207. Matches.
+Stub: `dispatch._auth_cipher` decrypts the blob and logs the name and key. The first login with a
+new name stores its password (`store.set_password`); a later login whose password does not match
+gets Result(42) errorcode 1 (`store.check_password`); otherwise it sends 207. Matches.
 
 **Open decisions.**
 - **L5** Registration policy: name uniqueness, password rules, whether the CD key is valid or
@@ -733,8 +736,8 @@ Plaintext (`Authenticator::EncryptCredentials` T 1002b560): [known]
 [PROVEN]
 
 Stub: `decode_login_blob` looks for a clear `[1][1][16]` key after the password. On 204 that
-finds nothing, so only the log is affected (cosmetic). The stub binds the connection to the named
-player (`players.resolve_by_username`) and sends 207.
+finds nothing, so only the log is affected (cosmetic). The password check is the one of 203. The stub
+binds the connection to the named player (`players.resolve_by_username`) and sends 207.
 
 **Open decisions.**
 - **L6** Credential policy. Options: compare the password, compare the CD-key hash with
@@ -751,7 +754,7 @@ The game client never selects this mode. [inferred]
 
 **Open decisions.**
 - **L7** Whether to accept 205/206 at all. Default: refuse with Result(42). The SAdK client never
-  sends them, and the stub currently treats 206 like 204.
+  sends them, and the stub treats 206 like 204 without the password check (`dispatch._h_auth_server`).
 
 #### 0x0CE (206) AuthenticateServer — C->S
 
@@ -849,7 +852,7 @@ request. A mismatched kategory or index is reported as a failure. [inferred] The
 `g_ClientProtocolVersion` has the static value **1000** (read_memory S 0087aed8 = e8 03 00 00).
 LoginDialog (S 0043cbf0) and CreateAccountDialog (S 0043e080) overwrite it with
 `[LobbyClient] ProtocolVersion` (S 00465380) only when that key is present (not -1). [known] The
-same value is the server-browser match key (board/stub `LOBBY_PROTOCOL_VERSION`).
+same value is the server-browser match key (in the stub `config.LOBBY_PROTOCOL_VERSION` = 1000).
 
 This property is the client's real patch-level gate. `network.ini patchlevel=9212` is not
 involved. [known for the gate; inferred that 9212 never reaches the lobby wire, since no
@@ -1094,8 +1097,10 @@ Token plaintext (GenerateToken T 1002c090, inverse DecryptToken T 1002c430): [in
 **Open decisions.**
 - **L16** Whether to decrypt and verify the token (perm_id, name, nonce == the 212 nonce) with the
   session key issued to that perm_id. The client does not care. Default: verify when the session
-  key is known, and refuse with a non-zero 153 if verification fails. The stub does not verify. It
-  binds the connection by `perm_id` (`players.resolve_by_perm`).
+  key is known, and refuse with a non-zero 153 if verification fails. The stub does not decrypt the
+  token. It refuses a `perm_id` that did not log in during this server run with a 153 errorcode 1
+  (`players.issued`) and otherwise binds the connection by `perm_id` (`players.resolve_by_perm`)
+  (`dispatch._h_send_token`).
 
 #### 0x099 (153) AddResult — S->C (token completion)
 
@@ -1115,7 +1120,8 @@ ticket matters here. A 153 on any other ticket is ignored and that ticket is not
   half-built chat container before login crashed the client about 215 ms after the 153 (stub s31).
   [PROVEN] Push them right after it.
 
-Stub: `status_with_id(0, perm_id, ticket)`, followed by `chat.send_initial_reply`. Matches.
+Stub: `dispatch._h_send_token` sends `status_with_id(0, account id, ticket)`, followed on UC by
+`chat.send_initial_reply`. Matches.
 
 **Open decisions.**
 - **L17** The `id` value: always the **account's** 207 perm_id, also when the token names a character.
@@ -1136,8 +1142,13 @@ sends it. [known]
 **Required server behaviour.** Complete with 153 AddResult on the 0xE0 ticket. The rules are the
 same as for the server-id row of 153. [known] Which connections use this path is in the village and hosting sections.
 
-Stub: no handler, so it falls into the default-ack (Result 0). This is only correct if no
-connection ever takes this path. Not settled here.
+223 TANConnectionRequest / 224 TANLogin are not on the SAdK path to a hosted game: the joiner dials
+the 170 descriptor ip/port (`GameServerInfo::JoinGame` S 0048d030), and the game's
+TANConnectionGranted handler S 00469d20 only logs [inferred]. Whether any SAdK server-id connection
+is opened with data is not settled.
+
+Stub: `dispatch._h_send_token` handles 224 like 213 and completes it with 153 AddResult errorcode 0
+(the account id). Matches.
 
 **Open decisions.**
 - **L28** Whether to validate the nonce against the 222 that issued it (same shape as L16).
@@ -1195,9 +1206,12 @@ S 004801e0 (UserCommConnection) and from the mini-game StopObserving (board #785
 - Optionally send template 10 (left).
 - Tell the other members with NETMSG 6.
 
-Stub difference: there is no handler, so the default-ack sends NETMSG Result(42) on module 0x26B6.
-HandlerUserComm ignores it (unknown ticket, type 0x107), so the leave never completes on the client
-side. [inferred] Report only.
+A NETMSG Result(42) on module 0x26B6 does not complete the leave: HandlerUserComm ignores it (unknown
+ticket, type 0x107). [inferred]
+
+Stub: `chat.handle_leave_channel` (`dispatch._h_leave_channel`) sends template 10, template 11
+StatusReply(0) and NETMSG 6 to the remaining members. Matches. Leaving a channel works in live play
+[live, 2026-10-12, maintainer].
 
 **Open decisions.**
 - **L20** Whether a leave can be refused. The client accepts result 0 or 1. Default: 0.
@@ -1236,8 +1250,10 @@ with message_id 30. [known]
 **Required server behaviour.** Deliver the whisper as **NETMSG 3 PrivateChatMessage** inside
 template 3, only to the target's UC socket. The client has no receive case for 30. [inferred]
 
-Stub difference: the stub relays the frame to all cell-1 members as message_id 30. The client
-deserializes it and ignores it, so whispers are not delivered. Report only.
+Stub: `chat._handle_whisper` decodes the 30 and sends NETMSG 3 {mode, txt, cell_id 1, from_id =
+sender, to_id = target, from_name = sender's character name} in template 3 to the target's newest UC
+connection, and echoes it to the sender; an offline target is dropped (L22). Matches. Whispers work in
+live play [live, 2026-10-12, maintainer].
 
 **Open decisions.**
 - **L22** Behaviour when the target is offline or ignores the sender. The client gets no error
@@ -1258,6 +1274,9 @@ follows:
 **Required server behaviour.**
 - Send it to the target with from_id = sender, to_id = target and from_name = sender's name.
 - Echo the same message to the sender, so the outgoing line appears there. [inferred]
+
+Stub: sent by `chat._handle_whisper` (see 30) and by `chat.whisper_from_server` (a line from
+"Server", from_id `config.FROM_SERVER`).
 
 **Open decisions.** See L22.
 
@@ -1283,7 +1302,9 @@ kick. [inferred]
 **Required server behaviour.** Send it to the remaining members when a player's last UC
 connection in the cell goes away. [inferred]
 
-Stub: `chat.on_conn_closed`. Matches the intent. Not yet live-confirmed.
+Stub: `chat.on_conn_closed` when a UC socket closes (no 6 while the same player still has another
+live socket in the cell) and `chat.handle_leave_channel` on 259. Matches the intent. That the other
+members' lists drop the player is not live-confirmed.
 
 **Open decisions.** None beyond L19.
 
@@ -1322,7 +1343,7 @@ for it. [inferred]
 **Required server behaviour.** Do not use it. Global chat goes through a CellManager cell (cell 1).
 
 Stub difference: `_h_chat_message` (NETMSG 2 on module 0x26B6) relays as 165. That path is dead in
-both directions. Report only.
+both directions.
 
 **Open decisions.** None.
 
@@ -1391,8 +1412,8 @@ its `type` u16) in `data`. [PROVEN]
 - On the kind-3 ticket, a StatusReply/Result handles only 0x11 (failure 0x8C). Every other code is
   dropped. [inferred, T 10017640]
 
-Stub difference: the stub replies StatusReply(cell 3, ticket, 0). The client ignores that reply,
-so it never learns that the channel was created. Report only.
+Stub: `chat.handle_frame` refuses every create with StatusReply(cell 0, ticket, 0x11), the L26
+default. Matches.
 
 **Open decisions.**
 - **L26** Whether players may create channels, and how ids are assigned. The client accepts any
@@ -1417,9 +1438,7 @@ observed]
 
 **Required server behaviour.** Use result_id as a u32 with the codes listed at 17 and 259. [known]
 
-Stub difference: `chat.status_reply` packs result_id as u16, so the body is 2 bytes short of the
-template (board #825). Joins still complete live with result 0. A non-zero code sent this way may
-deserialize wrongly. [inferred] Report only.
+Stub: `chat.status_reply` packs cell_id, ticket_id and result_id as u32 each. Matches.
 
 **Open decisions.**
 - **L27** Result codes for server-side refusals. The client acts on these values and drops
@@ -1483,8 +1502,9 @@ from LobbyManager state 5->6 (S 00464ee0). [known]
 
 **Required server behaviour.** Remove the observer. Reply `Result(42)` errorcode 0 on the ticket. No
 client state depends on the reply. [inferred]
-Stub difference: the stub answers with the default Result but keeps the observer registered until the
-socket closes. [known]
+Stub difference: `dispatch._h_ack` answers Result(42) but keeps the observer registered until the
+socket closes. 172 carries only a ticket and every client registers two observers (types 4 and 5),
+so the stub cannot tell which one to drop. [known]
 
 **Open decisions.** None.
 
@@ -1570,10 +1590,9 @@ Enter. [PROVEN]
 - Keep server ids unique across **all** connection kinds. tincat3 looks up connections by server id
   (T 10019570). A village id that equals the UC server id (1) makes the client reuse the UC
   connection instead of dialling. [PROVEN] (stub `FAKE_VILLAGE` note)
-- Stub differences:
-  - The stub always sends `max_spectators 0` and `password_required False`.
-  - Its 177 handler drops `max_spectators`, `ai_players`, `cipher` and `hardcore`.
-  - So a hosted game lists as "0 + AI" occupied and never shows as protected. [inferred; boards #4771/#4772]
+- Stub: `dispatch.server_to_170_values` echoes the stored `max_spectators`, `ai_players`, `hardcore`
+  and `description`, and sets `password_required` from the decrypted `cipher` (`dispatch._has_password`,
+  H9); 168 and 177 store them (`_h_add_game_server`, `_h_change_server`). Matches.
 
 **Open decisions.**
 - **H3** `server_id` values. The client accepts any u32 except 0xFFFFFFFF/0xFFFFFFFE, which are
@@ -1672,7 +1691,9 @@ It is re-sent on room changes. [inferred] There is no server_type/subtype/port/i
 - Update the hosted game record and push the updated `170` (ticket 0) to type-5 observers. [PROVEN]
   (push path)
 - Treat `property_mask` as absent. All fields arrive every time. [known]
-- Stub difference: it does not store `max_spectators`, `ai_players`, `cipher` or `hardcore` (see 170). [known]
+- Stub: `dispatch._h_change_server` stores name, description, max_players, max_spectators,
+  ai_players, game_mode, hardcore, map, running, data and the password flag from `cipher`, and pushes
+  the updated 170. Matches.
 
 **Open decisions.**
 - **H9** How to map `cipher` to `password_required`. The client accepts any value. Default:
@@ -1693,7 +1714,9 @@ server_id = ServerList+0x9c and ticket category 0xa9 (T 10021350). [known]
   0xa9, a ticket-0 169 goes to listener +0x14 = face slot 5 `ServerList::RemoveServer` S 0046a5e0,
   which erases the game. A non-zero ticket only releases a ticket. [inferred, board #4773]
 - When the host's lobby connection closes, push the same 169 for each of its games. [inferred]
-- Stub difference: the stub removes the game but never pushes 169, so other browsers keep stale rows. [known]
+- Stub: `dispatch._h_remove_server` answers Result(42) 0 and pushes the ticket-0 169 to the observers
+  (`dispatch.push_servers_removed`); `connection.py` does the same for every game of a host whose lobby
+  connection closes. Matches.
 
 **Open decisions.** None.
 
@@ -1791,16 +1814,22 @@ reached any other way [known, static]:
   natupnp/hnetcfg/INetFw strings).
 So joiners need no forwarding, and the host needs TCP on its game port (5479 observed live). Making an
 unreachable host joinable needs something on the host's side that dials out (a tunnel helper or VPN).
-The stub's answer is the host bridge: `lobby/docs/bridge-protocol.md`.
-
+The stub's answer is the host bridge (`bridge.py`, `lobby/docs/bridge-protocol.md`): the host's
+`gamebridge` mod keeps an outgoing connection to the stub, a bridged game's 170 carries a virtual
+address on the stub (`bridge.game_registered`), the joiner's own mod redirects that dial to the stub's
+relay, and the stub forwards the TCP stream to the host unchanged.
 
 The host opens its room with 168. The joiner reads host ip/port from the 170 descriptor and runs
 `GameServerInfo::JoinGame` S 0048d030 / `JoinGameWithPassword` S 0048d0c0:
 `Shutdown -> StartUpNetwork(3) -> ConnectAndJoin` to that ip:port. A password is MD5-hashed client side
-and checked by the host. [known] Everything below goes peer to peer. The lobby server neither sees nor
-relays it. Its only duties for the room are the 170 address (H4) and keeping 177 changes visible.
+and checked by the host. [known] Everything below goes peer to peer. The lobby server does not read
+or answer it (the host bridge only forwards the bytes). Its only duties for the room are the 170
+address (H4) and keeping 177 changes visible.
 
-Event router: `NComm_Manager::HandleEvent` S 0040e560 (jump table 0x30002..0x30012). [known]
+Event router: `NComm_Manager::HandleEvent` S 0040e560 (jump table 0x30002..0x30012). [known] The
+names below follow that switch, the senders (S 00413ae0, S 00408e50, S 0040ff90) and the event-name map
+S 00421bd0 [known]. Events outside the pre-game room, such as 0x3000b user left (`EventUserLeft`), are
+in `docs/NCOMM_GAME_PROTOCOL.md`.
 
 #### 0x30001 (196609) UserInformation — joiner -> host
 **Contract.** (S 00409950): header, then name (u16 len + bytes), NetGUID (20 B), i32 buildVersion,
@@ -1887,7 +1916,8 @@ little-endian encoded value, it **returns silently**. [PROVEN]
   2026-07-27 live: RegisterGame followed)
 - Use **that connection's** player's perm_id. [PROVEN]
 - It is useful only while the WorldScreen is subscribed, that is during match start. Pushed at lobby
-  login, it reaches an empty observer list and has no effect. [known, ER 2026-07-27 push-after-153]
+  login, it reaches an empty observer list and has no effect. [known; a push at lobby login on
+  2026-07-27 drew no RegisterGame]
 - Send it once per referee login. Each LoginSuccess makes every subscribed client send RegisterGame again,
   with no guard (S 00432240). [inferred]
 
@@ -2183,7 +2213,7 @@ AvatarID (the claim's ActorID, the same in every client's claim), empty text.
 | 12 | Ref->C | 0xDCA LoginSuccess {own PermID} | S 0047ac20 [PROVEN] |
 | 13 | C->Ref | 0xDB6 RegisterGame (every client) | S 00432240 [PROVEN] |
 | 14 | Ref->C | 0xDB7 {GameID, 0}; 0xDB8 {GameID, 0, GameSeed} | S 00431800 starts the match [PROVEN] |
-| 15 | C->Ref | in match: 0xDAC / 0xDD4 / 0xDC0 | not answered by the stub [TODO] |
+| 15 | C->Ref / Ref->C | in match: 0xDAC / 0xDD4 / 0xDC0, answered with 0xDAD + 0xDAE / 0xDD5 / 0xDC1 + 0xDC2 | [PROVEN: server log 2026-10-10] |
 
 Silent failure points, where a frame is accepted and nothing happens:
 - a 4/5 assign reply (step 3);
@@ -2192,7 +2222,8 @@ Silent failure points, where a frame is accepted and nothing happens:
 - a type word repeated inside the MEMBLOCK (steps 12-14);
 - a 0xDB8 that arrives after the setup dialog closed (step 14).
 
-[PROVEN for the first four, ER 2026-07-27; known for the last]
+[PROVEN for the first four, live 2026-07-27 (`docs/MATCH_START.md`, "What the server must do"); known for
+the last]
 
 ## Village / world connection
 
@@ -2202,7 +2233,9 @@ The village (3D lobby world) is the client's third TinCat connection, owned by
 `LobbyComm::VillageServerConnection` (vftable 007db8d4). It dials the ip:port the server returns in
 `ConnectionData(222)` for the selected village server id (T 10023cc0 fills conn host/port, T 100309d0
 `ConnectionReal::Connect` dials only from those fields) [PROVEN, stub `dispatch._h_connection_data`].
-The port is the server's choice; the current stub serves it on `config.WORLD_PORT` = 5477. The login
+The port is the server's choice; the current stub serves it on `config.WORLD_PORT` = 5477.
+`network.ini` gamePort plays no part in it: that is the NComm game port a host listens on (see 168).
+The login
 on this connection is the same token flow as the UC connection (188 CheckVersion -> 211/212 -> 213
 SendToken -> 153 AddResult errorcode 0 -> transport state 8) and is covered in the login section.
 
@@ -2440,8 +2473,11 @@ avatar's position [PROVEN 2026-08-01, TTD traces].
   own id is safe on the wire and sets the own style, equipped items and stats [known]; what the
   movement sample pushed by `CLobbyClient::UpdateAvatar` S 00503620 does to the locally controlled
   avatar is [TODO].
-- Stub differs: names this message EntityCreate; sends location + style blocks only; never sends a
-  1001 for the recipient's own id.
+- Stub: names this message EntityCreate (`config.VILLAGE_MSG_ENTITY_CREATE`,
+  `village.entity_create_body`). A spawn carries the location, style, active-items and stats blocks
+  (`dispatch._avatar_style`); refreshes carry the location only. It sends no 1001 for the recipient's
+  own id at world entry; after a tailor change the owner gets a style-only 1001 (dtblcks 2) for its own
+  id (`village.send_style_update`).
 
 **Open decisions.**
 - **V9** which blocks to send (dtblcks 0..15). Client accepts any mask; mask 0 is valid (no blocks).
@@ -2468,8 +2504,8 @@ appearance and location come later via 1001.
 **Required server behaviour.**
 - Not required: 1001 alone creates avatars [PROVEN]. If used, send it before the first 1001 for that
   id, otherwise it only logs an error [known].
-- Stub differs: `config.VILLAGE_MSG_ENTITY_UPDATE = 1002 # (movement)` is wrong; movement is a
-  repeated 1001. No wire effect (the stub never sends 1002).
+- Stub: never sends 1002 (`config.VILLAGE_MSG_ENTITY_UPDATE` = 1002 is defined, commented as
+  AvatarLoggedIn, and unused).
 
 **Open decisions.**
 - **V13** announce arrivals with 1002. Client accepts it or its absence. Default: do not send.
@@ -2513,7 +2549,7 @@ per fixed 83 ms object step, not per rendered frame: S 0046ca40 was called about
 **Required server behaviour.**
 - Nothing is expected back. To make other players see the movement, relay it to them as 1001
   location refreshes [PROVEN 2026-08-01].
-- Stub matches (`dispatch._h_avatar_location`). Comment drift: the stub says "~3/s".
+- Stub matches (`dispatch._h_avatar_location`).
 
 **Open decisions.**
 - **V14** server-side movement validation (speed, bounds, zone). Client accepts any relay. Default:
@@ -2534,7 +2570,10 @@ The tailor action (slot code 17) checks avatar gold +0xd0 >= 50 client-side (S 0
 **Required server behaviour.**
 - No reply handler exists [known]. Others see the change only through a 1001 with the style block
   [inferred].
-- Stub differs: logged and dropped.
+- Stub: `dispatch._h_color_change` -> `economy.handle_color_change` charges 50 gold when the player has
+  it (otherwise the colours stay unchanged), sends 3201 (`economy.send_stats`), a style-only 1001 for
+  the owner's own id (`village.send_style_update`) and a 1001 with all four blocks to every other
+  in-world player. The owner and the others see the new look [live, 2026-10-07, maintainer].
 
 **Open decisions.**
 - **V15** tailor price and whether to charge. Client checks gold >= 50 only. Default: charge 50 gold
@@ -2555,7 +2594,7 @@ Unknown ownr -> rest discarded silently. No observer notification [known].
 **Required server behaviour.**
 - Not required for progress. Send to the owner's client after XP changes if the UI should update
   [inferred].
-- Stub differs: not implemented.
+- Stub: never sends 3200; 3201 carries lvl and exp as well.
 
 **Open decisions.**
 - **V16** level/XP rules. Client accepts any u32 pair (see V12 for the XP-bar constraint).
@@ -2576,6 +2615,12 @@ and later 3201s too. `glod` is play money ("funnies"): the minigame dialog reads
 
 **Required server behaviour.**
 - Send after any gold change (shop, tailor, minigames) so client-side gold checks stay correct
+  [inferred].
+- Stub: sends 3201 to the owner and to every other in-world player at world entry
+  (`economy.send_owner_state`) and after every gold or level change in the world: shop, tailor and
+  minigame stakes (`economy.send_stats` with `dispatch._stats_to_others`), `!level` and `!fasttrack`
+  (`dispatch._send_stats_everywhere`). Match rewards and wagers are written into the character save
+  and arrive with the next world entry. Matches.
 - Stub rule (maintainer decision, not client-derived): a character gets 500 funnies on its first
   world entry of each calendar day; nothing else earns funnies. Server notices (welcome, allowance,
   rewards, mail) are channel lines in the player's local zone cell, the tab selected by default.
@@ -2584,8 +2629,6 @@ and later 3201s too. `glod` is play money ("funnies"): the minigame dialog reads
 - Stub rule: every character gets one introduction mail (funnies, XP/gold, `!fasttrack`, hosting on
   TCP 5479) on its first world entry, from creator id `FROM_SERVER`; a LookUpName (72 by `char_id`)
   of that id is answered with a row named "Server" so the inbox shows a sender.
-  [inferred].
-- Stub differs: not implemented.
 
 **Open decisions.**
 - **V17** economy values (gold, glod). Any u32. Default the stored character values; new characters
@@ -2628,9 +2671,13 @@ NPC records render with per-npcidx models and labels [PROVEN 2026-08-02].
 - actcnt <= 3: actChat for i >= 3 is written past the 0x120-byte object (heap corruption, S 0047b5c0
   disasm, board #2381) [known].
 - Send after 1000 to each entrant; they are static, no refresh stream needed [PROVEN].
-- At most one action per NPC, in slot 0, for the action to run (see above) [inferred].
-- Stub: matches (`village.player_create_body`); NPCs are on (`config.VILLAGE_NPCS_ENABLED = True`).
-  Comment drift: the stub calls this "PlayerCreate"/"player record".
+- At most one action per NPC, in slot 0, for the action to run (see above) [inferred]. An NPC with two
+  actions did nothing when selected [live, 2026-10-12; note in `npcs.make_village_npcs`].
+- Stub: matches (`village.player_create_body`); NPCs are on (`config.VILLAGE_NPCS_ENABLED = True`), each
+  with one action in slot 0 (`npcs.make_village_npcs`). Comment drift: the stub calls this
+  "PlayerCreate"/"player record". Its `actChat` texts are button labels ("Zum Laden", "Post"), while the
+  client shows `actChat` as the NPC's line after running the action (`DispatchSlotAction` S 00434230)
+  [known].
 
 **Open decisions.**
 - **V18** the NPC cast (ids, positions, npcidx, colours, labels). Any values; npcidx 0..15, npctyp 1/2
@@ -2660,7 +2707,9 @@ No local state change: the client waits for the server's item update [known].
 
 **Required server behaviour.**
 - Answer with 3102 (or 3100 / 3101) for the owner so the UI reflects the move [inferred].
-- Stub differs: logged and dropped.
+- Stub: `economy.handle_move_item` applies the move as a swap and answers with 3102
+  (`economy.send_items`); an illegal move gets the unchanged state. A change of worn gear also sends
+  3100 to the other in-world players (`dispatch._gear_changed`). Matches.
 
 **Open decisions.**
 - **V21** move validation (slot compatibility, stacking). Client accepts whatever the following update
@@ -2680,7 +2729,8 @@ Sent after an item is dropped on the 3D world and the `!LOBBY_DELETE_ITEM` box i
 
 **Required server behaviour.**
 - Answer with an inventory update (3101 or 3102) without the item [inferred].
-- Stub differs: logged and dropped.
+- Stub: `economy.handle_delete_item` clears the slot and answers with 3102; a deleted worn item also
+  sends 3100 to the other in-world players (`dispatch._gear_changed`). Matches.
 
 **Open decisions.**
 - **V22** whether deletion is allowed for every item. Any. Default allow.
@@ -2698,8 +2748,11 @@ Unknown ownr -> discarded silently. Queued (+0x1c0) for observers +0xc8 (CLobbyC
 state 9 [known].
 
 **Required server behaviour.**
-- Send after equipment changes [inferred]. Requires ownr in the avatar map (see 1001 [TODO]).
-- Stub differs: not implemented.
+- Send after equipment changes [inferred]. Requires ownr in the avatar map (see 1001).
+- Stub: sends 3100 for a player to every other in-world player after a change of its worn gear
+  (`dispatch._gear_changed`) and after `!level` / `!fasttrack` (`dispatch._send_stats_everywhere`);
+  an emptied slot goes out twice, first with its container `sltt`, then with 0
+  (`economy._active_slots`). The owner gets 3102 instead.
 
 **Open decisions.**
 - **V23** item ids and slot types. Item ids are the ids 1..36 of `ItemsClient.txt` (plain text in the
@@ -2736,7 +2789,7 @@ listener [TODO]) [known].
 - Send exactly the client's slot count of records: fewer and the reader runs past the end, more are
   ignored (board #1033) [known]. The count is 0 after init and max(20, n) after the character data
   blocks (S 0048af70) [known]; the server must know which applies [inferred].
-- Stub differs: not implemented.
+- Stub: never sends 3101; 3102 carries the same inventory block.
 
 **Open decisions.**
 - **V24** sltcnt value. Ignored by the client; default the true slot count.
@@ -2755,7 +2808,9 @@ Queued (+0x1e8) for observers +0xe0 (CLobbyClient S 005036d0) [known].
 
 **Required server behaviour.**
 - Preferred answer to 3001/3002 and to shop buy/sell, since it refreshes both containers [inferred].
-- Stub differs: not implemented.
+- Stub: `economy.send_items` sends 3102 to the owner at world entry (`economy.send_owner_state`) and
+  after every move, delete, buy and sell, always with 20 inventory records (`economy.INVENTORY_SLOTS`).
+  Matches.
 
 **Open decisions.**
 - None beyond V23/V24.
@@ -2794,8 +2849,9 @@ about 30 ms later and `SendOpenShop` returned 1; the server answered with 0xE11 
 
 **Required server behaviour.**
 - Reply with 0xE11 whose NPCID equals the request's NPCID [inferred, board #4784].
-- Stub: wired, `dispatch._ECONOMY_HANDLERS[0x2E10]` -> `economy.handle_open_shop`, which answers
-  with 0xE11. An NPC id that is not a shop gets no answer.
+- Stub: `dispatch._ECONOMY_HANDLERS[0x2E10]` -> `economy.handle_open_shop`, which answers with 0xE11.
+  An NPC id that is not a shop gets no answer. Shops open and list their items in live play
+  [live, 2026-10-12, maintainer].
 - A live shop-NPC click put nothing on the wire on 2026-08-02. Unexplained [TODO] and superseded by
   the wired handler: statically nothing gates the send beyond the conditions above. An NPC record
   with more than one `act`, or with 11 not in slot 0, sends nothing [known].
@@ -2971,7 +3027,7 @@ observer call [known].
 
 **Required server behaviour.**
 - None. Sending it latches a pending flag the client can never clear by itself [inferred].
-- Stub: not implemented (correct).
+- Stub: never sends it. Matches.
 
 **Open decisions.**
 - **V31** send trade messages at all. Default: never.
@@ -2993,7 +3049,7 @@ Read only while a trade is active and the key matches; otherwise discarded. Pars
 stored or shown [inferred].
 
 **Required server behaviour.**
-- None. Stub: not implemented (correct).
+- None. Stub: never sends it. Matches.
 
 **Open decisions.**
 - Covered by V31.
@@ -3012,7 +3068,8 @@ No reply handler exists on the village connection [known].
 
 **Required server behaviour.**
 - Nothing required. Any answer would go through chat (UC) [inferred].
-- Stub differs: logged and dropped.
+- Stub: logs it (`dispatch._h_send_game_data`). The stub's own server commands (`!help`, `!setpwd`,
+  ...) are typed as ordinary chat lines starting with `!` and answered in chat (`dispatch._chat_command`).
 
 **Open decisions.**
 - **V32** command set and responses. Client accepts anything. Default: ignore, or reply with a system
@@ -3217,7 +3274,10 @@ The password itself never travels [inferred].
 **Required server behaviour.**
 - Success: 0xDA (create) then 0xD9 (first update shows the 3D table) for everyone in the zone
   [inferred]. Failure: 0xDB [inferred].
-- Stub differs: logged and dropped.
+- Stub: `minigames.handle_create` places the table in the dialog's tavern (the clicked spot if free),
+  seats the creator with the stake, publishes the table's chat cell and sends 0xDA then 0xD9 to every
+  in-world player; with no free spot, outside a tavern or for an unknown game type it sends 0xDB.
+  Dice, Poker and PawnChess tables are played in both taverns [live, 2026-10-07, two clients].
 
 **Open decisions.**
 - **V33** table capacity per tavern and when to refuse (0xDB). Any. Default: one table per tavern slot.
@@ -3234,7 +3294,8 @@ freeing it (leak). No observer fires and no UI change [inferred].
 **Required server behaviour.**
 - mngt low nibble 1..3 (else crash) [known].
 - Follow with 0xD9 for the table to appear [inferred].
-- Stub differs: not implemented.
+- Stub: `minigames.create_body` (key and settings, no seats), sent on create and by
+  `minigames.sync_tables` to a player entering the world, each followed by a 0xD9.
 
 **Open decisions.**
 - Covered by V34.
@@ -3252,7 +3313,8 @@ table); a successful state read fires +0x80 (table updated) [inferred].
 - Every client action (join, leave, amount, bets, moves) is answered through this message; the
   PawnChess board stays locked until an update changes `trnid` (board #713) [inferred].
 - Seat-block limits above.
-- Stub differs: not implemented.
+- Stub: `minigames.table_body`, sent to every in-world player after each table change and phase step
+  (`minigames._update`).
 
 **Open decisions.**
 - **V35** chtid per table. Any non-zero value; it is a chat cell the client joins via UC, so it must
@@ -3268,7 +3330,7 @@ Read only in state 9. Found -> all seats cleared, observers +0x74 remove the 3D 
 [inferred].
 
 **Required server behaviour.**
-- Send when a table closes [inferred]. Stub differs: not implemented.
+- Send when a table closes [inferred]. Stub: `minigames.leave` sends it when the last player leaves.
 
 **Open decisions.**
 - **V37** when tables close (last player leaves, timeout). Any. Default when empty.
@@ -3281,7 +3343,7 @@ Fires +0x8c -> error dialog `!MINIGAME_NOTABLELEFT` (S 00433280) while the game 
 [inferred].
 
 **Required server behaviour.**
-- Failure answer to 2001 [inferred]. Stub differs: not implemented.
+- Failure answer to 2001 [inferred]. Stub: `minigames.handle_create` (see 2001).
 
 **Open decisions.**
 - None.
@@ -3293,7 +3355,8 @@ Fires +0x8c -> error dialog `!MINIGAME_NOTABLELEFT` (S 00433280) while the game 
 Fires +0x98 -> error dialog `!MINIGAME_NOPLAYERSLOTLEFT` (S 00433380) [inferred].
 
 **Required server behaviour.**
-- Failure answer to 209 JoinTable [inferred]. Stub differs: not implemented.
+- Failure answer to 209 JoinTable [inferred]. Stub: `minigames.handle_join` sends it for an unknown
+  table, a wrong password CRC or a full table.
 
 **Open decisions.**
 - None.
@@ -3314,7 +3377,8 @@ no traffic (board #1067) [inferred].
 
 **Required server behaviour.**
 - Success: 0xD9 whose seat block lists the joiner. Failure: 0xDC [inferred].
-- Stub differs: logged and dropped.
+- Stub: `minigames.handle_join` seats the joiner on the first free seat, moves `stck` (clamped to the
+  balance) from the table's currency into the stack and sends 0xD9 and 3201; failure 0xDC.
 
 **Open decisions.**
 - **V38** buy-in rules (stake vs limits and gold). Any. Default: enforce lmtmn..lmtmx and available gold.
@@ -3325,7 +3389,8 @@ no traffic (board #1067) [inferred].
 
 **Required server behaviour.**
 - Send a 0xD9 whose seat block omits the leaver (removal by omission) [inferred].
-- Stub differs: logged and dropped.
+- Stub: `minigames.leave` returns the stack to the wallet and sends that 0xD9, or 0xD8 when the table
+  is empty; a closed village connection leaves every table (`minigames.leave_all`).
 
 **Open decisions.**
 - None.
@@ -3353,7 +3418,9 @@ visible client-side [inferred].
 `bt00..bt10` 11 x packed (bet on dice sum k+2) [inferred].
 
 **Required server behaviour.**
-- Accept during the betting phase and echo in the next 0xD9 [inferred]. Stub differs: dropped.
+- Accept during the betting phase and echo in the next 0xD9 [inferred]. Stub:
+  `minigames.handle_place_bets` stores the bets of a seated player in phase 1 when they do not exceed
+  the stack, and sends 0xD9.
 
 **Open decisions.**
 - Covered by V36.
@@ -3363,7 +3430,9 @@ visible client-side [inferred].
 **Contract.** (`MiniGameDiceProxy::SendRollDice` S 004887a0): `msgprt` 16, `rnid` 8.
 
 **Required server behaviour.**
-- Answer with a 0xD9 carrying `dice` and the result phase [inferred]. Stub differs: dropped.
+- Answer with a 0xD9 carrying `dice` and the result phase [inferred]. Stub: `minigames.handle_roll`
+  accepts it only from the `dlr` seat in phase 2 (repeats are dropped), rolls and sends the phase-3
+  0xD9; the server rolls itself when the roller times out.
 
 **Open decisions.**
 - Covered by V36 (dice RNG is server-side).
@@ -3375,7 +3444,8 @@ visible client-side [inferred].
 Marks the current state as answered; the local turn ends until a state change [inferred].
 
 **Required server behaviour.**
-- Answer with 0xD9 that advances `crntplyr`/`phase`/`round` [inferred]. Stub differs: dropped.
+- Answer with 0xD9 that advances `crntplyr`/`phase`/`round` [inferred]. Stub:
+  `minigames.handle_game_action` -> `_poker_act` (rules under "Poker game").
 
 **Open decisions.**
 - Covered by V36.
@@ -3386,7 +3456,7 @@ Marks the current state as answered; the local turn ends until a state change [i
 `wgr` packed.
 
 **Required server behaviour.**
-- As 300 [inferred]. Stub differs: dropped.
+- As 300 [inferred]. Stub: as 300.
 
 **Open decisions.**
 - Covered by V36.
@@ -3397,7 +3467,8 @@ Marks the current state as answered; the local turn ends until a state change [i
 (polarity [guess]: 1 = sit out).
 
 **Required server behaviour.**
-- Reflect in the player's `actn` flags (bit12 sittingOut) in the next 0xD9 [inferred]. Stub: dropped.
+- Reflect in the player's `actn` flags (bit12 sittingOut) in the next 0xD9 [inferred]. Stub:
+  `minigames._poker_sit_out` (`enbl` 1 = sit out).
 
 **Open decisions.**
 - Covered by V36.
@@ -3417,8 +3488,8 @@ Marks the current state as answered; the local turn ends until a state change [i
 Unknown table or unseated client -> silent drop [inferred].
 
 **Required server behaviour.**
-- Send each seated player's own hole cards privately (only to that client) [inferred]. Stub differs:
-  not implemented.
+- Send each seated player's own hole cards privately (only to that client) [inferred]. Stub:
+  `minigames._send_hands` sends each player's 303 to that player's village connection only.
 
 **Open decisions.**
 - hndval encoding: see "Poker game" (the client compares it to pick winners) [known].
@@ -3438,7 +3509,9 @@ Unknown table or unseated client -> silent drop [inferred].
 
 **Required server behaviour.**
 - Answer every 400-402 with a 0xD9 whose `trnid` differs from the latched one, or the board stays
-  locked silently [inferred]. 403 is cleared by a phase-6 update. Stub differs: dropped.
+  locked silently [inferred]. 403 is cleared by a phase-6 update. Stub: `minigames.handle_game_action`
+  -> the PawnChess handlers in `minigames.py` / `pawnchess.py` (rules under "PawnChess game"); every
+  answer to 400-402, accepted or not, carries a new `trnid` (`minigames._chess_bump`).
 
 **Open decisions.**
 - Covered by V36.
@@ -3743,6 +3816,9 @@ client clears its 149 cache [known].
   0x92 and PostOffice then marks itself busy with nothing in flight: the whole mailbox queue
   (polls, mark-read, delete, send) stalls until logout [known code path, board #2376].
 - No Result: busy +0x24 stays set, no further list requests, PostOffice queue stalls [known].
+- Stub: `mail.send_inbox` (`dispatch._h_private_message_list`) sends one 149 per stored mail of the
+  `delivery_target`, with `message_text`, newest first and at most 100, then Result(42). Mail is kept
+  in `sadk_mail.json` beside the player store (`mail.py`). Matches.
 
 **Open decisions.**
 - **T11** Mailbox storage and retention: client imposes nothing. Default: persist per perm id.
@@ -3838,8 +3914,11 @@ after resolving the recipient name with a 72 RequestCharacters by name when not 
 **Required server behaviour.** Complete with **AddResult(153)** {errorcode, id, ticket_id} -> T
 10028fc0 -> PostOffice::SendMailResultReceived S 0047c5e0 (delegate gets errorcode). A Result(42) is
 ignored (no 0x96 Result case): the ticket leaks, busy +0x34 stays 1 (every later send returns 4) and
-the PostOffice queue stalls [known, board #4788]. **Stub differs:** 150 falls to the default
-Result(42) ack (`dispatch.dispatch_lobby`).
+the PostOffice queue stalls [known, board #4788].
+
+Stub: `dispatch._h_add_private_message` stores the mail (`mail.add`) and answers AddResult(153)
+{errorcode 0, id = the new message_id}; a recipient that is not a known character gets errorcode 1
+(T22). Mail works in live play [live, 2026-10-12, maintainer].
 
 **Open decisions.**
 - **T21** AddResult `id`: passed to the observer but unused by SADK [inferred]. Default: the new
@@ -3884,7 +3963,10 @@ RefreshFriendList.
 **Required server behaviour.** N × **61 UserBuddyConn** with the request ticket, then
 **Result(42)**. The Result calls observer vtbl+0x28 (userId, rows, count, errorcode) ->
 BuddyListReceived S 00478160, which merges rows and sets BuddyListValid [known]. Result alone =
-valid empty list [PROVEN: stub `_h_ack`, 31 live logins]. No Result: login hangs in state 6.
+valid empty list [PROVEN: 31 live logins answered with a Result only]. No Result: login hangs in state 6.
+
+Stub: `buddies.send_list` (`dispatch._h_buddy_list`) sends one 61 per stored buddy on the 56 ticket,
+then Result(42). Matches.
 
 **Open decisions.** **T24** Buddy persistence and whether buddy relations are one-way: client imposes
 nothing. Default: one-way list per perm id, persisted.
@@ -3913,6 +3995,9 @@ Paths [known]:
 
 **Required server behaviour.** For list rows use the 56 ticket. For live presence changes push with
 ticket_id 0.
+
+Stub: `buddies.set_location` pushes a ticket-0 61 to the lobby connection of every account that lists
+the character when it enters or leaves a world; `buddies.row` fills perm_id_type 2. Matches.
 
 **Open decisions.**
 - **T25** When to push presence updates (login, logout, joining a game): client accepts any time
@@ -3943,7 +4028,9 @@ ticket_id 0.
 **Required server behaviour.** Result(42) on the ticket -> T 1002e0b0 / T 1002e1d0 -> observer
 (userId, buddyId, errorcode) -> AddBuddyResultReceived S 004770b0 / RemoveBuddyResultReceived
 S 00477550. On success the client adds the buddy (offline, server id -1) or removes it [known].
-Stub acks with Result [inferred correct; not exercised live].
+Stub: `buddies.add` / `buddies.remove` (`dispatch._h_add_buddy` / `_h_remove_buddy`) answer Result(42)
+errorcode 0, or 1 for a refused add (T28); a successful add is followed by one 61 push (T29). Buddy
+lists and presence work in live play [live, 2026-10-12, maintainer].
 
 **Open decisions.**
 - **T28** Refusals (self, unknown id, already a buddy, list full): any nonzero errorcode; the client
@@ -3963,7 +4050,8 @@ Stub acks with Result [inferred correct; not exercised live].
 No SADK caller identified; the SADK observer slots 7/8 are no-ops [inferred].
 
 **Required server behaviour.** Complete with **AddResult(153)**; Result(42) is ignored and the
-ticket leaks (no visible effect beyond that) [known]. **Stub differs:** answers Result(42).
+ticket leaks (no visible effect beyond that) [known]. Stub: `dispatch._h_buddy_observer` answers
+AddResult(153) errorcode 0 (id = the request's user_id) and sends no 61 for `send_all` (T30).
 
 **Open decisions.** **T30** `send_all` semantics (initial dump of all buddies as 61 pushes):
 [guess]. Default: if set, push one 61 per buddy with ticket 0 after the AddResult.
@@ -4755,106 +4843,25 @@ tolerates; the default is a suggestion, not a client requirement. Ids match the 
 
 ## Where the stub differs from the client
 
-The stub (`lobby/sadk_lobby/`) is unchanged by this catalog. Rows marked "not implemented" are messages
-the client handles and the stub ignores or only logs.
+What the stub (`lobby/sadk_lobby/`) still does differently from what the client needs or from the
+original server, including code comments that describe the protocol wrongly. Messages the stub
+answers as the client needs are not listed; their entries above name the stub function.
 
 | Message | What the stub does | What the client needs | Impact | Address |
 |---|---|---|---|---|
-| 259 RequestLeaveChannel | default NETMSG Result(42) on module 0x26B6 | CellManager tpl 11 StatusReply (or a relayed 42) on the CellManager ticket | the leave never completes on the client [inferred] | T 10016f10, T 10017640, T 10027080 |
-| 30 WhisperChatMessage | relays message_id 30 to all of cell 1 | NETMSG 3 PrivateChatMessage to the target only (and an echo to the sender) | whispers are not delivered [inferred] | T 10017100, T 10017ba0, S 004810a0 |
 | 2 on 0x26B6 / 107 / 108 / 165 | `_h_chat_message` relays NETMSG 2 as 165; 107/108 handlers | chat through CellManager cells only | dead path in both directions, no wire effect [inferred] | T 10023cc0 (no case 0xA5) |
-| CellManager tpl 11 StatusReply | `chat.status_reply` packs result_id as u16 | result_id u32 (body 2 bytes longer) | result 0 works live; non-zero codes may deserialize wrongly [inferred] | T 1000ef30 case 11 |
-| CellManager tpl 7 requestCreateCell | replies StatusReply(cell 3, ticket, 0) | success only by publishing the new cell (tpl 0); kind-3 StatusReply handles only 0x11 | the client never learns the channel was created [inferred] | T 10017210, T 10017640 |
 | 204 AuthenticateUser | `decode_login_blob` looks for a clear CD key | 204 carries only a SHA-512 key hash | logging only [known] | T 1002b560, T 1002ba70 |
 | 4 / 71 | `_h_request_login` / `_h_create_account` | never sent | unreachable code [inferred] | — |
-| 206 AuthenticateServer | accepted like 204 | never sent; see L7 | none today [known] | T 10030fe0 |
+| 206 AuthenticateServer | accepted like 204, without the password check (`_h_auth_server`) | never sent; see L7 | none today [known] | T 10030fe0 |
 | 207 SessionKey | cipher=None when the `twofish` module is missing | a decryptable cipher | login fails with OnError 0xCB (environment hazard) [known] | T 10023cc0 case 0xCF |
-| 224 TANLogin | no handler; default Result(42) | 153 AddResult on the 0xE0 ticket | matters only if a server-id connection is opened with data [inferred] | T 10023460 |
-| 172 DeregObserverServerList | default Result; observer kept until the socket closes | remove the observer | pushes continue to a client that stopped observing [inferred] | — |
-| 170 GameServerData / 177 ChangeGameServer | sends max_spectators 0 and password_required False; 177 handler drops max_spectators, ai_players, cipher, hardcore | echo the host's 177 values | hosted games list as "0 + AI" occupied and never as protected [inferred] | S 0048da70 (disasm 0048db1b), T 10021040 |
-| 169 RemoveServer | removes the game, never pushes 169 | push `169 {server_id, running 0, ticket 0}` to type-5 observers | other browsers keep stale rows [known] | T 10023cc0 case 0xa9, S 0046a5e0 |
+| 172 DeregObserverServerList | Result(42) (`_h_ack`); the observer stays registered until the socket closes, because 172 does not say which of the client's two lists ends | remove the observer | pushes continue to a client that stopped observing [inferred] | — |
 | 189 AssignServer | unreachable `(5,1)` branch | — (no SAdK path sends 5/1) | none [inferred] | S 00468f60 |
-| 0xDB6 RegisterGame | reads only GameID; docstring describes u32-length strings | MSB-first bitstream, u8 strings, 1-bit bool | no wire effect today [known] | S 00479840 |
-| 0xDC0 FinishGame | logs, no reply | 0xDC1 then 0xDC2 | what the client blocks on is [TODO] | S 00479c40, S 0047a810, S 0047a9c0 |
-| 0xDD4 GiveUpGame | logs, no reply | 0xDD5 with the request's GameID, Result 0..20 | client stays on "Finalizing" [known] | S 00479ab0, S 0047ae80 |
-| 0xDAC ClaimChest | 0xDAD Result 0, then 0xDAE with the claim's ActorID (the opener) for every claim of the chest; every client gets the same GameSeed | 0xDAD Result 0, then 0xDAE | none [live, 2026-10-14] | S 00479670, S 00479fb0, S 00782a60 |
-| 1001 AvatarData | named EntityCreate; sends location + style blocks only; never sends a 1001 for the recipient's own id | the original server sent each client its own 1001 [inferred]; the own avatar is in the map without it (S 004626c0) and a 1001 for the own id is consumed bit-exactly (S 004824b0) [known] | none: 3100-3201 `ownr` lookups find the own avatar [known] | S 0046e1d0, S 004824b0, S 004626c0 |
-| 1002 AvatarLoggedIn | `config.VILLAGE_MSG_ENTITY_UPDATE = 1002 # (movement)` | 1002 is AvatarLoggedIn; movement is a repeated 1001 | comment only; the stub never sends 1002 | S 0046e390 |
-| 1004 NPCData | body builder matches; on (`config.VILLAGE_NPCS_ENABLED = True`); comments call it "PlayerCreate"; one NPC ("Herold Hartmut") carries two actions; `actChat` values are written like button labels | NPCs sent after 1000 to each entrant; one action per NPC, in slot 0; `actChat` is spoken (bubble + chat line) | the two-action NPC has no established way to run an action [inferred] | S 0046f8c0, S 0047b5c0, S 00437760, S 004337f0 |
-| 2000 AvatarLocation | relays correctly; comment says about 3/s | about 3/s: every 4th call of S 0046ca40, which runs once per 83 ms step [live call rate 2026-10-14, inferred send rate] | none (the comment matches) | S 0051ace0 |
+| 0xDB6 RegisterGame | reads every field with a bit reader (`wagers.parse_register_game`); the `referee.py` module docstring still describes positional u32 fields with u32-length strings | MSB-first bitstream, u8 strings, 1-bit bool | comment only [known] | S 00479840 |
+| 1001 AvatarData | named EntityCreate; no 1001 for the recipient's own id at world entry (only a style-only one after a tailor change) | the original server sent each client its own 1001 [inferred]; the own avatar is in the map without it (S 004626c0) and a 1001 for the own id is consumed bit-exactly (S 004824b0) [known] | none: 3100-3201 `ownr` lookups find the own avatar [known] | S 0046e1d0, S 004824b0, S 004626c0 |
+| 1004 NPCData | body builder matches; comments call it "PlayerCreate" (`config.VILLAGE_MSG_PLAYER_CREATE`); `actChat` values are button labels ("Zum Laden", "Post") | `actChat` is spoken (bubble + chat line) | cosmetic: the NPC speaks a button label [inferred] | S 0046f8c0, S 0047b5c0, S 004337f0 |
 | 2002 LeaveVillageRequest | answers with two 1006 (correct); docstrings still call 0x27D2 a world-login request answered with 1000 | two 1006 {0xDEADBEEF} | comment only | S 0046bde0, S 0046ec50 |
-| 3950 AvatarColorChange | logged and dropped | 3201 + a style 1001 to everyone (V15) | colour changes are not seen by others; gold not charged | S 0046c760 |
-| 3200 / 3201 | not implemented | 3201 after any gold change | client-side gold checks drift [inferred] | S 0046c940, S 0046c9c0 |
-| 3001 / 3002 | logged and dropped | an item update (3101/3102) | item moves and deletes never take effect | S 0046bec0, S 0046bff0 |
-| 3100 / 3101 / 3102 | not implemented | item state for the owner | inventory and equipment never update | S 0046e660, S 0046e6f0, S 0046e780 |
-| 3600 OpenShop / 3601 ShopInventoryData | wire matches (`economy.handle_open_shop` answers 0x2E10 with 0xE11); stale comments in `dispatch.py` and `village.py` still say a click sends nothing; a non-shop NPC id gets no answer | 0xE11 as the reply to 0xE10 with the same NPCID | none on the wire; comments only | S 0046ddf0, S 004706b0, S 0047b200 |
+| 3600 OpenShop / 3601 ShopInventoryData | wire matches (`economy.handle_open_shop` answers 0x2E10 with 0xE11); comments in `dispatch._spawn_world_avatars`, `village.py` (`VILLAGE_MSG_SHOP_INVENTORY`) and `npcs.py` (`Npc.shop`) still say a click sends nothing; a non-shop NPC id gets no answer | 0xE11 as the reply to 0xE10 with the same NPCID | none on the wire; comments only | S 0046ddf0, S 004706b0, S 0047b200 |
 | 3610 / 3620 and 3611 / 3621 | wire matches (`economy.handle_buy`, `handle_sell`, `result_body`); ShopID is not compared with the opened shop; QTY > 1 honoured | 0xE1B / 0xE25 plus 3102 and 3201; the client sends the ShopID of its last 0xE11 and QTY 1 | a buy with a stale ShopID is honoured; no effect with the real client | S 0046c400, S 0046c510, S 00470990, S 00470a10 |
 | 3620 ShopSell price | credits the stock Sell value for an item the open shop lists (matches [live, 2026-10-12]); base value // 2 for an item it does not list | the amount the client shows: stock Sell if the open shop lists the item, else trunc(base value x SellMod) | at a shop that does not list the item the player may be paid another amount than the confirm box states [inferred] | S 0046d800, S 0044e271 |
-| 4000 ChatCommand | logged and dropped | nothing required | none | S 0046cbf0 |
-| Minigames (2001, 209, 204, 222, 220, 221, 300-302, 400-403; 216-220, 303) | client actions logged and dropped; server messages not implemented | the table protocol (0xDA, 0xD9, 0xD8, 0xDB, 0xDC, 0x12F) | no minigames | S 0046cf20, S 0046f380, S 00471720 |
-| 150 AddPrivateMessage | default Result(42) | AddResult(153) | the first send leaks the ticket; all later mail sends and the PostOffice queue stall [known] | T 1002677c entry 0x96 -> T 10028fc0 |
-| 175 / 176 buddy observers | Result(42) | AddResult(153) | ticket leak only; SADK does not send them [inferred] | T 1002677c |
-| 147 / 149 | Result only (empty mailbox) | 149 records with `message_text` before the Result once mail exists | correct for an empty mailbox; stored mail would never show | T 10028d80, T 10028a30 |
+| Minigames (2001, 209, 204, 222, 220, 221, 300-302, 400-403) | the table protocol and all three games are implemented (`minigames.py`, `poker.py`, `pawnchess.py`); the `minigames.py` module docstring still says Poker and PawnChess tables are refused with 0xDB, and the `handle_game_action` docstring says the PawnChess logic is not implemented | — | comment only | S 0046cf20, S 0046f380, S 00471720 |
 | 162 PropertyData | value 0 | any value <= 1000 | passes; the binary-derived default is 1000 | S 00464e70 |
-| 61 UserBuddyConn | no presence pushes | 61 with ticket 0 on presence changes | buddies always show offline | S 00476f90 |
-
-## Corrections to existing docs
-
-Contradictions between this catalog and `docs/LOBBY_PROTOCOL.md`, `docs/NCOMM_GAME_PROTOCOL.md` and
-`CLAUDE.md`. This is a report only; those files are not edited here.
-
-### Encoding
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.1: LBOOL is a 4-byte uint32 | LBOOL is **1 byte** on the wire | T 10011490 GetMaxLength returns 1 for type 14; T 10013100 stores one byte; stub `tincat.py` writes 1 byte live |
-| LOBBY_PROTOCOL.md §3.1: `STRING N` is a fixed char[N] buffer | u32 LE length (including the NUL) followed by the bytes, clamped to N on receive | T 100112b0 / T 100110e0 |
-| LOBBY_PROTOCOL.md §3.1 and CLAUDE.md "chat payload magic 0x0062" | 0x0062 is the TinCat module id of the CellManager, followed by msgType 0 and a template id (0..11). It is not a separate NETMSG payload magic. The UC connection's login and channel requests (188/211/213/17/259) use module 0x26B6 | T 1000cde0 / T 1000ef30 |
-| CLAUDE.md "LobbyMessage field scalars are BIG-endian" | The fields are an MSB-first bitstream. 32-bit values read as big-endian only when byte-aligned; strings are u8-length-prefixed, raw buffers have no length, bools are 1 bit. In RegisterGame 0xDB6 every field after RankedGame is 1 bit off byte alignment. Reads through vtbl+0x40 byte-reverse 32 bits: ShopInventoryData 0xE11 `SellMod` is a little-endian float inside the stream | S 00479840, WriteBits S 0048ef70, WriteBool S 0048f3c0, S 0048ff50, S 004706b0 |
-| LOBBY_PROTOCOL.md §3.7 / §3.6: `keypool` in 120 CdKeyData and 159 UserKeyConn is UNSHORT | still UNSHORT on the wire, but the client reads it with the byte accessor, so values must stay below 256 | T 10023cc0 @10025d3b, vtbl+0x5c |
-
-### Login and connections
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.3 / §6 and CLAUDE.md "auth ... completing on 153 AddResult" | On the main lobby connection login completes on **207 SessionKey** (state 7 -> 8, OnConnected). 153 completes only the token login on the UC connection and on the server-id connections (village, referee) after 213 | T 10023cc0 case 0xCF; T 10027080; T 10023460 |
-| LOBBY_PROTOCOL.md §3.3: 202 is "server ECDH public key, both derive, session key = SHA-512 XOR-folded" | 202 is an `ecc_encrypt_key` blob {hash OID, server ephemeral P-521 key, server-chosen secret XOR hash(ECDH)}; the client decrypts it with DecryptSharedSecret | T 1002ade0; T 10023cc0 case 0xCA |
-| LOBBY_PROTOCOL.md §3.3 / §6: "plaintext fallback 4 RequestLogin -> 42 -> 207" | The client has no builder for NETMSG 4 or 71. Every connection starts with 188; the lobby login is 188 -> 201 -> 203/204 -> 207 only | T 10023bf0 |
-| LOBBY_PROTOCOL.md §1 / §5: "patchlevel 9212 ... enforced via 183 CheckLevel / 188 CheckVersion" | 188 carries the constant version 27 and no patch level. The lobby-side version gate is PropertyData(162) kategory 1 / index 1 compared with `[LobbyClient] ProtocolVersion` (default 1000). No login-path writer of `patchlevel` exists; 183 has no sender | T 10023bf0 (SetSISHORT "version" 0x1b); S 00464e70; S 0087aed8 |
-| LOBBY_PROTOCOL.md §3.17: properties are a general store for resources/XP/unlocks | The only SADK caller is the login version check PropertyGet(1, 1). The value must be <= the client ProtocolVersion (1000 live), compared as signed, or the client disconnects with error 62 | RequestProperty S 0048ecb0, single caller S 00464f31; S 00464e70 |
-| CLAUDE.md "Ports: ... 5479 world" and LOBBY_PROTOCOL.md §1 table / §3.2 / §3.21 (":5479 sub-protocol") | The village connection dials the ip:port the server returns in ConnectionData(222); network.ini gamePort is not used for it. The stub currently serves the village on `config.WORLD_PORT` = 5477 | T 10023cc0 (fills host/port); `ConnectionReal::Connect` T 100309d0 |
-| LOBBY_PROTOCOL.md §6 item 4: "MOTD ... Result (42)" | 105 RequestMOTD is completed only by 106 MOTD; a Result(42) on the 105 ticket is ignored | no 0x69 case in the Result table T 10026680; 106 at T 10023cc0 case 0x6a -> T 100292c0 |
-
-### Chat
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.5: 240-251 UC* messages, 107/108, 165 Chat | 240-251 are not used: no builder, and neither T 10027080 nor the CellManager handles them. 107/108 have no client builder. 165 is dropped by HandlerLobby (no case 0xA5). Chat runs through the CellManager (module 0x62) carrying NETMSG 2/3/5/6/17/30/76/259 | T 10027080; T 1000ef30; T 10023cc0 |
-| LOBBY_PROTOCOL.md §3.15 / §3.18: admin cyclic messages and broker messages on the lobby connection | Admin cyclic messages (10, 11, 13, 14, 15) and broker messages (34-47) travel through the CellManager relay on the UC/chat connection. 46 BrokerSoldNotification, 40/41 and 8/9/12/32/33 are neither sent nor handled by the client | ChatChannelManager::HandleCellMessage T 10017ba0 |
-
-### Hosting, referee and ranking
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.11: "189 AssignServer -> server replies 192 [PROVEN]" | The SAdK 189 for the game is the referee request (4, 4), completed by a 170 GameServerData on the category-0x108 ticket. 192 is the separate UC dial (189 type 2) | S 00468f60; T 10021520 -> S 00469ad0 |
-| LOBBY_PROTOCOL.md §3.11 host flow: 168 with "port 5479" | The client sends 168 with `ip` unset and `port` = the NComm game port. The completion is AddResult(153){id}, consumed by CreateResultReceived; a non-zero errorcode shuts the host network down | S 0046aaa0 / T 10020ca0; S 0046a6a0 |
-| LOBBY_PROTOCOL.md §3.11 join flow | A joiner reaches a hosted game by dialling the 170 descriptor ip/port directly. 221/222 address server-id connections (village world, referee). 223/224 TAN is not on the SAdK join path (TANConnectionGranted only logs) | GameServerInfo::JoinGame S 0048d030; T 10021420 / T 10023af0; S 00469d20 |
-| LOBBY_PROTOCOL.md §3.11 ServerDataBlock note | For village descriptors, 170 `running` (desc+0x4c) is the add/remove opcode: running == 1 is required to add an unknown id, running == 0 removes a known one. For games it is ignored | S 0046a440 |
-| LOBBY_PROTOCOL.md §3.11 occupancy | The game browser's occupied count is max_spectators + ai_players; cur_players is not read for games. 177 property_mask and 168 automatic_join are never written by the client | S 0048da70 (disasm 0048db1b); T 10021040; T 10020ca0 |
-| LOBBY_PROTOCOL.md §3.19: ranking messages 252-257 on the lobby connection | They use a separate ranking-server connection, opened when AssignServer type 4 / subtype 5 is answered, and are received by HandlerStatSurf | RankingManager T 10029a00 -> ConnectRankingServer T 10029a20; T 100268e0 |
-| LOBBY_PROTOCOL.md §3.19 / §7: rankdata (257) layout [TODO] | Each of the `count` records is u32, u32, NUL-terminated nick, then u32 points, won, lost, tie, disconnected. `played` is derived and there is no bounds check. In 255, `played` is not read | OnReceiveRankRange T 10029d50; HandlerStatSurf T 100268e0 |
-| NCOMM_GAME_PROTOCOL.md event table | Several NComm ids are mislabelled: 0x30003 = GameInformation, 0x30004 = GameLoaded, 0x30005 = StartGame, 0x3000b = UserLeft, 0x3000f = NE_PreGame_HostReconnectRestartAndSendGameInformation | switch in S 0040e560; senders S 00413ae0, S 00408e50, S 0040ff90; event-name map S 00421bd0 |
-
-### Mail and other tincat3 messages
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.14: 149 PrivateMessage `data` | `data` is never read; `message_text` is read twice instead | HandlerLobby T 10023cc0, push operands at 10024e8a / 10024edc |
-| LOBBY_PROTOCOL.md §3.14: 150 AddPrivateMessage completion | 150 must be completed with AddResult(153), not Result(42) | AddResult table T 1002677c, entry 0x96 -> T 10028fc0 |
-| LOBBY_PROTOCOL.md §3.20: 261 CheckPlayerOnServerAndGetInfosReply | 261 has no receive case on the lobby connection, so the client drops it and its callback is never invoked from the wire | HandlerLobby T 10023cc0 case list; callback T 10021700 |
-
-### Village
-
-| Existing text | Correction | Settled by |
-|---|---|---|
-| LOBBY_PROTOCOL.md §3.2 / §3.21: 1001-1006 as an unspecified [TODO] set | The binary fixes all of them (dispatcher S 00470a90). 1002 is AvatarLoggedIn, not an update/movement message; 1006 WorldLoginAck is the logout trigger, not a render gate | S 00470a90; S 0046e390; S 0046ec50 |

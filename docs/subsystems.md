@@ -10,13 +10,13 @@ and `tincat3.dll` (the network middleware, image base `0x10000000`).
   **[inferred]** = follows from known facts through one reasoning step. **[guess]** = plausible, not
   checked. **[PROVEN]** = the working stub (`lobby/sadk_lobby/`) shows it live (binary address plus live evidence).
 - Wire layouts are not repeated here. See [message-catalog.md](message-catalog.md) for per-message fields
-  and [LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md) for the NETMSG reference.
+  and the NETMSG encoding ("Wire encoding"), and [protocol-overview.md](protocol-overview.md) for the flows.
 - Mapping numbers come from a `mapping/state.db` snapshot taken on 2026-10-07 at the end of Phase 6.
 
 Related documents: [NCOMM_LAYER.md](NCOMM_LAYER.md), [NCOMM_GAME_PROTOCOL.md](NCOMM_GAME_PROTOCOL.md),
-[MATCH_START.md](MATCH_START.md), [MP_P2P_TRANSITION.md](MP_P2P_TRANSITION.md),
-[IN_WORLD_PRESENCE.md](IN_WORLD_PRESENCE.md), [SOURCEMAP.md](SOURCEMAP.md), [UI_FINDINGS.md](UI_FINDINGS.md),
-[REVERSE_ENGINEERING_GUIDE.md](REVERSE_ENGINEERING_GUIDE.md).
+[MATCH_START.md](MATCH_START.md), [sim/network-session.md](sim/network-session.md),
+[IN_WORLD_PRESENCE.md](IN_WORLD_PRESENCE.md), [SOURCEMAP.md](SOURCEMAP.md),
+[game-data-files.md](game-data-files.md).
 
 ---
 
@@ -67,24 +67,27 @@ strongest evidence for the whole stage.
  │  → LobbyComm::System::CreateVillageServerConnection S 00463850          state 8
  └────────────────────────────────────────────────────────────────────────────────
    ▼
- ┌─ [Village] world connection (:5479, HandlerGS T 10023460) ───────────────────── [PROVEN]
+ ┌─ [Village] world connection (address from 221/222, HandlerGS T 10023460) ────── [PROVEN]
  │  base login (188 → 211/212/213 → 153) → LobbyMessages in SendGameData(74)
  │  1000 EnterWorld → HandleEnterWorld S 0046f670 → state 9, 3D world renders
  └────────────────────────────────────────────────────────────────────────────────
    ▼
  ┌─ [Hosting] SetupGameDialog / BrowseGameDialog ───────────────────────────────── [PROVEN]
+ │  referee (at lobby login): 189 AssignServer 4/4 → 170 4/4 → SetRefereeServerAddress
+ │           S 004625d0 (LM+0x580, 189 again every 60 s)
  │  host: 168 AddGameServer → 153; joiner: server list (171/170) → join
  │  NComm StartUpNetwork S 0040a9a0 (mode 4 host / 3 join) → ConnectAndJoin S 0040ad60
  │  pre-game room = NComm events (UserInformation, PlayerInformation, PlayerReady)
- │  referee: 189 AssignServer type 4 → 170 descriptor → SetRefereeServerAddress S 004625d0
- │           → referee connection base login → server pushes LoginSuccess 0xDCA
  └────────────────────────────────────────────────────────────────────────────────
    ▼
  ┌─ [Match start] ──────────────────────────────────────────────────────────────── [PROVEN]
- │  0xDCA → WorldScreen::OnRefereeLoginSuccess_RegisterGame S 00432240
+ │  host: NE_StartLoading 0x30012 (BroadcastStartLoading S 0040fe50) → every client NComm +0x3cc = 1
+ │  → village leave 2002 → server 1006 {0xDEADBEEF} → HandleLoggedOut (state 11)
+ │  → WorldScreen::OnVillageConnectionLoggedOut S 004316c0 arms the referee login
+ │  → RefereeServerConnection::Login S 004793f0 → 221/222 referee address → base login 153
+ │  → server pushes LoginSuccess 0xDCA → OnRefereeLoginSuccess_RegisterGame S 00432240
  │  → RegisterGame 0xDB6 → 0xDB7 Ack + 0xDB8 Result{GameSeed} (S 0047a580)
- │  → NE_StartLoading 0x30012 (BroadcastStartLoading S 0040fe50)
- │  → NE_GameInformation 0x30003 load gate → GameFile_LoadMap S 005aa7b0
+ │  → OnRefereeRegisterGameResult S 00431800 → RequestModeTransition(1) → world build
  │  → host broadcasts StartGame when all slots loaded (nGame::System::Update S 00780d20)
  └────────────────────────────────────────────────────────────────────────────────
    ▼
@@ -92,8 +95,8 @@ strongest evidence for the whole stage.
    ↔ NComm_Manager::AdvanceNetTick S 00411990 (1001 client→host, 1002 host→clients)
 ```
 
-The full referee chain and its failure modes are in `lobby/sadk_lobby/referee.py`, `lobby/sadk_lobby/dispatch.py` and
-`engagement_records/2026-07-27_referee-*.md`. Every failure in that chain is silent: the frame is accepted, the
+The full referee chain and its failure modes are in [MATCH_START.md](MATCH_START.md) ("What the server must do"),
+`lobby/sadk_lobby/referee.py` and `lobby/sadk_lobby/dispatch.py`. Every failure in that chain is silent: the frame is accepted, the
 socket stays open, and nothing is logged.
 
 ---
@@ -280,7 +283,9 @@ through an IE control (`url2tex`, §5) [inferred].
 | Menus (`nMenu`) | `System` (ctor S 005db1e0, `Update` S 005da500, `Render` S 005d9800), `Game` (`SetupHud` S 005ed700), `MiniMap`, `Messages`, `Book`, `Cinematic`, `Debug`, `NetInfo` | In-game and front-end menus. `StartPendingMap` S 005d9fd0 starts a queued map [inferred] |
 | XML | `ai::xml::XmlDoc::LoadFromFile` S 006e8210 | expat (`EXPAT.DLL`, 9 imports by ordinal), files decrypted first with `gDecryptData` [known] |
 
-Layouts live in `data/game/ui/layout/*.xml` and `data/lobby/...` (KEX-encrypted). See [UI_FINDINGS.md](UI_FINDINGS.md).
+Layouts live in `data/game/ui/layout/*.xml` and `data/lobby/ui/layout/*.xml`, each an encrypted `sadk` container
+([asset-formats.md](asset-formats.md) §1). The layout format is in [sim/formats-inventory.md](sim/formats-inventory.md)
+§3.8; a layout holds layout only, screen flow is code ([game-data-files.md](game-data-files.md) §5).
 The Phase 6 sample measured a higher error rate here (6.6 %, 5 of 76) than elsewhere, so `ui` plates
 need more care [known: VERIFICATION.md].
 
@@ -318,8 +323,8 @@ references], so PhysX appears to drive avatar movement and collision in the 3D l
 | `DirectoryWatcher` | S 00581200 | Watches data directories for hot reload [inferred] |
 
 The map file format is documented in [map-format.md](map-format.md),
-checked against all 22 shipped free-game maps. Data-file decryption for modding is in
-[REVERSE_ENGINEERING_GUIDE.md](REVERSE_ENGINEERING_GUIDE.md).
+checked against all 22 shipped free-game maps. Reading and changing the data files, through mods included, is in
+[game-data-files.md](game-data-files.md).
 
 ### 2.13 Crypto
 
@@ -434,7 +439,8 @@ Mode") and AI, harbour, flag and military debug toggles (S 00617f30, S 006197a0,
 [inferred]. The only write to its gate (`nMenu::System+0xa4`) is the constructor, which sets it to 0, so the row
 is probably created in retail and hidden under the resource overview [inferred]. `HandleDebugKey` S 0061a9c0
 switches the AI-debug views with r/m/i/c, but is blocked in multiplayer [inferred]. To test it, move the
-resource overview in `data/game/ui/layout/menuingame.xml` with AdKEd (a data change, not a binary patch).
+resource overview in `data/game/ui/layout/menuingame.xml`: a plain replacement file in a mod
+([game-data-files.md](game-data-files.md) §4.1; a data change, not a binary patch).
 
 **Remote CVar server.** Console variables (`CVar`, ctors S 005c6270 / S 005c6370 / S 005c64a0) can be
 served over a socket by `CVarServer` (thread S 0067df40, singleton `0088ca58`) and shown in a native

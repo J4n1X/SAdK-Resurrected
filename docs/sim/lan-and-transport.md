@@ -7,8 +7,8 @@ it. Nothing here was observed in the running game.
 
 Related documents, not repeated here: `docs/sim/network-session.md` (the session layer above this transport:
 events, tick packages, join, leave, the manager's reconnect state machine; its §2.1 net ids, §2.7 transport
-object, §3.1 send primitives, §3.3 roles, §3.9 reconnect), `docs/LOBBY_PROTOCOL.md` §3.1 (the 28-byte TinCat
-frame header as the lobby connection uses it), `docs/s2tftp.md` (file transfer, message 1003),
+object, §3.1 send primitives, §3.3 roles, §3.9 reconnect), `docs/message-catalog.md`, "TinCat frame" (the
+28-byte TinCat frame header as the lobby connection uses it), `docs/s2tftp.md` (file transfer, message 1003),
 `docs/sim/match-setup-room.md` (the room that runs on top of a role 3 or 4 session), `docs/subsystems.md`
 (library inventory of `tincat3.dll`).
 
@@ -740,7 +740,7 @@ Other TinCat timers that matter [known, values §6.2]: logon check 10000 ms (§3
 ### 3.9 Frame format and message size
 
 Every TCP message is a 28-byte header followed by the payload, little-endian (`NET_SendPacket` T 100325e0,
-`NET_ReceivePacket` T 10032670; the same header as on the lobby connection, `docs/LOBBY_PROTOCOL.md` §3.1)
+`NET_ReceivePacket` T 10032670; the same header as on the lobby connection, `docs/message-catalog.md`, "TinCat frame")
 [known]:
 
 | Offset | Size | Field | Notes |

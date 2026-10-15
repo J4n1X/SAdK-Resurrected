@@ -20,7 +20,7 @@ game as a mod, type registry, components, commands, determinism rules) is fixed 
   outputs, data-driven parameters, save and load, determinism notes, notes for a reimplementation, open questions,
   function reference.
 - The protocol references outside this folder are the authority for wire formats: `docs/message-catalog.md`,
-  `docs/LOBBY_PROTOCOL.md`, `docs/village-and-character-protocol.md`, `docs/NCOMM_GAME_PROTOCOL.md`; file formats:
+  `docs/village-and-character-protocol.md`, `docs/NCOMM_GAME_PROTOCOL.md`; file formats:
   `docs/map-format.md`, `docs/asset-formats.md`; the Lua function lists: `docs/lua-surface.md`.
 
 ## How reliable they are (2026-10-12)

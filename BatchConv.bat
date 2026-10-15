@@ -1,1 +1,0 @@
-FOR %%i IN (BatchConversion\*.*) DO AdKEd %%i

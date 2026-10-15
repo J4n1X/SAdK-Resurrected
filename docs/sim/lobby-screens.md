@@ -27,9 +27,8 @@ Out of scope, specified elsewhere: `SetupGameDialog`, `BrowseGameDialog`, `Selec
 3D village (`Lobby::CLobby`, avatars, camera: [lobby-world-client.md](lobby-world-client.md)); the lobby model
 behind the dialogs ([lobby-client-state.md](lobby-client-state.md)); the wire formats
 ([../message-catalog.md](../message-catalog.md),
-[../village-and-character-protocol.md](../village-and-character-protocol.md),
-[../LOBBY_PROTOCOL.md](../LOBBY_PROTOCOL.md)). The three minigame table dialogs (Dice, Poker, PawnChess) are
-only covered as far as the world screen opens them (§3.17); the dialogs are specified in
+[../village-and-character-protocol.md](../village-and-character-protocol.md)). The three minigame table dialogs
+(Dice, Poker, PawnChess) are only covered as far as the world screen opens them (§3.17); the dialogs are specified in
 [minigames-client.md](minigames-client.md), the wire rules in `../message-catalog.md` section "Minigames".
 
 The dialogs never build network messages themselves. They call the lobby model (`LobbyComm::System` and its

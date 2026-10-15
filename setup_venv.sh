@@ -21,8 +21,6 @@ rm -rf "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/pip" install -r "$REPO_DIR/lobby/requirements.txt"
 "$VENV_DIR/bin/pip" install zombie-imp
-# Deps for the Ghidra MCP bridge (decomp/bridge_mcp_ghidra.py, wired in .mcp.json).
-"$VENV_DIR/bin/pip" install "mcp>=1.2.0,<2" "requests>=2,<3"
 
 echo ">> Done. Installed:"
 "$VENV_DIR/bin/pip" list --format=columns | grep -iE "cryptography|twofish|zombie-imp" || true

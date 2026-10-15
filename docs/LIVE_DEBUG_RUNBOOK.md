@@ -1,376 +1,295 @@
-# Live debug runbook — the standing instrument
+# Live debug runbook
 
-> **Why this exists.** For several sessions the test loop was: *guess → ship a stub wire-change → drive the
-> GUI by hand → describe a symptom → infer backwards.* Three shipped changes in a row were falsified, and
-> each cost a full play-through plus a revert. This runbook replaces that with **observation**: the client
-> is a state machine we can read directly, so most questions should be answered **without changing the
-> stub at all**.
->
-> Everything here runs through the sanctioned Ghidra/debugger MCP — no standalone scripts (`HARNESS §1`).
+Live work on the running game goes through the Frida MCP `frida-sadk` (`tools/frida_mcp/server.py` and its agent
+`agent.js`). This runbook covers the setup, the tools, the standing probes of the lobby client and how unattended
+runs and the check queue work. The binding rules are `HARNESS.md` §2 and §7.
 
----
+Addresses: `S` = `SADK.exe` (Ghidra program `sadk_noav.exe`, base 0x400000), `T` = `tincat3.dll` (base
+0x10000000). Both load at these bases, so the static Ghidra addresses are the runtime addresses. The tools take
+them as hex strings (`"0x462540"`).
 
-## 0. Prerequisites
+## 1. When to go live
 
-- Debugger backend up (elevated, on the machine running the game):
-  `cd C:\Users\<you>\Downloads\ghidra-mcp && python -m debugger`   → binds `127.0.0.1:8099`
-- Game running (any state; the probe works even when disconnected).
-- Ghidra MCP connected with `sadk_noav.exe` open.
+- Only when the behaviour cannot be read from code: what the screen or the speaker shows, timing of real networks
+  or hardware, libraries that cannot be read (the packed `fmod.dll`, drivers), the original servers. "Confirm the
+  reading" is not a reason. Read the code path to its end in Ghidra first.
+- Sort every list of checks into (1) answerable by reading: do it; (2) measurable unattended in a running game
+  (hooks, reads, orders through the game's own send functions on the main thread): run it yourself (§10);
+  (3) needs the maintainer's eyes, ears or a second player: hand over only these, as one short list.
+- Calling client functions or writing memory changes the live game: state every call and why. Writes to game
+  memory and new server behaviour need the maintainer's approval first.
+- No hardware watchpoints from JS (§5).
 
-## 1. Attach (every session)
+## 2. Setup
 
-1. Find the pid — `Get-Process -Name SADK`.
-2. `debugger_attach(target=<pid>)`.
-3. **Sync the module map** — required every attach, or all module-relative calls fail with
-   *"not in any mapped module"*:
-   ```
-   POST http://127.0.0.1:8099/debugger/sync_modules
-   {"ghidra_bases": {"SADK": "0x400000", "tincat3": "0x10000000"}}
-   ```
-   (Runtime module names are `SADK` / `tincat3`; the Ghidra program is `sadk_noav.exe`. Bases are 1:1.)
-4. Resume with `POST /debugger/go` when done arming.
-
-**Gotchas learned the hard way**
-- The MCP's `debugger_resume` / `debugger_interrupt` target Ghidra Trace-RMI, **not** this backend. Use
-  `POST /debugger/go` and `POST /debugger/interrupt`.
-- `debugger_attach` fails with *"Cannot attach in state stopped"* if a previous (dead) target is still
-  held — `POST /debugger/detach` first.
-- Setting a breakpoint while the target is running can time out; interrupt first. The request often lands
-  anyway — check `breakpoint_count` before retrying.
-
-## 2. The state probe (read-only, no freeze, ~5 reads)
-
-Walk the chain. The root object is the `LobbyComm::System` that `g_pLobbyManager` points at (called
-LobbyManager in older notes; `LM+0x..` below is an offset inside it). **Its address is stable for the
-process lifetime; everything below it is not — re-walk each time.**
-
-```
-g_pLobbyManager  = *(0x00885890)     LobbyComm::System (0x5a8 bytes, vtable 0x007DACB0)
-  +0x54   serverList                LobbyComm::ServerList       (embedded)
-  +0x100  serverMessages            LobbyComm::ServerMessages   (embedded)
-  +0x140  characterManager          LobbyComm::CharacterManager (embedded)
-  +0x2f8  postOffice                LobbyComm::PostOffice       (embedded)
-  +0x3bc  properties                LobbyComm::Properties       (embedded)
-  +0x3d8  userCommConnection        (EMBEDDED — its address IS LM+0x3d8; vtable 0x007DCECC)
-  +0x490  refereeServerConnection   (embedded)
-  +0x540  pVillageConnection        (POINTER; vtable 0x007DB8D4)
-  +0x544  pGameServerConnection     (POINTER)
-  +0x550  selected village server id (50 = our stub's village)
-  +0x57C  ***state*** (LobbyManagerState)
-  +0x580  nRefereeServerId
-
-<any LobbyComm connection>
-  +0x34   transport  (CommLayer::ConnectionReal, vtable 0x10051694) — NULL when disconnected
-  +0x1c   observer list: LoggedOut      → fired by BaseConnection::OnLoggedOut@0x0048e2a0
-  +0x28   observer list: Disconnected   → fired by BaseConnection::OnDisconnected@0x0048e3c0
-
-<transport (ConnectionReal)>
-  +0x08   ***transport state***  (the folded getter at 0x10036bd0 is literally `return *(this+8)`)
-  +0x1c   server id
-  +0x24   net-driver / socket wrapper
-  +0x38   state observer (its vtbl[0x0C] is a no-op stub for our connection)
-```
-
-### `LobbyComm::System.state` (+0x57C, enum `LobbyManagerState`) values
-| val | name | set by |
-|---|---|---|
-| 1 | Disconnected | Initialize / OnLoginFailed / OnLoggedOut(main) |
-| 2 | Authorizing | `Login`, `CreateUser` (`0x004633f0`) |
-| 3 | Authorized | OnLoggedIn |
-| 4 / 5 / 6 / 7 | version-check → global-data ladder | StatePump_Tick, OnVersionChecked |
-| 8 | EnteringVillage | `0x0047063e` |
-| 9 | **VillageEntered** | HandleEnterWorld (msg 1000) |
-| 10 | **LeavingVillage** | SendLeaveVillageRequest (msg 2002) — **has no self-recovery** |
-| 11 | **VillageLeft** | HandleLoggedOut **or** HandleDisconnected — the ONLY two exits from 10 |
-| 12 | ConnectionLost | OnConnectionLost (main conn) |
-
-### transport state (+0x08) values
-`0` none · `2` connecting · `5`/`6`/`7` handshake ladder · **`8` authorized** · **`9` logging out**
-
-### ⭐ The single most important rule this instrument encodes
-`CommLayer::ConnectionReal::OnTinCatEvent` (`0x10030ad0`) **case 4 = disconnect** branches on transport state:
-
-| transport state at disconnect | result |
+| Piece | Where |
 |---|---|
-| **8** | `ConnectionLost` with a **hardcoded reason 10** → `!CONNECTION_LOST_TEXT` dialog |
-| **9** | **`OnLoggedOut`** → `HandleLoggedOut` → `VillageLeft(11)` → `+0x1c` observer → **arms the referee** |
+| frida-server 17.22.2 (windows-x86) | on the game PC, as Administrator (the game runs elevated): `frida-server-17.22.2-windows-x86.exe -l 0.0.0.0:27042` |
+| MCP server | stdio, registered at user scope: `claude mcp add -s user frida-sadk -- ~/.venvs/frida/bin/python <repo>/tools/frida_mcp/server.py`. The venv holds `frida` 17.22.2 (the same version as frida-server) and `mcp`. A project `.mcp.json` entry is skipped in background sessions, which never show the approval prompt |
+| Attach | the maintainer starts the game; then `frida_connect(host="<game-pc-ip>")`. The reply lists `SADK.exe` at 0x400000 and `tincat3.dll` at 0x10000000 |
 
-State 9 is set **only** by `CommLayer::ConnectionReal::Disconnect@0x10030510` (the transport's vtbl
-`+0x18`, the logout), which is called only from `HandleWorldLoginAck` (msg 1006),
-`UserCommConnection::Logout@0x0047ed70`, and `RefereeServerConnection::Logout@0x00479540`.
+The game PC is reachable over SSH without a password; the remote shell is Windows PowerShell 5 (join commands
+with `;`, not `&&`).
+- Install builds only while `SADK.exe` is not running (`Get-Process SADK`): the shim `bin\wsock32.dll`, mods in
+  `mods\<name>`. Stage uploads in `~\sadk_upload` (scp target `sadk_upload/`); keep previous copies in
+  `~\sadk_upload\prev\<mod>`, never inside `mods\<mod>` (assetshare compares the whole mod folder).
+- The shim log is `bin\wsock32_shim.txt` in the install folder; its `build` line names the installed shim.
+- Screenshots: `schtasks /Run /TN sadk-screenshot` runs `tools/screenshot.ps1` in the logged-on desktop session,
+  which SSH cannot see. It captures the game window only and writes `~\sadk_upload\shot.png`; copy it with scp.
+- The lobby server runs as the systemd user service `sadk-lobby` on the Linux server; its log: §9.
 
-### Worked example (2026-07-26, validated live)
+## 3. The tools
+
+| Tool | Arguments (default) | Does |
+|---|---|---|
+| `frida_connect` | `host`, `port` (27042), `target` (`"SADK.exe"`) | attaches, loads the agent, lists the two modules |
+| `frida_status` | – | attached or not; after a detach the reason and, after a crash, Frida's crash report |
+| `frida_read` | `address`, `length` (64) | bytes as hex |
+| `frida_read_u32` | `address` | one little-endian u32 (to follow pointers) |
+| `frida_read_cstring` | `address`, `max_length` (256) | a NUL-terminated ANSI string |
+| `frida_hook` | `address`, `nargs` (0), `name` | records every call (below) |
+| `frida_unhook` | `address` | removes a `frida_hook` hook; spell the address as in the `frida_hook` call |
+| `frida_events` | `clear` (true), `limit` (200) | recorded calls and exceptions, oldest first |
+| `frida_eval` | `code` | runs JavaScript in the agent; returns the value of the last expression |
+| `frida_call` | `address`, `args`, `abi` (`cdecl`), `ret` (`uint32`) | calls a client function |
+| `frida_detach` | – | detaches; the game keeps running and every hook is gone |
+
+**Hook events.** `frida_hook` (`Interceptor.attach`) stores one event per call when the function returns:
+`{kind: "call", name, addr, ecx, args, tid, ret, t}`. `ecx` is `this` of a `__thiscall` function (meaningless
+otherwise). `args` are the first `nargs` 32-bit stack slots in hex (the stack arguments); a `__fastcall`
+function's second argument (EDX) is not recorded, and a float shows as its bit pattern. `ret` is EAX: an x87 float
+return is not visible. `t` is the game PC's clock in ms, `tid` the thread. Nested calls appear inner first; a call
+that never returns leaves no event. The agent keeps the last 5000 events. `frida_events` returns the last `limit`
+of them, and `clear` deletes all of them, those beyond `limit` included: pass a larger `limit` or `clear=false`
+when more are expected.
+
+**Exceptions.** The agent's `Process.setExceptionHandler` records every native exception (`kind: "exception"`,
+registers, 24 backtrace frames) and returns false, so the game's own handling continues: such an event is not
+necessarily a crash. When the game dies, the unread events are gone; `frida_status` keeps the reason.
+
+**`frida_call`** types every argument as `pointer`: an int or hex string, `{"str": "text"}` (a new ANSI string) or
+`{"bytes": "hex"}` (a new buffer, freed after the call). `abi`: `cdecl`, `stdcall`, `thiscall` (the first argument
+is `this`), `fastcall`. `ret`: `uint32` (decimal text), `int`, `pointer` (hex), `void`, `float`, `double`. A fault
+inside the call goes to the game's own handling (`exceptions: 'propagate'`). The call runs on the agent's thread,
+not the game's main thread: use it only for functions that change nothing (§4). Float, double and struct
+arguments need `frida_eval` with an explicit signature.
+
+**`frida_eval`** is an indirect `eval` in the agent's global scope, on the agent's thread, with Frida's API (`ptr`,
+`NativeFunction`, `Interceptor`, `Process`, `Thread`). Return numbers, strings and plain objects (`.toString()` on
+pointers). Keep state on `globalThis`; hooks made here are unknown to `frida_unhook`, so keep the listener there
+and call its `.detach()`. The agent runs Frida 17: use `p.readU32()`, `p.readPointer()` and
+`Process.getModuleByName(...).getExportByName(...)`; static forms such as `Module.findExportByName(null, ...)`
+no longer exist.
+
+## 4. Calls on the main thread
+
+The game's objects are not thread-safe. A call that changes the game is made once, from a hook on a function the
+main thread runs every tick or frame. Example (it changes the game speed, so it is announced before the run):
+
+```js
+globalThis.job = { done: false };
+globalThis.jobHook = Interceptor.attach(ptr("0x78b040"), {        // nGame::Autosave::Update (main thread, match)
+  onEnter() {
+    if (job.done) return;
+    job.done = true;
+    const ncomm = ptr("0x885754").readPointer();                    // g_NCommManager
+    job.before = ncomm.add(0x3c).readU32();                         // game speed
+    new NativeFunction(ptr("0x782950"), "void", [], "stdcall")();    // nGame::System::SendCycleGameSpeedCommand
+    job.after = ncomm.add(0x3c).readU32();
+    job.tid = this.threadId;
+  }
+});
 ```
-*(0x885890)      = 0x0E5C9040   LobbyComm::System
-  +0x57C         = 0x0C  (12)   → ConnectionLost       ← client was disconnected
-  +0x540         = 0x0E5C95F0   village conn (vtable 0x007DB8D4 ✓)
-      +0x34      = 0x00000000   transport NULL          ← consistent with state 12
-  +0x3d8         = 0x0E5C9418   UserComm conn (vtable 0x007DCECC)
-```
-That took ~4 reads and replaced "it seems odd" with an exact diagnosis.
 
-## 3. Standing trace set (non-freezing)
+Then `frida_eval("job")` for the result and `frida_eval("jobHook.detach(); 'detached'")`. Other anchors:
+`nGame::Camera::Update` S 00787530 (every frame in a match), `Lobby::CLobbyClient::Update` S 00503fc0 (every frame
+in the lobby). An order goes through the game's own sender (the function its button calls), or is built the way
+that sender builds it and passed to `NComm_Manager::QueueGameCommand` S 00408b10, which drops a command sent
+without `force` while `IsGameHanging` S 00408860 is true (`docs/sim/logic-core.md`).
 
-`debugger_trace_function` logs each call **with arguments and auto-resumes in ~0.5 ms** — invisible at
-25 fps. This is the right tool: ordinary breakpoints freeze the client, which times out a joiner and
-manufactures fake "stuck" states (that contamination wrecked an earlier session).
+The game window must keep the foreground. When another window takes it, the Direct3D device is lost and the main
+thread waits in `S2CE::CGraphicDevice::WaitForDeviceRestore` S 004da170: no tick, no frame, no main-thread hook.
+To check that the game advances, read `g_pGameSystem` S 0088996c `+0x88` (`tickCounter`) twice.
 
-Read hits with `debugger_trace_log()`; stop with `debugger_trace_stop`.
+## 5. Hot functions, limits, watchpoints
 
-| # | address | module | conv | args | what it tells you |
-|---|---|---|---|---|---|
-| 0 | `0x00462540` `LobbyComm::System::SetState` | SADK | `__thiscall` | `newState` | **every** lobby state transition, with the value. The backbone. |
-| 1 | `0x004647e0` `OnConnectionLost` | SADK | `__thiscall` | `connId,p2,reason` | the **reason code** (10 = dialog) |
-| 2 | `0x0046bde0` `SendLeaveVillageRequest` | SADK | `__thiscall` | — | the client asked to leave |
-| 3 | `0x0046ec50` `HandleWorldLoginAck` | SADK | `__thiscall` | `msgStream` | msg 1006 arrived → the Logout branch |
-| 4 | `0x10030510` `ConnectionReal::Disconnect` | tincat3 | `__fastcall` | — | **state → 9** (the good path) |
-| 5 | `0x00470e20` `HandleLoggedOut` | SADK | `__thiscall` | `arg` | the exit we want |
-| 6 | `0x00470f90` `HandleDisconnected` | SADK | `__thiscall` | `arg` | the exit that shows a dialog |
-| 7 | `0x10030ad0` `ConnectionReal::OnTinCatEvent` | tincat3 | `__thiscall` | `eventType,p2` | `eventType==4` = disconnect |
+- A function called thousands of times per tick floods the buffer and slows the game through `frida_hook`. Hook it
+  in `frida_eval`, filter and count in the handler, and read the aggregate later, e.g.
+  `globalThis.rec = {n: 0}; globalThis.recHook = Interceptor.attach(ptr("<address>"), {onLeave(r) {rec.n++;}});`
+- `this.returnAddress` in `onEnter` tells the callers of a shared body apart. A function reached by a tail jump
+  returns to its caller's caller (`CLobbyClient::LeaveVillage` S 00503470 jumps into `SendLeaveVillageRequest`).
+- One-instruction getters (`MOV EAX,[ECX+n]; RET`) are too short for Interceptor; hook their callers.
+- When a measurement disagrees with the decompiled text, read the disassembly of that branch: the decompiler can
+  drop operations.
+- **No hardware watchpoints** (`Thread.setHardwareWatchpoint` with a JS exception handler). On 2026-10-14 one
+  slowed the game to 2 ticks in 65 s, and tearing it down killed the process. Find the readers and writers of a
+  field with static xrefs in Ghidra, live with hooks on the candidate functions. If a watchpoint seems
+  unavoidable: ask the maintainer first, one cold field, one thread, and never change the exception handler while
+  traps can be pending (the agent installs one when it loads).
 
-A single play-through with these armed yields an ordered event timeline instead of a symptom report.
+## 6. Lobby client probe
 
-## 4. Watchpoints — limitation
+The root object is `LobbyComm::System` (`g_pLobbyManager` S 00885890; 0x5a8 bytes, vtable S 007dacb0); `LM+0x..`
+is an offset inside it. The village connection and every transport are created and destroyed per connection:
+walk the chain on every read. Layouts: `docs/types.md` §1, `docs/SOURCEMAP.md`.
 
-`debugger_watch_memory` only accepts **module-mapped** addresses; heap addresses are rejected
-(*"not in any mapped module"*), so `LM+0x57C` and `transport+0x08` **cannot** be watched
-directly. Trace their *writers* instead — trace #0 (`SetState`) and #4 (`Disconnect`) cover every transition
-that matters. Reserve real watchpoints for globals in `.data`.
-
-> **This limitation is lifted by TTD (§9).** `ttd_memory` reconstructs the full read/write history of
-> *any* address, heap included, from a recording — no watchpoint involved.
-
-## 4b. Time Travel Debugging — the short version
-
-See **§9** for the full runbook. The rule of thumb:
-
-| Situation | Use |
+| Read | Meaning |
 |---|---|
-| You know exactly what to watch, and want it live | live traces (§3) |
-| You want to ask questions you have not thought of yet | **TTD (§9)** |
-| The address is on the heap | **TTD (§9)** |
-| "Did X *ever* happen during that run?" | **TTD (§9)** |
+| `*(S 00885890)` | `LM`; 0 when no lobby client exists |
+| `LM+0x57c` | `LobbyManagerState` (below) |
+| `LM+0x580` | `nRefereeServerId`; 0 until a type 4 / subtype 4 assign reply latched it |
+| `LM+0x54` | `ServerList` (embedded): `+0x9c` the hosting latch (§7.2), `+0xa0` `bSelectionLocked` (a byte) |
+| `LM+0x3d8` / `LM+0x490` | chat (UserComm) / referee connection (embedded) |
+| `LM+0x540` / `LM+0x544` | village / game-room connection (pointer, 0 = none); village vtable S 007db8d4 |
+| `conn+0x04` / `+0x10` / `+0x1c` / `+0x28` | the connection's observer lists: logged in, login failed, logged out, disconnected |
+| `conn+0x34` | the connection's tincat3 transport (`CommLayer::ConnectionReal`, vtable T 10051694); 0 = none |
+| `transport+0x08` | transport state (below) |
+| `*(LM+0x50)+0x14` | the lobby connection's transport (it has no `LobbyComm` object; `ConnectionManager`, `types.md` §3) |
 
-## 5. Correlating with the stub
+One `frida_eval` reads it all:
 
-The stub logs unbuffered (`python -u`) to `~/projects/sadk-resurrected/stub*.out` on the Linux server
-with millisecond timestamps; trace hits are timestamped too. Line the two up to see *"client sent 2002 at
-T, we answered at T+2 ms, client did X at T+40 ms."*
+```js
+(() => {
+  const lm = ptr("0x885890").readPointer();
+  if (lm.isNull()) return "no LobbyComm::System";
+  const u32 = (p, off) => p.add(off).readU32();
+  const tr = conn => { const t = conn.add(0x34).readPointer(); return t.isNull() ? null : u32(t, 0x08); };
+  const vsc = lm.add(0x540).readPointer(), sl = lm.add(0x54);
+  return { lm: lm.toString(), state: u32(lm, 0x57c), refereeServerId: u32(lm, 0x580),
+           chat: tr(lm.add(0x3d8)), referee: tr(lm.add(0x490)),
+           village: vsc.isNull() ? null
+             : { at: vsc.toString(), vtable: "0x" + u32(vsc, 0).toString(16), transport: tr(vsc) },
+           hostLatch: "0x" + u32(sl, 0x9c).toString(16), selectionLocked: sl.add(0xa0).readU8() };
+})()
+```
 
-## 6. Method note — trust order
+**`LobbyManagerState`** `[known]`; every transition with its writer: `docs/sim/lobby-client-state.md` §3.1.
 
-When static and live disagree, **live wins**. This session alone, static shape-matching produced three
-false positives (a `GetState`/`OnLoggedOut` slot collision at `+0xc`, message-factory calls at the same
-offset, and a five-arg `vtbl[0x10]`), the stack unwinder produced garbage frames twice, and an
-operand-filter search silently returned zero matches for an instruction that demonstrably exists. The
-logout mechanism was finally found by **stepping**, not sweeping.
-
-Corollary: prefer reading `[ESP]` at a function's *entry* over any stack trace — and remember tail-jumps
-(`CLobbyClient::LeaveVillage` tail-jumps into the 2002 sender, so `[ESP]` there holds *its caller's*
-return address, not its own).
-
----
-
-## 7. Wire endianness — the rule, and the audit (2026-07-26)
-
-A little-endian/big-endian mix-up silently disabled msg 1006 for months with **no visible symptom**
-(the client's `if (code == 0xDEADBEEF)` simply never matched, so the whole handler body was skipped).
-After fixing it, every integer the stub puts on the wire was audited. The rule:
-
-| layer | endianness | proof |
+| Value | Name | Set by |
 |---|---|---|
-| **NETMSG** (`msgdefs.py` / `codec.py`) | **little** (`fmt = "<" + …`) | login, server browser and room config all carry `UNLONG` fields and work end to end |
-| **TinCat framing** — envelope `msg_type`, MEMBLOCK length prefix, type words | **little** | the client's own msg-2002 frame, captured byte-exact: `… d2 27 00 00 │ 04 00 00 00 │ …` |
-| **TinCat property VALUES** (scalars inside a LobbyMessage/PropertySet) | **BIG** | same frame: `code=0xAFFEDEAD` → wire `af fe de ad`; independently, `MEMORY.md` records the ServerDataBlock `roomId` as a big-endian u32 |
-| **MEMBLOCK payload bytes** | raw, unswapped | `enter_world_body`'s 32-byte channel-count block (first dword = N) works as a raw dword; EnterWorld renders |
+| 0 | Init | before `Initialize`; `Destroy` S 00462f70 at shutdown |
+| 1 | Disconnected | `Initialize` S 004643d0; lobby login failed S 00464a20; lobby logged out S 00464bf0 |
+| 2 | Authorizing | `Login` S 004630e0, `CreateUser` S 004633f0 |
+| 3 | Authorized | `OnLoggedIn` S 00463a10 (lobby connection) |
+| 4 to 7 | CheckingVersion, VersionChecked, LoadingGlobalData, GlobalDataLoaded | `StatePump_Tick` S 00464ee0; 4 -> 5 `OnVersionChecked_State4to5` S 00464e70 |
+| 8 | EnteringVillage | `VillageServerConnection::OnUserCommLoggedIn` S 004704e0 (from 7 or 11) |
+| 9 | VillageEntered | `HandleEnterWorld` S 0046f670 (message 1000) |
+| 10 | LeavingVillage | `SendLeaveVillageRequest` S 0046bde0 (message 2002) |
+| 11 | VillageLeft | `HandleLoggedOut` S 00470e20 or `HandleDisconnected` S 00470f90 |
+| 12 | ConnectionLost | `OnConnectionLost` S 004647e0 (lobby connection) |
 
-**Audit results — one real bug, since fixed:**
-- `village.world_login_ack_body` (msg 1006 `code`) — was little-endian. **THE bug.** Fixed → big-endian,
-  regression-guarded by `test_1006_code_is_big_endian`.
-- `dispatch.py` ServerDataBlock `roomId` — already `>I`. Correct.
-- `village.gamedata_frame` envelope `msg_type`, `enter_world_body`, `pong_body` (echoes the client's
-  token raw), `world_tick_body` — correct.
-- `chat.py`, `connection.py` (`status_with_id` → AddResult 153), `crypto.py` — NETMSG layer, correct.
+No state has a timeout. `SetState` S 00462540 (`nargs` 1) does nothing in state 12, and only the village
+connection calls it (states 8 to 11); the `LobbyComm::System` handlers write the field directly. A hook on
+`SetState` therefore misses 1 to 7 and 12: poll `LM+0x57c`, or hook the handlers (`ecx` = `LM`): `OnLoggedIn`
+S 00463a10 (`nargs` 3: connection, id, unused), `OnLoginFailed` S 00464a20 (2: connection, error), `OnLoggedOut`
+S 00464bf0 (2: connection, reason), `OnConnectionLost` S 004647e0 (3: connection, unused, error).
 
-**`[TODO]` Latent, NOT currently harmful — `referee.py`.** Its `_u32()` packs *property values*
-little-endian, which is wrong by the rule above. It does not bite today:
-`RefereeServerConnection::RegisterGameResultReceived@0x0047a580` reads `GameID` but **never compares it**; its
-only branch is `if (Result == 0)`, and `Result = 0` is byte-order symmetric; `GameSeed` is byte-swapped
-but our fixed constant swaps identically for every client, so every client gets the same value (it
-seeds only the chest contents, `docs/MATCH_START.md` Phase 2); `PermID` in
-LoginSuccess is ignored (the client gates on the message id). Deliberately **left unchanged** — the
-referee path has never been exercised end to end, so changing an untested encoding on an inference could
-introduce a fresh bug we have no way to detect. Fix it *when* that path is first driven for real, and
-verify with a trace at that time.
+**Transport state** (`ConnectionReal +0x08`): 0 idle, 2 connecting, 8 logged in, 9 logging out. The client tests 8
+(logged in) and treats 0, 8 and 9 as "not pending", any other value as "connecting or logging in"
+(`IsConnectionPending` S 0048dd00). The other values are tincat3-internal (`types.md` §3).
 
-**Method note:** a wrong scalar encoding fails *silently* — the handler runs, the compare fails, and the
-body is skipped, so it looks exactly like "the hypothesis was wrong". If a message provably reaches its
-handler but nothing happens, check the encoding before abandoning the theory.
+## 7. Standard hook sets
 
----
+These functions run rarely; `frida_hook` is enough.
 
-## 8. `LobbyComm::ServerList` — the hosting latch (added 2026-07-26)
+### 7.1 Leaving the village
 
-`ServerList = LM + 0x54` (the folded getter `Generic_GetAddr_54@0x0046b610` is literally
-`return this + 0x54`). It carries the latch that gates hosting **and** the
-"Verbindung zu Spieleserver wird hergestellt" modal.
+The transport's Logout (vtbl `+0x18`, `ConnectionReal::Disconnect` T 10030510) sets transport state 9. When the
+connection then closes, `ConnectionReal::OnTinCatEvent` T 10030ad0 takes the logged-out branch only in state 9:
+`HandleLoggedOut` -> VillageLeft(11) -> the village connection's `+0x1c` list, whose observer
+`WorldScreen::OnVillageConnectionLoggedOut` S 004316c0 arms the referee login at match start. A close in state 8
+ends in `HandleDisconnected` -> the `+0x28` list -> `WorldScreen::OnVillageConnectionDisconnected` S 00432ed0,
+which shows the `!CONNECTION_LOST_TEXT` box for a non-zero reason. These are the only two exits from
+LeavingVillage(10) `[PROVEN]`. The server answers 2002 with two 1006 `{0xDEADBEEF}`: the first logs the chat
+connection out, the second the village transport (`docs/message-catalog.md`, 2002 and 1006).
 
-### ⚠️ Read this before quoting any offset out of a ServerList observer
-
-`LobbyComm::ServerList::ctor@0x0046a160` installs **two** vtables:
-
-```
-0046a1a6  MOV [ESI],       0x7dafcc     ; primary                       -> this = ServerList+0
-0046a1ac  MOV [ESI + 0x8], 0x7daf8c     ; CommLayer::IGameServerObserver -> this = ServerList+8
-```
-
-Every function in the `0x7daf8c` table (`GameServerAdded`, `CreateResultReceived`,
-`DeleteResultReceived`, `GameServerAssigned`, `AssignGameServerResultReceived`, `TANConnectionGranted`,
-…) runs with **ECX = `ServerList + 8`**. In Ghidra their `this` is the offset pointer
-`ServerList * __((offset(0x8))) this`, so the decompile shows the ServerList field names at the offsets
-of the table below. A raw register value read in a live trace or an operand `[ECX+N]` in the listing is
-still relative to `ServerList + 8`: add 8 to get the offset of the table.
-
-| field | type | meaning |
+| Address | Function | A hit shows |
 |---|---|---|
-| `+0x6c` | ptr | `pGameServerManager` — `vtbl[0x20]` AddGameServer(168) · `[0x24]` Update · `[0x28]` Delete · `[0x2c]` AssignServer |
-| `+0x94` / `+0x98` / `+0x99` | u32 / byte / byte | `selectedGameServerId` (-1 = none) / two bytes the ctor zeroes and nothing else touches |
-| **`+0x9c`** | u32 | **`gameServerId`, the hosting latch.** `0xFFFFFFFF` INVALID · `0xFFFFFFFE` PENDING · else = the real assigned game-server id |
-| `+0xa0` | **byte** | `bSelectionLocked` (`=1` in `WorldScreen::HandleButtonClicks@0x00437760` after `ServerList::SelectVillageServer`; cleared when the village connection logs in) — **not** a pointer |
-| `+0xa4` / `+0xa8` | ptr / fptr | `refereeCbContext` / `refereeCbFn`, the pending **referee** callback; armed only by `RequestRefereeServer@0x00468f60`, fired+cleared by `GameServerAssigned` |
+| S 00503470 | `Lobby::CLobbyClient::LeaveVillage` | the leave starts (confirm box, or match start) |
+| S 0046bde0 | `VillageServerConnection::SendLeaveVillageRequest` | state 10, 2002 sent (only in transport state 8) |
+| S 0046ec50 | `VillageServerConnection::HandleWorldLoginAck` | a 1006 arrived; it acts only on 0xDEADBEEF |
+| S 0047ed70 | `UserCommConnection::Logout` | the chat logout |
+| T 10030510 | `CommLayer::ConnectionReal::Disconnect` | `ecx` = the transport going to state 9 |
+| T 10030ad0 | `CommLayer::ConnectionReal::OnTinCatEvent` | every TinCat event of every connection; filter by `ecx` in a `frida_eval` hook if it floods |
+| S 00470e20 | `VillageServerConnection::HandleLoggedOut` | -> 11, the clean exit |
+| S 00470f90 | `VillageServerConnection::HandleDisconnected` | -> 11 through the connection-lost path |
 
-Reading `+0xa0` as a dword yields the flag byte plus 3 bytes of uninitialised heap padding — it will
-look like garbage (e.g. `0x70732E00`). That is normal, not a stale pointer.
+### 7.2 Hosting latch
 
-### The hosting state machine
+`ServerList +0x9c` (`gameServerId`, at `LM+0xf0`): 0xFFFFFFFF INVALID, 0xFFFFFFFE PENDING, any other value the
+hosted game's id. While it is INVALID or PENDING, `SetupGameDialog::Update` S 00457a00 returns early and shows the
+"Connecting to Game Server" modal. Writers: the ctor (INVALID); `CreateGameServer` (PENDING once 168 is sent);
+`CreateResultReceived` (the id on error code 0, else INVALID plus NComm shutdown); `DeleteResultReceived`
+(INVALID); `DestroyGameServerAndShutdown` (INVALID plus NComm shutdown). Field map:
+`docs/LOBBY_SCREEN_VTABLES.md`. The callbacks of the `IGameServerObserver` face (vtable S 007daf8c,
+`SOURCEMAP.md` §2d) run with ECX = `ServerList+8`: in their events `ecx - 8` is the `ServerList`, and the latch is
+at `ecx + 0x94`.
 
-```
-CreateGameServer@0x0046aaa0   guard +0x9c == INVALID
-   Shutdown(false) -> StartUpNetwork(4) -> ConnectAndJoin -> AddGameServer(168) type5/sub1
-   send ok -> +0x9c = PENDING
-CreateResultReceived@0x0046a6a0 (newGameServerId, errorCode)      [ECX = ServerList+8]
-   +0x9c != PENDING -> log "…but no create pending." and DISCARD
-   errorCode == 0   -> +0x9c = newGameServerId          (hosting live)
-   errorCode != 0   -> +0x9c = INVALID + NComm_Manager::Shutdown()
-```
-
-`LobbyMenu::SetupGameDialog::Update@0x00457a00` shows the modal and **early-returns every frame** while
-`+0x9c ∈ {INVALID, PENDING}` — which also stops the widget pump that could clear it.
-
-### The decisive trace set for a match-start run (no stub change needed)
-
-| # | address | function | what it proves |
-|---|---|---|---|
-| 1 | `0x0046aaa0` | `ServerList::CreateGameServer` | did the host attempt to host at all? |
-| 2 | `0x0046a6a0` | `CreateResultReceived` | **args `(newGameServerId, errorCode)`** — did our 153 land, and with what code? The single most informative value on this path. |
-| 3 | `0x00468410` | `DestroyGameServerAndShutdown` | reset-to-INVALID + NComm teardown |
-| 4 | `0x00469990` | `DeleteResultReceived` | the other reset-to-INVALID |
-| 5 | `0x00469610` | `ServerList::GameServerAdded` | did the 170 reach the observer |
-
----
-
-## 9. Time Travel Debugging — record once, query forever (added 2026-07-27)
-
-**The problem it solves.** Live debugging can only answer questions you decided to ask *before* the
-run. Every follow-up costs another full human-driven host+join+Start cycle. TTD records one
-execution into a `.run` trace, then replays it offline — forwards *and backwards* — as many times as
-you like. See `docs/RE_METHOD_RESEARCH.md` for the reasoning and the `HARNESS §3` stated reason.
-
-### Setup (done 2026-07-27)
-
-- Windows already ships the **recorder** inbox: `C:\Windows\System32\tttracer.exe` +
-  `ttdrecord.dll` / `ttdrecordcpu.dll`.
-- The **replay** half came from `winget install Microsoft.WinDbg`, which also provides headless
-  `cdb.exe`, `TTDReplay.dll`, `TtdExt.dll` and a `wow64` payload for our 32-bit target.
-- The toolchain is **auto-discovered** — no hard-coded paths. Override with `TTD_DIR` / `TTD_EXE`.
-
-> **⛔ Gotcha `[PROVEN]` 2026-07-27 — `TTD.exe` cannot be executed from inside `WindowsApps`.**
-> Launching `…\amd64\ttd\TTD.exe` fails CreateProcess with **Win32 error 5 (ACCESS_DENIED)**, *even
-> from an elevated process*. It is **not** an ACL issue — the ACLs are byte-identical to the sibling
-> `cdb.exe`, which runs fine from the same package — and **not** an elevation issue (error 5, not
-> 740 ELEVATION_REQUIRED). It is an MSIX execution restriction on the nested path. **Copying the
-> whole `ttd` folder out fixes it.** `debugger/ttd.py` now does this automatically, caching the
-> payload to `%LOCALAPPDATA%\ghidra_mcp_ttd_cache\ttd` and re-copying when WinDbg updates. `cdb.exe`
-> needs no such treatment and is used in place.
-> Also note `TTD.exe` prompts for EULA acceptance interactively unless `-accepteula` is passed —
-> which would hang a headless call. The module always passes it.
-- Traces default to `%USERPROFILE%\ttd_traces` (override with `TTD_TRACE_DIR`).
-  **Keep traces out of the repo — they are gigabytes.**
-
-### It lives in the debugger MCP, not in a script (HARNESS §1)
-
-Added to the `ghidra-mcp` debugger server as `debugger/ttd.py` plus five routes under
-`/debugger/ttd/*`, and exposed as MCP tools by `decomp/bridge_mcp_ghidra.py`:
-
-| tool | what it does |
-|---|---|
-| `ttd_status` | resolved paths, elevation, whether recording/querying is possible |
-| `ttd_record` | start recording (attach to a running PID, or launch) |
-| `ttd_stop` | finalize the `.run` |
-| `ttd_list_traces` | traces on disk with size + timestamp |
-| `ttd_calls` | **every call to a function across the whole run** |
-| `ttd_memory` | **every read/write of an address — heap included** (lifts §4) |
-| `ttd_query` | arbitrary cdb/`dx` commands against the trace |
-
-### Elevation — the one human step
-
-**Recording requires an elevated debugger server**; querying does not. That is not an extra burden:
-the game already runs elevated, so live debugging already required this. Start it with:
-
-```powershell
-# elevated PowerShell
-cd C:\Users\<you>\Downloads\ghidra-mcp
-python -m debugger
-```
-
-The payoff is the division of labour: **one elevated, human-driven run** → unlimited non-elevated
-analysis by the agent, with no further game launches.
-
-### Practical notes
-
-- **Expect a 10–20× slowdown while recording.** For MP this is a real risk: a slowed host can time
-  out the joiner and manufacture a fake "stuck" state (cf. `dbgeng-breakpoint-vs-loader-conflict`).
-  **Mitigation: `ttd_record(mode="attach")` immediately before pressing Start**, not at launch.
-  Consider `ring_buffer_mb` to cap the trace to the most recent activity.
-- **First query on a trace builds an index and can take minutes.** Later queries are fast. The
-  default timeout is 600 s.
-- **We have no PDBs**, so pass **addresses** to `ttd_calls` (e.g. `"0x468f80"`), not symbol names.
-  Module base is 1:1 with Ghidra (`SADK@0x400000`), so Ghidra addresses work directly.
-- Record the **host only** unless you specifically need both sides.
-
-### ⛔ The trap that will lie to you: an UNINDEXED trace returns ZERO, not an error
-
-**`[PROVEN]` 2026-07-27.** On a trace that has not been indexed, `TTD.Calls(...)` and
-`TTD.Memory(...)` return **0 results and exit 0** — they do *not* error. Read naively that says
-*"this function was never called"*. It is the exact false-negative shape that has cost this project
-sessions before.
-
-Measured on the same trace, same query:
-
-| | `NtAllocateVirtualMemory` | `LdrLoadDll` |
+| Address | Function | A hit shows |
 |---|---|---|
-| before `!index` | **0** ← a lie | **0** ← a lie |
-| after `!index` | 0x43 (67) | 0x5 (5) |
+| S 0046aaa0 | `ServerList::CreateGameServer` | the host tried to host |
+| S 0046a6a0 | `ServerList::CreateResultReceived` | `nargs` 2: (newGameServerId, errorCode), the answer to 168; dropped when no create is pending |
+| S 00469610 | `ServerList::GameServerAdded` | a 170 reached the list |
+| S 00469990 | `ServerList::DeleteResultReceived` | the answer to 169 |
+| S 00468410 | `ServerList::DestroyGameServerAndShutdown` | the host left the setup dialog and sent 169 |
 
-`debugger/ttd.py` now **prepends `!index` to every query**, so this cannot bite us. It is a no-op
-once the index exists (`Successfully created the index in 0ms`). If you ever query a trace by hand
-in WinDbg, index it first — the position line tells you: `Time Travel Position: B:0 [Unindexed]`.
+### 7.3 Match start (referee chain)
 
-### Validation — the whole pipeline is `[PROVEN]` end to end (2026-07-27)
+The sequence and every field: `docs/MATCH_START.md`. Each failure in this chain is silent (frame accepted,
+socket open, nothing logged): a missing hook event is the only sign.
 
-Recorded `C:\Windows\SysWOW64\cmd.exe /c ver` (a **32-bit** target, via the wow64 payload) and
-queried it back:
+| Address | Function | A hit shows |
+|---|---|---|
+| S 00469ad0 | `ServerList::GameServerAssigned` | the 189 assign reply reached the client |
+| S 004625d0 | `LobbyComm::System::SetRefereeServerAddress` | the id latched into `LM+0x580` (type 4 / subtype 4 replies only) |
+| S 004316c0 | `WorldScreen::OnVillageConnectionLoggedOut` | the referee login is armed (match start), or back to the avatar screen |
+| S 004793f0 | `RefereeServerConnection::Login` | the referee login was sent |
+| S 0047ac20 | `RefereeServerConnection::LoginSuccessReceived` | 0xDCA arrived; returns silently when the PermID is not the local one |
+| S 00432240 | `WorldScreen::OnRefereeLoginSuccess_RegisterGame` | `RegisterGame` 0xDB6 was sent |
+| S 00431800 | `WorldScreen::OnRefereeRegisterGameResult` | `nargs` 2: (gameId, GameSeed); the load starts |
 
-- `ttd_record` → `Recording has started… Full trace dumped` ✅
-- **`cdb -z` does open `.run` traces** ✅ — TTD analyzers load, `dx @$cursession.TTD` resolves.
-  (The `-?` text mentions only crash dumps; that was a documentation gap, not a limitation.)
-- `ttd_calls ntdll!LdrLoadDll` → 5 calls, each with time position, return value, thread id ✅
-- `ttd_memory 0x032ffc44 w` → **120 writes**, each with the **writing instruction pointer** and the
-  value stored ✅ — on a non-module-mapped address, i.e. exactly what §4 watchpoints refuse.
-  *One such query would have replaced the whole multi-session `+0x9c` writer hunt.*
+The login pump's state is in the `LobbyMenu::WorldScreen` (`ecx` of `WorldScreen::Update` S 00435980):
+`+0x3624` pending, `+0x3625` armed, `+0x3628` delay, `+0x362c` tries (more than 4 aborts). Once `LM+0x580` is
+latched, the client re-sends 189 every 60 s (timer `LM+0x588`); that cadence in the server log shows the latch.
 
-Queries run in **~0.4 s** once indexed. Output is stripped of cdb's banner/NatVis boilerplate by
-`_clean_output()`, so results stay readable.
+## 8. Wire byte order
 
-Together these cover **every** writer of `+0x9c`. The June-2026 plan to put a hardware write-watchpoint
-on its absolute address (which §4 says is impossible for heap addresses anyway) is obsolete.
+| Layer | Byte order | Reference |
+|---|---|---|
+| NETMSG messages and the TinCat property bag (lobby, chat, the NETMSG 73 / 74 envelope) | little-endian scalars and u32 lengths | `message-catalog.md`, NETMSG 74 |
+| LobbyMessage body (village and referee messages inside NETMSG 74) | MSB-first bit stream: a 32-bit value is big-endian when it starts on a byte boundary; bool 1 bit; string u8 length; `SellMod` of 0xE11 is read byte-reversed (little-endian) | `message-catalog.md`, "Field bitstream" |
+| NComm P2P events (pre-game room and match) | raw little-endian memory dumps | `message-catalog.md`, "NComm P2P events" |
+| Game memory as Frida reads it | little-endian | – |
+
+A wrong byte order fails silently: the handler runs, its compare fails and it skips the body. `HandleWorldLoginAck`
+ignores a 1006 whose code is not 0xDEADBEEF; `LoginSuccessReceived` returns silently on a little-endian PermID.
+When a hook shows that a message reaches its handler and nothing follows, check the encoding first.
+
+## 9. Correlating with the server log
+
+- Hook events carry the game PC's clock (`t`, ms), the journal the Linux server's. Measure the offset once per
+  session: `frida_eval("Date.now()")` against `date +%s%3N` on the Linux server (accurate to the round trip).
+- `journalctl --user -u sadk-lobby -o short-precise --since "-10min"` gives the server side.
+- For the bytes on the wire, `tools/lobby_proxy.py` logs the traffic passively; `tools/decode_lobby_capture.py`
+  decodes a capture.
+
+## 10. Unattended runs and the check queue
+
+`docs/live-session-queue.md` holds the open checks. Each entry says what happens in the game, what to observe
+(`Observe:`) and which statement of a specification it settles (`Settles:`). Entries marked **needs permission**
+write game memory or change what the server sends.
+
+1. **Read first.** Settle in Ghidra every entry the code decides (`docs/live-checks/2026-10-12_read-from-code.md`
+   is a batch settled this way).
+2. **Prepare.** The maintainer starts the game and a throwaway match or lobby session. The game window keeps the
+   foreground for the whole run (§4). Every call and write is listed before the run.
+3. **Run.** Hooks observe; orders go through the game's own senders on the main thread; the tick counter shows
+   that the game advances. Remove every hook at the end (`frida_unhook`, `.detach()` or `frida_detach`).
+4. **Record** per entry: the status (PROVEN, PARTLY, CONTRADICTS SPEC, NOT POSSIBLE UNATTENDED); what was done (the
+   hooks with their addresses, every call and write with its thread); what was measured; the conclusion against
+   the specification's section. `docs/live-checks/2026-10-12_unattended-run.md` is a run recorded in this form.
+5. **File the result** in the specification named under `Settles:` (tag, addresses, date and source;
+   `HARNESS.md` §8) and remove the entry from the queue. A statement becomes `[PROVEN]` only with the binary
+   address and the live observation. A case seen once is reported as seen once, and "not called in N ticks"
+   describes that run, not every path.
+6. **Hand over** what is left (look, listen, a second player) to the maintainer as one short list.

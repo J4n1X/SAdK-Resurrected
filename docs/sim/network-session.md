@@ -976,6 +976,10 @@ yields the fallback), and with duplicate sections it takes the first one it find
 first section of the install's file is hidden and the effective `gamePort` is 5479, from the second section or
 the fallback (both 5479), not 5478 [live, 2026-10-14]. A remake's reader should strip the mark.
 
+In a hosted two-player match against the stub the clients opened no connection to the `[Lobby] url` endpoint
+(port 8777; packet capture on the host, 2026-07-04), and matches run with nothing listening there [live]. Which
+code reads `url` is [TODO].
+
 Code constants [known]: TinCat module id `0x27d9`; message types 1000..1003; package magics `0x5332`, `0x4b38`;
 six slots; initial net tick length 4 (1 offline); package and checksum history of 5 net ticks (S 00411990); leave
 timeout 3.0 s (S 00409240); hang threshold 2.0 s (S 00408860); package buffer 0x400 bytes, growing by 0x80.
@@ -1053,7 +1057,7 @@ The checksum exchange detects divergence but repairs nothing: after `!DESYNC DET
   is open (§10); strings are
   u16-length byte strings in the game's 8-bit code page [inferred for the code page: the bytes are copied without
   conversion]; the TinCat framing itself is specified in
-  `docs/LOBBY_PROTOCOL.md` and is a prerequisite.
+  `docs/message-catalog.md` ("TinCat frame", "Module payload (CUSTOMDATA)") and is a prerequisite.
 - **Session description**: model it as one resource owned by the host and replicated whole on every change (the
   original sends all six slots and all settings every time; it is small). Identify players by a persistent GUID,
   not by the peer id, so that a reconnect can reclaim a slot.

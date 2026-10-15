@@ -15,9 +15,7 @@ events), [players-victory.md](players-victory.md) (messages, quests, victory sta
 detail: statistics, in-game settings, messages, tooltips), [ui-toolkit.md](ui-toolkit.md) (the widget toolkit
 in detail), [frontend-screens.md](frontend-screens.md) (the front end: main menu, options, free game, campaign),
 [lobby-screens.md](lobby-screens.md) (the lobby screens), [match-setup-room.md](match-setup-room.md) (the match
-set-up room), [`../UI_FINDINGS.md`](../UI_FINDINGS.md) (only a file map of the lobby layout files and the
-finding that screen flow is code, not data; it specifies no screen; its §2 calls `data\game\ui\layout` "the
-single-player RTS UI": the same files serve network matches), [`../subsystems.md`](../subsystems.md) §2.9,
+set-up room), [`../subsystems.md`](../subsystems.md) §2.9,
 [`../data-loading.md`](../data-loading.md), [`../asset-formats.md`](../asset-formats.md).
 
 ---
@@ -1101,7 +1099,7 @@ handed to `nMenu::System` (+0x68) and started on the next update.
 ### 3.9 Screen flow
 
 Top-level screens: `Splash` (at start, if enabled) → `Main` (`menumain.xml`) → `Game`; `Exit`. The flow is
-code ([`UI_FINDINGS.md`](../UI_FINDINGS.md) §3 for the general finding). In-game:
+code ([`../game-data-files.md`](../game-data-files.md) §5 for the general finding). In-game:
 
 1. A map or save path placed in `System +0x68` (free-game panel, load panel, campaign, lobby) is consumed by
    `System::Update`: `StartPendingMap` S 005d9fd0 closes all screens, makes `Game` current and calls its

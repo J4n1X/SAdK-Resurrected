@@ -126,8 +126,8 @@ vtables: UserComm `0x7dcecc`, GameServer `0x7deaf0`, Village `0x7db8d4`, Referee
 
 ## Match-start screens & game-server-request chain (2026-06-17) — applied + saved in Ghidra
 
-Static RE on `sadk_noav.exe` via the Ghidra MCP. Full write-up + corrections:
-`docs/MATCH_START_STATIC_RECONCILIATION.md`. All `[PROVEN static]`.
+Static RE on `sadk_noav.exe` via the Ghidra MCP. Current model: `docs/MATCH_START.md`,
+`docs/LOBBY_SCREEN_VTABLES.md`, `docs/sim/match-setup-room.md`. All `[PROVEN static]`.
 
 | Address | Name | Note |
 |---------|------|------|
@@ -411,7 +411,7 @@ reaches `HandleLoggedOut` → `VillageLeft(11)`) or `ConnectionLost` (`+0x10` �
 
 **Decision:** stop the static dive here (diminishing returns against a large async state machine) and
 settle it empirically — the two breakpoints `0x00464bf0` (OnLoggedOut) and `0x004647e0` (ConnectionLost)
-discriminate the outcomes exactly, in one run. Requires an Engagement Record (stub wire-change).
+discriminate the outcomes exactly, in one run (a stub wire change).
 
 **Class identified `[PROVEN]`:** the village/lobby transport (vtable `0x10051694`) is
 **`CommLayer::ConnectionReal`** — ctor `FUN_100301f0@0x100301f0` (assigns the vftable; sets
@@ -920,7 +920,7 @@ Trace 2's `errorCode` argument is the single most informative value on the whole
 
 #### Reconciliation with the June captures — the old "sixth writer" mystery dissolves
 
-`docs/MATCH_START_HOST_WALL.md` recorded these live reads (2026-06-14, host PID 44992) and could not
+The live captures of 2026-06-14 (host PID 44992) recorded these reads and could not
 explain them. With the +8 correction they read cleanly:
 
 | logged | old reading | correct reading |

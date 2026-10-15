@@ -147,6 +147,7 @@ The loader can bake the scale into the positions (`stripScale`) and drop it.
 ```
 python3 tools/sadk_crypt.py decrypt <game>/data <out>    every encrypted file, verified, same folder layout
 python3 tools/sadk_crypt.py file <file> [<out>]
+python3 tools/sadk_crypt.py encrypt <plain> <out>         re-encrypt (key from the output file's name)
 python3 tools/kex.py check <dir>                          parse all .KEX, report any that do not end exactly
 python3 tools/kex.py info <file.KEX>                      structure as JSON
 python3 tools/kex.py split <dir> <out>                    per KEX: scene.json + indices, streams, tracks

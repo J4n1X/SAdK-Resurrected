@@ -1,80 +1,83 @@
-# CLAUDE.md — authoritative instructions for every agent in this repo
+# CLAUDE.md — instructions for every agent in this repository
 
-> Loaded into **every** session. Read it in full before starting any work, then read
-> **`HARNESS.md`** (the binding rules of engagement) before any RE, debugging, or
-> stub change.
-
----
-
-## The goal — understanding first, working second (read this before anything)
-
-The purpose of this project is to **comprehensively reverse-engineer the code the
-client uses to connect to the server, and to write detailed, correct documentation of
-that protocol.** That faithful model of the systems at play **is the deliverable.** A
-working stub lobby is how we *demonstrate* the understanding — it is not the point.
-
-Therefore:
-- **Build understanding brick by brick. Do not sprint to a milestone.** A change that
-  makes something "work" without an understood, evidence-backed reason is a regression,
-  not progress — it buries the very knowledge we exist to capture.
-- **Prefer a correct, documented model over a quick result.** Knowledge is power; a
-  green checkmark bought with a guess or a hack is worthless to us.
-- This is *why* `HARNESS.md` forbids faking results and demands honest
-  `[PROVEN]`/`[TODO]` status, and why RE is done to a standard (`HARNESS.md §6`): those
-  rules all serve understanding.
-
-**Milestones** — each a *demonstration* of understanding, subordinate to the goal above:
-1. ✅ Load into the 3D lobby world at all (even with nothing working inside it).
-2. ✅ **Host and Join matches** — achieved 2026-07-27, two games back-to-back.
-3. ◀ **current** — Finalize the lobby system.
+> Loaded into every session. It applies to every agent, not only Claude (`AGENTS.md` points here).
+> Read it in full, then **`HARNESS.md`** (the binding rules) before any reverse engineering, live debugging or
+> server change, and **`MEMORY.md`** (what is established, what is open) before picking up work.
 
 ---
 
-## The three rules that matter most (see `HARNESS.md` for the full text)
+## The goal
 
-1. **MCP-first.** Do all reverse-engineering and debugging through the **Ghidra
-   MCP**. Running scripts *inside* Ghidra via the MCP is fine. Writing standalone
-   Python/PowerShell to do RE, read process memory, trace, inject, or patch is
-   **forbidden** — that's circumventing the harness. If a debugging capability is
-   missing, add a debugger MCP; do not write a script.
-2. **No faking results, and new tools need a stated reason.** Never force/patch/inject
-   to fake a "working" result; if the game waits for something, provide it via the
-   real mechanism. Before writing **any** new tool, state in detail what capability
-   it needs and why neither the Ghidra MCP nor a debugger MCP can provide it. The only
-   thing that has cleared that bar so far is **network capture/decode**.
-3. **Honest status + no flag-gating.** `[PROVEN]` = binary address + live evidence;
-   everything else is labelled `[TODO]`. In the stub, working behaviour is the
-   **default** — never gate a working feature behind a flag, and never add a hack or
-   bypass without explicit user permission.
+This repository reverse-engineers **Die Siedler: Aufbruch der Kulturen** ("The Settlers: Rise of Cultures",
+Funatics / Blue Byte / Ubisoft, 2008; **SAdK**, on the *Settlers II: 10th Anniversary* engine) and documents it.
+**A faithful, evidence-backed model of the client is the deliverable.** Everything that runs (the lobby server,
+the mods) demonstrates that understanding; it is not the point.
 
----
+- **Understanding first.** Build the model brick by brick. A change that makes something "work" without an
+  understood, evidence-backed reason is a regression: it buries the knowledge the project exists to capture.
+- **End goal: a remake** in Godot (maintainer, 2026-10-12), C# throughout (2026-10-14). It ships no original data,
+  keeps every system moddable (Harmony-patchable assemblies, data, Lua), and has two modes: a *compatibility mode*
+  in lockstep with the original client (crossplay) and a *refined mode* that fixes the original's bugs. When you
+  document a quirk, say whether it changes simulation state (compatibility mode must reproduce it) or is
+  presentation only. The remake's code lives in its own repository (`sadk-remake`); its design lives here.
 
-## Project orientation
-
-This repo revives the dead online lobby of **Die Siedler: Aufbruch der Kulturen**
-("The Settlers: Rise of Cultures", Funatics / Blue Byte / Ubisoft, 2008) — **SAdK**,
-the German standalone on the *Settlers II: 10th Anniversary* (DNG) engine. The
-official servers died ~2014.
-
-The method: reverse-engineer the original client (`SADK.exe` + `tincat3.dll`) and run
-a Python **stub lobby server** (`lobby/sadk_lobby/`) that the real, unmodified client
-connects to. The goal is to **speak the protocol correctly**, not to force
-client-side bypasses.
-
-Two tracks:
-- **Online lobby revival** — the active frontier, centred on `lobby/sadk_lobby/`.
-- **Game asset decoding / modding** — encrypted `.KEX` / `sadk` files via `AdKEd.exe`
-  (see `docs/REVERSE_ENGINEERING_GUIDE.md`).
+**Milestones**
+1. ✅ Load into the 3D lobby village.
+2. ✅ Host and join matches (2026-07-27).
+3. ✅ The lobby revival is played on (2026-10-12): accounts, village, minigames, mail, matches with rewards and
+   wagers, the host bridge, map and mod sharing. Its open points are in `MEMORY.md`.
+4. ◀ **current** — Groundwork for the remake: close the remaining `[TODO]` / `[inferred]` gaps, specify every
+   subsystem (`docs/sim/`), design the remake (`docs/remake-architecture.md`, `docs/remake-rendering.md`,
+   `docs/remake/`).
 
 ---
 
-## Mandatory reading order
+## The rules in short (`HARNESS.md` has the binding text)
 
-1. **`HARNESS.md`** — binding rules (MCP-first, no faking, honest status, no flags).
-2. **`MEMORY.md`** — compact persistent context: proven facts + current TODOs.
-3. **`docs/LOBBY_PROTOCOL.md`** — the NETMSG protocol reference (msgdefs-grounded).
-4. **`docs/SOURCEMAP.md`** — named functions / structs / offsets (Ghidra map).
-5. **`README.md`** — quick-start, what works / what doesn't.
+1. **MCP-first.** Static RE through the **Ghidra MCP**, live debugging through the **Frida MCP**. Scripts run
+   *inside* Ghidra through the MCP are fine. Standalone scripts that do RE, read or write process memory, trace,
+   inject or patch are forbidden. A new tool needs a stated reason first (`HARNESS.md` §3).
+2. **No faked results.** Never force, patch or inject to make something look like it works. If the game waits,
+   ask what it waits for and provide it through the real mechanism.
+3. **Honest status.** `[PROVEN]` = binary address + live evidence; `[known]` = read in the binary; `[inferred]`;
+   `[TODO]`. Never upgrade a tag by repetition.
+4. **Consult the client before implementing.** Read the client's whole code path in Ghidra (handlers, the
+   observers they fire, the UI and 3D code that consumes the state, its crash limits) before writing server or
+   mod behaviour. Never patch reactively from a live failure.
+5. **Map before mod code.** A mod uses only mapped game fields, types and functions: map in Ghidra → check in →
+   re-export `sadkmod/sourcemap/` → regenerate sadkmod → write the mod. No raw offsets.
+6. **Live tests only when the code cannot answer** (maintainer, 2026-10-14). Read the code path to its end
+   first; run what can be measured unattended yourself; hand the maintainer only what needs their eyes, ears or a
+   second player, as one short list (`HARNESS.md` §7).
+7. **No flag-gating, no hidden hacks** in the server: working behaviour is the default; a hack, bypass or new
+   flag needs the maintainer's explicit permission.
+8. **Docs state the current model as clean fact.** No session diaries, no dated engagement records, no
+   "superseded" stories: when something was wrong, correct the reference doc. Evidence (addresses, dated live
+   observations) goes into the reference doc itself; history lives in git.
+
+---
+
+## How to work here
+
+- **Act, don't ask.** Clear blockers with the tools at hand (scripts inside Ghidra, Frida, SSH to the game PC)
+  and report afterwards. Ask only real decisions — writes to game memory or new server behaviour that are not yet
+  approved, deleting the maintainer's data, anything outward-facing — and bundle them into one question.
+- **Parallel agents are welcome** for big work: commit a small shared foundation first, give each agent its own
+  files (or its own `git worktree add` + branch), and merge. In Ghidra keep **one writer per struct**: fan out
+  read-only analysis, apply struct edits serially.
+- **Git.** Branch `master` (not `main`). When work is done and checked, fast-forward it into `master`, push, and
+  delete the branch and its worktree; leftover branches get in the way. `backup/*` branches are never merged.
+  The submodules `lobby/` and `sadkmod/` are separate public repositories: change them inside the submodule,
+  commit and push there, then update the pointer here.
+- **Public repository, anonymized history.** Never commit the maintainer's real name or e-mail, the server's
+  public IP or host names, or `/home/<user>` / `C:\Users\<user>` paths (write "the maintainer", `127.0.0.1`,
+  `~`). The noreply identity `J4n1X <J4n1X@users.noreply.github.com>` is repo-*local*: set it in every new clone
+  and submodule checkout before the first commit, and scan outgoing commits for personal strings before pushing.
+- **Scratch space.** Never put bulk data in `/tmp` (it starved the live server once). A decrypted copy of the game
+  data is at `~/sadk_game_decrypted`: read it there, never decrypt the data again. Use an on-disk scratch folder
+  outside the repository and delete what you create.
+- **Never touch the players' saves.** The live service reads `sadk_players.json` / `sadk_mail.json` in this
+  repository's root (gitignored): never move, overwrite or delete them.
 
 ---
 
@@ -83,183 +86,154 @@ Two tracks:
 | Piece | State |
 |---|---|
 | Lobby login (ECDH + Twofish), chat, server list | ✅ working |
-| Room-assign → village entry joinable in the browser | ✅ working |
-| Village-enter → 3D lobby world renders (server pushes EnterWorld 1000) | ✅ reached (clean build, screenshot-confirmed once) |
-| Multi-client (host + joiner as distinct players, global game registry) | ✅ default |
-| In-world content: NPCs (shops, tailor, hall of fame, games, matchmakers, mail) | ✅ on (`config.VILLAGE_NPCS_ENABLED = True`); models: only the male set of `npc_bodyparts.xml` is reachable (`docs/village-and-character-protocol.md` §5.1) |
-| Village economy (gold, items, shop, tailor) | ✅ tailor live 2026-10-07 (owner and others see the new look); the shops open and show their items (maintainer, 2026-10-12); sell prices and unknown item ids are open points (`docs/live-session-queue.md`) |
-| Accounts + persistent characters: password set on first login, `!setpwd`; new names start without avatars; the character `data` blob is kept as the game's save (look, gold, items, position) | ✅ live 2026-10-07 (`store.py`, `savegame.py`) |
-| Minigame tables: Dice, Poker and Pawn Chess in both taverns (create, join, full rounds) | ✅ live 2026-10-07, two clients (`lobby/sadk_lobby/minigames.py`, `poker.py`, `pawnchess.py`) |
-| Mail, buddy lists + presence, whispers, channel leave | ✅ working in live play (maintainer, 2026-10-12) |
-| Hosting / pre-game room (slot/tribe/team/ready protocol) | ✅ working |
-| Shim on sadkmod + mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ working in the game 2026-10-08 (maintainer's test); `mods/README.md` |
-| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare), hook order by load order, conflicts stop the game, mods load/unload | ⚠️ implemented 2026-10-08, Wine-tested (sadkmod `make test`, mods `make test`/`verify`); ✅ working in the game: server mods are downloaded and switched per match (maintainer, 2026-10-12; the shim log of that day shows assetshare serving three server mods to a joiner) |
-| **Entering matches (full referee chain)** | ✅ **working — 2026-07-27, two games back-to-back** |
-| In-match referee msgs (GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC`) | ✅ live 2026-10-10 (server log: all three sent by the clients and answered; rewards credited) |
-| Match wagers (`lobby/sadk_lobby/wagers.py`: registration checks, the loser pays the winner in two-player matches) | ✅ live 2026-10-12: two players, wager 357, one gave up, the other's game reported itself the winner, the server moved 357 gold and queued both chat notices; the refusal codes and matches of more than two players (no gold moves until the server knows the teams) are `[TODO]` |
+| Village entry, 3D lobby village (server pushes `EnterWorld(1000)`) | ✅ working |
+| Multi-client (host and joiner as distinct players, process-global game registry) | ✅ default |
+| In-world NPCs (shops, tailor, hall of fame, games, matchmakers, mail) | ✅ on; models: only the male set of `npc_bodyparts.xml` is reachable (`docs/village-and-character-protocol.md` §5.1) |
+| Village economy (gold, items, shops, tailor) | ✅ tailor (2026-10-07), shops open and list their items (2026-10-12); sell prices and unknown item ids open (`docs/live-session-queue.md`) |
+| Accounts and persistent characters (password on first login, `!setpwd`, the character `data` blob kept as the game's save) | ✅ live 2026-10-07 (`lobby/sadk_lobby/store.py`, `savegame.py`) |
+| Tavern minigames: Dice, Poker, Pawn Chess in both taverns | ✅ live 2026-10-07, two clients |
+| Mail, buddy lists and presence, whispers, channel leave | ✅ live play (2026-10-12) |
+| Hosting, pre-game room (slot / tribe / team / ready) | ✅ working |
+| Entering matches (the full referee chain) | ✅ since 2026-07-27 (`docs/MATCH_START.md`) |
+| In-match referee messages: GiveUp `0xDD4`, FinishGame `0xDC0`, ClaimChest `0xDAC` | ✅ live 2026-10-10; rewards credited |
+| Match wagers (`lobby/sadk_lobby/wagers.py`) | ✅ two-player matches live 2026-10-12; refusal codes and matches of more than two players `[TODO]` |
+| Shim and mod system (`mods\<name>\{data,mod.dll}`), mods billboards / borderless / nomeshcache / npcmodels | ✅ in the game 2026-10-08 (`mods/README.md`) |
+| Server mods per match (assetshare: manifest, LZMS archives, mod switching, kick without assetshare) | ✅ in the game 2026-10-12 |
+| Ghidra map | function-complete in both binaries since 2026-10-13; figures and what stays open in `MEMORY.md` |
+| Remake specifications (`docs/sim/`, 36 documents) and design (`docs/remake*`) | written; the design set of 2026-10-15 is a draft until the maintainer confirms it |
 
-The referee/match-arbiter subsystem is **live and proven end-to-end**: `RegisterGame(0xDB6)`
-arrives from both clients and is answered with `Ack(0xDB7)` + `Result(0xDB8, GameSeed)`. The
-full chain — and the four *silent* bugs that hid it — are documented in `lobby/sadk_lobby/referee.py`,
-`dispatch.py` (`_h_assign_server` / `_h_connection_data`) and
-`engagement_records/2026-07-27_referee-*.md`. **Read those before touching anything referee-related:
-every failure mode in this subsystem is silent** (frame accepted, socket stays open, nothing
-logged anywhere), so "no error" tells you nothing.
-
-Two facts worth burning in:
-- The referee assign reply must be **type4/sub4**, never 4/5 — 4/5 is special-cased to a
-  tincat3-private handler that never notifies the lobby, so `LM+0x580` never latches. The
-  exact-60 s `189` retry cadence is the tell that the latch worked.
-- **LobbyMessage field scalars are BIG-endian** (`village.py` already knew: `struct.pack(">I")`).
-  A little-endian `PermID` is silently discarded by the guard in `OnLoginSuccess@0x0047ac20`.
+**Every failure in the referee path is silent** (frame accepted, socket open, nothing logged), so "no error" is
+not evidence. Read `docs/MATCH_START.md` and `lobby/sadk_lobby/referee.py` / `dispatch.py` before touching it. Two
+facts to burn in:
+- The referee assign reply is **type 4 / sub 4**, never 4/5: 4/5 goes to a tincat3-private handler that never
+  notifies the lobby, so `LobbyComm::System+0x580` never latches. The exact-60 s `189` retry cadence is the tell
+  that the latch worked.
+- **LobbyMessage bodies (village, referee) are an MSB-first bit stream**: 32-bit values read big-endian when
+  byte-aligned, strings carry a u8 length, bools are 1 bit; TinCat NETMSG property-bag fields are little-endian.
+  A little-endian `PermID` is silently discarded by `OnLoginSuccess@0x0047ac20`.
 
 ---
 
-## Repository architecture quick map
+## Where things are
 
-Run the stub (it lives in the `lobby/` submodule, `S2-modders/sadklobby`; after cloning:
-`git submodule update --init`, not recursive):
+| Path | What |
+|---|---|
+| `docs/` | The reference (index: `docs/README.md`). Protocol: `message-catalog.md` (every message, what the client expects, why), `MATCH_START.md`, `village-and-character-protocol.md`, `NCOMM_GAME_PROTOCOL.md`. Game: `types.md`, `subsystems.md`, `map-format.md`, `asset-formats.md`. Remake: `sim/`, `remake-architecture.md`, `remake-rendering.md`, `remake/`. Live work: `LIVE_DEBUG_RUNBOOK.md`, `live-session-queue.md` |
+| `decomp/` | `RE_PRACTICES.md` (the RE standard behind `HARNESS.md` §6), `RENAME_LIST.md` |
+| `mapping/` | The whole-binary mapping pipeline (`README.md`, `AGENT_GUIDE.md`, `scripts/` run inside Ghidra, `bin/`); its bulk (`cache/`, `work/`, `queue/`, `state.db`) is gitignored |
+| `mods/` | This repository's further mods (`mods/README.md`) |
+| `tools/` | The tools that cleared `HARNESS.md` §3 (below), the Frida MCP |
+| `lobby/` | Submodule `S2-modders/sadklobby`: the server `sadk_lobby/`, `tests/`, the players' mods (`gamebridge`, `assetshare`, `billboards`), the setup tool `setup/`, `docs/bridge-protocol.md` |
+| `sadkmod/` | Submodule `S2-modders/sadkmod`: the C++ modding library generated from the Ghidra map (`sourcemap/`), the shim `shim/` (proxy `wsock32.dll` that loads mods), `mods.mk`, `docs/writing-mods.md` |
+| `packaging/make_release.sh` | Assembles a release from both submodules and the mods listed in it |
+
+After cloning: `git submodule update --init` (not recursive). Build the lobby's mods against this repository's
+sadkmod: `make -C lobby/mods SADKMOD=../../sadkmod` (`lobby/sadkmod` stays empty here).
+
+`lobby/sadk_lobby/` file roles: `__main__.py` entry · `config.py` constants and ports (no feature flags) ·
+`tincat.py` frames · `msgdefs.py` parses the game's `msgdefs.ini` · `codec.py` generic message bodies ·
+`crypto.py` login crypto · `chat.py` chat/UC connection · `village.py` village connection · `players.py`
+identities · `registry.py` hosted games · `connection.py` per-socket state · `dispatch.py` lobby handlers ·
+`referee.py`, `wagers.py`, `rewards.py` matches · `server.py` listeners and main loop.
+
+---
+
+## Tools and setup
+
+- **Ghidra MCP** (`ghidra`): bethington/ghidra-mcp in headless mode on the Linux server, working on a checkout of
+  the Ghidra Server repository `sadk`; installed, updated and registered (local scope) by
+  `tools/ghidramcp/update-ghidramcp.sh`. Runbook and troubleshooting: `docs/HEADLESS_SETUP.md`. Working rules:
+  - Map **`/sadk_noav.exe`** (= the DRM-free `SADK.exe` on disk, MD5 `d4832bc5103c14f5445471af29b8d778`),
+    `/tincat3.dll` and `/NXCHARACTER.DLL`. Ghidra's `/SADK.exe` is a SecuROM dump-base build with other
+    addresses: never map it, keep it closed, pass `program=` on every call. Static addresses equal runtime ones
+    (`SADK.exe` base `0x400000`, `tincat3.dll` `0x10000000`).
+  - `checkin_program` writes a new repository version and **unloads** the program: `load_program_from_project`
+    right after. `server_status` may say "not connected" while check-in works.
+  - `run_ghidra_script` runs scripts by name from `~/ghidra_scripts/`. The mapping pipeline's writer
+    (`mapping/scripts/ApplyChanges.java`) does not protect hand-made names: evidence decides.
+- **Frida MCP** (`frida-sadk`, `tools/frida_mcp/`): call client functions, hook handlers, read objects, catch
+  crashes in the running game. Registered at user scope (a project `.mcp.json` entry is skipped in background
+  sessions); needs frida-server 17.22.2 (windows-x86) running as Administrator on the game PC. Runbook:
+  `docs/LIVE_DEBUG_RUNBOOK.md`. No hardware watchpoints from JS: they stalled and then killed the game.
+- **The game PC** is reachable over SSH (Windows PowerShell 5: use `;`, not `&&`). Install builds and read the
+  shim log `bin\wsock32_shim.txt` yourself; overwrite a DLL only while `SADK.exe` is not running. The maintainer
+  only starts the game and reports what they see.
+
+Tools that cleared the `HARNESS.md` §3 gate (nothing else without a stated reason):
+- `tools/lobby_proxy.py` (passive MITM logger of the wire); `tools/analyze_capture.py`,
+  `tools/decode_lobby_capture.py`, `tools/decode_game_join.py` (offline capture decoders).
+- `tools/frida_mcp/` (the live-debugging MCP itself).
+- `tools/sadk_crypt.py`, `tools/kex.py`: offline decryption (and re-encryption) of the game's data files and
+  `.KEX` scene parsing (`docs/asset-formats.md`); they re-implement the client's own loaders, checked against every
+  file. How to read and change game data today, mods included: `docs/game-data-files.md`. `AdKEd.exe` is not
+  needed.
+- `sadkmod/gen/gen_game_headers.py` (C++ declarations from `sadkmod/sourcemap/`; fed by
+  `sadkmod/sourcemap/ExportTypesJson.java` inside Ghidra).
+- `tools/s2m_upgrade.py`: rewrites a map in the old prototype layout into the shipped one (`docs/map-format.md` §9).
+- `tools/screenshot.ps1`: a PNG of the game window (`PrintWindow`), run through the scheduled task
+  `sadk-screenshot` in the logged-on desktop session.
+- `tools/cvar_client.py`: client for the game's developer-tweak (CVar) server (`docs/BINARY_PATCHES.md`).
+- `tools/ghidramcp/update-ghidramcp.sh`: installs and registers the Ghidra MCP itself.
+
+Captures and logs are RE artifacts: don't delete or casually rewrite them.
+
+---
+
+## Protocol and wire rules
+
+- **`msgdefs.ini` is authoritative** for NETMSG layouts; it overrides RE guesses. It is copyrighted game data:
+  copy it from the game's `bin\` into `lobby/sadk_lobby/data/` (gitignored), never commit it.
+- Wire behaviour is **byte-exact**. Change it only with `msgdefs.ini` plus binary evidence, and re-validate
+  against the real client. Preserve edge cases such as `None` vs `""` string encoding.
+- `[PROVEN]` constants: TinCat header **28 bytes**; NETMSG module id **0x26B6** (lobby, and the logins on every
+  other connection); chat runs as CellManager module **0x0062** templates, not as a second payload magic; auth =
+  **ECDH secp521r1** + **Twofish-CTR**: the lobby login completes on **207 SessionKey**, the token logins of the
+  UC, village and referee connections on **153 AddResult** after 213 (the UC path has no 214 handler);
+  `GameServerData(170)` = the ServerInfoOld layout; a connection learns its server's address only from
+  `ConnectionData(222)`; leave-village `0x27D2` is answered with `1006` (`0xDEADBEEF`), never with `1000`. Details
+  and evidence: `docs/message-catalog.md`.
+
+---
+
+## Running and testing
+
 ```bash
-pip install -r lobby/requirements.txt
+git submodule update --init
+source ./setup_venv.sh              # .venv with lobby/requirements.txt (+ zombie-imp: twofish needs `imp` on CPython >= 3.12)
 cd lobby && python -m sadk_lobby
 ```
-The server keeps its saves next to the package (`lobby/sadk_players.json`, `sadk_mail.json`) unless
-`SADK_STORE_PATH` names the store. The maintainer's live service (`sadk-lobby.service`, a systemd user unit) runs
-from `lobby/` with `SADK_STORE_PATH` set to `sadk_players.json` in this repo's root: **those files are the players'
-saves; never move, overwrite or delete them.**
 
-`lobby/sadk_lobby/` file roles:
-- `__main__.py` — entry point · `config.py` — constants/ports/players (no flags)
-- `tincat.py` — frame parsing/building · `msgdefs.py` — parses the game's `msgdefs.ini`
-- `codec.py` — generic message-body encode/decode · `crypto.py` — login crypto
-- `chat.py` — chat/UC second connection · `village.py` — village/world third connection
-- `players.py` — multi-user identities · `registry.py` — process-global hosted-game store
-- `connection.py` — per-socket state machine · `dispatch.py` — lobby handler table
-- `server.py` — listeners (lobby 7070, UC/chat 7071, village 5477, referee 5481, bridge 7072/7073) + main loop
-
-Two parts of the project are published as their own repositories (GitHub org `S2-modders`) and mounted here as
-submodules; changes to them are committed and pushed there, then the submodule pointer is updated here:
-- `sadkmod/` (`S2-modders/sadkmod`) — the C++ library for code running inside SADK.exe (generated game
-  declarations, patches, hooks, the mod host; `sadkmod/README.md`), the Ghidra map it is generated from
-  (`sadkmod/sourcemap/`), the shim `sadkmod/shim/` (a proxy wsock32.dll that only loads mods from the game's
-  `mods` folder), the shared mod build rules `sadkmod/mods.mk` and the mod guide `sadkmod/docs/writing-mods.md`.
-- `lobby/` (`S2-modders/sadklobby`) — the lobby server and what its players need: the mods `lobby/mods/`
-  (`gamebridge`, the host bridge's client side; `assetshare`, map sharing; `billboards`), the setup tool
-  `lobby/setup/` (C, Win32; embeds the shim and those three mods) and `lobby/docs/bridge-protocol.md`. Build its
-  mods against this repo's sadkmod: `make -C lobby/mods SADKMOD=../../sadkmod` (`lobby/sadkmod` stays empty here).
-
-Every other mod is in `mods/` (`mods/README.md`): borderless, oscursor, navalcombatfix, npcmodels, ...
-- `data/msgdefs.ini` — authoritative NETMSG schema, copied locally from the game (copyrighted: gitignored, never commit)
-
----
-
-## Protocol & wire-format rules
-
-- **`msgdefs.ini` is authoritative. Consult it first.** It overrides RE guesses and
-  emulator field layouts where they disagree.
-- Wire behaviour is **byte-exact**. Don't change it casually; re-validate against the
-  real client. Preserve `None` vs `""` string-encoding distinctions.
-- Key constants `[PROVEN]`: TinCat header = **28 bytes**; lobby payload magic
-  **0x26B6**; chat payload magic **0x0062**; auth = **ECDH secp521r1** + **Twofish-CTR**,
-  completing on **153 AddResult** (the client has no 214 handler on the UC path);
-  `GameServerData(170)` = the ServerInfoOld layout.
-
----
-
-## Running & environment notes
-
-- Ports: `7070` lobby · `7071` UC/chat · `5477` village · `5481` referee · `7072`/`7073` host bridge (`5479` is a hosting client's game port). Binds `0.0.0.0`. Advertised IP
-  via `SADK_ADVERTISE_IP`.
-- Point **both** client configs at the stub: `data/lobby/config/LobbySettings.ini`
-  and `data/game/settings/network.ini`. AdK patchlevel **9212**.
-- Test credentials: `test` / `test` / `test`.
-- **Git uses `master`, not `main`.** The game runs as admin; any live debugging (via
-  the MCP) must be elevated too. Ghidra static addresses for `SADK.exe` (base
-  `0x400000`) and `tincat3.dll` (`0x10000000`) line up with runtime.
-
----
-
-## Reverse-engineering setup
-
-- Connect the **Ghidra MCP** per `decomp/GHIDRA_MCP_SETUP.md`. Applied labels/structs
-  live in `decomp/RENAME_LIST.md`.
-- All RE and debugging goes through the MCP (HARNESS §1). Scripting *inside* Ghidra
-  via the MCP is allowed; standalone RE/memory/patch scripts are not.
-- **Follow the mandatory RE practices** in `HARNESS.md §6` / `decomp/RE_PRACTICES.md`:
-  type everything, build typed vtable structs, one-layer-then-`[TODO]`, never fabricate
-  structure, escalate purely-runtime-virtual calls to the user, keep the symbol map
-  current.
-
-## Windows 10/11 launch note
-
-The Win10/11 village-enter crash is a **SecuROM-vs-modern-OS** protector issue, not
-proof the protocol is wrong. The two runtime patches that get the genuine exe to boot
-on Win10/11 are documented in `docs/BINARY_PATCHES.md`. Win7 runs natively. (The boot
-itself is done by launching/attaching the game under a debugger — via the MCP — not a
-standalone loader script.)
-
-## Asset decryption / modding
-
-The game's XML/Lua data files are encrypted. Prefer **`AdKEd.exe`** (the known-good
-two-way converter); work on copies. See `docs/REVERSE_ENGINEERING_GUIDE.md` and
-`docs/UI_FINDINGS.md`. Python decrypt tooling exists only for analysis/automation.
-
----
-
-## Tooling (deliberately minimal — see `tools/`)
-
-Only capabilities the Ghidra MCP and a debugger genuinely cannot provide survive here:
-- `tools/lobby_proxy.py` — passive MITM proxy/logger of the live wire
-- `tools/analyze_capture.py`, `tools/decode_lobby_capture.py`, `tools/decode_game_join.py`
-  — offline decoders for captured traffic
-- `tools/frida_mcp/` — **the live-debugging MCP** (Frida): call client functions, hook handlers, read
-  objects and catch crashes in the running SADK.exe. Needs frida-server 17.22.2 (windows-x86) running as
-  Administrator on the game PC; registered at USER scope as `frida-sadk` (`claude mcp add -s user`; a
-  project `.mcp.json` entry is skipped in background sessions, which never show the approval prompt)
-- `tools/sadk_crypt.py` / `tools/kex.py` — offline decryption of the game's encrypted data files and parsing /
-  splitting of `.KEX` scenes (`docs/asset-formats.md`). Stated reason: `AdKEd.exe` (MEW-packed) crashes under
-  Wine and no MCP converts files in bulk; both re-implement the client's own loaders, checked against every file
-- `sadkmod/gen/gen_game_headers.py` — generates sadkmod's C++ declarations of the game from `sadkmod/sourcemap/`
-  (types, functions, globals). Stated reason (approved by the maintainer 2026-10-07): neither MCP produces source
-  code; it reads only the committed sourcemap. `sadkmod/sourcemap/ExportTypesJson.java` (runs inside Ghidra) feeds it.
-- `tools/s2m_upgrade.py` — rewrites a map in the old prototype layout (`data\game\map\Presentation.s2m`) into the
-  layout the shipped loader reads (`docs/map-format.md` §9). Stated reason (asked for by the maintainer 2026-10-12):
-  neither MCP rewrites a file from one container layout into another
-- `tools/screenshot.ps1` — saves a PNG of the game window only (`PrintWindow`), run on the game PC through the scheduled
-  task `sadk-screenshot` in the logged-on desktop session. Stated reason (approved by the maintainer 2026-10-14): an SSH
-  session cannot see the interactive desktop and neither MCP captures the screen; used for the look checks
-- `tools/cvar_client.py` — client for the game's own developer-tweak (CVar) server, which only exists after
-  the optional patch in `docs/BINARY_PATCHES.md` or when created at run time (same file); neither Ghidra nor a
-  debugger speaks its text protocol
-
-Adding anything else requires the stated-reason gate in `HARNESS.md §3`. Treat
-captures/logs as valuable RE artifacts — don't delete or casually rewrite them.
-
----
-
-## Conventions & known dead ends
-
-- `master`, not `main`. File tools can't read raw `.bin` captures — decode to text first.
-- Dead ends (keep dead unless new evidence): `-localhostmode`; two local client
-  instances on one machine; treating the `170` wire layout as the source of
-  room/validity (those values come from the `data` blob path).
-
----
-
-## Testing
+- Ports: `7070` lobby · `7071` UC/chat · `5477` village · `5481` referee · `7072`/`7073` host bridge. `5479` is a
+  *hosting client's* game port, not a server port. Binds `0.0.0.0`; the advertised IP comes from
+  `SADK_ADVERTISE_IP` (the live service gets it from a local systemd drop-in, never from the repository).
+- The live service is the systemd user unit `sadk-lobby` (`systemctl --user restart sadk-lobby`, logs via
+  `journalctl --user -u sadk-lobby`), running from `lobby/` under PyPy (`.venv-pypy` in this root) with
+  `SADK_STORE_PATH` pointing at this root.
+- Clients point at the server through `data/lobby/config/LobbySettings.ini` and `data/game/settings/network.ini`
+  (SAdK-ServerConfig, `lobby/setup/`, writes both). AdK patchlevel **9212**. Test credentials: any new name
+  registers on its first login.
 
 ```bash
-python lobby/tests/test_codec_golden.py     # 170 reproduced byte-for-byte vs the frozen legacy monolith
-python lobby/tests/test_server_smoke.py     # end-to-end vs a fake socket
-python lobby/tests/test_server_browser.py   # server-browser wire
-python lobby/tests/test_multi_client.py     # multi-player + global game registry
-# or: pytest lobby/tests/
+pytest lobby/tests/                 # wire codec (byte-for-byte golden), login, village, minigames, referee, bridge
+make -C sadkmod test                # library self-test and mod host (Wine)
+make -C mods verify                 # every mod's patches checked against SADK.exe (Wine)
 ```
+
+---
+
+## Platform notes and dead ends
+
+- The retail exe is SecuROM-protected; on Windows 10/11 it needs the runtime fixes in `docs/BINARY_PATCHES.md`.
+  The project targets the publisher's DRM-free build (MD5 above), which runs as is; the shim and the mods need it.
+- The game runs as administrator on the game PC; Frida's server must run elevated too.
+- Dead ends (stay dead unless new evidence): `-localhostmode`; two client instances on one machine; treating the
+  `170` wire layout as the source of room/validity (those values come from the `data` blob path).
+- File tools can't read raw `.bin` captures: decode them to text first.
 
 ---
 
 ## Maintainer context
 
-The maintainer is a game-domain expert; weight their in-game instincts, especially:
-**is the game actually waiting for something earlier in the real flow?** That instinct
-was previously correct and is codified in `HARNESS.md §2`.
+The maintainer is a game-domain expert; weight their in-game instincts, especially *"is the game waiting for
+something earlier in the real flow?"* (`HARNESS.md` §2). Their time at the game PC is the scarce resource. They want
+heavy initiative, work merged rather than parked on branches, and questions only for real decisions.

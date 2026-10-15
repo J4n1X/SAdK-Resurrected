@@ -1,9 +1,10 @@
 # Match start — pre-game room → loading the map → playing
 
-How the **client** leaves the pre-game room and starts the match. All addresses are in
-`sadk_noav.exe`. Tags: `[PROVEN]` = address plus live evidence (the stub's referee chain, two matches
-back-to-back on 2026-07-27, `lobby/sadk_lobby/referee.py`, `engagement_records/2026-07-27_referee-*.md`);
-`[known]` = read at the address; `[TODO]` = open.
+How the **client** leaves the pre-game room and starts the match, and what the server must answer. All
+addresses are in `sadk_noav.exe` (`S`) unless marked `T` (`tincat3.dll`). Tags: `[PROVEN]` = address plus
+live evidence (hosted matches against the stub since 2026-07-27: `lobby/sadk_lobby/referee.py`, and in
+`lobby/sadk_lobby/dispatch.py` `_h_assign_server`, `_h_connection_data`, `_h_send_token`,
+`_h_send_game_data`); `[known]` = read at the address; `[TODO]` = open.
 
 Match start is **referee-gated**: the load starts in the handler of the referee's
 `RegisterGameResult(0xDB8)` (S 00431800). The `GameSeed` that message carries only seeds the chest
@@ -48,7 +49,72 @@ LobbyGameScreen in older notes).
 
 Every client whose WorldScreen is active subscribes these observers (`Activate` has no host check), so
 host and joiners both log in to the referee and both send `RegisterGame` `[PROVEN]` (0xDB6 arrived from
-both clients in the live run).
+both clients in the live run). Neither the arm nor the pump has a ranked branch: ranked and unranked
+matches both go through the referee, and `RankedGame` is only a field of `RegisterGame` `[known]`.
+
+---
+
+## What the server must do `[PROVEN]`
+
+The steps in time order. Every failure on this path is silent: the client accepts the frame, keeps the
+socket open and logs nothing (the one exception is in step 3). Wire layouts: `docs/message-catalog.md`
+("AssignServer routing", "LobbyMessage bodies", "Referee / match arbiter", "Leave").
+
+1. **Assign the referee at lobby login: one `170` with server type 4 / subtype 4, never 4 / 5.** Once the
+   lobby state passes 5, `LobbyComm::System::StatePump_Tick` S 00464ee0 sends `189 AssignServer` (4, 4) on a
+   ticket of request type 0x108. tincat3's `GameServerManager::OnGameServerAssigned` T 10021520 routes the
+   answering `170` by its descriptor: type 4 / subtype 5 goes to the RankingManager (`ConnectRankingServer`
+   T 10029a20), which dials but never tells the game; any other pair reaches `ServerList::GameServerAssigned`
+   S 00469ad0 → `SetRefereeServerAddress` S 004625d0 (`LM+0x580` = server id, `LM+0x588` = 60000 ms).
+   - The sign that the latch worked: the client sends the 189 again exactly every 60 s for the rest of the
+     session. `StatePump_Tick` repeats the request only when `LM+0x588` runs out, and only
+     `SetRefereeServerAddress` arms it, so after a failed first assign no 189 follows in that process.
+   - With 4 / 5, `LM+0x580` stays 0, the `RefereeServerConnection` gets no transport (`refConn+0x34` = 0)
+     and its `Login` does nothing at match start (TTD trace of a host, 2026-07-27).
+   - Exactly one `170`: the first reply consumes the 0x108 ticket. A 4 / 5 and a 4 / 4 frame on the same
+     ticket lost the latch (no 60 s retry followed).
+   - Only `server_id` is read from this `170`; keep the id stable (message-catalog H10).
+2. **Answer the village leave with `1006 {0xDEADBEEF}`, never with `1000` and never by closing.** At match
+   start every client sends `2002 {0xAFFEDEAD}` once (`SendLeaveVillageRequest` S 0046bde0, state 10); the
+   room dialog's `Update` S 00457a00 starts it once `cStartLoading` is set while the state is 9 `[known]`.
+   State 10 has no timeout. The stub answers with one `1006` at once and a second one when the player's UC
+   socket has closed (`village-and-character-protocol.md` §7). The logout ends in `HandleLoggedOut`
+   (state 11), whose LoggedOut observers include `OnVillageConnectionLoggedOut`, the arm of Phase 3.
+   - `EnterWorld(1000)` instead sets state 9 again (`HandleEnterWorld` S 0046f670): both clients stay in the
+     lobby world and the match never loads.
+   - Closing the village socket takes the Disconnected exit: `!CONNECTION_LOST_TEXT`, no referee arm, and
+     at match start both players are thrown out.
+   - No answer leaves the client in state 10.
+3. **Give the referee connection its address with `222`.** `InitRefereeServerConnection` S 00462910
+   registers the latched id with the ConnectionManager (vtbl `+0x38`, T 100196b0: a new connection keyed by
+   the server id at `conn+0x1c`, with an empty address; 0xCD when it exists) and binds it. When `Login`
+   opens that connection at match start, the per-server-id handler asks the lobby with
+   `221 RequestConnectionData {server_id}` (T 10023af0). The answer `222 ConnectionData` is the only message
+   that sets a server-id connection's address: `HandlerLobby` T 10023cc0 finds the connection by server id
+   (T 10019570) and fills `conn+0x14` (host) and `conn+0x18` (port), and `ConnectionReal::Connect`
+   T 100309d0 dials from those two fields only `[known]`. A `170` does not address a connection, and a `222`
+   naming another listener's port makes the client dial that listener. The village connection gets its
+   address the same way. Without an address the client's own `LobbyComm.log` shows
+   `COMM_LAYER_ERROR_CANNOT_CONNECT - TinCat failed to start connection` from `LobbyManager.cpp` line 907
+   (`LobbyComm::System::OnLoginFailed`, line store at S 00464aeb) and `LobbyBaseConnection.cpp` line 119.
+4. **Push `LoginSuccess(0xDCA)` after the referee connection's `153`.** The referee connection logs in like
+   every server-id connection (188 → 42, 211 → 212, 213 → `153 AddResult`). `RefereeServerConnection::Login`
+   S 004793f0 only opens the channel and sends no request, so nothing asks for the login result: the server
+   pushes it (the stub 0.5 s after the `153`). `PermID` must be that client's own perm id:
+   `LoginSuccessReceived` S 0047ac20 compares it with `LM+0x54c` (S 0047ad09) and returns on a mismatch
+   before the `+0x80` fan-out that sends `RegisterGame`. A `LoginSuccess` that arrives while no WorldScreen
+   is subscribed (outside a match start) has no effect.
+5. **Encode referee and village messages as LobbyMessages.** In the `SendGameData(74)` envelope the
+   `msg_type` u32 (little-endian, like every envelope field) carries the type word
+   `names<<15 | category<<12 | id` (referee category 3, e.g. `0x3DCA`); the `data` MEMBLOCK carries the
+   fields only. The fields are an MSB-first bit stream, so a byte-aligned 32-bit field is big-endian on the
+   wire. Both mistakes are silent (live, 2026-07-27, values read at the compare S 0047ad09): with the type
+   word repeated at the head of the MEMBLOCK the client read `PermID` 1 as 0x00013DCA, with a little-endian
+   `PermID` as 0x01000000. A little-endian `1006` code (`ef be ad de`) is ignored the same way (2026-07-26).
+6. **Answer `RegisterGame(0xDB6)` with `0xDB7`, then `0xDB8 {GameID, 0, GameSeed}`,** the same seed for every
+   client of the match (Phase 2). The `0xDB8` acts only while the setup dialog exists (`WorldScreen +0x35c8`).
+7. **In the match**, answer `GiveUpGame(0xDD4)`, `FinishGame(0xDC0)` and `ClaimChest(0xDAC)`
+   (`docs/message-catalog.md`; server log 2026-10-10). Wagers: `lobby/sadk_lobby/wagers.py`.
 
 ---
 
@@ -76,19 +142,20 @@ both clients in the live run).
 
 ---
 
-## Phase 1 — referee server assignment (before login) `[PROVEN]`
+## Phase 1 — referee server assignment (at lobby login) `[PROVEN]`
 
 The referee is a separate server, assigned on demand:
 
-1. `LobbyComm::ServerList::RequestRefereeServer@0x468f60` → tincat3 `GameServerManager::AssignServer`,
-   **NETMSG 189** with `server_type=4, subtype=4`.
+1. `LobbyComm::ServerList::RequestRefereeServer@0x468f60`, called by `StatePump_Tick` once the state passes 5
+   (latch `LM+0x584`) → tincat3 `GameServerManager::AssignServer` (T 10021830), **NETMSG 189** with
+   `server_type=4, subtype=4`.
 2. The reply reaches `ServerList::GameServerAssigned@0x469ad0`, which calls the pending callback
    `LobbyComm::System::SetRefereeServerAddress@0x4625d0`: it stores `serverId` to `LM+0x580` and arms the
-   60000 ms timer at `LM+0x588`. The assign reply must be server type 4 / subtype 4: tincat3's
-   `GameServerManager::OnGameServerAssigned` (T 10021520) keeps a type 4 / subtype 5 reply to itself, and
-   `LM+0x580` then never latches.
-3. `LobbyComm::System::InitRefereeServerConnection@0x462910` (gated on `LM+0x580 != 0`) resolves the
-   serverId to ip:port and initialises the `RefereeServerConnection` at `LM+0x490`.
+   60000 ms timer at `LM+0x588`. The reply must be server type 4 / subtype 4 (server duty 1).
+3. `LobbyComm::System::InitRefereeServerConnection@0x462910` (pump, gated on `LM+0x580 != 0`) registers the
+   serverId with the ConnectionManager and binds the `RefereeServerConnection` at `LM+0x490` to that
+   connection. The connection has no address yet; it gets one from `222` when it is opened at match start
+   (server duty 3).
 
 ## Phase 2 — the game is registered → GameSeed `[PROVEN]`
 
@@ -156,7 +223,8 @@ NComm down.
 
 Referee replies: **`LoginSuccess(0xDCA)`** (`PermID`) fires `refConn+0x80`;
 **`LoginFailed(0xDCB)`** (`PermID`) fires `refConn+0x8c`. `LoginSuccessReceived@0x47ac20` drops a `PermID`
-that is not the local perm id; the field is big-endian on the wire.
+that is not the local perm id; the field is big-endian on the wire. Nothing requests `LoginSuccess`: the
+server pushes it after the referee connection's `153` (server duty 4).
 
 ## Phase 4 — the load kick `[known]`
 
@@ -195,7 +263,8 @@ Send/recv follow `send 0xD_6/0xD_0/… → ack +1 → result +2`. All names are 
 
 All callbacks are subscribed in `WorldScreen::Activate@0x4351a0` as an 8-byte `{screen, handlerFn}`
 struct handed to `ObserverList::Subscribe@0x458860` at `conn+listOffset`; the handler addresses are plain
-immediates in the registration code. The screen watches **two** connections: the referee connection
+immediates in the registration code (the `+0x80` one at S 00435269..0043527f), so the handlers have no
+direct callers. The screen watches **two** connections: the referee connection
 (`LM+0x490`) and the village connection (`LM+0x540`, `LobbyComm::System::GetVillageServerConnection@0x4624d0`).
 
 | Conn list | Fires on | Screen handler (`LobbyMenu::WorldScreen`) | Body |

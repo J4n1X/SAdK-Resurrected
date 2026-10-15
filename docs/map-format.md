@@ -77,14 +77,14 @@ goods of each player are created at game start from MapInfo (§4.2). `[inferred]
 
 ### 1.2 Encryption container (decryption is out of scope)
 
-The samples were decrypted with AdKEd. For completeness, the on-disk container
+The samples were decrypted with `tools/sadk_crypt.py` (`asset-formats.md` §1). For completeness, the on-disk container
 (`NCore::FileStreamCrypt`, vftable 00834f04, `Close` 007805d0):
 
 | Off | Type | Field | Tag |
 |---|---|---|---|
 | 0x00 | u32 | container version `0x06091812` | `[known]` |
 | 0x04 | char[4] | `"sadk"` | `[known]` |
-| 0x08 | u32 | CRC32 of the plaintext | `[known]` (written); whether the loader checks it: open |
+| 0x08 | u32 | CRC32 of the plaintext | `[known]`; `gDecryptData` 006e6660 checks it (§9.3, `asset-formats.md` §1) |
 | 0x0c | u32 | key hash | `[known]` |
 | 0x10 | u32 | plaintext size (= decrypted sample size in all 20 installed maps) | `[known]` |
 | 0x14 | … | packed and encrypted payload | `[known]` |

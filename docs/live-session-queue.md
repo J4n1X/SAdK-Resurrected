@@ -12,6 +12,12 @@ code.** Read the code path to its end first. What qualifies: what the screen or 
 networks and hardware, libraries that cannot be read (packed `fmod.dll`, drivers), the original servers' behaviour.
 Confirming a reading is not a reason for a live test.
 
+**Watches.** An entry that asks for a "read watch" or "write watch" names the field to observe, not the method:
+hardware watchpoints set from Frida's JS stall and then kill the game (2026-10-14, `LIVE_DEBUG_RUNBOOK.md`). Find
+the field's readers or writers through static field xrefs in Ghidra first, which often settles the entry without a
+session; live, hook the functions those xrefs name. A watchpoint only with the maintainer's go-ahead, on one cold
+field and one thread.
+
 ## Standing notes (maintainer, 2026-10-12)
 
 - Mail, buddy lists, whispers, the shops (they open and list their items) and per-match server mods work in live

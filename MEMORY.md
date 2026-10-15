@@ -2,14 +2,16 @@
 
 Start here after `CLAUDE.md` + `HARNESS.md`. The short, durable state of the project: what is established, what
 is open, and where each is written down. `[PROVEN]` = binary address + live evidence; everything else is
-`[TODO]` / `[inferred]` and labelled. Last full revision: 2026-10-12; map figures and map quality 2026-10-13.
+`[TODO]` / `[inferred]` and labelled. Last full revision: 2026-10-12; map figures and map quality 2026-10-13;
+locations and tooling 2026-10-15. Update the section a result belongs to; this is not a log.
 
 ---
 
 ## Where things are
 
-- **This repository** holds the research: `docs/` (the reference), `decomp/` (RE practices, rename list),
-  `engagement_records/` (dated evidence), `tools/`, and the further mods in `mods/`.
+- **This repository** holds the research: `docs/` (the reference; index `docs/README.md`), `decomp/` (RE
+  practices, rename list), `mapping/` (the mapping pipeline), `tools/`, and the further mods in `mods/`. Evidence
+  lives in the reference docs (`HARNESS.md` §8); the history of how a result was reached is in git.
 - **`lobby/`** (submodule, `S2-modders/sadklobby`): the lobby server, the players' mods `gamebridge` /
   `assetshare` / `billboards`, the setup tool.
 - **`sadkmod/`** (submodule, `S2-modders/sadkmod`): the modding library, the shim, and `sourcemap/`, the exported
@@ -18,15 +20,21 @@ is open, and where each is written down. `[PROVEN]` = binary address + live evid
   `d4832bc5103c14f5445471af29b8d778`). Ghidra's `/SADK.exe` is a different, SecuROM dump-base build with other
   addresses and layouts: do not map it. In the docs, `S 00xxxxxx` is an address in `sadk_noav.exe`, `T` one in
   `tincat3.dll`.
+- **The remake** (Godot 4.7.2, simulation in C#): binding decisions in `docs/remake-architecture.md` and
+  `docs/remake-rendering.md`, the draft design set in `docs/remake/` (2026-10-15, to be confirmed), the behaviour
+  specifications in `docs/sim/`. Its code is a separate repository, `sadk-remake`.
 
 ## What is established
 
 Per-feature status is the table in `CLAUDE.md`; the evidence is in the docs named here.
 
-- **Login** `[PROVEN]`: ECDH secp521r1 → Twofish-CTR credentials → SessionKey(207) → completes on
-  **153 AddResult** (the UC path has no 214 handler). `docs/LOBBY_PROTOCOL.md`.
-- **Transport** `[PROVEN]`: TinCat 28-byte header; lobby payload magic `0x26B6`, chat `0x0062`; the codec is driven
-  by the game's own `msgdefs.ini`. LobbyMessage field scalars are big-endian.
+- **Login** `[PROVEN]`: the lobby connection runs 188 → ECDH secp521r1 (201/202) → Twofish-CTR credentials
+  (203/204) → completes on **207 SessionKey**; the UC, village and referee connections log in with a token
+  (211/213) and complete on **153 AddResult** (the UC path has no 214 handler). `docs/message-catalog.md`,
+  flow overview `docs/protocol-overview.md`.
+- **Transport** `[PROVEN]`: TinCat 28-byte header; NETMSG module `0x26B6` with the codec driven by the game's own
+  `msgdefs.ini` (property-bag fields little-endian); chat as CellManager module `0x0062` templates. LobbyMessage
+  bodies (village, referee) are an MSB-first bit stream: 32-bit values big-endian when byte-aligned.
 - **Server list and village entry** `[PROVEN]`: `GameServerData(170)` in the ServerInfoOld layout; a village is
   joinable when its data block's room id equals the client's protocol version (1000). Entering the world is the
   server pushing `EnterWorld(1000)` inside a `SendGameData(74)` envelope.
@@ -34,8 +42,7 @@ Per-feature status is the table in `CLAUDE.md`; the evidence is in the docs name
   persistent characters. `docs/village-and-character-protocol.md`, `docs/message-catalog.md`.
 - **Hosting, the pre-game room, entering a match** `[PROVEN]`: the room is the NComm event system on TinCat
   (`docs/NCOMM_GAME_PROTOCOL.md`); match start is referee-gated: `RegisterGame(0xDB6)` → `Ack(0xDB7)` +
-  `Result(0xDB8, GameSeed)` (`docs/MATCH_START.md`, `engagement_records/2026-07-27_referee-*.md`). The referee
-  assign reply is type 4 / sub 4, never 4 / 5.
+  `Result(0xDB8, GameSeed)` (`docs/MATCH_START.md`). The referee assign reply is type 4 / sub 4, never 4 / 5.
 - **Host bridge** `[PROVEN]`: `lobby/docs/bridge-protocol.md`. **Map and server-mod sharing**: `docs/s2tftp.md`.
 - **Game internals** mapped statically, not yet seen in the running game: `docs/subsystems.md`, `docs/types.md`,
   `docs/lua-surface.md`, `docs/data-loading.md`, `docs/navy-and-military.md`, `docs/map-format.md`,
@@ -145,8 +152,11 @@ list of what stays open are in `mapping/work/gaps_20261013/GAP_CLOSURE.md`. In s
 
 ## Tooling state
 
-- Ghidra MCP: a headless backend started by the MCP bridge, working on a checkout of the shared repository
-  (`docs/HEADLESS_SETUP.md`). `checkin_program` writes a new repository version and unloads the program: load it
-  again afterwards. `server_status` may say "not connected" while check-in works.
-- Live debugging: the Frida MCP (`tools/frida_mcp/`, `docs/LIVE_DEBUG_RUNBOOK.md`).
+- Ghidra MCP: bethington/ghidra-mcp 6.0.0, headless on the Linux server, working on a checkout of the Ghidra
+  Server repository `sadk`; installed and registered (Claude Code local scope) by
+  `tools/ghidramcp/update-ghidramcp.sh`; the backend lives as long as the session's bridge, and one backend at a
+  time can open the shared project (`docs/HEADLESS_SETUP.md`). `checkin_program` writes a new repository version
+  and unloads the program: load it again afterwards. `server_status` may say "not connected" while check-in works.
+- Live debugging: the Frida MCP (`tools/frida_mcp/`, `docs/LIVE_DEBUG_RUNBOOK.md`). The earlier Ghidra-debugger and
+  Time Travel Debugging route is retired.
 - All RE and debugging through the MCPs; no standalone RE, memory or patch scripts (`HARNESS.md` §1).

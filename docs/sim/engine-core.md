@@ -33,8 +33,9 @@ This document specifies the low-level building blocks that the other specificati
 
 Not in scope, and where it is: the save and map file layouts ([save-format.md](save-format.md),
 `../map-format.md`), the encrypted container (`../asset-formats.md` §1), the NETMSG property-bag encoding of
-`tincat3.dll` (`../LOBBY_PROTOCOL.md`), the typed field accessors and field lists of each LobbyMessage
-(`../message-catalog.md`, [lobby-client-state.md](lobby-client-state.md)), the frame loop
+`tincat3.dll` (`../message-catalog.md`, "Property-bag body (msgdefs field types)"), the typed field accessors
+and field lists of each LobbyMessage (`../message-catalog.md`, [lobby-client-state.md](lobby-client-state.md)),
+the frame loop
 ([app-shell.md](app-shell.md)) and the logic tick ([logic-core.md](logic-core.md)).
 
 ---
@@ -1016,7 +1017,7 @@ This layer sends and handles no network message of its own. It provides the enco
 | the character data blocks of the lobby (`LobbyComm::IAvatarDataBlock::ReadFromBuffer` / `WriteToBuffer` S 00486120 / S 004861c0: a borrowed, non-growing stream over the block; a block shorter than 4 bytes is rejected) | `NComm::MemoryStream` (§3.3) [known] | [lobby-client-state.md](lobby-client-state.md), `../village-and-character-protocol.md` §1.4 |
 | the lockstep checksum inside event 0x30009 | `NCore::CRCStream` + CRC-32 | [logic-core.md](logic-core.md) §3.6 |
 | the match password digest | MD5 | [network-session.md](network-session.md) |
-| NETMSG property bags | `tincat3.dll`, not this layer | `../LOBBY_PROTOCOL.md` |
+| NETMSG property bags | `tincat3.dll`, not this layer | `../message-catalog.md`, "Property-bag body (msgdefs field types)" |
 
 Files [known: callers of each class's `Open`]:
 

@@ -37,13 +37,17 @@ The slot settings of event 0x30002 (tribe, team, colour, playerIndex) travel in 
   `NComm::EventGameInformation::GetSlot@0x413100` `(i) = this + 0x10 + i*0x4c` `[PROVEN]`.
 - **Transport `[PROVEN]`:** NComm P2P traffic rides **TinCat** (`tincat3.dll` — the *same* library as the
   lobby/village), via a **`NComm::TinCatNetwork`** object (`.\TinCatNetwork.cpp`, implements `ITinCatCallback`),
-  created by `NComm_Manager::StartUpNetwork@0x40a9a0` and stored at `Manager+0x340`. The session is spun up when
-  the `GameServerConnection` (`LM+0x544`) logs into the game server:
-  `GameServerConnection::OnLoggedIn@0x48edf0` → `StartUpNetwork(mode 3)` → `NComm_Manager::ConnectAndJoin@0x40ad60`
-  (sends the `0x30001` join). That is *why* `GameServerConnection`'s own `HandleMessage` (`vtbl[0x24]`) is the
-  no-op stub — NComm events are consumed by the **NComm Manager** (`NComm_Manager::HandleEvent`), not the
-  `LobbyComm::BaseConnection` dispatch path. (Host-authoritative: the host is the game server.) **The stub speaks
-  TinCat, so it can sit in this path.**
+  created by `NComm_Manager::StartUpNetwork@0x40a9a0` and stored at `Manager+0x340`. The host's session is started
+  by `ServerList::CreateGameServer` S 0046aaa0 (`StartUpNetwork(mode 4)`, the TinCat server); a joiner's by
+  `GameServerInfo::JoinGame` S 0048d030 / `JoinGameWithPassword` S 0048d0c0: `Shutdown` → `StartUpNetwork(mode 3)`
+  → `NComm_Manager::ConnectAndJoin@0x40ad60` to the host's ip:port from the `170` descriptor (sends the `0x30001`
+  join) `[known]`. `GameServerConnection::OnLoggedIn@0x48edf0` (`LM+0x544`) contains the same `StartUpNetwork(3)` →
+  `ConnectAndJoin`, but hosting does not reach it and no caller of its `Initialize` is known
+  (`docs/sim/lobby-client-state.md`); its `HandleMessage` (`vtbl[0x24]`) is the no-op stub. NComm events are
+  consumed by the **NComm Manager** (`NComm_Manager::HandleEvent`), not the `LobbyComm::BaseConnection` dispatch
+  path. Host-authoritative: the joiners connect to the host, and the lobby server neither sees nor relays this
+  traffic (`docs/message-catalog.md`, "Pre-game room"); for a host that cannot accept inbound TCP, the stub and
+  the `gamebridge` mod relay it (the host bridge, `lobby/docs/bridge-protocol.md`).
 
 ---
 
@@ -175,7 +179,7 @@ the folded setter S 00552f10 (`byte +0x40`; on a slot it writes readyState),
 
 - The five connection-type labels. (The nibble order of slot `+0x41` and the body part of each `+0x43` nibble are
   answered in the slot table `[live, 2026-10-12]`.)
-- **Host vs P2P topology:** is `NComm::TinCatNetwork` a star (clients→host) or routed via a server? Read the
-  connect/listen path (`StartUpNetwork` mode switch; `TinCatNetwork` vtbl `0x10`/`0x40`).
+- (Answered: a star. Every client is connected only to the host, which routes client messages on; no server
+  takes part. `docs/sim/network-session.md` §10 item 1, `docs/message-catalog.md` "Pre-game room".)
 - The consumer of `0x3000c` (NE_InGame_PlayerRemoveLogicData): this switch only swallows it.
 - The other `0x2xxxx` game events are not listed here (`0x20023` handled, `0x2002b` sent).

@@ -5,7 +5,7 @@ and `tincat3.dll`. Network and lobby types come first, then a short overview of 
 then how the types are organised in Ghidra, then the open gaps.
 
 Wire layouts (field order and bit widths on the wire) are not repeated here. See
-[message-catalog.md](message-catalog.md) and [LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md). For the NComm match
+[message-catalog.md](message-catalog.md). For the NComm match
 layer, see also [NCOMM_LAYER.md](NCOMM_LAYER.md) and [NCOMM_GAME_PROTOCOL.md](NCOMM_GAME_PROTOCOL.md). For a
 flat symbol map, see [SOURCEMAP.md](SOURCEMAP.md).
 
@@ -105,7 +105,7 @@ shorthand for an offset inside this object.
 `+0x580` is set by `SetRefereeServerAddress` S 004625d0. The stub shows it live: once a type-4/sub-4
 assign reply arrives, the client retries `189 AssignServer` exactly every 60 s, which is the +0x588 timer
 re-arming. A type-4/sub-5 reply never sets it. Sources: `lobby/sadk_lobby/dispatch.py` `_h_assign_server`
-and the 2026-07-27 referee engagement records.
+and `docs/MATCH_START.md` ("What the server must do", step 1).
 
 **`LobbyManagerState`** (`/LobbyManagerState`, 4 bytes) [known]: 0 Init, 1 Disconnected, 2 Authorizing,
 3 Authorized, 4 CheckingVersion, 5 VersionChecked, 6 LoadingGlobalData, 7 GlobalDataLoaded,
@@ -837,7 +837,7 @@ object `TinCat_CreateAPI` returns. Fields: +0x2c network core, +0x30 user callba
 list, +0x4c `PROGFLOW_NET`, +0x50 mode (1 server, 2 client), +0x54 / +0x58 `TinCat_Values`, +0x5c
 moduleId (the payload magic), +0x60 server connection id, +0x4f8..+0x508 synchronous send/wait state
 [known/inferred]. The 28-byte TinCat frame header itself is not a Ghidra struct. It is documented in
-[LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md) [PROVEN].
+[message-catalog.md](message-catalog.md), "TinCat frame" [PROVEN].
 
 ---
 

@@ -847,7 +847,7 @@ argument 1, called by `OnRefereeRegisterGameResult` S 00431800 after `SetupSessi
 
 ## 5. Inputs and outputs
 
-### 5.1 Lobby server (TinCat lobby connection) — `docs/message-catalog.md`, `docs/LOBBY_PROTOCOL.md`
+### 5.1 Lobby server (TinCat lobby connection) — `docs/message-catalog.md`, "Server list (lobby connection)"
 
 | Id | Name | Direction | Sent / handled by |
 |---|---|---|---|

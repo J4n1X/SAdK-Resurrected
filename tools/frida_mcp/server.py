@@ -11,7 +11,8 @@ Setup: run frida-server (same version as the `frida` package here, 17.22.2) on t
 Administrator — `frida-server-17.22.2-windows-x86.exe -l 0.0.0.0:27042` — start the game, then call
 frida_connect with that PC's address. Addresses are the static Ghidra addresses (no ASLR).
 
-Run (stdio, registered in .mcp.json):  ~/.venvs/frida/bin/python tools/frida_mcp/server.py
+Run (stdio): ~/.venvs/frida/bin/python tools/frida_mcp/server.py. Registered in Claude Code at user scope as
+`frida-sadk` (claude mcp add -s user ...): a project .mcp.json entry is skipped in background sessions.
 """
 import json
 import os

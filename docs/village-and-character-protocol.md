@@ -6,9 +6,9 @@ it waits, what happens on errors, and which values the server may use.
 
 - Wire layouts (bit widths, field order, envelopes) are in [message-catalog.md](message-catalog.md).
   This document only repeats a field when a flow decision depends on it.
-- Related: [LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md) (login, NETMSG basics),
+- Related: [protocol-overview.md](protocol-overview.md) (login, NETMSG basics),
   [LIVE_DEBUG_RUNBOOK.md](LIVE_DEBUG_RUNBOOK.md) (state values, transport states),
-  [MATCH_WORLD_LOGIN.md](MATCH_WORLD_LOGIN.md) (leaving the village at match start),
+  [MATCH_START.md](MATCH_START.md) (leaving the village at match start, the referee chain),
   [SOURCEMAP.md](SOURCEMAP.md) (symbol map). [IN_WORLD_PRESENCE.md](IN_WORLD_PRESENCE.md) is an
   older draft. Where it disagrees with this document (the `names=1` claim, the meaning of 1002),
   this document is current.
@@ -53,7 +53,8 @@ offsets such as `LM+0x57c` are relative to the named object.
 | 11 | VillageLeft | `HandleLoggedOut` / `HandleDisconnected` | — |
 | 12 | ConnectionLost | main connection lost | — |
 
-[known] for the values and setters; LIVE_DEBUG_RUNBOOK.md has the trace evidence.
+[known] for the values and setters. Seen live: 8 → 9 on the pushed 1000 (§2.3) and 9 → 10 → 11 in
+the two-phase leave (§7), both [PROVEN].
 
 ### 1.3 Two encodings
 
@@ -131,7 +132,7 @@ completion message.** A missing Result stalls every later character, friend and 
 | 8 LookUpName | S 00475370 | `RequestCharacterById` T 10015df0 | 72 | 75 rows + 42 → `CharacterDataReceived` S 00473590 |
 | 9 LookUpID | S 004752a0 | `RequestCharacterByName` T 10015d50 | 72 | same |
 | (list) | `RequestCharacterList` S 00472f00 | `RequestUserCharList` T 1002ea10 | 55 | 60 rows + 42 → T 1002f0c0 → `CharListReceived` S 00474910 |
-| 2–7, 10 | friend/ignore/e-mail | UserManager | 56/157/88/… | see [LOBBY_PROTOCOL.md](LOBBY_PROTOCOL.md) |
+| 2–7, 10 | friend/ignore/e-mail | UserManager | 56/157/88/… | see [message-catalog.md](message-catalog.md), "Buddies (friends)", "Ignore list", "Users and accounts" |
 
 LookUpName and LookUpID are answered from the local caches when possible. Every avatar seen in the
 village fills those caches (`CacheUserName` S 004780c0). [inferred]
@@ -361,9 +362,8 @@ The stub waits about 2 s after 1000 before sending these.
 ### 3.3 Re-entering
 
 The client also sends 2002 at **match start** (§7). Do not answer 2002 with a new 1000: that makes
-the client re-enter the lobby world instead of leaving. A connection that leaves and later returns
-goes through §2.3 again. [PROVEN 2026-07-26/27; the earlier "answer 2002 with 1000" behaviour
-caused the match-start stall]
+the client re-enter the lobby world instead of leaving, and the match never loads. A connection that
+leaves and later returns goes through §2.3 again. [PROVEN 2026-07-26/27]
 
 ### 3.4 Keepalive
 

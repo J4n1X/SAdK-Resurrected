@@ -30,8 +30,8 @@ that the real client connects to, plus a small optional client add-on for hostin
 
 **The 3D lobby village**
 - Other players' avatars appear, move and animate; their outfits and levels show correctly.
-- NPCs, the tailor (clothing colours, live-tested) and the shops (buying and selling; not yet verified
-  in live play).
+- NPCs, the tailor (clothing colours, live-tested) and the shops (they open and list their items in live
+  play; the sell price credited still differs from the one the client shows).
 - Tavern minigames in both taverns: **Dice**, **Poker** and **Pawn Chess**, all live-tested with two
   players.
 - Funnies (play money for the minigames): 500 per day on the first visit.
@@ -144,10 +144,15 @@ against fake sockets. Live behaviour is only ever proven against a real client.
   the MSVC 2005 `std::string` / `vector` / `list`, and a verify mode that checks a mod's patches against
   `SADK.exe` without running it. The shim is built on it and loads **mods** from the game's `mods`
   folder: replacement data files and `mod.dll` code (`mods/README.md`). See `sadkmod/README.md`.
+- **`docs/protocol-overview.md`** — the protocol at flow level, with sequence diagrams: the four
+  connections, login, chat, the village, hosting and joining, the referee chain.
 - **`docs/message-catalog.md`** — the protocol reference: every message the client sends or handles,
   what it expects back, and why, with binary addresses.
 - `docs/types.md` (structs and classes), `docs/subsystems.md`, `docs/village-and-character-protocol.md`,
-  `lobby/docs/bridge-protocol.md`, `docs/map-format.md`.
+  `lobby/docs/bridge-protocol.md`, `docs/map-format.md`; the full index is `docs/README.md`.
+- **`docs/sim/`** — one specification per subsystem of the client (simulation, data, engine, UI, network),
+  written so a remake can be built without the binary; the remake's design is in
+  `docs/remake-architecture.md`, `docs/remake-rendering.md` and `docs/remake/`.
 - **`HARNESS.md`** — the rules the work follows: reverse engineering through the Ghidra MCP, live
   debugging through the Frida MCP (`tools/frida_mcp/`), no faked results, honest status.
 
@@ -167,7 +172,8 @@ silently if it's wrong: the frame is accepted, the socket stays open, and nothin
 | 7 | server | push `LoginSuccess(0xDCA){PermID}` unprompted | `PermID` must be big-endian or the client silently drops it. |
 | 8 | client → server | `RegisterGame(0xDB6)` → `Ack(0xDB7)` + `Result(0xDB8, GameSeed)` | The match loads. |
 
-LobbyMessage field scalars are big-endian; the surrounding TinCat message fields are little-endian.
+LobbyMessage bodies (village, referee) are an MSB-first bit stream, so their byte-aligned 32-bit values read
+big-endian; the TinCat NETMSG fields around them are little-endian.
 
 ### Wire encoding (`msgdefs.ini` type tokens)
 
@@ -199,7 +205,8 @@ mods/                this repo's further mods (mods/README.md)
 docs/                protocol and RE reference
 tools/               wire proxy and capture decoders, the Frida MCP, CVar client
 mapping/             the whole-binary mapping run's infrastructure
-CLAUDE.md, HARNESS.md   instructions and rules for the agents doing the work
+CLAUDE.md, HARNESS.md   instructions and binding rules for the agents doing the work (AGENTS.md points
+                        other agents there); MEMORY.md is the compact state: what is established, what is open
 ```
 
 ## Legal / copyright

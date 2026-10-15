@@ -731,8 +731,8 @@ full owning time always runs under one owner [inferred from S 00539520].
 One of the observers is `Referee_OnChestOpened_SendClaimChest` S 00782a60, subscribed in `BuildScene` S 007842e0
 [known]: for a chest of kind 0 opened by a player whose player kind is not 1 and who has a slot in the game
 information, it sends the referee message ClaimChest 0xDAC with the chest's `contentValue` as chest id; what the
-chest yields then comes from the server (`docs/LOBBY_PROTOCOL.md`). Every peer of the match runs this observer
-[inferred: no local-player test in the function].
+chest yields then comes from the server (`docs/message-catalog.md`, ClaimChest 0xDAC to ClaimChestResult
+0xDAE). Every peer of the match runs this observer [inferred: no local-player test in the function].
 
 **Chest placement in a network match** (`Game_DistributeChestsForNetworkMatch` S 00775dd0, once at world creation,
 only when the game information has a `GameSeed` or game id, §3.3) [known]: a local generator is constructed and

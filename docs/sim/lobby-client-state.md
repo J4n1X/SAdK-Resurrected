@@ -20,7 +20,7 @@ Wire layouts are **not** repeated here. They are in:
 |---|---|
 | Every message, field by field; tickets; server decisions | [`../message-catalog.md`](../message-catalog.md) |
 | Flows a server has to run (characters, world entry, presence, NPCs, shops, leave) | [`../village-and-character-protocol.md`](../village-and-character-protocol.md) |
-| Endpoints, frame, authentication | [`../LOBBY_PROTOCOL.md`](../LOBBY_PROTOCOL.md) |
+| Endpoints, frame, authentication | [`../message-catalog.md`](../message-catalog.md), "Wire encoding" and "Login, authentication and the UC/chat connection"; the flows in brief: [`../protocol-overview.md`](../protocol-overview.md) |
 | Referee chain and match start | [`../MATCH_START.md`](../MATCH_START.md) |
 | Hosting, game browser, pre-game room, `GameServerInfo` | [`match-setup-room.md`](match-setup-room.md) |
 | The peer-to-peer match session | [`network-session.md`](network-session.md) |

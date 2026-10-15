@@ -1,9 +1,10 @@
 # NComm network layer — `NComm::Manager` + transports + events
 
-Status: **static RE on `sadk_noav.exe`** (base 0x400000) via the Ghidra MCP, 2026-06-17. RTTI intact
+Status: **static RE on `sadk_noav.exe`** (base 0x400000) via the Ghidra MCP. RTTI intact
 (namespace `NComm`, `.?AV…@NComm@@`). All renames/structs/enums applied + saved in the Ghidra project.
-`[PROVEN static]` unless marked `[inferred]`. This is the **match transport** — the host's match never
-starts because its NComm never leaves `EManagerState_SessionStarted(2)`; see `MATCH_START_STATIC_RECONCILIATION.md`.
+`[PROVEN static]` unless marked `[inferred]`. This is the **match transport**. How a lobby match starts on
+top of it (StartLoading, the village leave, the referee chain): `docs/MATCH_START.md`; the room events and
+the slot model: `docs/NCOMM_GAME_PROTOCOL.md`; the full session rules: `docs/sim/network-session.md`.
 
 NComm is the engine's network abstraction (`Manager.cpp`). A process-global **`NComm::Manager`** singleton
 (`NComm_GetManager@0x408290` → `DAT_00885754`) owns one polymorphic **transport** (`INetworkHandler`),
@@ -14,7 +15,8 @@ and the game talks to peers by sending **`Event`** objects.
 Struct **`NComm_Manager`** (973 B modelled; key fields only, gaps undefined):
 `+0x1c eManagerState` (`EManagerState`), `+0x20 cShutdownFlag`, `+0x34 logicTicksPerNetTick`
 (logic ticks per net tick = `gameSpeedMultiplier` × `netTickLength`), `+0x38 netTickLength` (base logic ticks per net tick),
-`+0xdc` the 6-entry **player-slot table** (room model; `NComm_GetSlotDataPtr(mgr+0xdc, i)`),
+`+0xdc` the game information with the 6-entry **player-slot table** (room model; `NComm_GetSlotDataPtr(mgr+0xdc, i)`;
+slot struct `NComm::PlayerInfo` in `NCOMM_GAME_PROTOCOL.md`),
 `+0x32c localGuid` (`NetGUID`, the local player's GUID), `+0x340 pNetwork` (`NComm_INetworkHandler*`), `+0x3c8 nMode`,
 `+0x3cc fStartLoading`.
 
@@ -108,35 +110,27 @@ Serialization primitives: `NComm_MemoryStream_{Write,Read,WriteString}` (`0x4122
 - The class-signature wire tags are documented above; not made into a Ghidra enum (large hex constants;
   add later if useful).
 - `set_function_this_type` pass for the NComm classes (deferred — duplicate-GhidraClass trap).
-- Model the 6-entry player-slot table at `Manager+0xdc` (the room slot/tribe/team/colour model) — needs
-  the per-slot struct mapped; it ties directly to `SetupGameDialog`'s 6 Player{Type,Tribe,Team,HQ,Color}
-  slot widgets.
 
-## Inbound event router & the load sequence (2026-06-17, added) [PROVEN static]
+## Inbound event router & the load sequence [PROVEN static]
 
 `Manager_HandleNCommEvent@0x40e560` is the per-frame inbound P2P event router; it switches on
-`event->GetType()` (the `NE_*` id at `event+4`). The match-start load sequence it implements:
+`event->GetType()` (the `NE_*` id at `event+4`; cases `0x30001..0x30012` plus the game event `0x20023`).
+Full case table: `NCOMM_GAME_PROTOCOL.md`. The match-start sequence:
 
-1. **`NE_PlayerReady 0x30011`** → `SetPlayerConnectionState(ready)`; host → `UpdateReadyUI` + `BroadcastGameInfo`.
-2. Host **`NComm_Manager_BroadcastStartLoading@0x40fe50`** (gated host-mode + `EManagerState==Connected`)
-   emits **`NE_StartLoading 0x30012`** → every client sets `manager+0x3cc = 1` (the StartLoading flag
-   the screens wait on).
-3. **`NE_GameInformation 0x30003` = the load gate:** when `IsAllConnected() && !IsInGame()`, reconciles
-   slots, then if `IsAllConnected()` runs **`SP_CheckMapExists`** → map present begins the load
-   (`FUN_004141f0`/`FUN_00414700`); **map MISSING → `EventKickUser 0x30010` `"!MAP NOT EXISTING"`**.
-4. Other arms: `0x30001` UserInformation (join; kick on Version/Checksum/static-data MD5 mismatch),
-   `0x30002` PlayerInformation (slot tribe/team/colour/index), `0x30004` GameLoaded, `0x30005` StartGame,
-   `0x3000a/b` UserLeave/Left, `0x3000e` UserReJoinGame (kick `"!COULD NOT RECONNECT"`), `0x30010` Kick
-   (`"!You were kicked!"`; if `!IsInGame` → `NComm_Manager_Shutdown` state→0).
+1. **`NE_PlayerReady 0x30011`** → the slot's ready state; host → `UpdateReadyUI` + `BroadcastGameInfo`.
+2. Host **`NComm_Manager_BroadcastStartLoading@0x40fe50`** (host mode, `EManagerState == SessionStarted (2)`,
+   called by `SetupGameDialog::Update@0x457a00` when the room is complete) emits **`NE_StartLoading 0x30012`**
+   → every client sets `manager+0x3cc = 1` (the StartLoading flag the screens wait on).
+3. The screens react to `+0x3cc`: the village leave and the referee registration (`docs/MATCH_START.md`).
+   The load starts on each client when the referee answers `RegisterGameResult (0xDB8)`; each client then
+   sends **`0x30004` GameLoaded**, and the host broadcasts **`0x30005` StartGame** once every slot is loaded
+   (`docs/sim/network-session.md` §3.8).
+4. **`NE_GameInformation 0x30003`** (the host's session broadcast): clients copy it, reconcile the slots and
+   look the map up by GUID; a missing map ends in a self-kick `"!MAP NOT EXISTING"` (or a file request from
+   the host, see `NCOMM_GAME_PROTOCOL.md`), so both peers must have the selected map.
+5. Other arms: `0x30001` UserInformation (join; kick on Version/Checksum/static-data MD5 mismatch),
+   `0x30002` PlayerInformation (slot tribe/team/colour/index), `0x3000a/b` UserLeave/Left, `0x3000e`
+   UserReJoinGame (kick `"!COULD NOT RECONNECT"`), `0x30010` Kick (`"!You were kicked!"`; if `!IsInGame` →
+   `NComm_Manager_Shutdown` state→0).
 
-**Bearing on the match-start wall:** the router has **no "all-ready → tear down NComm" case** — nothing
-here drives `EManagerState→0` (only the *kick* path shuts down). So the teardown that arms the
-game-server request is external (the screen/UI path), confirming `MATCH_START_STATIC_RECONCILIATION.md`.
-And because `SetupGameDialog::Update` early-returns on the `+0x9c` "Connecting to Game Server" modal
-*above* its `BroadcastStartLoading` call, while parked on that modal the host never emits StartLoading →
-steps 2-3 never run. **Live tests:** (1) does `0x40fe50` fire at all-ready? (fires → past the modal, stall
-is downstream; never → modal is the hard blocker). (2) `SP_CheckMapExists` is a second independent gate —
-both peers must have the selected map locally or 0x30003 kicks `"!MAP NOT EXISTING"`.
-
-Named: `NComm_Manager_BroadcastStartLoading@0x40fe50`; corrected the speculative plate on `0x40e560`
-(its real switch is `0x30001..0x30012`, not the `0x2002x` list a prior note guessed).
+The router has no case that shuts NComm down at match start; only a kick outside a running game does.

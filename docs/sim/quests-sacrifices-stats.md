@@ -27,7 +27,7 @@ Related documents (not repeated here):
 - [ingame-ui.md](ingame-ui.md): quest lines and quest log (§3.8.4), statistics panel (§3.8.1), sacrifice bar and
   target chooser (§3.8.9), message HUD, end-of-game dialogs (§3.9).
 - [map-resources.md](map-resources.md): animals, ground resources, grid bit `0x400`.
-- [map-format.md](map-format.md): `MapInfo` chest positions (+0x14) and sacrifice lists (+0x204).
+- [map-format.md](../map-format.md): `MapInfo` chest positions (+0x14) and sacrifice lists (+0x204).
 
 ---
 
