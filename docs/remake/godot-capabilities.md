@@ -101,7 +101,11 @@ Rules that follow:
   §6.1) [source]. Multichannel signed distance fields, mipmaps and oversampling apply to vector fonts only (the glyphs
   are drawn from the outlines, text_server_adv.cpp:1408; a fixed-size font skips oversampling, :4265). The project
   setting `gui/theme/default_font_multichannel_signed_distance_field` changes only Godot's embedded default font, and
-  only while no custom default font is set (default_theme.cpp:1393) [source].
+  only while no custom default font is set (default_theme.cpp:1393) [source]; the remake copies these settings
+  (MSDF, mipmaps, antialiasing, hinting, subpixel positioning) onto the vector fonts it loads itself.
+- `Theme.MergeWith` merges items, type variations and the defaults; `Clear()` keeps the default font, font size and
+  base scale [api; measured 2026-10-15]. The remake builds its UI theme by merging every layer's `ui/theme.tres`
+  ([mods.md](mods.md) §6.6).
 - Exported games cannot compress to BC formats: etcpak's compressor is registered in editor builds only
   (etcpak/register_types.cpp:41) [source]. The conversion, which has no Godot dependency, writes compressed textures
   with complete mip chains itself.
@@ -200,6 +204,9 @@ presentation (animation players, particles, tweens, shader time) follows both by
 fixed-tick accumulator fed by the scaled delta, so frame timing decides only when a tick runs, never what it computes
 ([sim-boundary.md](sim-boundary.md) §4); the camera, the UI and the boot code run on real time and process always.
 Godot's own `--time-scale`, `--fixed-fps` and `--write-movie` then work for unattended runs and replay videos.
+Godot keeps no run-time changes of the `InputMap`, so the remake stores key bindings in `settings.xml` (`<Input>`, one
+`<Action name>` with `<Key code shift ctrl alt meta physical>` and `<Mouse button>` children in Godot's enum names);
+a binding that does not parse is reported at start and left out [implemented 2026-10-15].
 
 **Visibility notifiers** (`VisibleOnScreenNotifier3D`, or node-free ones through `RenderingServer`) [source]: each is
 an instance in the normal cull loop of every camera of the world, sub-viewports (the mirror) included, filtered by the
@@ -236,6 +243,11 @@ How the presentation uses these facilities [draft; suggestions forwarded by the 
   asset; the layouts themselves stay XML ([mods.md](mods.md) §6.6).
 - **Animation of few objects**: `AnimationPlayer` on a `Skeleton3D` for buildings and other single instances; the
   thousands of characters keep the GPU skinning of [renderer.md](renderer.md) §9.
+- **Window and screen**: Godot cannot list a screen's display modes and never changes them; full screen and borderless
+  always have the screen's resolution (`DisplayServer.ScreenGetSize`), and the 3D picture's resolution is the render
+  scale's business. The Options screen therefore offers window sizes only in windowed mode: the screen's own size
+  first, then common sizes that fit the whole screen; a window that does not fit beside the taskbar opens maximized
+  [implemented 2026-10-15].
 
 ## 8. Editor
 

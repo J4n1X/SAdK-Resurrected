@@ -253,6 +253,14 @@ Presentation data is XML that other mods extend and patch: the visual descriptor
    then `add`, `insert`, `replace`, `remove`, `setAttribute`, `removeAttribute` (the RimWorld model; [binding]
    §6 for layouts, extended here to every presentation document). A patch that matches nothing is a warning unless
    marked `optional="true"`.
+
+**The UI theme** [implemented 2026-10-15] is a Godot `Theme`, not XML: every layer's `ui/theme.tres` is merged in
+layer order (the engine's first, then the mods' in load order) into one theme (`Sadk.Presentation.Ui.UiTheme`), so a
+mod ships only what it changes or adds, made in Godot's theme editor; a relative path in it names a file next to it.
+It is merged again when the conversion is mounted and when a mod set loads or unloads. The engine's type variations
+are constants in `ThemeVariations` (Heading, Note, ErrorText, Dialog, Hud, ModalShade, ...), so mods see them in
+IntelliSense. A theme does not pass a `CanvasLayer`, so the game's layers (modes, overlays) and a view's own layers
+(the map view's HUD) start with `UiTheme.Root(...)`.
 3. **Parse** into the runtime objects (visual descriptors, layouts, UI parts).
 
 Registry entries are not XML and are never patched this way: they change in the data stage.

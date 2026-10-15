@@ -473,10 +473,14 @@ boundaries where the original's order matters.
 As in the viewer, with one change:
 
 - a `SubViewport` with a camera mirrored about the water plane (mirrored eye, forward and up; the picture comes out
-  flipped left to right), its own environment without fog; anisotropy and mip bias set on it too;
+  flipped left to right), its own environment with its own copy of the sky material (the original dome mirrors the
+  camera's forward direction there); fogged by its materials as the original fogs its reflection view (§11.1);
+  anisotropy and mip bias set on it too;
 - a copy of the sun without shadows on a layer only the mirror camera sees (no second shadow map), unless "shadows in
   reflection" is on;
-- a guard band of a quarter above and below; resolution, range and update rate as switches; not drawn while no
+- a guard band of a quarter above and below; the original's lookup offsets are fractions of the screen, so the
+  planar lookup scales their vertical part by `1 / (1 + 2 × 0.25)` (`sadk_mirror_offset_scale`) to keep the
+  original's ripple in the taller picture [implemented 2026-10-15]; resolution, range and update rate as switches; not drawn while no
   terrain block at or below the water level or with ice is in view;
 - **requests instead of materials** [implemented]: the mirror view knows no water or ice. Each layer whose material
   reads the picture states the world bounds where it does (`MapRenderer.Mirror.Set(layer, boxes)`): the water layer
@@ -490,6 +494,14 @@ As in the viewer, with one change:
 - **Cheaper first** (maintainer, 2026-10-15): the mirror ends at the fog (§11.1); its content follows the original's
   detail levels (terrain; + buildings; + characters; everything, R §3.1), small objects (grass tufts, small stones)
   are left out below the top level; resolution and update rate stay settings.
+
+**Screen-space mode** (`Reflections mode="ScreenSpace"`, the remake's own) [implemented 2026-10-15]:
+`sadk/reflection_ssr.gdshaderinc` marches the reflected ray through the screen and depth textures and takes the sky
+for the reflected direction where it leaves the screen. To ripple like the planar picture, the ray starts from the
+mirror plane's point seen at the screen position moved by the original's offset; moving only the colour fetched at
+the hit would leave the outlines straight, a clean mirror. What lies outside the screen (hills above its top edge) is
+never found, so open water shows more sky than in the planar mode. Godot's own screen-space reflection cannot serve:
+opaque materials only, Forward+ only, no lookup offsets ([godot-capabilities.md](godot-capabilities.md) §2).
 
 Alternatives weighed on 2026-10-15:
 
@@ -713,6 +725,24 @@ original's relation between the view and its haze.
 - The sky stays unfogged in the fog pass: the cloud layer fades into the fog colour at the horizon by itself.
 - A setting keeps the faithful behaviour (the map's fixed distances at any zoom) for comparison.
 
+**How it is drawn** [implemented 2026-10-15]: the original sets `D3DFOG_LINEAR` table fog on view depth with the
+background colour (`CGraphicDevice::SetDefaultStates`, S 004d8f99); its shaders write no fog of their own. It fogs
+the sky dome (`Scene::RenderPasses` S 0067eb20 passes `Scene+0x720`, set to 1 by the constructor at S 0067ff07, to
+`RenderSkydome` S 00683e50) and the reflection view (`RenderReflectionPass` reads the same flag); particles,
+additive objects (blend mode 2) and the caustics pass are drawn without fog. Godot's depth fog is
+`smoothstep(begin, end, length(vertex))` on radial distance, not this ([godot-capabilities.md](godot-capabilities.md)
+§2), so every world pass writes the original's fog itself through the spatial `FOG` output:
+`sadk_fog(VERTEX, CAMERA_VISIBLE_LAYERS)` in `sadk/fog.gdshaderinc` gives linear fog on view depth in the background
+colour from `sadk_fog_range` (the distances after the zoom scaling above), and Godot blends it. The original dome
+sky fogs the point each ray meets by its view depth (`sadk_view_forward`; sky shaders have no camera basis); the
+remake's cloud layer is unchanged. The mirror is fogged as in the original, a switch (`<Reflections fog>`, on by
+default; `sadk_mirror_fog`). The border skirt takes the stronger of the fog in effect and the original's unscaled
+edge fade. Godot's depth fog stays on with the same distances only as the fallback for materials that write no `FOG`
+(a mod's `StandardMaterial3D`). A test checks that every spatial shader of the engine and core.game writes
+`FOG = sadk_fog…` or declares `fog_disabled`. Residual: Godot mixes the fog in linear light, the original in gamma
+space; both agree at no fog and at full fog, in between Godot's is lighter (black half fogged towards 0.5: 0.37
+instead of 0.25), and the final pixel colour is known only after Godot's light pass, so it cannot be pre-corrected.
+
 ## 12. Map objects [draft]
 
 - Created on `EntityAdded` for deposits, doodads, flags, harbours, sea routes (one buoy per end), chests and spawn
@@ -840,7 +870,13 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - **One clock** [the maintainer's direction 2026-10-15]: game speed is `Engine.TimeScale` and pause is
   `SceneTree.Paused`, so animation players, particles, tweens and the presentation time (`sadk_time`) follow both by
   themselves; the camera, the UI and the boot code run on real time (`Time.GetTicksUsec`) and process always
-  ([godot-capabilities.md](godot-capabilities.md) §6).
+  ([godot-capabilities.md](godot-capabilities.md) §6). Implemented 2026-10-15 as `PresentationClock`: `Game`
+  advances by Godot's process step and stands still under the tree pause (the shaders' `sadk_time`), `Real` comes from
+  `Time.GetTicksUsec` (`sadk_real_time`); one driver node advances it before every other node. `SetGameSpeed` is the
+  only way to set the speed and refuses 0. The renderer runs while paused (environment, fog and mirror follow the
+  camera), layers get the game step, and what Godot animates goes under `WorldRenderer.Animated`, a pausable node. The
+  free camera moves in real time and only on input nothing else handled (a text field or an open overlay keeps it
+  still).
 
 ## 18. Picking [draft]
 
@@ -880,7 +916,7 @@ object. Every change applies at once, including the region size and blended foli
 
 | Element | Attributes |
 |---|---|
-| `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth` |
+| `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
 | `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
 | `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |

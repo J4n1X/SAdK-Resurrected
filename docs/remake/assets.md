@@ -47,7 +47,7 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 |---|---|---|
 | the installation | never | the player's copy of the original |
 | `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
-| the game's folder: `settings.xml` | the game, at the first start and after each change | the installation's path and the conversion folder [implemented, maintainer 2026-10-15]; the language, `<Window>` (mode, size, screen, V-Sync, frame limit) and `<Graphics>` ([renderer.md](renderer.md) §19) [implemented 2026-10-15] |
+| the game's folder: `settings.xml` | the game, at the first start and after each change | the installation's path and the conversion folder [implemented, maintainer 2026-10-15]; the language, `<Window>` (mode, size, screen, V-Sync, frame limit), `<Graphics>` ([renderer.md](renderer.md) §19) and `<Input>` (key bindings, [godot-capabilities.md](godot-capabilities.md) §6) [implemented 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
 | the game's folder | the installer | the engine and, in `mods/`, the mods that ship with it: `core.game`, `core.mainmenu`, `core.lobby`, `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
