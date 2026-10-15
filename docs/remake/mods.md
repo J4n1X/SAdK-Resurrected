@@ -387,6 +387,9 @@ assemblies and assets are not covered: client-only differences are allowed.
 The **match set** is the list of simulation mods in load order with their identities; its hash is exchanged when
 a peer joins, together with the registry checksum (§6.5) and the engine version.
 
+A map's bundled mods ([assets.md](assets.md) §7.1) belong to the match set while the map is played; they travel
+with the map.
+
 ### 9.2 Joining [draft]
 
 The host's simulation set wins, as with today's server mods (`server-mods` design, 2026-10-08):

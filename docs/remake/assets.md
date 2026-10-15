@@ -372,6 +372,7 @@ change or add files without touching it (§5.6).
   locale/<lang>/map.txt    the map's own text keys (briefings, quest texts)
   preview.png
   assets/                  a layer of the virtual file system for this map (§5.1)
+  mods/<id>/ or <id>.zip   mods the map brings with it (§7.1)
 ```
 
 - Original maps are packaged at conversion: each `.s2m` (decrypted) with its `.bin` (as `world/environment.xml`,
@@ -386,14 +387,34 @@ change or add files without touching it (§5.6).
   `descriptionKey` and `RequiredMods`. The whole map is parsed to its last byte as the package's self-check. In the
   reference installation all 31 current maps have their file name as internal name; the two prototype maps in the
   old layout are not packaged (`MF` §9; `tools/s2m_upgrade.py` converts them).
-- **Maps carry no assemblies and no data-stage scripts** in the first version: a map that needs new registry types
-  needs a mod and names it in `required mods`. Maps can add assets, presentation XML (new visual descriptors, a
-  patched skydome list) and scripts. Because maps are data only, they can be transferred without the trust question
-  of code mods ([mods.md](mods.md) §7.4).
+- A map adds assets, presentation XML (new visual descriptors, a patched skydome list) and scripts through its own
+  layer; anything beyond that it brings as a bundled mod (§7.1) or names in `required mods`.
 - **Transfer**: the lobby announces the map's id and content hash; a peer without it receives the package as one
   stream with a sliding window (today's assetshare sends one archive per file in 4 KB stop-and-wait blocks). A
   compatibility-mode match with original clients can only use original maps (the `.s2m` and its companions), since
   the original resolves nothing else.
+
+### 7.1 Mods bundled with a map [idea of the maintainer 2026-10-15; to do]
+
+A map package may carry mods under `mods/<id>/` (or `mods/<id>.zip`), each in the layout of an ordinary mod
+([mods.md](mods.md) §2). A map can then bring what its own layer cannot: a new material (a terrain type with its
+shader and its row in `shaders/terrain/types.xml`, renderer.md principle 13), new descriptors, Lua and data-stage
+content, code.
+
+- **When**: a map's bundled mods join the mod set when the map is entered (match load, the map view, the editor) and
+  leave with it. A bundled mod with only assets, patches and presentation XML is mounted as layers and the
+  presentation documents are merged again, without a reload; one with a data stage or simulation assemblies changes
+  the match set, which is the in-process unload-and-load of [mods.md](mods.md) §9.3.
+- **Order**: after the player's mods, so the map's content wins for the map.
+- **Identity**: a bundled mod is `(id, version, content hash)` like any mod; the map's content hash covers it, and its
+  simulation parts are in the match set ([mods.md](mods.md) §9.1), so every peer that has the map has its mods.
+- **Trust**: data-only bundled mods load without asking; code needs the player's confirmation per content hash, as a
+  mod received from a peer ([mods.md](mods.md) §7.4).
+- **Godot resources in the package**: materials, themes and scenes inside a zip need the `vfs://` loader to read
+  Godot's own resource files from zip layers (in work, [redot-capabilities.md](redot-capabilities.md) §4).
+- **Compatibility mode**: a map with bundled simulation mods cannot be played with original clients.
+- Open: an installed mod with the same id but another content hash — the map's copy for that map (what the map was
+  made with), or the installed one.
 
 ### 7.2 The remake's own map format (later) [draft]
 
@@ -451,7 +472,8 @@ label.
   it, so Godot falls back per key as the engine does. While a map is entered its texts sit in the translation domain
   `sadk.map`. The tables are rebuilt on every change (mod set load or unload, language switch) and removed with the
   mod set.
-- **Language**: `settings.xml <Language code>` in the game folder, overridden by `--language=<code>` for one run, and
+- **Language**: `settings.xml <Language code>` in the game folder (the maintainer, 2026-10-15), overridden by
+  `--language=<code>` for one run, and
   switched with the intent `engine.language { code }`. When the base language cannot be told, it is the
   installation's only language folder. `Locale.LanguageFile("fonts/X.fnt")` finds a file of the chosen language (with
   the same fallback).
