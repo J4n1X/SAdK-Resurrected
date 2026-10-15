@@ -458,7 +458,10 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   referenced, a misspelled `TribeDef` member exactly CS0117, a client mod with its own node type clean, the same
   without `partial` exactly Redot's GD0001, the repository's example clean. `tools/export-game.sh` runs it after
   every export; with only the SDK and the game files, a mod author's machine needs nothing else but .NET's
-  reference packs. Checked with two mods built outside the repository: a tribe in C# with
+  reference packs. **Descriptions** [implemented]: the code's doc comments are XML (`<summary>`, `<para>`, `<c>`,
+  `<code>`), every assembly writes its documentation file, and the files travel with the dlls (the mods' `bin/`, the
+  export's `data_` folder, Godot's and Harmony's from their packages), so the editor shows the engine's, core.game's
+  and Godot's descriptions; the check probes them. Checked with two mods built outside the repository: a tribe in C# with
   core.game's `TribeDef`, and a client mod with its own node type, an overlay and a menu entry. The core mods in the
   repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
@@ -486,7 +489,7 @@ emits `engine.start`; from there the mods decide what shows. The remake itself i
 
 | Mod | Side | Holds |
 |---|---|---|
-| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. [implemented: the simulation assembly `Core.Game` with the data stage (the original's property scripts, 892 records); the rest planned] |
+| `core.game` | simulation + client | the game's content (the registry from the original's property scripts), systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies: `Core.Game.Simulation` (no Godot) and `Core.Game.Renderer` (Godot), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
 | `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
