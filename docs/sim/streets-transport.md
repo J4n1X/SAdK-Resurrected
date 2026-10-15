@@ -178,6 +178,18 @@ A package is in exactly one of these states [inferred from the functions that mo
 | carried | invalid (or valid for an instant during the drop) | valid | 0 |
 | in ship / expedition cargo | invalid | invalid | 0 |
 
+**Life cycle** [known]. `PackageSystem::CreatePackage` S 0064fb10 constructs the package (S 00651670: owner,
+good, empty movement and target, `ticket = blockedCount = 0`, then one `Unique` drawn, then "package created",
+slot 0x60) and appends it to `packages` and `packagesByPlayer`. `PackageSystem::RemovePackage(id)` S 0064f780
+finds it in `packages`, stable-erases it from `packagesByPlayer`, destroys it and stable-erases it from
+`packages`. The destructor S 006514b0 raises "package destroyed" (slot 0x64) **first**; then
+`TransportMovement::Destruct` S 0064f270 detaches it from its flag when `flagRef` is valid (stacks, "detached"
+slot 0x6c, the flag's `lastServedTicket = −1`, §3.9) and, only in that case, unlinks a carrier reference; a ship
+cargo link is unlinked in any case. The destructor does not unlink the carrier of a package that is in a hand
+and on no flag; the callers that destroy such a package unlink him first (`DiscardPackage` S 0064cc90,
+`NTransport::System::DeliverPackage` S 0064cc60 → `NeedSystem::DeliverPackage(pkg, keepCarrierLink = 0)`
+S 00651bc0, §3.11).
+
 ### 2.6 `NTransport::System` (0x454 bytes, `NLogic::System+0x1c`)
 
 | Offset | Part | Content |
@@ -201,6 +213,17 @@ ship reference (exactly one valid), +0x48 `goodId`, +0x4c `stamp` (tick of creat
 vector of bucket entries (0x18 each: `vector<NeedGood*>` at +4/+8, `goodId` at +0x10, `category` at +0x14) in order
 of first use, and a `sortedIdx` vector giving the order in which the entries are visited [known] S 00652740,
 S 006538f0.
+
+Entries are never removed while the world runs [known]: `GoodOrderStore::AddNeed` S 00652740 creates the entry
+of (category, good) on first use and appends the need; `RemoveNeed` S 006527a0 only erases the need pointer from
+its entry (stable erase, `OrderBucketEntry::RemoveFirstValue` S 00568770), so an emptied entry keeps its place. The
+creation order of the entries is therefore the order in which each (category, good) was first needed since the
+world was built; after a load it is rebuilt from the open needs (§7), so a save and load can change the order in
+which goods of equal rank are visited [inferred]. Both functions compute the category (`GoodOrder_GetCategory`
+S 006541e0) from the building's state at the time of the call; `RemoveNeed` does not check the entry it finds
+(`FindBucketForGood` S 006533c0 returns null when the category has no entry for the good) [known]. Whether a
+need's category can change while it is in the index (a finished `depot` building whose construction values
+become positive again) was not followed [TODO].
 
 Need category (`GoodOrder_GetCategory` S 006541e0) [known]:
 
@@ -288,9 +311,12 @@ is deleted (§3.8).
    [inferred] this is what removes doodads flagged `dd_setDeleteByStreet` and refreshes the construction map; it is
    local simulation code, not a network message.
 
-`NNet::Flag::ctor` S 0066b010 [known]: assigns a new id to the flag and **a new id to each of its two net
-continents**, initialises the stacks, flattens the terrain around the cell (`MapModifier::FlattenAroundCell`),
-raises `NetObjectAdded`, writes the flag id into object layer 0 of the cell (`MapModifier::SetFlagAtCell`).
+`NNet::Flag::ctor` S 0066b010 [known]: sets `searchMark = 0` and `lastServedTicket = −1`; draws three `Unique`s
+in this order: the flag's id, its kind-0 continent id, its kind-1 continent id (**a new id for each of its two net
+continents**); initialises the stacks (every capacity from `GameConfig+0x20`, `active = 1`, S 0066b640), flattens
+the terrain around the cell (`MapModifier::FlattenAroundCell`), raises `NetObjectAdded`, writes the flag id into
+object layer 0 of the cell (`MapModifier::SetFlagAtCell`). The two fresh continent ids are not entered into
+`NetContinentIds` (§2.8); a flag enters that index only when a recomputation (§3.5) collects it.
 `FlattenAroundCell(cell)` S 00673bd0 [known]: the cell's centre vertex is `(4x (+2 on odd rows), 4y)` on the
 vertex grid; the six vertices of vertex ring 1 around it are set to the centre vertex's height (integer copy, no
 averaging), inside an elevation batch. GridStates water, shore and cliff bits are not refreshed by it
@@ -396,23 +422,36 @@ cells 0x1 and water 0x4 only allowed for type 2; own flag still on the first cel
 
 **`NNet::System::BuildStreet(player, path, type)`** S 00666d00 [known]:
 
-1. `path[0]` must be in the map and carry a flag of the player; else return null.
-2. Create the `Street` with `path[0]` (constructor: new id, `usable[1] = 1`, `usable[0] = (type == 3)`).
+1. `path[0]` must be in the map and carry a flag of the player; else return null. From here on the function runs
+   inside a map-update batch, closed on both exits.
+2. Create the `Street` with `path[0]` (constructor S 00669cd0: draws the street's id, `AppendCell(path[0],
+   notify = true)`, `usable[1] = 1`, `usable[0] = (type == 3)`; it is not attached, so no event is raised).
 3. If `CanSplitStreetWithFlagAt(lastCell, type, player)`: `PlaceFlag(player, lastCell)` (this splits the street
-   that passes there).
-4. The last cell must now carry a flag of the player different from the start flag; else delete the new street and
-   return null.
-5. Register the street; append `path[1..]` cell by cell (`Street::AppendCell`, §3.4), raising a map-change
-   notification per cell.
-6. `AttachStreetToFlags` S 006662f0: resolve (or create and register) the flags on the first and last cell,
-   `StreetLink_LinkFlags` (§3.5). In batch-editing mode (`NLogic::Edit` query, vtable +4) a carrier is spawned at
-   once on the street's `mid` cell (`Street::SpawnCarrier` S 00668be0) [known]; in a normal game the carrier comes
-   by settler order (§3.7).
+   that passes there). Its `Unique` draws (§8) therefore come after the new street's id.
+4. The last cell must now carry a flag of the player different from the start flag; else delete the new street
+   (its id stays drawn) and return null.
+5. Register the street (`streetsByPlayer`, `streetById`); append `path[1..]` cell by cell with
+   `Street::AppendCell(cell, notify = false)` (§3.4: no street events, terrain change deferred to the batch),
+   reporting each cell to the map-update batch.
+6. `AttachStreetToFlags` S 006662f0: start flag = the flag-layer object on `path[0]` if it is a flag of the
+   street's owner, end flag likewise on the last cell; a missing one is created with the flag constructor directly
+   (no split, no harbour link) and appended to `flagsByPlayer` / `flagById` (its only caller is `BuildStreet`,
+   where both flags exist by steps 1 and 4); then `StreetLink_LinkFlags(startFlag, endFlag, street)` (§3.5). In
+   batch-editing mode (`NLogic::Edit` query, vtable +4) a carrier is spawned at once on the street's `mid` cell
+   (`Street::SpawnCarrier` S 00668be0) [known]; in a normal game the carrier comes by settler order (§3.7).
+7. Raise "street added" (slot 0x3c) once, now that the street is attached [known] S 00666d00.
 
 The street under interactive construction (`NNet::StreetConstructorStreet`, S 00668830, S 006688d0) is a real
 `Street` object created at the start flag by `CreateStreetAtFlag` S 00666590 and grown with `AppendCell`; it is not
 attached (no end flag reference), so it is neither updated nor usable until `BuildPlannedStreet` hands its path to
-`BuildStreet` [known].
+`BuildStreet` [known]. `CreateStreetAtFlag` needs a flag of the player on the cell, constructs the street (one id
+drawn), registers it in `streetsByPlayer` / `streetById` like a finished street (so it is saved, §7, and removed by
+`PostLoad` for its missing flag references) and reports the cell to the map-update batch; `AddPoints` appends with
+`notify = false` inside one batch [known] S 00666590, S 006688d0. It never becomes the finished street:
+`BuildPlannedStreet` S 005289b0 takes its path out of the planner, which cancels it (`RemoveStreet`; its
+destructor unlinks no flags and raises no event, since it is not attached, S 00669210), and then `BuildStreet`
+creates a new street. So a street built by the player costs one id per start or restart of its construction
+(command `0x20006`, the restart in `CommitPathTo`) plus the ids of `BuildStreet` [known].
 
 ### 3.3 Removing flags and streets
 
@@ -426,8 +465,12 @@ attached (no end flag reference), so it is neither updated nor usable until `Bui
 - **`Street` destructor** S 00669210 [known], in this order: raise "street removed" if attached and not type 3;
   for each valid carrier slot (first, then second): in a normal game unlink the carrier **and discard the package
   he carries** (a package he only claimed on a flag is released, not discarded, S 0064ced0), in batch-editing mode
-  remove the settler; unlink both flags (§3.5); unregister from the map; remove every pending settler order of the
-  street; unlink the ship route (type 3). An unlinked carrier has no street reference any more, so his next
+  remove the settler; unlink both flags (§3.5) when the start flag reference is valid; unregister from the map
+  (not type 3); remove every pending settler order of the street; unlink the ship route (type 3). The `Unique`
+  draws this causes in a normal game [inferred from S 0053ca80, S 0053cb40, S 0053c720]: the carrier unlink that
+  empties the street re-floods both end flags for kind 0 (2 draws; with two carriers only the second unlink does),
+  the flag unlink re-floods the start flag for kind 1 (1 draw, plus 1 for kind 0 on a type-3 street); an unmanned
+  attached land street draws 1, a street under construction none. An unlinked carrier has no street reference any more, so his next
   `Carrier::Update` S 0065b710 calls `Settler::StopAndSetState3` and he goes home (§3.8, "Losing the job")
   [known].
 - **`RemoveFlag(id)`** S 00665c10 [known]: clear a selection of it; remove every street attached to the flag
@@ -567,7 +610,23 @@ Carrier link changes (kind 0 only) [known]:
    order (`NNet_CollectConnectedFlags` S 00666250);
 4. draw a **new** `Unique`; for every collected flag remove its old continent from `NetContinentIds` and store the
    new id in `netContinent[kind]`;
-5. `NetContinentIds::AddNetContinent(newId, collectedFlags)`.
+5. `NetContinentIds::AddNetContinent(newId, collectedFlags)` S 006705c0: for every collected flag, the map
+   continent id of its cell joins the new id's set (and the new id joins that map continent's set); the cell of
+   the first collected flag (`flag` itself) is stored as the new id's cell.
+
+"Remove its old continent" is `NetContinentIds::RemoveNetContinent(oldId)` S 006706e0, which erases the id
+entirely (its set of map continents, its entry in every map continent's set, its cell) when it is present and
+does nothing otherwise [known]. The old id is shared by the whole old component, so the first collected flag
+removes it for all of them. After `StreetLink_UnlinkFlags` re-floods only `flagA`'s side, the flags of a part that
+the removal cut off keep the old id, which is no longer in the index; they still compare equal among themselves,
+so connectivity tests (below) are unaffected, but `NNet::System::ContinentIdsContain` S 00664f40 is false for that
+id until a recomputation reaches the part [known for the functions; inferred consequence]. The same holds for a
+new flag (§3.1). The index's only reader in the simulation is mode 1 of `BuildingList_FindNearestReachable`
+S 00557fe0 (a settler's home search, `settlers-jobs.md` §3.2, net kind 1): a building of the player counts when
+the map continents of the settler's cell and of the building are equal or joined by one of the player's sea
+routes (`Navy_AreContinentsConnectedForPlayer` S 0052eba0, true at once for equal ids), or else when the index
+lists the kind-1 net continent of the building's entrance flag under the settler's map continent [known]. So only
+a settler on another land mass than the building can be affected [inferred].
 
 Two flags are *connected for kind k* iff their `netContinent[k]` ids are equal (`NLogic_UniqueArray40_IsEqualAt`
 S 00663d90) [known]. This test is the gate of every search below and of all supplier queries.
@@ -632,7 +691,8 @@ state of that moment (same tick as the search). The cell list is target first, s
 on a miss search and store under `[from][to]` (also the value −2). The cache of a player and kind is emptied only
 by `RecomputeFlagContinent` for that player and kind (§3.5) and by `Clear`. It is **not** invalidated when a
 carrier picks up or puts down a package, so the ×3 factor in a cached cost is the one of the tick the pair was
-first asked for [inferred]. The cache is saved and is part of the checksum (§7, §8).
+first asked for [inferred]. The cache is saved and is part of the checksum (§7, §8). The cache is keyed by the
+owner of `from`; `GetNextHopFlagCell` S 006666d0 neither reads nor fills it [known].
 
 **Next hop of a package** (`TransportMovement::ComputeNextHop(fromCell, force)` S 0064f3a0) [known]: one-entry
 cache keyed by `fromCell` and the kind-0 continent id of the flag there; on a miss or with `force`,
@@ -646,11 +706,16 @@ cache keyed by `fromCell` and the kind-0 continent id of the flag there; on a mi
 | a target is set (`TransportTarget::Set` S 0064edb0) | `hasTarget = 1`, `hasNextWaypoint = 0`, waypoint and cache cleared; no search yet |
 | the package is put on a flag (`OnPlacedOnFlag` S 0064f4c0) | `placedOnFlag = 1`, waypoint cleared; if it has a target: `SetNextHop(flag cell)`; `revalidateCount = 0` |
 | a free package is assigned a return building (S 0064fd80) | target set to the building, then `SetNextHop(cell)`; if the package has a carrier reference to a settler of type Carrier with an exchange reservation, that reservation is dropped |
-| every 3rd tick, for every package with `hasTarget` that is registered on a flag (`flagRef` valid) and has no carrier reference (`RevalidateNextHop` S 0064f510) | if it has a waypoint, `revalidateCount < 200`, the waypoint flag exists, is in the target flag's kind-0 continent and is directly linked to the package's flag: `revalidateCount += 1`; otherwise `revalidateCount = 0` and `SetNextHop(flag cell)` |
+| every 3rd tick, for every package with `hasTarget` that is registered on a flag (`flagRef` valid) and has no carrier reference (`RevalidateNextHop` S 0064f510) | if it has a waypoint, `revalidateCount < 200`, the owner's flag on the waypoint cell exists, is in the target flag's kind-0 continent and is directly linked to the package's flag (`Flag::FindLinkToFlag` S 0066a170: any link, whatever its street's `usable`): `revalidateCount += 1`; otherwise `revalidateCount = 0` and `SetNextHop(flag cell)` |
 | the target is cleared (S 0064eee0) | `hasTarget = 0`, cache cleared (the waypoint is left as it is) |
 
 So a waiting package re-plans on the check after 200 successful ones (about every 600 ticks), and on the next
-check (within 3 ticks) when its next street disappears or loses its last carrier. A claimed or carried package is
+check (within 3 ticks) when it has no waypoint, when its waypoint flag is gone or no longer in the target flag's
+kind-0 continent, or when no street joins its flag to the waypoint flag any more. A next street that only loses
+its last carrier does **not** trigger it: the unlink re-floods both end flags (§3.5), the waypoint flag lies on
+the target's side of that street and keeps sharing the target's kind-0 id, and the link is still there; the
+package keeps its waypoint and waits for the street's next carrier (`Street::Update` orders one, §3.7) or for the
+200th check [inferred from S 0064f510, S 0066a170, S 0053ca80]. A claimed or carried package is
 not re-planned by this rule. The check only runs for packages with `hasTarget` (S 006513a0) whose `flagRef` is
 valid and whose `carrierRef` is invalid; `placedOnFlag` is not tested [known].
 
@@ -1089,9 +1154,21 @@ if B and B.settlerSpawn.cooldown == 0 and not B.entranceFlag.IsFullForGood(good)
 - *Take pkg* [known]: remove it from the free packages (not destroyed), set its target to the need's building or
   ship (§3.6 event 1), link it into the owner's `NeedGoods` element, `need.servingPackage = pkg`, remove the need
   from the open index. [inferred] the package's next hop is then computed by the 3-tick revalidation (§3.6), since
-  setting a target clears the waypoint.
+  setting a target clears the waypoint (`TransportLink_LinkPackageToOrder` S 0053c8c0 calls no route search).
+  The removal (`UnregisterPackage` S 00650990 → `PackageNeedSystem::RemovePackage(pkg, destroy = false)`
+  S 006505d0 → `EraseTarget` S 00650430) [known]: a return building assigned to it is unlinked; it is erased from
+  the per-good vector and from the registration vector (both stable erases); and when it lies on a flag
+  (`placedOnFlag`) with a carrier reference, that carrier's claim is dropped, or his exchange reservation when it
+  is his `reservedPackage`, so the carrier that chose it waits again. A package in a hand keeps its carrier (it
+  cannot be chosen here: `FindNearestFreePackage` only returns packages registered on a flag).
 - *DispatchFromBuilding* (S 00651770, S 0064d020) [known]: if the supplier's entrance flag `IsFullForGood` → nothing.
-  Else spawn a carrier with a package (§3.8), stock −1, then as *take pkg*.
+  Else spawn a carrier with a package (§3.8), stock −1, then as *take pkg*. Order inside
+  `SpawnCarrierWithPackage`: the carrier is spawned through `SettlerSpawn::SpawnCarrier` S 005644f0, whose
+  `ConsumeSettlerGood` S 00564360 sets the building's `spawnCooldown` to 10 and takes one `good_helper` from its
+  output stock (one is first made from the helper's empty cost list when the stock has none, so the stock is
+  then unchanged; `village-buildings.md` §3.11) and creates the settler, whose `Unique` draws therefore come
+  before the package's; the carrier is linked to the building's depot; one unit of the good is removed from the
+  output stock; the package is created (one id) and put into the carrier's hand [known].
 
 **Which need of an entry is served at a node** (`GoodOrderIndex_SelectOrderForNode` S 00652e00) [known]; only
 needs whose target flag is in the node's kind-0 continent are candidates:
@@ -1209,7 +1286,7 @@ the numbering is that of `logic-core.md` §4.2 [known]:
 | 2 | `AdvanceNetTick` | executes player commands: place / remove flag, start / extend / cancel street, priorities (`game-commands.md`) |
 | 3 | street planners 0..7 | cancel a plan that became invalid (§3.2) |
 | 6 | `NVillage::System::Update` | buildings add / cancel needs; then the settler order system serves carrier orders |
-| 7 | `NNet::System::Update` S 00665ef0 | (a) players 0..7, flags in vector order: remove flags on lost territory (§3.3), inside a map-update batch; (b) players 0..7, streets in vector order: `Street::Update` for attached streets (§3.7) |
+| 7 | `NNet::System::Update` S 00665ef0 | (a) players 0..7, flags in vector order: remove flags on lost territory (§3.3), inside a map-update batch that encloses (a) only; after a removal the scan goes on with the flag that moved into the freed slot (`RemoveFlag` returns the erase position); (b) players 0..7, streets in vector order: `Street::Update` for attached streets (§3.7), outside the batch [known] |
 | 9 | `NSettlers::System::Update` | every carrier: `Carrier::Update` (§3.8); iteration order is the settler system's |
 | 10 | `NTransport::System::Update` S 0064cbe0 | `if tick % 11 == 0` `NeedSystem::Update` (§3.11); `if tick % 3 == 0` `PackageSystem::Update` (route revalidation, §3.6, packages in creation order); `if tick % 5 == 0` `PackageNeedSystem::Update` (§3.12); in this order |
 | 14 | navy (`NNavy::System::Update` S 005b39d0) | every ship in vector order (`Ship::Update`: loads and unloads packages at harbour flags, `docs/sim/navy.md`); then the harbour list places harbour flags through `Logic_PlaceFlag` (S 005b5670) [known]. Sea streets are built and removed by `NavyShipRoute::UpdateSeaStreet` S 005b71d0, whose callers are the attaching of a flag to a harbour (S 005b49f0) and the adding / removing of a ship movement on a ship route (S 005b73a0, S 005b73d0) [known, caller list]: it runs in whichever step such an event happens (`docs/sim/navy.md` §3.12) |
@@ -1390,9 +1467,13 @@ S 0065a930 reads the building reference only if the `SettlersCarrier` section ve
   in the per-player vectors, the content of the **path-cost caches**, the net-continent `Unique` values, every
   package's waypoint, cache, `ticket` and `blockedCount`, and the order of the need and free-package vectors all
   enter the desync checksum [known / inferred from the field lists in §7].
-- **Unique ids** come from one global counter (`logic-core.md` §2.3). A flag draws 3 ids at creation (own id and
-  two continent ids), a street 1, a package 1, every `RecomputeFlagContinent` 1. The number and order of these
-  draws must match, because ids order the maps and are saved [known] S 0066b010, S 00667a30.
+- **Unique ids** come from one global counter (`logic-core.md` §2.3). A flag draws 3 ids at creation (own id, then
+  the kind-0 and the kind-1 continent id), a street 1, a package 1, every `RecomputeFlagContinent` 1. The number
+  and order of these draws must match, because ids order the maps and are saved [known] S 0066b010, S 00667a30.
+  The order inside the composite operations: `BuildStreet` §3.2 (the street's id before a split at its end),
+  `PlaceFlag` §3.1 (carrier unlink, `RemoveStreet`, the new flag, street A, street B, the carrier's relink), the
+  street destructor §3.3, the interactive construction §3.2, a dispatch from a building §3.11 (settler before
+  package).
 - **Container orders that decide outcomes** [known]: flag links in attach order (search tie-breaks, flood-fill
   order); `flagsByPlayer` / `streetsByPlayer` in creation order with stable erase; packages on a flag by stack
   index then push order; the free-package vector in registration order; the need vector in creation order; bucket
@@ -1474,6 +1555,7 @@ disappears without being booked when there is no such building.
 | 5 | Answered (§3.8, after `rank(good)`): yes. No package creator consults the priority list; `ConquerBuilding` S 0055a890 (script functions `vi_changePlayerOfBuilding`, `pl_changePlayer`) keeps the old building's stocks for a new owner of another tribe, and a forged `0x20021` may omit goods. Military capture moves no stock | — |
 | 6 | Answered (§3.9, "Extra units of a worker's product"): index 0 is product slot 0 (`bp_setGoods`, `BuildingProperty+0x44`); `GetGoods` S 00552f30 indexes `+0x44 + slot × 8`, written only by `SetGoods` S 00552ef0 from `bp_setGoods` (slot 0) and `bp_setSecondGoods` (slot 1) | — |
 | 7 | Answered (§3.8 GoToPackageTarget, §4): `SettlerMovement+0x38` is `rough.finalTarget`, the target cell of the current rough move (writer `Rough::StartMoveTo` S 00773c10; constructor and load besides), not the next step cell; settler `+0x10` is `unique.idLo` | — |
+| 8 | Can an open need change its category (§2.6) between `AddNeed` and `RemoveNeed`, which would make `RemoveNeed` use a null entry? Candidates: a `depot` building whose construction values change sign while a need of it is open (the shipped upgrade chains hold no `depot` type) | static: the writers of `Construction+0x70/+0x74` against the callers of `NeedGoods::CancelRequest` / `ClearAll` |
 
 ---
 
@@ -1570,3 +1652,12 @@ disappears without being booked when there is no such building.
 | 00668be0 / 0065b150 | `Street::SpawnCarrier` / `Carrier::AssignToStreet` | carrier created on a street / assigned to one |
 | 005a96b0 | `AiStreetPlan::PlanPath` | AI street search with `randomize = true` |
 | 005b39d0 / 0055a640 / 00654ce0 | `NNavy::System::Update` / `NVillage::System::Update` / `NSettlers::System::Update` | tick steps 14, 6, 9 |
+| 006705c0 / 006706e0 / 00664f40 | `NetContinentIds::AddNetContinent` / `RemoveNetContinent` / `NNet::System::ContinentIdsContain` | the continent index |
+| 0052eba0 | `Navy_AreContinentsConnectedForPlayer` | map continents joined by a sea route (mode 1 home search) |
+| 0066a170 | `NNet::Flag::FindLinkToFlag` | first link to a flag, any street |
+| 00652740 / 006527a0 / 006533c0 / 00568770 | `GoodOrderStore::AddNeed` / `RemoveNeed` / `GoodOrderPlayerBlock::FindBucketForGood` / `OrderBucketEntry::RemoveFirstValue` | open-need index |
+| 00650990 / 006505d0 / 00650430 | `PackageNeedSystem::UnregisterPackage` / `RemovePackage` / `EraseTarget` | free package taken or removed |
+| 0064fb10 / 00651670 / 0064f780 / 006514b0 / 0064f270 | `PackageSystem::CreatePackage` / `Package::ctor` / `PackageSystem::RemovePackage` / `Package::dtor` / `TransportMovement::Destruct` | package life cycle |
+| 0053c8c0 | `TransportLink_LinkPackageToOrder` | target set for a need |
+| 005644f0 / 00564360 | `SettlerSpawn::SpawnCarrier` / `ConsumeSettlerGood` | carrier spawned with a package |
+| 0066b640 / 005289b0 | `FlagPackageStacks::Init` / `NLogic::System::BuildPlannedStreet` | flag stacks / finishing a planned street |
