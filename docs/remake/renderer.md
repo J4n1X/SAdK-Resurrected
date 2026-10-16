@@ -1115,6 +1115,22 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Water-street boats**: the hidden `Boat` item per water street, shown for carriers on it.
 - Every good has an item or is skipped: 27 group goods have none (WO §3.1).
 
+**As built** [implemented, sadk-remake a85f14f]:
+
+- **Rules as the original's** (WO §3.2, §3.3): the site pile lies between the anchor and the entrance flag with the
+  anchor's x, in columns of 8, only while the building is under construction (never for an upgrade); a good put down
+  without a carrier takes its slot without landing, so items in higher slots drop and pop back (the spill quirk); a
+  new carrier takes the good a tick late (released in one tick, attached in the next); `RemoveItem` searches the later
+  stacks of the same key; `MergeStacks` keeps the moved item's old stack transform, with the refined switch
+  `ItemPile.PlaceMergedItems` (off).
+- **In hands**: carried goods keep their own size; the character scale 1.2 is in the skeleton and is taken out of the
+  attachment rotation. The holder rule runs once per frame (the original's per tick); a new held-good key changes the
+  animation at once (the original's a tick later).
+- **Differences**: no notifier per item; items cast shadows. `IPackageCargoView` is declared, not implemented.
+  Decisions to review: [sim-boundary.md](sim-boundary.md) §11 item 4.
+- **Open**: the carrier turning to the stack; default tool items; animated items; the water-street boats
+  (`CharacterCarrier::UpdateAttachedItem` S 006c8ee0); hiding under the fog of war.
+
 ## 15. Streets, borders, overlays [draft]
 
 ### 15.1 Streets and routes
@@ -1183,8 +1199,38 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - **Cell marker**: a translucent hexagon; the original lays a decal (`SelectionMarker::UpdateDecal` S 006b0d00) whose
   picture is not known. The info box has its fade-in only.
 - **Open**: the construction lock (`Player::IsLocked`, `menu.lockBuilding`) is not exposed to the menu yet; the
-  create-flag box and `0x20004`; selecting own buildings; the help text keys come from ingame-ui §3.8.10, which is
-  [inferred].
+  create-flag box and `0x20004`; the help text keys come from ingame-ui §3.8.10, which is [inferred].
+
+**Selection and street placement as built** [implemented, sadk-remake 0df0a07]:
+
+- **Pick and actions**: a click picks as `Cursor::SelectAtCursor` S 00788370 does (own flag on the cell, then a
+  building on or next to it, then an own street); the selection kind decides the four action buttons, their tooltips
+  and the confirmation box (ingame-ui §3.5 to §3.7). **Esc** cancels the street placement, the remake's own (the
+  original's Esc reaches only a visible box's close button); the action panel closes only after the cursor has been
+  over it and left.
+- **Street preview** (WO §3.6): the accepted plan and the plan through the cursor cell, as the original's two paths;
+  the red part is the tail a click would cut back. The preview is extended click by click and replaced by the
+  simulation's path on its event (the original re-plans the whole chain [inferred]); the first segment's pre-tests
+  are folded into the searches. There is no separate water-street mode: the water preview is a plain strip. The
+  marker's look and the tints are the remake's own.
+- **Commands**: after a street is completed an extra `0x20007` can go out and is refused (as in the original's
+  network flow; harmless).
+- **Open**: the ray pick of buildings, ships and routes (S 00787cc0); selection kind 3's third button (always 14);
+  kind 7 (fight), the sacrifice states and destroy block reason 2; `menu.allowActions`; action 30 until `0x20010`;
+  audio. Decisions to review: [sim-boundary.md](sim-boundary.md) §11 item 4.
+
+**Building panels as built** [implemented, sadk-remake 24823f6]:
+
+- **Boxes**: the construction, production and store boxes and the settings panel follow the original's layouts and
+  rules (ingame-ui §3.6, §3.8, [`../sim/hud-panels.md`](../sim/hud-panels.md)): the good lists and their defaults,
+  the count formats and colours, the productivity text, the confirmation order of the settings. The reset buttons for
+  `0x20022` and `0x20020` are the remake's own; the settings panel opens with **L** or `btSettings`; parents and
+  layout details the layouts do not give are [inferred].
+- **Boundary**: the panels read some simulation classes directly (open requests, depot settlers, worker slots,
+  productivity) until `IBuildingView` carries them.
+- **Open**: the stock overview (the statistics' inventory tab), the store's soldiers tab, the diplomacy rows, the
+  product progress fans, the worker flags, the box animations. Decisions to review:
+  [sim-boundary.md](sim-boundary.md) §11 item 4.
 
 ### 15.4 Fog of war
 

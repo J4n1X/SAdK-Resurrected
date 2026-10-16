@@ -11,7 +11,8 @@ of the cited document. Short names: LC = `../sim/logic-core.md`, RE = `../sim/re
 `../sim/animation-models.md`, SJ = `../sim/settlers-jobs.md`, GC = `../sim/game-commands.md`, LR =
 `../sim/lua-runtime.md`, CI = `../sim/camera-input-cutscenes.md`, MR = `../sim/map-resources.md`, SF =
 `../sim/save-format.md`, NS = `../sim/network-session.md`, ST = `../sim/streets-transport.md`, VB =
-`../sim/village-buildings.md`, PV = `../sim/players-victory.md`.
+`../sim/village-buildings.md`, PV = `../sim/players-victory.md`, MI = `../sim/military.md`, QS =
+`../sim/quests-sacrifices-stats.md`.
 
 ## 1. How the original couples them
 
@@ -384,10 +385,75 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   117th of the 4th unit).
 - **Statistics** are in the remake's state hash only; the original's checksum has no statistics section
   (`ComputeChecksum` S 00784080).
-- **Open**: upgrades (0x2000F, 0x20010); the gatherer, specialist and catapult jobs with their flood fills;
-  military; `IVillageSacrifices`; the AI hooks; save and load (the checksum is written in `StoreForChecksum` order,
-  without section tags); a military building with a soldier limit never activates its territory until soldiers
-  exist; `ConstructionChanged` is raised per stroke.
+- **Open**: the catapult job (§6.9); the AI hooks; save and load (the checksum is written in `StoreForChecksum`
+  order, without section tags); `ConstructionChanged` is raised per stroke. The military, the barracks, the
+  sacrifices, the upgrades and the gatherer and specialist jobs followed (§6.9 to §6.13).
+
+### 6.9 The military as built [implemented, sadk-remake 848852d]
+
+- **Measured** (`MP_2P_steinfjord`, command script `attack.commands`, the same in two runs): the guard house is
+  completed at tick 1147; claymores are ordered at 1155 and spawned at 1176; the first soldier is present at 1352
+  (the territory becomes active), the second at 1373; the attack at 1400 posts `!You are under attack!`; the enemy
+  castle spawns its 10 stocked soldiers at 1410; the first strikes fall at 1686; `!attack failed` and
+  `!attack averted` at 1785; the attacker dies at 1815, the fight is deleted at 1986 and the guard house is refilled
+  at 2003.
+- **Kept from the original** in both modes: the paired-type comparison that is always false, attacks on own and
+  allied buildings, the double kill credit of an overkill (MI).
+- **Crash guards in both modes**, where the original reads unchecked: an allocation index of −1; an empty attacker
+  list or no path in the gathering and origin steps; an undefined level in `ConquerBuilding`. Kill credit goes only to
+  valid slots.
+- **Removal reasons**: a captured building leaves with `Transferred`, one destroyed by a catapult with `Destroyed`.
+- **Open**: catapult targeting, `Fire` and working mode 5; capture (built, not yet exercised in a run);
+  `FindOrderForSoldier`; the sea branches; the AI hooks; the ship states; order category 6; the hook of the heal
+  sacrifice 1003.
+
+### 6.10 Barracks, statistics and victory as built [implemented, sadk-remake 6860305]
+
+- **Measured**: the barracks trains one soldier per 333-tick cycle. The statistics series are sampled at ticks 0,
+  600, 1200 (series 0 and 7), 1 and 601 (3 and 5), 2 (1), 3 (2 and 4) and 4 (6), at most 960 samples per series
+  (PV §3.11). The two live victory cases of PV §3.7 replay with the original's `stateTime` (246, 146, 246, 0 and 277,
+  277, 177, 0). `0x2002B` eliminates and declares the winner in the same tick.
+- **Not saved yet**: the victory state.
+- **Open**: `Player::Update` (the 22-tick recount, `!low soldiers`, `!low resources`, PV §3.9); the lock maps
+  (PV §3.10); victory mode 5 (Lua); the quest-0 slot (QS §3.1.4); `FinishGame` and the profile write.
+
+### 6.11 Sacrifices as built [implemented, sadk-remake 322de69]
+
+- **Measured** (QS §3.2.5 to §3.2.8): carriers ×3, production ×0.75, the own damage bonus 1.4, armour 1.2, the worker
+  pause aimed at the enemy with divisor 1/3 (effective 3.0); a workshop's 333-tick cycle becomes 250 under
+  `sacrifice_prodSpeed` (ceil(333 × 0.75)); the territory expansion range grows by 5; the sacrifice is removed exactly
+  at start + duration.
+- **Seams**: the effect event is `SacrificeEffectApplied`; `Building.TerritoryBonus` is cached and pushed after each
+  territory rebuild.
+- **Open**: the Lua interface (QS §3.2.12); the cinematics' callers (QS §3.2.11); post-load and save; the heal for
+  stocked soldiers; border contact; the navy and script effects.
+
+### 6.12 Upgrades as built [implemented, sadk-remake 8225872]
+
+- **Measured** (a Scots guard house at (51, 56) upgraded to a tower): completed at tick 1032, upgrade started 1200,
+  builder 1201, carriers 1221 to 1397, work done 3567, message 3575, type change 3576; input
+  plank 3 and `stoneScots` 4. The same upgrade at (52, 56) is blocked with reason 2: the tower fails the medium slope
+  rule (VB §3.13).
+- **Seams**: the `UpgradeChanged` event carries the upgrade's progress; `IUpgradeQueries` answers the block reason.
+  The transport's site test uses the effective construction (S 00652b70, VB §3.13); with the building's own
+  construction no upgrade material was ever sent.
+- **Open**: the other readers of the effective construction (S 0055bf90): the AI's `MilitaryMap::UpdateCell`
+  S 00586790, `StreetRouteOptimizer::ProcessEntry` S 005a52c0, the missing-goods overlay (S 00640418, S 0063ff9f) and
+  `RefreshAvailability` (S 006240e6).
+
+### 6.13 Gatherers and specialists as built [implemented, sadk-remake 2540ec0]
+
+- **Measured** (`MP_2P_steinfjord`, a Scots woodcutter): completed at tick 666, deposit linked 717, the worker
+  leaves the castle at 767 and arrives at 897; `LeaveBuilding` 898 (44 ticks, an uphill cell), `MoveToDeposit` 942,
+  `Working` (kind 4) at 956 for 55 ticks, the tree is depleted at 1011, the wood is in his hands at 1015, put down at
+  1038, `EnterBuilding` 1046, then a rest of 222 ticks; the first log reaches the castle at 1202, the next ones at
+  1423, 1874, 2358 and 2841. The stone pit makes its first stone at 1043, which reaches the castle at 1282. The fisher
+  works in 333-tick cycles. A farm sows at 2832 and 4058 and reaps at 5276. A scholar sets an iron sign at 985 with
+  `!Found Resource` (SJ, MR §3.8).
+- **Data**: the good flag `FoundOnBuildableGround` names the good a sign on buildable ground reports, in place of the
+  water good's literal id 0xa9676263 (`PlaceResourceSignAndNotify` S 0077b2f0, MR §3.8).
+- **Open**: `Worker::GetWorkProgress` S 0065ce80; `StreetLink_UnlinkFlagSpecialist`. A known bug: a carried
+  package's `EntityAdded` names cell (0, 0) (the event is raised before the cell is set).
 
 ## 7. The way back: commands [draft]
 
@@ -488,58 +554,99 @@ These matter more in the remake than in the original, because Harmony patches ca
    the map part runs too: an empty world starts at 0, a world from a map at the map's stored counter. Still open: a
    reconnect resets `S` to speed × 4 and the sub-tick to 0 on every peer, which the network transport will need a way
    to do in `SimHost`.
-4. Decisions taken for the night of 2026-10-16 while the maintainer was away (to confirm): exactness against the
-   original (ids, grids, order) wherever it does not need the AI; the building command validated at execution only in
-   the refined look (the original does not check lock, tribe or construction time there); no chests offline (as the
-   original); map scripts deferred to campaign maps (the 20 shipped free-game maps have none); user maps whose stored
-   ids collide with the counter behave as the original (a duplicate within a class replaces the earlier object) with a
-   warning; no start-position shuffle. Taken while building the match from a map (to review): the per-net-tick
-   checksum keeps the original's coverage (map, resources, doodads and spawns stay out) and the whole state goes into a
-   separate state hash; a unit type the registry lacks leaves the object out with a warning (the original inserts
-   default properties); the whole-map exploration notice goes to every player (the original sends it for its local
-   player); a map reference's hash covers the world part's bytes including mod overlays. Taken while building the
-   placement core (to review): where the original reads memory unchecked (an anchor or flag cell outside the map, an
-   `IsGroundLevel` neighbour outside the vertex grid) the remake returns false or skips; with no batch open the
-   construction flags are recomputed over the area's bounding rectangle instead of the original's spiral (same
-   result); computer slots draw no AI ids yet (the original draws an AI cell id per building of a computer player, so
-   ids diverge in every shipped free game with computer slots until the AI exists); the refined-mode check of
-   0x20002 waits for a mode switch. Taken while building the settler core (to review): the motion sample's `Street` is
-   the street the settler serves, not the street of the leg it walks (open whether the route spline needs the leg's);
-   settler services and job interfaces resolve to the first system implementing them; the debug command
-   `core.game.debug.spawnsettlers` has no original id and is refused in a session with a game seed. Taken while
-   building the build mode (to review): **B** opens the build menu without a cell, the original's "choose a type, then
-   click cells" mode, which the original has but never reaches (ingame-ui §3.8.10), as the remake's own addition; the
-   cell marker is a translucent hexagon, since the picture of the original's decal (S 006b0d00) is not known; the info
-   box has its fade-in only. Taken while building the street net (to review, §6.5): `StreetType` is an engine type;
-   `0x2000B` is always refused (result "no-effect"; the original's executor does nothing, GC); no owner check on
-   `0x20005` and `0x20009`, as in the original, until a mode switch exists; the hook defaults (nobody carries, nothing
-   is ordered, no building blocks); `Initialised` and `NetContinents.InUse` are set at `Start` [inferred]; the checksum
-   writes each record's fields in the original's order but the flag cores first rather than interleaved as
-   `StoreForChecksum` does, and the flag-stack part leaves out each package container's active byte, so the street
-   net's checksum bytes differ from the original's [inferred]; a split whose half cannot be built hands the carrier
-   to the other half (the original would crash). Taken while building the living map (to review, §6.6): guards
-   against division by zero (move distance 0, idle quotient 0, spawn interval 0, empty spawn list); the roam search
-   refuses a start cell outside the map (the original reads past its grids, MR §3.10); the removal reasons
-   `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once [inferred]; growth visuals step
-   per tick instead of the original's 0.1 s fade [presentation]; the good flag `GroundResourceOnWater` replaces the
-   hard-coded fish id. Taken while building the map changes in the presentation (to review,
-   [renderer.md](renderer.md) §10.5, §12, §15.2):
-   the border posts are laid again on a height change (the original keeps their old height until the next territory
-   change, so its posts float or sink, RE §3.8; presentation only); the border posts cast shadows (the original's
-   `RenderWithEffect` S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag
-   model. Taken while building the transport (to review, §6.7): the original's good rules attached by their literal
-   ids in the data stage (`GoodRulesDef.AttachOriginalRules`; registry fingerprint 22926df0 → 142868c8); the
-   checksum layout of `CarrierMovies` and the three subsystem bytes is the remake's own; a claimed package that is
-   not carried is released, not discarded, by `ISettlerTransport.DiscardPackage` [inferred]; a free package in a
-   carrier's hands heads for the flag at his `RouteTarget` [inferred]. Taken while building the transport settings
-   commands (to review, §7): refused only where the original does not survive (a sender outside the player table,
-   an unknown good, no group, an entry out of range, an empty priority list, GC §3.4); 64-bit list elements get no
-   `EventData` mapping. Taken while building construction and production (to review, §6.8): working modes without
-   a job yet (the gatherers' 0, 1, 2, 3 and 7, the catapult's 5, the scholar's 11) rest; ship sites send the builder
-   home; an order's category is fixed when it is linked (the original recomputes it on removal); commands for a
-   missing building are refused (the original ignores them); `IsOccupied` skips empty slots among the first
-   `workerCount` (in the original a hole can hide a later worker, VB §3.18); `RebalanceInputRequests` is
-   approximate; remains that name a doodad only warn (none in the shipped data).
+4. Decisions the remake took while the maintainer was away, to confirm, per subsystem:
+   - **General**: exactness against the original (ids, grids, order) wherever it does not need the AI; the building
+     command validated at execution only in the refined look (the original does not check lock, tribe or construction
+     time there); no chests offline (as the original); map scripts deferred to campaign maps (the 20 shipped
+     free-game maps have none); user maps whose stored ids collide with the counter behave as the original (a
+     duplicate within a class replaces the earlier object) with a warning; no start-position shuffle.
+   - **The match from a map**: the per-net-tick checksum keeps the original's coverage (map, resources, doodads and
+     spawns stay out) and the whole state goes into a separate state hash; a unit type the registry lacks leaves the
+     object out with a warning (the original inserts default properties); the whole-map exploration notice goes to
+     every player (the original sends it for its local player); a map reference's hash covers the world part's bytes
+     including mod overlays.
+   - **The placement core**: where the original reads memory unchecked (an anchor or flag cell outside the map, an
+     `IsGroundLevel` neighbour outside the vertex grid) the remake returns false or skips; with no batch open the
+     construction flags are recomputed over the area's bounding rectangle instead of the original's spiral (same
+     result); computer slots draw no AI ids yet (the original draws an AI cell id per building of a computer player,
+     so ids diverge in every shipped free game with computer slots until the AI exists); the refined-mode check of
+     0x20002 waits for a mode switch.
+   - **The settler core** (§6.4): the motion sample's `Street` is the street the settler serves, not the street of
+     the leg it walks (open whether the route spline needs the leg's); settler services and job interfaces resolve to
+     the first system implementing them; the debug command `core.game.debug.spawnsettlers` has no original id and is
+     refused in a session with a game seed.
+   - **The build mode** ([renderer.md](renderer.md) §15.3): **B** opens the build menu without a cell, the
+     original's "choose a type, then click cells" mode, which the original has but never reaches (ingame-ui §3.8.10),
+     as the remake's own addition; the cell marker is a translucent hexagon, since the picture of the original's decal
+     (S 006b0d00) is not known; the info box has its fade-in only.
+   - **The street net** (§6.5): `StreetType` is an engine type; `0x2000B` is always refused (result "no-effect"; the
+     original's executor does nothing, GC); no owner check on `0x20005` and `0x20009`, as in the original, until a
+     mode switch exists; the hook defaults (nobody carries, nothing is ordered, no building blocks); `Initialised`
+     and `NetContinents.InUse` are set at `Start` [inferred]; the checksum writes each record's fields in the
+     original's order but the flag cores first rather than interleaved as `StoreForChecksum` does, and the flag-stack
+     part leaves out each package container's active byte, so the street net's checksum bytes differ from the
+     original's [inferred]; a split whose half cannot be built hands the carrier to the other half (the original
+     would crash).
+   - **The living map** (§6.6): guards against division by zero (move distance 0, idle quotient 0, spawn interval 0,
+     empty spawn list); the roam search refuses a start cell outside the map (the original reads past its grids,
+     MR §3.10); the removal reasons `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once
+     [inferred]; growth visuals step per tick instead of the original's 0.1 s fade [presentation]; the good flag
+     `GroundResourceOnWater` replaces the hard-coded fish id.
+   - **The map changes in the presentation** ([renderer.md](renderer.md) §10.5, §12, §15.2): the border posts are
+     laid again on a height change (the original keeps their old height until the next territory change, so its posts
+     float or sink, RE §3.8; presentation only); the border posts cast shadows (the original's `RenderWithEffect`
+     S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag model.
+   - **Transport** (§6.7): the original's good rules attached by their literal ids in the data stage
+     (`GoodRulesDef.AttachOriginalRules`; registry fingerprint 22926df0 → 142868c8); the checksum layout of
+     `CarrierMovies` and the three subsystem bytes is the remake's own; a claimed package that is not carried is
+     released, not discarded, by `ISettlerTransport.DiscardPackage` [inferred]; a free package in a carrier's hands
+     heads for the flag at his `RouteTarget` [inferred].
+   - **The transport settings commands** (§7): refused only where the original does not survive (a sender outside
+     the player table, an unknown good, no group, an entry out of range, an empty priority list, GC §3.4); 64-bit list
+     elements get no `EventData` mapping.
+   - **Construction and production** (§6.8): working modes without a job rest (the catapult's 5; the gatherers' 0, 1,
+     2, 3, 7 and the scholar's 11 got theirs with §6.13); ship sites send the builder home; an order's category is
+     fixed when it is linked (the original recomputes it on removal); commands for a missing building are refused (the
+     original ignores them); `IsOccupied` skips empty slots among the first `workerCount` (in the original a hole can
+     hide a later worker, VB §3.18); `RebalanceInputRequests` is approximate; remains that name a doodad only warn
+     (none in the shipped data).
+   - **Selection and street placement** ([renderer.md](renderer.md) §15.3): **Esc** cancels the street placement
+     (the original's Esc reaches only a visible box's close button); the action panel closes only after the cursor
+     has been over it and left; the street preview is extended click by click and replaced by the simulation's path
+     on its event (the original re-plans the whole chain [inferred]); the first segment's pre-tests are folded into
+     the searches; after a street is completed an extra `0x20007` can go out and is refused (as in the original's
+     network flow; harmless); no separate water-street mode, the water preview is a plain strip; the marker's look and
+     the tints are the remake's own.
+   - **Goods** ([renderer.md](renderer.md) §14): the spill quirk and the `MergeStacks` transform are reproduced, with
+     the refined switch `ItemPile.PlaceMergedItems` (off); carried goods keep their own size (the character scale 1.2
+     is in the skeleton and taken out of the attachment rotation); the holder rule runs once per frame (the original's
+     per tick); a new held-good key changes the animation at once (the original's a tick later); no notifier per item;
+     items cast shadows; `IPackageCargoView` is declared but not implemented.
+   - **Military** (§6.9): crash guards in both modes (an allocation index of −1, an empty attacker list or no path in
+     the gathering and origin steps, an undefined level in `ConquerBuilding`); the faithful quirks kept (the
+     always-false paired-type comparison, attacks on own and allied buildings, the overkill's double kill credit); kill
+     credit only for valid slots; the removal reasons `Transferred` (capture) and `Destroyed` (catapult).
+   - **Barracks, statistics and victory** (§6.10): `!DEFEAT` goes to every other active, not eliminated human slot,
+     and only when a `RemoteHuman` slot exists (the stand-in for network mode) [inferred]; `PlayerDefeated` is raised
+     for unused slots too, on tick 0 (`WasActive` false); `VictoryProgress` per active player, on change only;
+     `0x2002B` accepts any sender; index guards on `0x20018` and `0x20017`; crash guards (a good with no history, a
+     level gap in the promotion, a slot with no level-0 soldier, a kind with no levels, an owner out of range); the
+     victory state is not saved.
+   - **Sacrifices** (§6.11): tests place the flame with `PlaceBuilding` (no placement test); the effect event is
+     named `SacrificeEffectApplied`; an enemy-aimed start with a target that is not a player is refused (the original
+     reads out of bounds); the original's silent ignores are refusals with the check's code; the lock maps live in the
+     sacrifice record (not saved, as in the original); `Building.TerritoryBonus` is cached and pushed after each
+     rebuild; a full territory recomputation posts no lost-territory messages; the state hash includes unsaved state.
+   - **Upgrades** (§6.12): a blocked start is refused as `blocked-<n>`, a cancel without an upgrade as
+     `not-upgrading`; the `UpgradeChanged` event for the upgrade's progress; `IUpgradeQueries` for the block reason.
+   - **Gatherers and specialists** (§6.13): `GoAfforest` without a planting type fails (the original creates type
+     −1); `MoveToDeposit` ends when its deposit vanished; a good with no sign list gets no sign (the original
+     crashes); `!Found Resource` refreshes its message in radius 7 through `MessagePosted.Refresh`; the good flag
+     `FoundOnBuildableGround` replaces the hard-coded water good id.
+   - **Building panels** ([renderer.md](renderer.md) §15.3): the reset buttons for `0x20022` and `0x20020` are the
+     remake's own; the panels read some simulation classes directly (open requests, depot settlers, worker slots,
+     productivity) until `IBuildingView` carries them (a breach of §6.1 for now); parents and layout details are
+     [inferred]; the settings panel opens with **L** or `btSettings`.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.
