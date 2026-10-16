@@ -1449,7 +1449,7 @@ references go through untagged variants, the other components through their norm
 
 ## 8. Determinism notes
 
-**Found by the remake's port (2026-10-16)** [known, the addresses cited]:
+**Details that matter for a byte-exact port** [known, the addresses cited]:
 - The construction strokes run in float32 (one unit = 4 walks + 121 strokes of `1 / (total · 120)`), so where a phase
   ends depends on the total: for the woodcutter (frame total 1) 6.17e-7 is left after 120 strokes, so the frame phase
   uses all 121 strokes and nothing carries over; a total of 2 ends on stroke 241; totals 4, 6 and 7 end after exactly

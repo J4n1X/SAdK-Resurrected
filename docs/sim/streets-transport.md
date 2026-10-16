@@ -1480,7 +1480,7 @@ S 0065a930 reads the building reference only if the `SettlersCarrier` section ve
 
 ## 8. Determinism notes
 
-**Found by the remake's port (2026-10-16)** [known]:
+**Details that matter for a byte-exact port** [known]:
 - The reserve-last rule of `AddPackage` (S 00671590) compares only stacked packages that have a next waypoint: a stack
   whose only package has no waypoint refuses its last place to a routed newcomer (all compared packages are vacuously
   "the same").
