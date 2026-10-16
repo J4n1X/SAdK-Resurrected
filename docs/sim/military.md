@@ -390,8 +390,8 @@ else. Otherwise [known]:
       `UpgradeLowestSoldier`, then `ReplaceSoldiers`.
    3. If the garrison list is empty and the building has open orders: `unconnectedTicks += 1`; whenever the
       counter is a multiple of 600 (it starts at 500 and is never reset, so first after 100 such ticks, then
-      every 600), if `OrderSystem::GetSupplyStatus` for the first open order says 1 ("nothing reachable"
-      [inferred from the message]), post or refresh the message `!Building is not connected` to the owner.
+      every 600), if `OrderSystem::GetSupplyStatus` for the first open order says 1 ("nothing reachable",
+      S 00562820, `village-buildings.md` §3.12 [known]), post or refresh the message `!Building is not connected` to the owner.
 
 A soldier is **idle in the building** (`IsIdleInBuilding` S 00659060) when it has a home, is not moving, stands
 on the home's door cell (`Building+0xf8`), is in no fight, and has no order building, no paired soldier and no
@@ -429,7 +429,8 @@ are `<= maxHealth / 2` (integer division, S 0065da50) and for which `IsPairedSet
 (above; never true with the shipped data) is false:
 
 1. if the soldier has no paired soldier and no order building but holds an order whose reference at `Order+0xb4`
-   is valid (`HasUnpairedUpgradeOrder` S 00659390; the pending promotion order of slot 0 [inferred]), that order
+   is valid (`HasUnpairedUpgradeOrder` S 00659390: `Order+0xb4` is the id high word of the building reference
+   of soldier slot 0, `Order+0xa0`, so this is a pending promotion order [known]), that order
    and pairing are dissolved first: replacing a wounded soldier takes precedence over promoting it;
 2. if the soldier is then idle in the building, order a soldier of the **same good** through slot 2.
 
@@ -450,8 +451,9 @@ S 00562280, order category 5 only; `village-buildings.md` §3.12) [known].
    the building as its **order building** (`+0x358`, S 0053d3d0). It is not a garrison member yet. Then the
    order is removed.
 3. *Arrival* (`Soldier::OnEnterBuilding` S 00659300, the soldier's virtual slot +0x20 in the vtable
-   S 007f842c; called when a settler has stepped into a building [inferred from the name; the caller of the
-   slot was not read]): a fight state still held is released; if the soldier has an order building,
+   S 007f842c; called by `NMovie::EnterBuilding::Update` S 00778c20 when the settler has stepped in: with the
+   building at the settler's cell, or, for a type with an entrance direction, after the one-cell door step with
+   the building one cell in direction 1 of the settler's cell [known]): a fight state still held is released; if the soldier has an order building,
    first the **paired old soldier is unlinked** from the entered building's garrison, then the new soldier is
    **linked** as garrison member (S 0053c4f0, S 0053c4c0).
 4. *Old soldier* (`Soldier::OnUnlinkedFromHome` S 00659140, inside the unlink of step 3): if it has a home, is
@@ -536,7 +538,9 @@ Who may be attacked and with how many soldiers is specified in `../navy-and-mili
 re-read for this document; the statements there hold. Additions and corrections:
 
 - Button code 7 and target state 5 are the **peace time** sacrifice (`Effect_PeaceTime`, §3.9): no attack by
-  or on a player while it runs [inferred: the slot field +0x28 is effect index 10].
+  or on a player while it runs [known: `SacrificeModifierQuery::IsPeaceTimeActive` S 00661c30 tests the
+  player's modifier flag at `+0x28` > 0 (S 00663440), the int flag of effect index 10; callers S 0055fdc1,
+  S 005716a4, S 005716bd, S 00575a09].
 - "Proximity zone" there is §3.1 here. A target must be in zone 2 by its **own** `enemyDistanceB`, measured to
   any enemy, not to the attacker in particular [known] S 0055fd90.
 - An **unoccupied** non-headquarters building with `bp_setSoldierLimit != 0` cannot be attacked (target state 3)
@@ -636,9 +640,11 @@ count is 0), so this branch runs only for a castle that is itself the target, in
 In addition a soldier idling in a building that is under attack joins on its own once the fight has started and
 the enemy side has an engageable soldier (state 0xc, below) [known].
 
-There are **no later reinforcements**: nothing dispatches again after these two moments [inferred: the only
-callers of the two dispatchers are `StartAttack`, `Fight::Update` at countdown 0 and the computer player's
-strength estimate]. The attacker can only start a new attack after this fight has ended.
+There are **no later reinforcements**: nothing dispatches again after these two moments [known: the
+callers of `DispatchAttackers` S 00576320 are `StartAttack` S 00576500 and the computer player's strength
+estimate `AiAttack_EstimateStrengthRatio` S 0059f290; those of `DispatchDefenders` S 00576400 are
+`Fight::Update` S 005715a0 at countdown 0 and the same estimate, which counts through its own
+`ISoldierConnector` instead of sending]. The attacker can only start a new attack after this fight has ended.
 
 **Retreat** (command 0x2000E) and the computer player's attack watch call `Military_RequestCancel` S 00570900:
 `ending = true`, `endCountdown = actionsInFightDelayTime` (300) [known]. The command is honoured only when the
@@ -698,13 +704,16 @@ posts `!attack failed` to the attacker and `!attack averted` to the target's own
 1. If not **active**, return. Active = (not: countdown running and target reference invalid) and (a side list
    is non-empty or a ship is linked) (S 00571090). An inactive fight is deleted by the list right after its
    update (§4).
-2. `startCountdown`: decrement; when it reaches 0: dispatch defenders, record the fight for the computer
-   players, compute the gathering positions, set the gathering mode and slots, and if **either side has no sword
-   soldier** set both `contact` flags.
+2. `startCountdown`: if not 0, decrement; when it reaches 0: dispatch defenders with the target's
+   `defenceFraction` (`Military+0x64`), record the fight for the computer players, compute the gathering
+   positions, set the gathering mode and slots, and if **either side has no sword soldier** (`countByKind[0]`
+   of side 0, then side 1) set both `contact` flags.
 3. If not `ending`: if the attacker or the defender is in **peace time** and the phase is Fighting:
    `ending = true`, `endCountdown = 0`.
-4. If `ending`: when `endCountdown == 0`, flag every attacker (`leftFight = true`, `retarget = true`,
-   S 005714a0); then, if `endCountdown > -1` and the game-wide flag `GameSystem+0xec` is clear, decrement it.
+4. Otherwise (`ending` was already set when the tick began): when `endCountdown == 0`, flag every attacker
+   (`leftFight = true`, `retarget = true`, S 005714a0); then, if `endCountdown > -1` and the game-wide flag
+   `GameSystem+0xec` is clear, decrement it. Steps 3 and 4 are the two branches of one test on `ending`, so a
+   fight that starts ending in step 3 releases its attackers in the next tick, not in this one.
 5. If `startCountdown == 0` and `assignDirty`: run the assignment pass, clear `assignDirty`.
 
 **Phase** (`GetPhase` S 005708a0) [known]: 1 Gathering (`startCountdown != 0`); 2 Ending; 4 NoTarget (target
@@ -715,14 +724,35 @@ the phase is Fighting and the defenders still have an engageable soldier: `endin
 `endCountdown = actionsInFightDelayTime / 10` (30). The target reference is cleared.
 
 **Gathering positions** (S 00576fb0, S 00576d00) [known; summary in `../navy-and-military.md` §4]: `r` =
-smallest `bowRange` among the bow soldiers of both sides (0x7fffffff if none). `origin` = the attackers' origin
-cell; path from the target's entrance flag to the origin; `d` = hex distance origin–target. On that path:
-centre = the cell at distance `d / 2` from the target, far = at `min(d / 2 + r / 2, d)`, near = at
-`max(d / 2 - r / 2, 0)` (integer divisions; the last path cell with the matching distance wins; a slot for
-which no path cell matches keeps its previous value). The path is searched from the target's entrance flag cell
+smallest `bowRange` among the bow soldiers of both sides (0x7fffffff if none). Every distance below is measured
+to the **target's entrance flag cell** `F` (the flag referenced at `Building+0xa0`, its cell at flag `+0x28`),
+not to the building's anchor. `origin` = the attackers' origin cell (below); path from `F` to the origin; `d` =
+hex distance origin–`F`. On that path: centre = the cell at distance `d / 2` from `F`, far = at
+`min(d / 2 + r / 2, d)`, near = at `max(d / 2 - r / 2, 0)` (integer divisions; with no bow soldier, far = `d`
+and near = 0; every path cell is tested in path order and a later match overwrites an earlier one; a slot for
+which no path cell matches keeps its previous value).
+
+**Origin cell** (`Military_GetAttackOriginCell(attacker side list, F, target owner)` S 00576d00) [known]:
+
+1. Among the attacker side list's soldiers, in list order, that have a home: the home whose anchor lies on the
+   same continent as `F` (per-cell continent id, `NMap::Continents`) with the smallest hex distance from its
+   anchor to `F` (strict `<`, first wins a tie).
+2. If there is none: the nearest finished building of the **first** listed soldier's owner in the village's
+   territory-building list (`FindNearestCompletedInList3C` S 005578f0: smallest hex distance from the anchor to
+   that soldier's cell, strict `<`; may be none).
+3. `H` = `HarborList::FindNearestWithPlayerShipRoute(F, first soldier's owner, target owner, 1, null)`. If `H`
+   exists: when the building of steps 1–2 (its entrance flag cell; without a building the first soldier's
+   cell) is not farther from `F` than `H` **and** that building's anchor lies on `F`'s continent, go on to
+   step 4; otherwise the origin is `H`'s cell.
+4. The origin is the building's entrance flag cell; without a building, the first soldier's cell.
+
+Step 3 reads the building's anchor without a null test, so "no building, a harbour, and the first soldier at
+least as close as the harbour" dereferences a null building; step 2 reads the first soldier without testing
+that the list is non-empty (§9). The path is searched from the target's entrance flag cell
 to the origin (`AStar::FindPath`); if none is found, the origin is replaced by the nearest harbour in the
 target's water body (`HarborList::FindNearestInWaterBody`) and the search repeated, and `d` is then measured to
-that harbour. The path is built with `AStar::BuildPath(…, randomize = false)`, which draws no random number
+that harbour; the harbour is used without a null test, so no path and no harbour dereferences a null pointer
+[known, S 00576fb0]. The path is built with `AStar::BuildPath(…, randomize = false)`, which draws no random number
 (the randomizing variant of that function does) [known] S 00576fb0, S 00676d10. When origin and entrance cell
 are equal the path is that single cell.
 
@@ -876,7 +906,8 @@ Groups whose target reference is invalid or whose member list is empty are delet
      `FindGroupOfSoldier(own side, soldier)` S 00571c60: the first group of the side's list that has the
      soldier as a member or as its target [known].
      If the soldier's sword group is **not outnumbered** (below), its walk stops one step short of the target
-     cell [inferred from the stop-distance flag `ai::settlers::SettlerMovement::SetStopDistance(movement, 1)`].
+     cell (`ai::settlers::SettlerMovement::SetStopDistance(movement, 1)`; a stop distance `n` ends the walk `n`
+     cells short, `settlers-jobs.md` §3.8 [known]).
 4. `cellB` unchanged → 0x2b (or first back to the grid, 0x2f, when outnumbered and off-centre). Changed → walk
    there (0x2a), via 0x2f when off-centre; walk impossible → 0x2d.
 
@@ -989,12 +1020,20 @@ if lifePoints < 1: attacker player's kill counter += 1
 ```
 
 The soldier object dies in its next update (§3.5.1). A projectile hit calls the same function with the stored
-damage and the shooter's player.
+damage and the shooter's player (`ProjectileOwner+0x50` of the source, S 00572fa0).
+The kill test reads only the life points after the hit, not before it: every hit that leaves them below 1
+counts, so a hit on a soldier that is already below 1 but has not had its next update yet (a second projectile
+landing in the same military step, §4) credits a second kill [known for the test; the coincidence in play is
+inferred]. The kill credit goes to the player passed in, without a test that it is an enemy.
 
 **Projectiles** (`ai::military::MilitaryProjectile::Update` S 00572fa0) [known]: `elapsedTicks += 1` each tick; when
-`elapsedTicks >= flightTicks`: target kind 0 (soldier, still linked) → `TakeDamage` and a strike notification at
-the **source** cell; kind 1 (building) → `Building::OnCatapultHit`; otherwise nothing. The projectile is then
-deleted. A projectile whose target soldier died or was unlinked expires without effect [inferred].
+`elapsedTicks >= flightTicks`: target kind 0 (soldier) → `TakeDamage` and a strike notification at the **source**
+cell (fine grid); kind 1 (building) → `Building::OnCatapultHit`; otherwise nothing. The projectile is then
+deleted. Kind 0 calls `TakeDamage` without testing the settler reference, which is safe because unlinking a
+projectile from its target soldier (a missed shot in `Bow::Shoot` S 0065f270, the soldier's death or removal
+through `ReleaseHomeAndProjectiles` S 00659400 → S 0053cee0) runs `ProjectileOwner::ClearSettler` S 00570530:
+the settler reference is cleared, the soldier's current cell is kept as the target cell and the kind becomes 2
+(position). Such a projectile flies on and lands without effect [known].
 
 ### 3.8 Capture, castle destruction, demolition
 
@@ -1017,8 +1056,9 @@ healthiest soldiers go in, up to the HP-scaled capacity.
 [known]:
 
 - Target owner is an enemy of the soldier's owner:
-  - **headquarters type** (castle): message `!Castle was destroyed!` to all players except the owner, and the
-    building is removed (`NVillage::System::RemoveBuilding`). The loss of the last castle defeats the player
+  - **headquarters type** (castle): message `!Castle was destroyed!` (type 1) to all players except the owner,
+    with the owner's name (`Player+0x18`, `players-victory.md` §2.2) as its argument and the castle's cell as
+    its position, and the building is removed (`NVillage::System::RemoveBuilding(…, spill = true)`). The loss of the last castle defeats the player
     (`players-victory.md`).
   - otherwise `TransferBuildingOwnership(target, soldier's player, withMessages)`
     (`village-buildings.md` §3.16), and the new building's `soldierKind` = the capturing soldier's kind.
@@ -1100,8 +1140,14 @@ it is driven only by the worker of a building type with `bp_setCatapult` and wor
 
 1. **Trigger** (`Worker::TryStartCatapultAttack` S 0065d410) [known]: select a target; if the input stock holds
    the ammunition good (the first good of the type's `bp_setGoods` list, e.g. `catapultStone`) and a target was
-   found, start the attack movie. How often the worker tries: the production cycle of working mode 5
-   (`bp_setProductionTime 25`, `bp_setRestTime 55`) [inferred; `village-buildings.md`].
+   found, start the attack movie (state 0x1d; first `ReturnFromIdle`, state 0x13, when the worker stands at
+   the idle position). How often the worker tries [known]: the only caller is the worker's `ChooseNextWork`
+   S 0065d660, working mode 5 (`settlers-jobs.md` §3.5.3), so a try follows the worker's arrival, every
+   finished attack and every rest. After an attack the worker stamps its work tick and rests
+   `trunc(bp_setRestTime * effective[13])` ticks (55 for the catapult types; state 0x1e, then `ChooseNextWork`
+   again); a try without a target or without ammunition fails into `RestOrIdleOutside` (`Rest`, or
+   `IdleOutside` after 600 ticks without work). With production switched off (command 0x2000A) the worker
+   never tries (`ChooseNextWork` step 2). `bp_setProductionTime` (25) is the length of the shot, step 3.
 2. **Target selection** (`Catapult::SelectTarget` S 00567d20, `CatapultTargetSearch` S 00567ac0..S 00567c60)
    [known]. A building is a valid target (`Military::IsValidCatapultTarget` S 0055fff0) when its cell is
    **explored** by the catapult's owner, its owner is an enemy, it is finished, any fight on it is led by an
@@ -1124,8 +1170,11 @@ it is driven only by the worker of a building type with `bp_setCatapult` and wor
    once.
 4. **Fire** (`Catapult::Fire` S 005678b0) [known]: unless `GameSystem+0xec` is set, remove one ammunition good
    from the input stock and request a new one. Create a projectile of type 1 with `flightTicks =
-   trunc(hexDistance(building, aim) * cfg_setCatapultFlightTimeFactor)` (5 per cell; truncation [inferred from
-   the same control-word conversion as in `ai::settlers::Bow::Shoot`, seen here only in the decompiled C]). If aim
+   trunc(hexDistance(building anchor, aim) * cfg_setCatapultFlightTimeFactor)` (5 per cell; the int distance is
+   loaded with `FILD`, multiplied by the f32 factor and stored with the control word's rounding bits forced to
+   truncation, `OR 0xc00` at S 005679b5, the same conversion as in `ai::settlers::Bow::Shoot` S 0065f2cd
+   [known]). The f32 at `GameSystem+0x78` is copied into the last fire stamp before the projectile is created,
+   also while `GameSystem+0xec` is set. If aim
    equals target and a
    building is found at or nearest to the target cell (`FindBuildingAtOrNearest`), the projectile targets that
    building, else the position. Projectile damage = `bp_setCatapultDamage` of the catapult's type (10).
@@ -1213,8 +1262,8 @@ projectile destroyed (slot +0x9c, S 005314a0).
 (`!Building hit by Catapult`, `!Building destroyed by Catapult`, `!Enemy Building destroyed by Catapult`), and
 from the ownership transfer `!Lost Military Building to enemy.` / `!Military Building conquered.` (both with
 the leading `!` and the full stop). The castle message is the exception to "building name": it goes to all
-players except the owner and carries a field of the owner's player object (`Player+0x18`) in place of the
-building name (S 00571af0) [known; what that field holds: TODO, read the `Player` layout].
+players except the owner and carries the owner's name (`Player+0x18`, the `std::string` name of
+`players-victory.md` §2.2) in place of the building name (S 00571af0) [known].
 
 **Asks of other subsystems**: map (hex distance, landmass ids, territory owner grid, exploration grid, A* path
 and path length, flood fill), village (territory-building and catapult lists, orders, stocks, hit points,
@@ -1412,7 +1461,8 @@ of §2.3 are hashed with the player (`players-victory.md`).
 - **Floating point**: all conversions truncate (`ftol`), several add 0.5 first, the strike value adds 0.99.
   Single precision: garrison
   size, send counts (`avail * fraction + 0.5`), strike multiplier, sacrifice factors, falloff. Fractions arrive
-  as raw f32 bits in commands. `round()` (to nearest) is used only for flight ticks [known].
+  as raw f32 bits in commands. The two flight-tick conversions truncate as well: they force the rounding bits
+  of the x87 control word to truncation around a `FISTP` (S 0065f2ba..0065f2da, S 005679a8..005679c2) [known].
 - **Integer division** in the score (`lifePoints * 100 / maxHealth`), the gathering distances and the wounded
   limit [known].
 - The fight keeps `countByKind` incrementally while it is not stored; after a load it is recounted
@@ -1455,7 +1505,8 @@ of §2.3 are hashed with the player (`players-victory.md`).
   (`game-commands.md` §3.4); it changes simulation state only when a peer's command stream contains it.
 - `Military_GetAttackOriginCell` dereferences the first attacker without a check, and with no building found
   but a harbour found whose distance to the target is not smaller than the first soldier's, it reads the cell
-  of a null building [known, decompiled C of S 00576d00]: guard both.
+  of a null building [known, decompiled C of S 00576d00]: guard both. The same holds for the water-body
+  harbour of `MilitaryGatheringPositions_Compute` S 00576fb0 when no path to the origin exists (§3.6.1).
 
 ## 10. Open questions
 
@@ -1465,7 +1516,7 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | 2 | Answered (§3.3): `Soldier::IsPairedSettlerTypeEqualSoldierType` (settler type compared with soldier kind) is always false with the shipped data, so `ReplaceSoldiers` S 00560110 never skips a wounded soldier because of it and `ExchangeWrongKindSoldiers` S 00560190 never reaches its unlink call [inferred]; 31,676 calls in play all returned 0 [live, 2026-10-12] | static: S 00658df0, S 006587e0, S 00656500; `Jobs.lua` |
 | 3 | Answered (§2.2, §2.6, §2.7): none of the four is read by the simulation. `MilitaryConfig+0x108` is written only by the ctor (20); `+0x10c` only by S 00553f00 (1, from `Properties_RegisterLuaLibrary`) and S 00553f10 (0, from `Properties_Db_ClearAll`); a whole-binary scan of `[reg+0x108/+0x10c]` after a load of `PropertiesDb+0x5c` finds no access, while it finds every known reader of +0x110..+0x11c. `SoldierFightState+4` is -1 from the ctor, written by `Load`, read only by `Store` / `StoreUntagged` (no access through `Soldier+0x234` or `Soldier+0x230`). `Catapult+0x1c` is read only by `Serialize` S 00567770 (all `NVillage::Catapult` and movie methods scanned, plus every `[reg+0x1c]` after a load of `Building+0xf4`) [known] | — |
 | 4 | Answered (§3.2): index -1 in `Soldiers::GetSoldierObject` ends the process (exit code 0xC000000D), and play can reach it: all present soldiers bound to an attack during its 10-tick start countdown, wanted size below the garrison, an allocation pass in that window. Not observed in the running game | static: S 00574a00, S 00566220, S 00658f90, S 005751e0, S 006594a0 (state 0xc), S 006f26de; observation: lower the garrison slider, then at once attack with all soldiers of that building |
-| 5 | What `Player+0x18` holds, the argument of `!Castle was destroyed!` (§5) | the `Player` layout / its constructor |
+| 5 | Answered (§3.8, §5): `Player+0x18` is the owner's name, passed as the argument of `!Castle was destroyed!` with the castle's cell as position (S 00571af0) [known] | — |
 | 6 | Answered (§3.5, after Start): `GetAvailableAttackers` S 00575dc0, the reach factor S 00575320, the falloff S 00574fe0, `Military_IsTargetReachable` S 00575cb0, the path cache S 00575b70, `Military_ShouldAttackBySea` S 00576250 and the harbour lookups S 00574f70 / S 005b65d0 / S 005b5f50 re-read; they agree with `../navy-and-military.md` §3, with two precisions: the H2 limit is 25 cells in the reach factor and 24 in the reachability test, and a cache is emptied when the tick exceeds its stamp + 111 | — |
 | 7 | Answered: specified in `ai-player.md` (`MilitaryBuildingRanking` §3.8 step 5, the fight history in the attack fraction §3.12, attack watches §3.13). The military side only creates and deletes the watch: `Fight::SetTargetBuilding` S 00570760 is the only caller of the add S 0053be90, `Fight::dtor` S 00571790 the only caller of the remove S 0053bed0, and the watch's defence fraction is overwritten by `StartAttack` (§3.5 step 2) [known] | — |
 | 8 | Answered (§3.5.1 state 0xf, §3.6.2 rule 2): yes. A waiting soldier unbinds in the first tick in which the opposing list has no soldier with `leftFight == 0` and the defender list has had a member; the building is captured by an attacker already in the fight (0x29 → 0xd). With no attacker outside nobody captures [inferred]. In play the attack dialog does not let the player send more soldiers than can fight at once, so the case does not arise from the dialog [live, maintainer, 2026-10-12] | static: S 006594a0 case 0xf, S 005711c0, S 00571140, S 00570980 |

@@ -772,12 +772,13 @@ which calls `menu.lockBuilding(player0, casernHalCross)`) `[known]` data.
   counts for its owner if the owner is not -1, the cell has a continent record, and that record's exclusion
   byte (`+8`) is 0. `percent[p] = cells[p] * 100 / total` (integer division), where `total` is the continent
   system's counter at `+0x38`; if `total == 0` all percentages are 0 `[known]`. The records are 0x30 bytes, in a
-  vector whose begin pointer is at `Continents +0x2c`. By the order of the saved fields
-  (`docs/map-format.md` §4.11: per continent
-  cell count, water flag, id, ...; after the list one `landCellCount`) the byte at `+8` is the continent's
-  water flag and `+0x38` is the number of cells of all land continents `[inferred]`. So the share is
-  "owned cells on land continents / all land-continent cells"; cells without a continent count on neither
-  side.
+  vector whose begin pointer is at `Continents +0x2c`. The byte at `+8` is the continent's water flag: the
+  flood fill that builds a continent (`NMap::Continents::FloodFillContinent` S 00678d70) gives it the grid
+  bit 0x4 (water, `map-resources.md` §3.3) of its seed cell and only joins cells with the same bit; `+0x38`
+  is `landCellCount`, the sum of the cell counts (`+4`) of all continents whose byte `+8` is 0
+  (`RecountLandCells` S 00678010) `[known]`. So the share is "owned cells on land continents / all
+  land-continent cells"; cells without a continent (grid bit 0x400, or a land cell with bit 0x40 or a pattern
+  whose property byte `+0x3c` is set) count on neither side.
 - Military strength (S 005335b0): for every living soldier, weight `max(1, trunc((level + 1) * 0.8))` added to
   its owner, where level = `MilitaryConfig::FindSoldierLevel`; plus, for every active player, for both soldier
   classes and every level: `stockCount(soldier good) * max(1, trunc((level + 1) * 0.8))`. The factor is the
@@ -789,9 +790,10 @@ which calls `menu.lockBuilding(player0, casernHalCross)`) `[known]` data.
   +0x14, +0x44`) plus, per active player, the `pStock` count of every id in the tribe's job list (the vector at
   `TribeProperty +0x30`, Lua `tp_addJob`) whose `GoodProperty.type == 1` `[known]`. The tribe's ware list
   (`tp_addGood`) is not walked. Type 1 is the constant `Settler` of `Goods.lua` (`Invalid = -1, Ware = 0,
-  Settler = 1, WareGroup = 2, EitherGroup = 3`) `[known]` data. The settler lists are indexed by settler type
-  (`docs/sim/settlers-jobs.md` §2.1), which makes the four lists soldiers (+0x34), workers (+0x04),
-  constructors (+0x14) and specialists (+0x44); carriers (+0x24) and NPCs (+0x54) are not counted `[inferred]`.
+  Settler = 1, WareGroup = 2, EitherGroup = 3`) `[known]` data. The four lists are soldiers (+0x34), workers
+  (+0x04), constructors (+0x14) and specialists (+0x44); carriers (+0x24) and NPCs (+0x54) are not counted
+  `[known]` (list offsets per settler type: `docs/sim/settlers-jobs.md` §2.1, `System::RemoveSettler`
+  S 00654c20).
 - Average productivity (S 005332e0): for every productivity-map entry whose building still exists,
   `trunc(productivity * 100.0)` is added to the building owner's sum (the productivity float is at node
   `+0x28`, widened to double and multiplied by the double at S 007d8ff0, bytes `00 00 00 00 00 00 59 40` =

@@ -34,8 +34,8 @@ assigned to a route per player [known: `NavyShipRoute::HasPlayerEntry` `005b6bb0
 
 | Code | Cause |
 |---|---|
-| 7 | The attacker's peace-time sacrifice runs: `ai::logic::SacrificeModifierQuery::IsPeaceTimeActive` `00661c30` (`NSacrifice::System+0xc`) tests the player's sacrifice modifier flag 10 (`+0x28`) `> 0` [known]; flag 10 is the own-sacrifice effect type 10 `Effect_PeaceTime` (`docs/sim/military.md` §3.5) [inferred] |
-| 5, 1, 6, 3, 7 | From the target's own state, `NVillage::Military::GetAttackTargetState` `0055fd90`: still under construction → 5; not in proximity zone 2 → 1; an unoccupied military building → 6; already under attack (a fight is bound) → 3; the owner's slot flag → 7 [known]. "Proximity zone" is [TODO] |
+| 7 | The attacker's peace-time sacrifice runs: `ai::logic::SacrificeModifierQuery::IsPeaceTimeActive` `00661c30` (`NSacrifice::System+0xc`) tests the player's sacrifice modifier flag 10 (`+0x28`) `> 0` [known]; flag 10 is the int flag of effect index 10, `Effect_PeaceTime` (`docs/sim/military.md` §3.5, §3.9) [known] |
+| 5, 1, 6, 3, 7 | From the target's own state, `NVillage::Military::GetAttackTargetState` `0055fd90`: still under construction → 5; not in proximity zone 2 → 1; an unoccupied military building → 6; already under attack (a fight is bound) → 3; the owner's peace time → 7 [known]. The proximity zone is the target's zone B (`docs/sim/military.md` §3.1) |
 | 0 / 8 | `Military_IsEnemyTerritoryInRange` (below) is true: 0 if `Military_CountAttackersByKind` finds any soldier, else 8 ("no soldiers") [known] |
 | 2, 4, 1 | Otherwise the sea reason from `Military_IsHarborWithinBuildingRange` `00574f70`: route but no ship → 2; ship busy → 4; no route, or no harbour in range → 1 [known] |
 
@@ -49,8 +49,8 @@ without it (`+0x58`). Each is the smaller of:
 - the distance to the nearest **own harbour** on the building's landmass that has a route to an **enemy-owned**
   harbour (`HarborList::FindNearestWithEnemyRoute` `005b5e00` → `Harbor::HasRouteToEnemyHarbor` `005b47d0`).
 
-`ClassifyIndex_0_1_2` turns a distance into a zone: **2 below 19 cells, 1 from 19 to 24, 0 beyond** [inferred:
-thresholds `0x13`/`0x18`].
+`ClassifyIndex_0_1_2` `00553f20` turns a distance into a zone: **2 below 19 cells, 1 from 19 to 24, 0 beyond**
+[known: thresholds `0x13`/`0x18`; `docs/sim/military.md` §3.1].
 - **Zone A** (`+0x5c`, `GetProximityZoneA` `0055fbb0`) draws the stripes on the building's flag (`DrawFlags`
   `006d2820`): two stripes = zone 2, one = zone 1, none = zone 0 [known]. It also enables soldier upgrades in
   `NVillage::Military::Update` `005609b0`.
@@ -157,20 +157,23 @@ soldier to that ship's mission (soldier `+0xf8` ↔ mission settler list) [known
    1, a ship of the route that is already on a military mission counts as ready (§5.1).
 4. The message `!You are under attack!` goes to the defender.
 
-**Tick.** `NMilitary::Fight::Update` `005715a0` [inferred]:
+**Tick.** `NMilitary::Fight::Update` `005715a0` [known; full rules in `docs/sim/military.md` §3.6.1]:
 - When the start countdown (`+0x24`) reaches 0: defenders are dispatched (with `g_bSeaAttackDispatch` = 0), the
-  fight is recorded in the AI's history, gathering positions are computed, and a side with no soldiers marks the fight
-  as empty (`+0xcc/+0xcd`).
-- If either player's slot flag `+0x28` is set while the target is held by the attacker, the fight ends at once.
+  fight is recorded in the AI's history, gathering positions are computed, and when either side has no sword
+  soldier both contact flags (`+0xcc/+0xcd`) are set, so the archers may shoot at once.
+- If the attacker's or the defender's peace-time flag (`+0x28`, effect 10) is set while the fight is in phase
+  Fighting (gathering over, target valid and **not** owned by the attacker), the fight starts ending with an end
+  countdown of 0.
 - While ending (`+0xb8`), at end countdown 0 `ReleaseAttackers` `005714a0` flags every attacker to leave
   (`SoldierFightState+0xa0`).
 
-**Gathering positions.** `MilitaryGatheringPositions_Compute` `00576fb0` [inferred]: the attackers' origin
-`Military_GetAttackOriginCell` `00576d00` is the nearest home building of an attacker on the target's landmass. Failing
-that, it is the owner's nearest completed building. A landing harbour of the target's owner with a route to the
-attackers is used instead when it is closer, or when the building is on another landmass. An A* path from the target's
-entrance to the origin fixes three cells: centre at half the distance, near/far at ± half the soldiers' minimum kind-1
-property `+0xa0`. If no path exists, the path goes to the harbour nearest to the target in its water body
+**Gathering positions.** `MilitaryGatheringPositions_Compute` `00576fb0` [known; exact rules in
+`docs/sim/military.md` §3.6.1]: the attackers' origin `Military_GetAttackOriginCell` `00576d00` is the nearest home
+building of an attacker on the target's landmass. Failing that, it is the nearest completed territory building of the
+first attacker's owner. A landing harbour of the target's owner with a route to the attackers is used instead when it
+is closer, or when the building is on another landmass. An A* path from the target's entrance flag to the origin fixes
+three cells: centre at half the distance, near/far at ± half the smallest bow range of the fight's bow soldiers
+(`+0xa0`). If no path exists, the path goes to the harbour nearest to the target in its water body
 (`HarborList::FindNearestInWaterBody`).
 
 **Soldier states** (`NSettlers::Soldier::Update` `006594a0`, state `+0x54`) for the sea [inferred]:
@@ -678,8 +681,6 @@ both harbours are owned, a defence across the water, and the return trip of the 
 
 ## 8. Open points
 
-- [TODO] The proximity zone of `GetAttackTargetState` (code 1 on the button) and the slot-table flag `+0x28` (code 7).
 - [TODO] Who assigns ships to a route whose two ends both belong to the player (manual assignment refuses it with
   reason 2), i.e. how such a sea street gets its ship in the first place.
-- [TODO] `SoldierFightState+0x40`, set together with the leave flag by `0065b7c0`.
 - [TODO] The AI's own sea-attack planning (`NAI::*`, `ai::navy::*`) beyond its use of the dispatchers.
