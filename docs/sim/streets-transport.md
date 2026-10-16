@@ -454,6 +454,11 @@ cells 0x1 and water 0x4 only allowed for type 2; own flag still on the first cel
    where both flags exist by steps 1 and 4); then `StreetLink_LinkFlags(startFlag, endFlag, street)` (§3.5). In
    batch-editing mode (`NLogic::Edit` query, vtable +4) a carrier is spawned at once on the street's `mid` cell
    (`Street::SpawnCarrier` S 00668be0) [known]; in a normal game the carrier comes by settler order (§3.7).
+   `SpawnCarrier` creates a `good_helper` carrier directly on the street's middle cell, assigns it to the street
+   and starts it in `WaitForPackage` (§3.8): there is no walk from a building and no settler order [known]. Its
+   other caller is the script asset hand-over `NLogic::System::TransferPlayerAssets` S 00529040, which rebuilds
+   the remembered streets of the old owner for the new one and gives each a carrier this way
+   (`docs/sim/players-victory.md` §3.12) [known].
 7. Raise "street added" (slot 0x3c) once, now that the street is attached [known] S 00666d00.
 
 The street under interactive construction (`NNet::StreetConstructorStreet`, S 00668830, S 006688d0) is a real
@@ -1443,7 +1448,8 @@ static constructor) [known]: `Net System` 3, `Flag` 3, `SettlersCarrier` 1, all 
 **`Flag::Store`** S 0066a370, tag `Flag` [known]: building reference; `unique`; cell; i32 link count, per link
 `FlagLink::Store` (tag `Net FlagLink`: other-flag reference, street reference); 2 × `netContinent`;
 `FlagPackageStacks::Store` (tag `Net Package Stock`: byte `active`; 6 × stack with tag `Net Package Stack`: u32
-`capacity`, i32 `goodsFilter`, `PackageContainer::Store`: tag, byte `active`, i32 count, per package reference);
+`capacity`, i32 `goodsFilter`, `PackageContainer::Store` S 0064dd40: tag, byte `active`,
+i32 count (a signed int, not the stream's u32 count), per package reference);
 `specialists` (tag `Net Specialist`, settler references); `orders`; i32 `lastServedTicket`; `harborRef`;
 `waitingSettlers`; `parking` (tag `Net Parking`, vector of fine positions).
 
@@ -1702,7 +1708,8 @@ disappears without being booked when there is no such building.
 | 0053d2b0 / 0053d2d0 | `VillageLink_LinkSettlerToDepot` / `UnlinkSettlerFromDepot` | the depot's `settlerRefs` |
 | 00669e60 / 00669eb0 | `Flag::LinkNavyObject` / `UnlinkNavyObject` | harbour link of a flag, callbacks |
 | 00532280 / 00532400 | `MapUpdateBatch::RemoveObstructedDoodadsAtCell` / `MapUpdateBatch::InvalidateConstructionAroundCell` (map-update batch) | per-cell map change reports |
-| 00668be0 / 0065b150 | `Street::SpawnCarrier` / `Carrier::AssignToStreet` | carrier created on a street / assigned to one |
+| 00668be0 / 0065b150 | `Street::SpawnCarrier` / `Carrier::AssignToStreet` | carrier created on a street's middle cell in `WaitForPackage` (batch editing, script asset hand-over) / assigned to one |
+| 0064dd40 | `NTransport::PackageContainer::Store` | tag, byte `active`, i32 count, package references |
 | 005a96b0 | `AiStreetPlan::PlanPath` | AI street search with `randomize = true` |
 | 005b39d0 / 0055a640 / 00654ce0 | `NNavy::System::Update` / `NVillage::System::Update` / `NSettlers::System::Update` | tick steps 14, 6, 9 |
 | 006705c0 / 006706e0 / 00664f40 | `NetContinentIds::AddNetContinent` / `RemoveNetContinent` / `NNet::System::ContinentIdsContain` | the continent index |

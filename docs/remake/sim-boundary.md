@@ -12,7 +12,8 @@ of the cited document. Short names: LC = `../sim/logic-core.md`, RE = `../sim/re
 `../sim/lua-runtime.md`, CI = `../sim/camera-input-cutscenes.md`, MR = `../sim/map-resources.md`, SF =
 `../sim/save-format.md`, NS = `../sim/network-session.md`, ST = `../sim/streets-transport.md`, VB =
 `../sim/village-buildings.md`, PV = `../sim/players-victory.md`, MI = `../sim/military.md`, QS =
-`../sim/quests-sacrifices-stats.md`, FS = `../sim/frontend-screens.md`, PA = `../sim/particles.md`.
+`../sim/quests-sacrifices-stats.md`, FS = `../sim/frontend-screens.md`, PA = `../sim/particles.md`, AP =
+`../sim/ai-player.md`.
 
 ## 1. How the original couples them
 
@@ -413,9 +414,14 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   600, 1200 (series 0 and 7), 1 and 601 (3 and 5), 2 (1), 3 (2 and 4) and 4 (6), at most 960 samples per series
   (PV §3.11). The two live victory cases of PV §3.7 replay with the original's `stateTime` (246, 146, 246, 0 and 277,
   277, 177, 0). `0x2002B` eliminates and declares the winner in the same tick.
-- **Not saved yet**: the victory state.
-- **Open**: the lock maps (PV §3.10); victory mode 5 (Lua); the quest-0 slot (QS §3.1.4); `FinishGame` and the
-  profile write. `Player::Update` is in §6.15.
+- **The victory state** is saved in the remake's extension [implemented, sadk-remake 8d0b24a] (§9.1); the original
+  loses it on load.
+- **`!DEFEAT`** [implemented, sadk-remake 2509f83]: posted only in a network match, as the original's
+  `VictoryConditions::CheckPlayerEliminated` S 00535b90 does through `NComm_Manager_IsRole0` S 004083d0, and only for
+  an eliminated player of kind 3 (PV). The session's mode is `MatchSetup.Network` (setup form 3, `CommandLog`
+  format 3; forms 1 and 2 are still read); offline campaign maps post no `!DEFEAT`.
+- **Victory mode 5 and the quest-0 slot** are built with the map-script host (§6.18).
+- **Open**: the lock maps (PV §3.10); `FinishGame` and the profile write. `Player::Update` is in §6.15.
 
 ### 6.11 Sacrifices as built [implemented, sadk-remake 322de69]
 
@@ -425,8 +431,12 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   at start + duration.
 - **Seams**: the effect event is `SacrificeEffectApplied`; `Building.TerritoryBonus` is cached and pushed after each
   territory rebuild.
-- **Open**: the Lua interface (QS §3.2.12); the cinematics' callers (QS §3.2.11); post-load and save; the heal for
-  stocked soldiers; border contact; the navy and script effects.
+- **Lua**: `sacrifice_execute` runs through `ISacrificeScript` (§6.18); the cinematics' `EndCinematic` is the command
+  `core.game.cinematicfinished`. The save sections are written (§9.1) but no whole-world round trip exercises a
+  sacrifice yet.
+- **Effects** ([renderer.md](renderer.md) §16.1): the sacrifice movies and the building buffs [implemented,
+  sadk-remake 5281ab9].
+- **Open**: the heal for stocked soldiers; border contact; the navy and script effects.
 
 ### 6.12 Upgrades as built [implemented, sadk-remake 8225872]
 
@@ -544,6 +554,58 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   `listbox2`); shapes take borders per side.
 - **Not built**: the row portraits, the player previews, the picture slider, a stepped loading progress.
 
+### 6.17 The computer player's economy as built [implemented, sadk-remake 8ba0948]
+
+- **Place in the tick**: `ComputerPlayerSystem` (`core.game.ai`, step 16, after the statistics; `NAI::System::Tick`
+  S 00581a30). It plays through the simulation's own functions inside the tick, as the original does (AP §1): it
+  places buildings, flags and streets directly, not through commands.
+- **Activation and ids** (AP §2.3): a new game's computer slots are activated through `INewPlayerHandler`
+  (`NAI::System::ActivatePlayer` S 00581c40, `Player::Activate` S 00582870): the castle draws its building id, the
+  AI cell (castle + 1) and the flag (castle + 2); every new building then draws its productions, its new needs and,
+  at a new coarse position, the new AI cell. The ids of a free game with computer slots follow the original's.
+- **Built**: the building mirror, the cells and the cell validator, need creation, the needs arrangement with the
+  group needs, the needs construction and its arbitration, the site search and score, the street builder (the AI's
+  own street planner), the expansion (resource, territory and military maps, the military building creation) and the
+  economy controls (lock smith, production control, cell clearing, depot creation, destruction, food arrangement),
+  with the original's order owner ids (AP §3).
+- **Measured** (`MP_2P_steinfjord`, a computer Scots player at level 2, 20 000 ticks): the sites come in the order
+  sawmill (tick 129), stone pit 290, guard house 529, woodcutter 672, …, locksmithery 7980, …; at the end 44
+  buildings (7 of them sites), 60 flags and 76 streets; the territory grows from 271 to 360 within 3000 ticks; a tick
+  takes about 3 ms with an active computer.
+- **Tests**: the mechanic tests run with `MatchKit.WithoutComputers` (computer slots played as remote humans).
+- **Script switches** [implemented, sadk-remake 2509f83]: the scripts' `ai_*` functions drive the computer players
+  (§6.18, LR §3.6).
+- **Open**: the military half (AP §3.10 to §3.16), the expedition, `RemoveHarbor`,
+  `RefreshPlayersAndResourceMap` S 00581960; the AI's own load and post-load (a save writes every computer player
+  inactive, §9.1).
+
+### 6.18 The map-script host as built [implemented, sadk-remake fcee142]
+
+- **Host**: `MapScriptSystem` (step 23) keeps one MoonSharp state per world, seeded from the game seed. The property
+  scripts are replayed into it (the vocabulary, `core.game` only); the map's top-level chunk runs at the `MapScript`
+  build phase, `onStarted` and `onLoaded` at tick −1, `onLogicTick` at every tick; `sacrifice_execute` runs through
+  `ISacrificeScript`; `Default.CallScript` takes a bare file name. An error aborts the callback and is reported once
+  (`ScriptReport`). `logic.getRandom` is one `SimRandom` draw. All 168 functions of `logic`, `gfx`, `menu`, `ui` and
+  `txt` exist; one not yet built reports once and returns a neutral value ([lua.md](lua.md)).
+- **Quests and victory**: 40 quest slots and the `sd_` store, announced by `QuestChanged`; `VictorySystem` writes
+  quest 0 into the real slots and runs mode 5 (`VictoryCond_Update` S 00535d70, PV, QS).
+- **Commands**: `core.game.cinematicfinished` (`EndCinematic` and `quest_cinematicDone`) and
+  `core.game.scriptcallback` (§7).
+- **Presentation**: `ScriptUi` events go to `ScriptUiPresenter` (pages, letters, books and tutorials as entries of
+  the message list); the map's own texts are loaded.
+- **Save**: the hook `CaptureSection` / `RestoreSection`; a load runs the top-level chunk, then `RestoreSection`,
+  then `onLoaded`; `onStarted` does not run again (§9.1).
+- **The computer player's switches** [implemented, sadk-remake 2509f83]: the `ai_*` bindings act on the computer
+  player as the original's do (LR §3.6), and the campaign maps' use of them runs (C02 to C10).
+- **Measured**: C01 to C11 run 5000 ticks with no Lua error. C01's opening: the quests Intro (slot 0) and sawmillInfo
+  (18) at the start, the cinematic at tick 0, Start and "1intro" at tick 1, C01_Q01 (slot 8, the temple at 76/65),
+  ReachIce (15), EgyptReachPlace (2) and the tutorial chain at tick 2; `onStarted` places the Olympic temple for
+  player 3, halves its stock seven times and destroys its castle.
+- **Open**: the readers of the lock maps (map 0: `Village_CheckBuildingPlacement` S 005576e0 and the build menu
+  S 00634db0; map 3: `SoldierTraining.IsJobLocked`); `map_createChest`; the continent rebuild after blocking doodads;
+  the NPC functions `se_*`; the waits ([lua.md](lua.md) §2.8); the cinematic camera paths; the book and tutorial
+  screens; the minimap's quest symbols.
+
 ## 7. The way back: commands [draft]
 
 **As built** [implemented, sadk-remake a7a220c]: a command is a record with
@@ -573,7 +635,9 @@ original does not survive (§11 item 4).
 - **UI callbacks into map scripts** (`quest_cinematicDone`, `createQuestUi`, `destroyQuestUi`,
   `<widget>_isClicked`, `<widget>_isPressed`) become the command `ScriptCallback(name)`. The end of a cinematic is
   the command `CinematicFinished`, so `EndCinematic` (AI, chests and sacrifices switched back, sacrifice ticks
-  shifted) happens at a tick. Offline the timing equals the original's (between two ticks).
+  shifted) happens at a tick. Offline the timing equals the original's (between two ticks). As built
+  [implemented, sadk-remake fcee142]: `core.game.scriptcallback` and `core.game.cinematicfinished`, which runs
+  `EndCinematic` and `quest_cinematicDone` in one step (§6.18).
 - **Local feedback** that the original's executors provide by direct calls (closing the street placement mode,
   refusing a waypoint) comes from `CommandResolved` events; previews come from `IQueries`. Commands travelling
   through the network (up to three net ticks) may show a pending ghost in the UI; nothing is predicted in the
@@ -606,6 +670,34 @@ since program start); refined mode gives every peer, every load and every sessio
 - Saves and the autosave run at a tick boundary, never mid-tick.
 - Compatibility saves (the original's format) carry the original's presentation-flavoured fields (messages with
   remaining time, the victory quest's text for the local player) through the save adapter (§7).
+
+### 9.1 Save and load as built [implemented, sadk-remake 8d0b24a]
+
+- **File**: the original's container (SF); the map part in the map-file layout; the logic part (`Game File Logic`
+  v6: the random generator, players, village, settlers, transport, military, street net, AI, statistics, script and
+  quests, sacrifices, chests); then the remake's block (the setup, the systems, the session values and per-system
+  extension sections with their lengths) behind a 16-byte footer the original never reads. `S2mWriter` writes all
+  31 shipped maps byte for byte. `tools/sadk_crypt.py` reads the remake's `.aav`. Strings are Latin-1.
+- **Sections**: `ISaveSection` (`Save`, `Load`, `Relink`, `PostLoad`, `AfterPostLoad`), ordered by After / Before.
+  A load checks each section's name and version.
+- **Load** is the normal build, with the logic part read between the map script and the post-load
+  (`LoadRebuildBegin` / `LoadRebuildEnd`); a load that takes a unique id or draws a random number fails. Rebuilt as
+  the original rebuilds them: the construction flags, the object layers, the indexes, the stock running total; the
+  street planners are cancelled. The game speed is not restored, as in the original. The map script runs its chunk,
+  `RestoreSection`, then `onLoaded` (§6.18).
+- **Entry points**: `SimHost.Save` / `SaveFile`; headless `--save`, `--load` and `--roundtrip`; the match option
+  `load=<file>`; **F5** saves into `<user data>/saves/` under the original's default name.
+- **Measured**: the round trips are exact (checksum and state hash at every tick, a byte-equal re-save) for the
+  construction, fight and upgrade sessions and for all 31 maps at ticks 0 and 3000.
+- **Beyond the original**: the remake keeps state the original loses on load: the active deposit order, the animal
+  time stamps (the original's post-load clamp changes later checksums on `sp02_perpetual_ice`), the victory state,
+  the ship sinking timer, the open-need index and a few appended fields. Ships go into an extension (the map part's
+  navy writes 0 ships). The AI, the messages, the chests and the quests are written in empty or default form into
+  the original's sections. The military's transient path cache is empty with stamp 0 after a load (the original
+  stamps it with the load tick, `Attack::PostLoad` S 00575800, MI §7). The saved next-tick time is the float32 sum.
+- **Open**: the AI state is not saved (computer players stop after a load); reading the original's saves of older
+  versions (the shipped `C02.sav` is plaintext from an older build, SF); ships, expeditions, the catapult, the
+  specialists, fishing, hunting and sacrifices are not yet exercised in a whole-world round trip.
 
 ## 10. What must never cross, and the guards
 
@@ -657,9 +749,8 @@ These matter more in the remake than in the original, because Harmony patches ca
    - **The placement core**: where the original reads memory unchecked (an anchor or flag cell outside the map, an
      `IsGroundLevel` neighbour outside the vertex grid) the remake returns false or skips; with no batch open the
      construction flags are recomputed over the area's bounding rectangle instead of the original's spiral (same
-     result); computer slots draw no AI ids yet (the original draws an AI cell id per building of a computer player,
-     so ids diverge in every shipped free game with computer slots until the AI exists); the refined-mode check of
-     0x20002 waits for a mode switch.
+     result); computer slots draw their AI ids through the computer player (§6.17), so the ids follow the
+     original's in free games with computer slots; the refined-mode check of 0x20002 waits for a mode switch.
    - **The settler core** (§6.4): the motion sample's `Street` is the street the settler serves, not the street of
      the leg it walks (open whether the route spline needs the leg's); settler services and job interfaces resolve to
      the first system implementing them; the debug command `core.game.debug.spawnsettlers` has no original id and is
@@ -717,12 +808,13 @@ These matter more in the remake than in the original, because Harmony patches ca
      catapult's fire stamp is the start clock plus one f32 tick interval per tick (the first tick [inferred],
      §6.15).
    - **Barracks, statistics and victory** (§6.10): `!DEFEAT` goes to every other active, not eliminated human slot,
-     and only when a `RemoteHuman` slot exists (the stand-in for network mode) [inferred]; `PlayerDefeated` is raised
+     and only in a network match (`MatchSetup.Network`, the original's `NComm_Manager_IsRole0` test) for an
+     eliminated player of kind 3; `PlayerDefeated` is raised
      for unused slots too, on tick 0 (`WasActive` false); `VictoryProgress` per active player, on change only;
      `0x2002B` accepts any sender; index guards on `0x20018` and `0x20017`; crash guards (a good with no history, a
      level gap in the promotion, a slot with no level-0 soldier, a kind with no levels, an owner out of range); the
-     victory state is not saved; `Player::Update` runs in the player table's step without a system of its own
-     (§6.15).
+     victory state is saved in the remake's extension (the original loses it on load, §9.1); `Player::Update` runs in
+     the player table's step without a system of its own (§6.15).
    - **Sacrifices** (§6.11): tests place the flame with `PlaceBuilding` (no placement test); the effect event is
      named `SacrificeEffectApplied`; an enemy-aimed start with a target that is not a player is refused (the original
      reads out of bounds); the original's silent ignores are refusals with the check's code; the lock maps live in the
@@ -775,6 +867,33 @@ These matter more in the remake than in the original, because Harmony patches ca
      Low, a refused start retried at the next state change; `sadk_time` wraps every hour; pass 2's volume uses the
      box fixed at the start; work-clip emitters fade out when the clip stops [inferred]; a one-shot of an endless
      effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide).
+     The effects follow-up (5281ab9): the effect and movie names (`sacrificeWaitForGoodsGfx`,
+     `sacrificeResearchGfx`, `HitDamage`, `ShipSpeedUp`, `BuildingArmor`, `WorkerPause`) are constants citing the
+     exe's strings (they could move to `visuals/particles.xml`); a movie's effects are placed once per keyframe at
+     the bone [inferred]; the research back-date quirk is kept; the projectile's launch point is approximated by the
+     source box's centre; the buffs ignore `showEffects` (its meaning is open).
+   - **The computer player** (§6.17): mechanic tests use `MatchKit.WithoutComputers` (computer slots as remote
+     humans); the literal good ids are handled two ways (`AiGoodRolesDef` role flags and `GoodRulesDef` flags), to
+     be unified; the construction back-off pair is written into the state (the original's `Store` lacks it);
+     references are `Int64` (the original's are 20-byte `Unique`s); crash guards (a profile ticker of 0, a group
+     weight total of 0, stage-1 needs without a depot, the production control's endless loop without a controllable
+     good); the grids are sized in `Build(PostLoad)` [inferred]; the average productivity counts a building without a
+     statistic as 0 [inferred].
+   - **The map-script host** (§6.18): `logic` and `gfx` are registered in every match state (the original only
+     offline; the network rule is open, [lua.md](lua.md) §4.5); a cinematic ends in one step (the original's steps are
+     at least 1.5 s apart); the vocabulary replay covers `core.game` only; page and tutorial messages are type 7,
+     letters type 8 [inferred]; `createBuildingWithSettler` puts the soldiers on the call's cell in `IdleOutside`
+     [inferred]; `pl_changePlayer` skips a street it cannot rebuild (the original crashes).
+   - **The script switches and the defeat letter** (§6.10, §6.18): removing a harbour position or an enemy exclusion
+     that is not listed does nothing (the original runs past the vector's end); offline campaign maps post no
+     `!DEFEAT`.
+   - **Save and load** (§9.1): the remake keeps state the original loses on load (the active deposit order, the
+     animal time stamps, the victory state, the ship sinking timer, the open-need index, a few appended fields); the
+     game speed is not restored (as the original); ships go into an extension; the AI, the messages, the chests and
+     the quests are written in empty or default form into the original's sections; a load checks section names and
+     versions; strings are Latin-1; the original's rebuilds are kept (construction flags, object layers, indexes,
+     cancelled street planners, the stock running total); the military's path cache is empty with stamp 0 after a
+     load (the original stamps the load tick); the saved next-tick time is the float32 sum.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

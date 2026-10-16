@@ -1464,7 +1464,7 @@ ints), byte/bool, float. Each component is an `IStoreable` with Store (vtable +4
 
 **Building body** (`StoreSavegame` S 0055c470; `Load` S 0055d290 mirrors it) [known], in this order:
 
-1. tag `VillageBuilding` (versions 0..2), unique, position;
+1. tag `VillageBuilding` (versions 0..2; this build writes 2), unique, position;
 2. ticker; depot; workers; deposit reference; animal reference; construction; production; blocking;
 3. int +0x38 (`reserved38`, §2.3); int `variantKey`; entrance flag reference; settler spawn; field connection; territory updater;
    bulldozing; order container; byte `initialInputsRequested`;
@@ -1508,7 +1508,8 @@ entrance cell from the new owner's tribe after a load, from the old tribe before
 category indexes (`System::PostLoad` calls
 `IndexBuilding` per building, S 00559cd0); the building mark on the map cell and the "building added"
 callback (S 0055c260); all references are resolved in PostLoad; the order index is rebuilt from the order
-vector (S 005625c0). Hit points: `Hitpoints::Save` writes the tag `VillageHitpoints` and one int, `hitpoints`;
+vector (S 005625c0). Hit points: `Hitpoints::Save` writes the tag `Village Hitpoints` v0 (with a space; the
+log-category object is `g_LogCategory_VillageHitpoints`) and one int, `hitpoints`;
 `Load` reads the same (S 0055b7d0, S 0055b800) [known]. `maxHitpoints` and `lastRegenTick` are not stored:
 they keep the constructor values (type `health`, 0), so after a load the first regeneration step is due at
 once [inferred]. `maxHitpoints` is only read by the upgrade rescale; the ratio and the regeneration cap use

@@ -1437,7 +1437,9 @@ projectile, group and fight lists.
    and stamped with the current tick): uint stamp of the persistent path cache (global S 0088a4d0); uint entry
    count (map object at S 0088a4dc: head S 0088a4e0, size S 0088a4e4); per entry in ascending key order: uint
    key, int path length. Load empties the map before reading. The second cache is not saved; the post-load
-   pass (S 00575800) empties it and stamps it with the current tick.
+   pass `NMilitary::Attack::PostLoad` S 00575800 (vtable slot 3, no direct caller) empties it (map head
+   S 0088a4ec, size S 0088a4f0) and stamps it (S 0088a4d4) with the tick counter at load time, i.e. the saved
+   tick, not 0 [known].
 5. Projectile list: bool, uint count, then each projectile: unique id, int type, uint flightTicks, uint
    elapsedTicks, target owner, source owner, int damage. An owner (tag `Military Projectile Owner`; the
    target one preceded by the tag `Military Projectile Target`): int kind, building reference, settler
@@ -1472,7 +1474,7 @@ currentSlotIndex (v ≥ 1).
 **Catapult** (section `Village Catapult`) [known] S 00567770: target cell, aim cell, f32 `+0x1c`, f32 last fire
 stamp, int direction, int pending direction, projectile reference, int targetSeed (v ≥ 1).
 
-**Soldier** (section `SettlersSoldier`) [known] S 00658960: movies GoToWorkingPlace, home reference,
+**Soldier** (section `SettlersSoldier`; `Soldier::Store` S 00658960 writes in this member order) [known]: movies GoToWorkingPlace, home reference,
 LeaveBuilding, MoveToAttackBuilding, Fight, ReturnToMilitaryBuilding, MoveToPosition; life points; bow;
 projectile references; fight state; order building, paired soldier, order reference (v ≥ 1); then the base
 settler. Fight state (section `Settlers Fight`) [known] S 0065b8b0: fight reference, and **only if it is valid**:
@@ -1668,7 +1670,7 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | S 00782b60 / 00782bb0 | cinematic start / `nGame::System::EndCinematic` | flag `GameSystem+0xec` |
 | S 00676700 / 00676840 | `NMap::AStar::Step` / `GetStepCost` | path search, no random draw |
 | S 006630b0, S 006633f0..00663610 | `SacrificeModifiers::ApplyOwnEffect`, slot readers | sacrifice factors |
-| S 00575740 / 00576600 / 00575800 | `NMilitary::Attack::Store` / `Load` / post-load | path-length cache in the save |
+| S 00575740 / 00576600 / 00575800 | `NMilitary::Attack::Store` / `Load` / `PostLoad` | path-length cache in the save; `PostLoad` empties the transient cache and stamps it with the load tick |
 | S 00570120 / 00570fb0 / 0065ba40 | `StoreUntagged` of system, fight, fight state | checksum variant |
 | S 00775170 / 00676d10 | `NMovement::FreePath::FindPath` / `NMap::AStar::BuildPath` | random draws of off-road walks |
 | S 0056ffe0 / 00570d20 / 005603f0 / 00658960 / 0065b8b0 | `Store` of system, fight, building part, soldier, fight state | save format |

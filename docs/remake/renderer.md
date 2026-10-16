@@ -1343,9 +1343,40 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
   shader instead of the original's sequence; the caps; `sadk_time` wraps every hour; pass 2's volume uses the
   box fixed at the start; work-clip emitters fade out when the clip stops [inferred]; a one-shot of an endless
   effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide).
-- **Open**: the sacrifice effect movies (`effectMovies.xml`) and the `SacrificeEffectApplied` movies, the building
-  buffs (RE §3.9), the `StoneDust` animation event, `ShipFX` and `BoatFX`, `SettlerSpeed`, the soldier buffs,
-  `HitDamage`, projectiles, resource hints, buoy and gate fires, Lua `createParticel`.
+- **Scene effects** [implemented, sadk-remake 5281ab9]: `SceneEffects` applies the scene's effect callbacks to each
+  published tick record (PA §3.13):
+  - *effect movies* (`EffectMovies`, `MoviePlay`): `effectMovies.xml` read as `LoadEffectMovies` S 00686160 does
+    (exact-name lookup, S 006858b0); the keyframe timing of `EffectMovieElement::Update` S 006c6c80 and `IsPastEnd`
+    S 006c67c0; a keyframe starts at its link bone's transform of that moment; stopping lets `maxLoops` effects run
+    out and stops endless ones;
+  - *the sacrifice building* plays one movie at a time: the definition's `gfxName` while a sacrifice runs,
+    back-dated by the ticks run (`StartEffect` S 006ace00); `sacrificeResearchGfx` back-dated by the research's
+    absolute start tick as S 006acf70 does; `sacrificeWaitForGoodsGfx` while an order collects; slots +0xa4, +0xac,
+    +0xb4 stop it;
+  - *`SacrificeEffectApplied`*: the `buffGfxName` as a movie on the sinking ship, the healed soldier and the revealed
+    building, a one-shot at a revealed harbour's cell only when the viewer has explored it (S 00681fd0);
+  - *strikes*: `HitDamage` at the striker (`StrikeLanded`, `Scene::OnFightStrike`);
+  - *building buffs* (`BuildingBuffs`): the six buffs of `Building::Update` S 006abcf0, tested after each record
+    against the owners' modifier tables (`ISacrificesView`) and the garrison's zone;
+  - *projectiles* (`ProjectileEffects`, `ProjectileFlight`): the `projectiles.xml` record in the slot order of
+    `AddProjectile` S 006a3d90, the arc of S 006a32b0 / S 006a3400 (0.1 s per flight tick, gravity 2.44269 for the
+    catapult stone, 1.4715 otherwise) and the target point of S 006a3610; `flightPFX` follows the arc
+    (`ParticleLayer.Follow`), `impactPFX` plays at the target and the trail is released (S 006a3af0): in the shipped
+    data the stone's `BoulderFly` and `BoulderHit`;
+  - *character clip particles* (`CharacterParticles`): a clip's `<Particle>` events on any character
+    (S 006b05e0, S 006b0710) at the slot bone plus the turned offset, moved with the bone every frame, stopped at
+    `start + duration` or with the next clip.
+  The building gallery plays a movie (`movie=<name>`) on every building, or a one-shot (`effect=<name>`) in front
+  of every building each second. Tests: the shipped movies, the keyframe timing, the back-dating, the buff rules.
+- **Scene effects, decisions to review** ([sim-boundary.md](sim-boundary.md) §11 item 4): the effect and movie names
+  (`sacrificeWaitForGoodsGfx`, `sacrificeResearchGfx`, `HitDamage`, `ShipSpeedUp`, `BuildingArmor`, `WorkerPause`)
+  are constants citing the exe strings (could move to `visuals/particles.xml`); movie effects are placed once per
+  keyframe at the bone [inferred]; the research back-dating quirk is kept; the projectile launch point is
+  approximated by the source's box centre or position [inferred]; the buffs ignore `showEffects` (its meaning is
+  open).
+- **Open**: `ShipFX` and `BoatFX` (S 006a4a20, S 006a5bf0), the effects' sounds, the projectile model, the meaning
+  of `showEffects`; besides `SettlerSpeed`, the soldier buffs, resource hints, buoy and gate fires and Lua
+  `createParticel` (the `StoneDust` event of `WorkLoop0Forester` now plays through the character clip particles).
 
 ## 17. Interpolation and time [draft]
 

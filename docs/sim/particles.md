@@ -483,7 +483,13 @@ displacement grow faster than linearly, `age * vel * f(t)`.
   `maxLoops != 0` (the effect runs out on its own); an endless effect stays attached and keeps emitting.
 - `Particles::StartByIndex(index, active, emitting, startTime, pos, rot)` S 006964c0: with an emitter already
   attached it only updates `emitting`; else load, set `active` and `emitting`, `SetPosition`, `SetRotation`,
-  `Restart(startTime)`, attach, reseed (§3.4).
+  `Restart(startTime)`, attach, reseed (§3.4). `StartByName` S 00696620 resolves the name and calls it, so on a
+  running handle it changes nothing but `emitting`: an owner may call it every frame (the building and soldier
+  buffs do) and the effect is not restarted.
+- A `Stop(false)` on an endless effect (`maxLoops == 0`) has no visible effect: the emitter stays attached and
+  keeps emitting; only its `autoDelete` drops to 0, and an emitter that always shows particles is never deleted.
+- `S2CG::Particles::dtor` S 00696570 always stops as `Stop(true)` does (`autoDelete = 0`, `emitting = 0`,
+  detach), whatever the effect's `maxLoops`: an owner that dies lets its effects fade out.
 
 ### 3.9 Sorting and draw order
 
@@ -610,17 +616,59 @@ summarised from the functions named and were not all re-read line by line, so th
 | building fire points `Building::UpdateFireEffects` S 006abbb0 | `BuildingFire` | each frame: the first `round(points × (1 - hp ratio))` fire points burn (`StartByName(..., active 1, emitting 1, time, fire point, identity)`); the points are `FIRE_03`, `FIRE_06`, ... or five fallback points (below) | fire point position, identity | `Stop(true)` on the others |
 | building buffs `Building::Update` S 006abcf0 | `ShipSpeedUp` (four slots), `BuildingArmor`, `WorkerPause` | while the condition of its slot holds (`rendering.md` §3.9: mines without food need, armour, territory range, modified goods, production time, rest time); only without scaffold and with `showEffects` | building position, identity | `Stop(true)` |
 | demolition `Building::StartDemolition` S 006ab840 | `DemolitionDust`, or `SmallDemolitionDust` when bit 0x4 of the size mask (`+0x3c`) is clear: mines (8) and ship sites (16) | once | building | `Stop(false)` |
-| animation events `ParticleEvent::Start` S 006b05e0 | `<Particle start duration name slot>` of `buildings.xml`, `settler_animations.xml` | at the event time; the effect's start time is `desc.start / animScale + startTime` | bone or slot transform + rotated `offset`, followed every tick (`ParticleEvent::Update` S 006b0710) | at `start + duration` `emitting = 0` and the event ends; `duration = 0`: `Stop(false)` at once |
-| effect movies `EffectMovieElement::Start` S 006c6bc0 | `effectMovies.xml` `particles=` | at the keyframe | link transform | movie end |
+| animation events `ParticleEvent::Start` S 006b05e0 | `<Particle start duration name slot>` of `buildings.xml`, `settler_animations.xml` | at the event time; the effect's start time is `desc.start / animScale + startTime` | the bone's world position plus `offset` turned by the bone's rotation, followed every tick (`ParticleEvent::Update` S 006b0710) | at `start + duration` `emitting = 0` and the event ends; `duration = 0`: `Stop(false)` at once |
+| effect movies `EffectMovieElement::Start` S 006c6bc0 | `effectMovies.xml` `particles=` | at the keyframe (below) | link transform | past the keyframe's end, or movie end |
 | soldiers `CharacterSoldier::Update` S 006c7f80 | `SoldierDamage`, `SoldierDefense`, `ArcherSpeed`, `BlindSoldier` | while the buff applies | right-hand bone (`SoldierDamage`), head (`SoldierDefense`, `BlindSoldier`), `animation-models.md` §3.10 | `Stop` |
 | settlers `CharacterMovement::Update` S 006c57b0 | `SettlerSpeed` | `emitting` while the settler moves | settler | |
 | carriers `CharacterCarrier::Update` S 006c9250 | `BoatFX` | `emitting` while moving on a boat | | |
 | ships `Ship::UpdateFxEmitter` S 006a4a20, `Ship_SpawnParticleEffect` S 006a5bf0 | `ShipFX` under way; `ShipSpeedUp` or `ShipSpeedDown` while the ship's speed byte `+0xfc` or `+0xfd` is set (caller `Ship::UpdateVisuals` S 006a5cc0, `animation-models.md` §3.17) | created with `emitting = 0`, `active = 1`, `Restart(time)`, no reseed; `emitting` while the owner says active | ship x, z at the water height; rotation about up by `angle - π/2` | |
 | projectiles `Projectile::SpawnNamedEffect` S 006a3980, `OnImpact` S 006a3af0 | `projectiles.xml` `flightPFX`, `impactPFX` | launch, impact | projectile | `ReleaseEffect` |
-| fights `Scene::OnFightStrike` (string reference S 006835e8) | `HitDamage` | per strike | | `Stop(false)` |
-| scene callbacks `Scene::OnSacrificeAppliedToCell` S 00681fd0, `OnSpawnTriggered` (S 0068216a) | sacrifice on a cell, spawn trigger | callback | cell | `Stop(false)` |
+| fights `Scene::OnFightStrike` (string reference S 006835e8) | `HitDamage` | per strike | the attacker's position, turned toward the target vertex | `Stop(false)` |
+| scene callbacks `Scene::OnSacrificeAppliedToCell` S 00681fd0, `OnSpawnTriggered` (S 0068216a) | sacrifice on a cell (the definition's `buffGfxName`), spawn trigger | callback; the sacrifice one-shot only on a cell the viewing player has explored | cell | `Stop(false)` |
 | Lua `gfx.createParticel(name, x, y [, dx, dy, dz])` S 005aca40 | any (`Spawning`, `AnimalSpawned`, `BuildingFireShort`, `WhiteSmokeShort`, ...) | script call | cell centre + offset, identity; `active = emitting = 1`, `autoDelete = 0` | self (one-shots with `maxLoops > 0`) |
 | lobby minigames (S 00512c28, S 0051836b) | `MGChess_Capture`, `MGDice_*` | game events | | |
+
+**Sacrifice callbacks of the scene** (`NLogic::CallbackReceiver` face, vtable S 007f8e24, `rendering.md` §3.2)
+[known]:
+
+| Slot | Handler | Effect |
+|---|---|---|
+| +0xa0 | S 00681850 | `SacrificeBuilding::StartEffect` (below) |
+| +0xa4 | S 00681890 | stop the sacrifice building's movie |
+| +0xa8 | S 006818d0 | research movie `sacrificeResearchGfx` (`StartResearchEffect` S 006acf70) |
+| +0xac, +0xb4 | S 00681930 (shared) | stop the sacrifice building's movie |
+| +0xb0 | S 00681900 | wait-for-goods movie `sacrificeWaitForGoodsGfx` (`StartWaitForGoodsEffect` S 006ad050) |
+| +0xb8 | S 0067f3b0 | `Ship::AddEffectInstance` |
+| +0xbc | S 006819a0 | `CCharacter::AddEffect` |
+| +0xc0 | S 00681fd0 | particle one-shot at the cell, only when the viewing player has explored it |
+| +0xc4 | S 00681960 | `Building::AddAttachment` |
+
+Slots +0xb8 to +0xc4 all use the sacrifice definition's `buffGfxName` (`SacrificeProperty +0x3c`). The
+sacrifice building (`S2CG::SacrificeBuilding`) plays one movie at a time from its single movie list (+0x218).
+`StartEffect` S 006ace00 clears that list, starts the definition's movie back-dated to
+`now − (end − start) · timeInfo[2]` (the ticks the sacrifice has run, in seconds) and updates the list once in the
+same call, so a sacrifice seen after a load or a late start shows the movie at the point it has reached. The
+research movie is back-dated by the research's **absolute** start tick (S 006acf70), so every keyframe that starts
+in the movie's first `startTick` seconds is already past: the ignite sound keyframe never plays and the fire burns
+at once (presentation only; `quests-sacrifices-stats.md` §3.2.13).
+
+**Effect movies** [known]: an `effectMovies.xml` movie is a list of keyframes of 0x5c bytes, one per `<FX>`.
+`EffectMovieElement::ctor` S 006c69a0 resolves the keyframe's `link` by bone name once; a missing bone falls back to
+the owner's matrix. Per update, `Update` S 006c6c80 starts an element when `start <= elapsed`, or stops it at once if
+it is already past its end; `IsPastEnd` S 006c67c0 is `duration > 0 && start + duration <= elapsed`, so a keyframe
+with `duration = 0` never ends on its own. `Start` S 006c6bc0 passes the current time (`*now`) as the emitter's
+start time, not the movie's start, so a back-dated movie skips keyframes but does not fast-forward the particles of
+the ones it starts.
+
+**Projectiles** [known]: `ProjectileTable::AddProjectile` S 006a3d90 picks the `projectiles.xml` record by the
+logic projectile type: type 0 → record 1, 1 → 0, 2 → 3, 3 → 2. The flight time is `T = flight ticks × 0.1` s
+(`ComputeLaunchVelocity` S 006a32b0); gravity is 2.44269 (the float 0x401c5509 at S 00881a10) for type 1 (the
+catapult stone) and 1.4715 otherwise; the launch velocity is `distance / T` horizontally and `g/2 · T + dy/T`
+vertically. `Projectile::Update` S 006a3400 moves the projectile, and its `flightPFX` emitter with it, along that
+arc. The target point (`ComputeImpactPoint` S 006a3610) starts at the bottom centre of the target's box and is moved
+back along the normalised launch-to-target direction, per axis by that direction's component times 0.3 of the
+box's width (x), 0.5 of its height (y) and 0.3 of its depth (z), so the projectile lands on the near face. `OnImpact` S 006a3af0 plays
+`impactPFX` once at the impact and calls `ReleaseEffect` on the flight emitter.
 
 **Building fire points** (`Building::InitFirePoints` S 006ac510, called only from the building constructor
 S 006acc23) [known]: the model nodes `FIRE_03`, `FIRE_06`, ... (the counter starts at 0 and adds 3 before each
@@ -955,6 +1003,12 @@ one-shot events (impacts, demolitions, animation events in progress) are not res
 | 006ec2a0, 006ec410, 006ec3a0 | `RandomGenerator::SetSeed` / `unit` / `NextInRange` | generator |
 | 006e8a50 | `Math_FastCosLut` | cosine table |
 | 006964c0, 00696620, 00696400 | `S2CG::Particles::StartByIndex` / `StartByName` / `Stop` | owner handle |
+| 00696570 | `S2CG::Particles::dtor` | always stops as `Stop(true)` |
+| 00681850, 00681890, 006818d0, 00681930, 00681900, 0067f3b0, 006819a0, 00681fd0, 00681960 | scene callback slots +0xa0 .. +0xc4 | sacrifice movies, buff effects (§3.13) |
+| 006ace00 / 006acf70 / 006ad050 | `S2CG::SacrificeBuilding::StartEffect` / `StartResearchEffect` / `StartWaitForGoodsEffect` | back-dated movies |
+| 006c69a0 / 006c6bc0 / 006c6c80 / 006c67c0 | `EffectMovieElement::ctor` / `Start` / `Update` / `IsPastEnd` | effect movie keyframes |
+| 006a3d90 / 006a32b0 / 006a3400 / 006a3610 / 006a3af0 | `ProjectileTable::AddProjectile` / `Projectile::ComputeLaunchVelocity` / `Update` / `ComputeImpactPoint` / `OnImpact` | projectile flight |
+| 00683530 (reference S 006835e8) | `S2CG::Scene::OnFightStrike` | `HitDamage` |
 | 006964a0, 00696480, 00696450 | `Particles::SetVisible` / `SetEmitterLooping` / `SetEmitterPositionAndColor` | switches, transform |
 | 0068b220, 0068ac10 | `CLandscape::CollectResourceParticleCandidates` / `SpawnRandomResourceParticle` | resource hints |
 | 00689bf0 | `Landscape_LoadSettingsXml` | `ResourceFX minTime maxTime` |

@@ -197,7 +197,10 @@ Series index (the "category" of `AddSample`) `[known]` S 00537ba0:
   → 0.1, tier 1 → 0.3, tier 2 → 1.0, any other → 0.0) and reads no data file; `+0x14` eight bytes, default 0;
   `+0x1c` float, default 0.5. The eight bytes are indexed by another player's index: a set byte makes
   `GameQueryHelper::MinDistanceToEnemyMilitaryBuilding` S 005337e0 (called with its diplomacy filter) skip that
-  player's buildings `[known]`. The three tier values are the garrison fractions for the zones far / medium /
+  player's buildings `[known]`. The bytes are written by `NPlayer::Military::SetFlag` S 005c09b0; the computer
+  player's enemy exclusions set and clear them (`NAI::Player::AddEnemyExclusion` S 00584840 /
+  `RemoveEnemyExclusion` S 00583650, Lua `ai_forbidAttackingPlayer` / `ai_allowAttackingPlayer`,
+  `docs/sim/lua-runtime.md` §3.6) `[known]`. The three tier values are the garrison fractions for the zones far / medium /
   near and `+0x1c` is the defence fraction; their rules are in `docs/sim/military.md` §2.3 and the commands that
   change them (0x20013..0x20017) in `docs/sim/game-commands.md`. The object is constructed with the player
   (`Military::ctor` S 005c0ab0 calls `ResetDefaults`), so its values never carry over from an earlier match
@@ -506,6 +509,9 @@ and territoryBuilding all set — the castle. If none exists `[known]`:
   client / host (`docs/sim/logic-core.md`), so the test means "a network game" `[inferred]`;
   `player[i].kind == 3` (remote human). The notice is a letter
   (message type 8) with the text `<localised "!DEFEAT">: <name of i> (<i>)`.
+  Consequence: an offline game (network mode 0) never posts `!DEFEAT`, and neither does a network game for an
+  eliminated computer player (`kind` 1); the campaign maps, which run offline, get no defeat letter when a
+  computer opponent loses its castle `[inferred]` (from the two `[known]` tests).
 
 Notes:
 
@@ -857,10 +863,13 @@ Lua readers: `logic.pl_getMilitaryStrength` (latest of series 4), `logic.pl_getR
   2. remember the paths of `from`'s roads whose `streetType` (`+0xe4`) is not 2 (2 = water street,
      `docs/sim/streets-transport.md` §2.3);
   3. `NVillage::System::TransferAllBuildingsOfPlayer(from, to)`;
-  4. `NSettlers::System::RemoveSettlersOfPlayer(from)`;
+  4. `NSettlers::System::RemoveSettlersOfPlayer(from)` S 00654bd0, which walks the six settler vectors in kind
+     order (worker, constructor, carrier, soldier, specialist, NPC) `[known]`;
   5. remove all of `from`'s flags (last to first);
   6. place the remembered flags for `to` (`Logic_PlaceFlag`), then rebuild the remembered roads for `to`
-     (`NNet::System::BuildStreet`) and spawn a carrier directly on each (`NNet::Street::SpawnCarrier`);
+     (`NNet::System::BuildStreet`) and spawn a carrier directly on each (`NNet::Street::SpawnCarrier`
+     S 00668be0: a `good_helper` carrier placed on the street's middle cell and started in `WaitForPackage`, with
+     no walk from a building, `docs/sim/streets-transport.md` §3.2) `[known]`;
   7. `NNavy::System::TransferShipsOfPlayer(from, to)` S 005b44e0: a ship of `from` whose construction component
      (`ship+0x20`) still has remaining work (`+0x48` or `+0x4c` > 0) is deleted; a finished ship is deleted and
      a new ship is created for `to` on the same cell (so it takes a new name number from `to`, §2.6) `[known]`;
@@ -1020,12 +1029,14 @@ the stored index, not by the loop position. The neutral player is rebuilt afterw
    `[known]`: `ArrangementBase::Load` S 005c3930 fills a temporary entry with weight 0, accumulator 0, type -1
    and `used = 0` (S 005c39a6), reads the three stored fields into it and appends a copy of the whole 0x14 bytes
    (`push_back` S 005c3800). A section version below 4 discards the loaded data and rebuilds the defaults.
-6. `Military` — `"Player Military"` v2: 3 × float (the tier values), 8 × u8 (version >= 1), float `+0x1c`
-   (version >= 2) (S 005c09d0 / S 005c0a40)
+6. `Military` — `"Player Military"` v2: 3 × float (the tier values), 8 × bool (version >= 1), float `+0x1c`
+   (version >= 2) (S 005c09d0 / S 005c0a40). The eight ignore-distance flags (§2.6) are one byte each in memory
+   (`+0x14`) but go through the stream's bool, which is 4 bytes in the file (`docs/sim/save-format.md` §2.2), so
+   the block is 32 bytes `[known]`
 7. `Messages` — `"Messages"` v0: u32 count, count × `"Message"` v2 {float timeRemaining, cell position, string
    text, string text2, i32 msgType, i32 isRead, Unique id, string arg (version >= 1)}. On load, messages of type
    8 (letters) are read and dropped.
-8. `pStock` (only when active)
+8. `pStock` (only when active; see the stock rule below)
 9. i32 updatePhase
 10. `ShipNames` — `"Player ShipNames"` v0: u32 nameIndex
 11. i32 team
@@ -1033,7 +1044,11 @@ the stored index, not by the loop position. The neutral player is rebuilt afterw
 13. `pMobileStock` (written unconditionally, read only when active; only active slots are written at all)
 14. i32 state (version >= 1; older saves get 2)
 
-On load `pTribeProperty` is re-resolved from `tribeId` (only when the loaded `bActive` is set). **Not saved**: `buildingCounts` (refilled at phase 1,
+On load `pTribeProperty` is re-resolved from `tribeId` (only when the loaded `bActive` is set). Both stocks
+(`pStock` `+0x34`, `pMobileStock` `+0xa0`) follow one rule in `Player::Load` S 005be500 `[known]`: a stock whose
+initialised byte (`+0x04`) is already set is emptied first (`NLogic::Stock::Reset`); then, only for an active
+player, the byte is set to 1 and the stock's own `Load` runs. A loaded active player's stocks are therefore always
+marked initialised, whatever the saving game had. **Not saved**: `buildingCounts` (refilled at phase 1,
 up to 22 ticks later), `lockMaps` (re-established by the map script's `onLoaded`, §3.10), the neutral player.
 
 The section versions are the constants of the static initialisers of the section tags `[known]`:
@@ -1215,7 +1230,7 @@ to ticks.
 | 005be2f0 | `Player::RecountStocks` | refill both stock caches: `CollectPlayerBuildingStocks` S 00532a30 sums the output stocks of the depot list, then of the casern list without depots; `CollectPlayerUnitCounts` S 00532ca0 counts packages, the tribe's last non-soldier good among the settlers, and soldiers |
 | 00532ca0 / 00532e70 | `GameQueryHelper::CollectPlayerUnitCounts` / `CountPlayerBuildingsOfType` | the mobile stock (packages, carriers of the counted good, soldiers) and the building counts of §3.9 |
 | 005be970 / 005bf040 / 005bfeb0 | `Player::IsLocked` / `Unlock` / `SetLockFlag` | lock maps |
-| 005be3c0 / 005be500 / 005be6e0 | `Player::Store` / `Load` / `StoreChecksum` | save and checksum |
+| 005be3c0 / 005be500 / 005be6e0 | `Player::Store` / `Load` / `StoreChecksum` | save and checksum; `Load` resets an initialised stock and marks both stocks of an active player initialised |
 | 005abb60 | `Game_CreatePlayersFromDescriptor` | players, castles, starting stock, fog |
 | 005ac770 | `Game_LoadWorldFromDescriptor` | calls the above; sets the victory mode |
 | 005a9bb0 | `GameLoadDescriptor::Reset` | setting defaults |
@@ -1237,6 +1252,10 @@ to ticks.
 | 00600760 | `Requester_SendRefereeGiveUpGame` | menu give-up → referee |
 | 00527b30 | `NLogic::System::SetPlayerTeam` | Lua team change |
 | 00529040 | `NLogic::System::TransferPlayerAssets` | Lua asset hand-over |
+| 00654bd0 | `NSettlers::System::RemoveSettlersOfPlayer` | asset hand-over step 4: the six kind vectors in order |
+| 00668be0 | `NNet::Street::SpawnCarrier` | asset hand-over step 6: carrier on the street's middle cell, `WaitForPackage` |
+| 005c09b0 | `NPlayer::Military::SetFlag` | ignore-distance flag of one other player |
+| 00584840 / 00583650 | `NAI::Player::AddEnemyExclusion` / `RemoveEnemyExclusion` | set / clear the ignore-distance flag (Lua `ai_forbidAttackingPlayer` / `ai_allowAttackingPlayer`) |
 | 00674800 / 00674ad0 | `MapModifier::ExploreArea` / `DetectTerritoryContacts` | spotted / reached |
 | 00537a60 / 00537ba0 | `Statistics::Init` / `Update` | statistics set-up and schedule |
 | 00537230 | `Statistics::AddGoodAmount` | production history, coin counter |

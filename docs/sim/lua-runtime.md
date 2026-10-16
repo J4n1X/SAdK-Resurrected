@@ -70,7 +70,9 @@ Nearly every `logic.*` function starts with guards and **returns no value** (the
 fails; only the success path pushes a result [known: each body below]. The guards, where a function has them:
 
 - player guard: `(unsigned)player < 8` and `PlayerTable entry.bActive != 0` (S 005ac9c0 is the shared form);
-- AI guard: `(unsigned)player < 8` and `ai->players[player]->bActive != 0`;
+- AI guard: `(unsigned)player < 8` and the **computer player's** `NAI::Player.bActive` (+0x10) of slot `player` is
+  not 0. It does not test the game player's `bActive` in the player table: a slot whose computer player is inactive
+  fails it even when the game player is active [known: the `ai_*` bodies S 005ada40..S 005ae100];
 - cell guard: `0 <= x < g_MapWidth` and `0 <= y < g_MapHeight` (S 005ac8f0);
 - quest guard: `(unsigned)index < 40` and the slot is in use (`kind != 2`).
 
@@ -252,7 +254,7 @@ script calls it.
 | `pl_getRegionSize(p)` → int | P | `PlayerStatistics.regionSize` | yes |
 | `pl_getMilitaryStrength(p)` → int | P | latest value of statistics series 4 | yes |
 | `pl_getProducedGoodCount(p, good)` → int | `p < 8` only | last element of the good's statistics history. The history exists only for the tribe's goods and jobs and the body reads the vector's last element with checked iterators and no empty test, so another good id ends the process (`_invalid_parameter_noinfo`) [inferred from S 005b0e80] | yes |
-| `pl_getBuildingProductivity(p, type)` → int | P | mean of the productivity of all finished buildings of the type, × 100, truncated; 0 when there is none (S 00533160) | yes |
+| `pl_getBuildingProductivity(p, type)` → int | P | `GetAverageBuildingProductivity` S 00533160: `(sum / count) × 100`, truncated, over the finished buildings of the type in the statistics' productivity map, summed in ascending unique-id order (the map's key order, which fixes the float rounding); 0 when there is none | yes |
 | `pl_hasCastle(p)` → bool | P | the village depot list holds a building of `p`, **finished or not**, whose type has `depot`, `casern` and `territoryBuilding` all set (property bytes +0x54, +0xf1, +0xf5; `FindPlayerBuildingWithDefFlags` S 005579a0) | yes |
 | `pl_hasReachedPlayer(p, q)` → bool | P on `p`, `q < 8` | `Player.reached[q]` | yes |
 | `pl_getReachedPlayerPosition(p, q)` → x, y | P on `p`, `q < 8` | `Player.reachedPos[q]`; nothing if `reached[q]` is 0 | yes |
@@ -265,11 +267,11 @@ script calls it.
 | `pl_sacrificeStarted(p, sacrifice)` → bool | P | the sacrifice system's per-player list of active sacrifices contains the id | yes |
 | `pl_sacrificeStartedOnContinent(p, sacrifice, x, y)` → `true` | P, C(x, y) | as above and the sacrifice's building stands on the continent of the cell. Pushes `true` or **nothing** (never `false`) | yes |
 | `pl_changeTeam(p, team)` | P | `SetPlayerTeam`: team, shared exploration, spotted flags ([players-victory.md](players-victory.md) §3.12) | yes |
-| `pl_changePlayer(from, to)` | P on both | `TransferPlayerAssets` (same section): buildings, flags, roads, ships move; settlers of `from` are removed | yes |
+| `pl_changePlayer(from, to)` | P on both | `TransferPlayerAssets` S 00529040 (same section): buildings, flags, roads, ships move; settlers of `from` are removed by `RemoveSettlersOfPlayer` S 00654bd0, which walks the six settler kind vectors in order. The remembered streets are rebuilt for `to`, and each gets its carrier from `Street::SpawnCarrier` S 00668be0: a `good_helper` carrier created on the street's middle cell and put straight into `WaitForPackage`, with no walk from a depot [known] | yes |
 | `pl_setName(p, name)` | P | `Player::SetName` | yes |
-| `pl_clearResource(p, good)` | P | removes the whole count of the good from the stock of the first finished building of `p` in the village depot list (types with `depot`, list order; `FindCompletedBuildingOfPlayerInList20` S 00558730); other depots untouched; nothing if `p` has none | yes |
-| `pl_halfResources(p)` | P | same building: every stock entry becomes `count / 2` (integer division, toward zero) | yes |
-| `pl_removeResource(p, good, amount)` | P | walks the depot list in order, finished buildings of `p` only, and removes `min(remaining, count)` from each until the remaining amount is `< 1` or the list ends | yes |
+| `pl_clearResource(p, good)` | P | removes the whole count of the good from the output stock (`Depot +0x28`) of the first finished building of `p` in the village depot list (types with `depot`, list order; `FindCompletedBuildingOfPlayerInList20` S 00558730); other depots untouched; nothing if `p` has none | yes |
+| `pl_halfResources(p)` | P | same building, same stock (`Depot +0x28`): every entry becomes `count / 2` (integer division, toward zero) | yes |
+| `pl_removeResource(p, good, amount)` | P | walks the depot list in order, finished buildings of `p` only, and removes `min(remaining, count)` from each output stock (`Depot +0x28`) until the remaining amount is `< 1` or the list ends | yes |
 | `pl_sendOrderSacrificeMessage(p, sacrifice)` | `p < 8` only | posts two type-4 player messages (`!Player orders sacrifice` with the player's name, `!Sacrifice ordered` with the sacrifice's name) to every player except `p`. Presentation plus message queues | yes |
 
 **Map** (`map_`)
@@ -282,25 +284,34 @@ script calls it.
 | `map_createDoodad(x, y, doodad)` | C | `NDoodads::System::AddDoodadAtCell`; if the doodad property's byte +0x48 is set (blocking kind): rebuild continents, refresh AI players and the AI resource map, invalidate the construction map around the cell and remove a street through the cell | yes |
 | `map_removeDoodads(x, y, radius, doodad)` | C | removes every doodad of that type on the hex spiral (§3.6.1) of the given radius; if the last removed type is blocking, rebuild continents and refresh the AI once at the end | yes |
 | `map_forEachDoodad(x, y, radius, doodad, "fn")` | C | calls the global `fn(x, y)` for each doodad of the type on the spiral, in spiral order; nothing if the name is empty | no |
-| `map_searchConstructionPlace(p, x, y, radius, sizeMask)` → x, y | P, C | first cell on the spiral whose construction flags for `p` match the mask (§3.6.2); nothing if none within the radius | yes |
+| `map_searchConstructionPlace(p, x, y, radius, sizeMask)` → x, y | P, then C (S 005afaa0 tests the player before the cell) | first cell on the spiral whose construction flags for `p` match the mask (§3.6.2); nothing if none within the radius | yes |
 | `map_createDeposit(x, y, deposit, flag)` | C | `NResources::System::CreateDeposit(type, cell, flag)` S 00540b40: a new deposit at the cell with `growth = 1.0` (fully grown, harvestable) when `flag` is true, and `growth = growingStartSize` of its property (+0x44, S 00542da0) when it is false. `flag` follows `lua_toboolean`. The deposit constructor **draws one number from the simulation generator** (display offset, S 005432d0; [map-resources.md](map-resources.md) §3.9). The data uses both forms (`tent, true` and `tent, false`) | yes |
-| `map_killDeposits(x1, y1, x2, y2 [, deposit])` | C on both corners | for every cell of the bounding rectangle, x outer and y inner, ascending: if a deposit is there whose `depletedTicks` (+0x50) is 0, i.e. it is not already being removed ([map-resources.md](map-resources.md) §2.6), and (the 5th argument is not a number, or is −1, or equals the deposit's property id), `KillDepositAt`. The filter is a deposit type id (the data passes `tent`) | yes |
+| `map_killDeposits(x1, y1, x2, y2 [, deposit])` | C on both corners | for every cell of the bounding rectangle, x outer and y inner, ascending: if a deposit is there whose `depletedTicks` (+0x50) is 0, i.e. it is not already being removed ([map-resources.md](map-resources.md) §2.6), and (the 5th argument is not a number, or is −1, or equals the deposit's **own** property id, not a type derived from the cell), `KillDepositAt`. The filter is a deposit type id (the data passes `tent`) | yes |
 | `map_createChest(x, y, good, amount)` | C | if `good != −1`: `LogicChestSystem::AddChest(kind 1, cell)` and `SetContentGood(good, amount)` ([logic-core.md](logic-core.md) §2.7) | no |
 
 **Computer players** (`ai_`; the switches are in [ai-player.md](ai-player.md) §2.5)
 
 | Function | Guards | Changes | Used |
 |---|---|---|---|
-| `ai_isEnabled(p)` → bool | `p < 8` only | reads `NAI::Player.bActive` | yes |
-| `ai_enable(p, profile)` | P, and the AI slot must be inactive | `NAI::System::ActivatePlayer(player, start position of slot p from the map info, AI profile id)` | yes |
-| `ai_disable(p)` | A | `NAI::Player::Deactivate` | yes |
-| `ai_allowAttack(p, bool)` | A | `attackAllowed` | yes |
-| `ai_setAllowedAttackCount(p, n)` | A | military system field +0x144 = n (remaining attacks) | yes |
-| `ai_setAttackEnable(p, bool)` | A | the same field: −1 (unlimited) for true, 0 for false | no |
-| `ai_enableExpansion` / `ai_enableForesting` / `ai_enableSacrifices` / `ai_enableShipConstruction` `(p, bool)` | A | the flag of that name | yes |
-| `ai_enableNeeds` / `ai_enableCoinProduction` / `ai_enableCatapultsLocal` `(p, bool)` | A | the flag of that name | no |
-| `ai_forbidHarborPosition(p, x, y)` / `ai_allowHarborPosition(p, x, y)` | A, C | adds / removes the cell in the AI's forbidden harbour list | yes |
-| `ai_forbidAttackingPlayer(p, q)` / `ai_allowAttackingPlayer(p, q)` | A, `q < 8` | adds / removes `q` in the AI's enemy exclusion list | yes / no |
+| `ai_isEnabled(p)` → bool | `p < 8` only | S 005ada40: reads the computer player's `NAI::Player.bActive` (+0x10) | yes |
+| `ai_enable(p, profile)` | P, and the computer player of slot `p` must be inactive | S 005b2660: `NAI::System::ActivatePlayer` S 00581c40 with the slot's start position (read through the bounds-checked accessor on `mapInfo +0x04`) and the profile key `Lua_ToInt(arg 2)`. The only `ai_*` binding with the player guard. Nothing tests the slot's controller kind, so a **human slot can be taken over** by a computer player | yes |
+| `ai_disable(p)` | A | S 005add10: `NAI::Player::Deactivate` | yes |
+| `ai_allowAttack(p, bool)` | A | S 005add70: `attackAllowed` | yes |
+| `ai_setAllowedAttackCount(p, n)` | A | S 005ade50: the attack limiter of the AttackSystem, military system field +0x144 = n (remaining attacks) | yes |
+| `ai_setAttackEnable(p, bool)` | A | S 005addd0: the same field: −1 (unlimited) for true, 0 for false | no |
+| `ai_enableExpansion` S 005adec0 / `ai_enableForesting` S 005adfe0 / `ai_enableSacrifices` S 005ae0a0 / `ai_enableShipConstruction` S 005ae100 `(p, bool)` | A | the flag of that name | yes |
+| `ai_enableNeeds` S 005adf20 / `ai_enableCoinProduction` S 005adf80 / `ai_enableCatapultsLocal` S 005ae040 `(p, bool)` | A | the flag of that name | no |
+| `ai_forbidHarborPosition(p, x, y)` | A, C | S 005ada90 → S 005824b0: **appends** the cell to the computer player's forbidden harbour vector; duplicates are kept | yes |
+| `ai_allowHarborPosition(p, x, y)` | A, C | S 005adb50 → S 005824c0 / `Stl_VectorMapPos_EraseValue` S 00674ed0: erases the **first** equal entry. There is no not-found test: a cell that is not listed is erased at the vector's end iterator, past the last element [inferred: undefined behaviour of the erase] | yes |
+| `ai_forbidAttackingPlayer(p, q)` | A, `q < 8` | S 005adc10 → `AddEnemyExclusion` S 00584840: appends `q` to the enemy exclusion vector (duplicates kept) and sets the **game** player's ignore-distance flag for `q` through `NPlayer::Military::SetFlag` S 005c09b0 ([players-victory.md](players-victory.md) §7) | yes |
+| `ai_allowAttackingPlayer(p, q)` | A, `q < 8` | S 005adc90 → `RemoveEnemyExclusion` S 00583650: erases the first entry equal to `q` and clears the flag; no not-found test (as above) | no |
+
+Every `bool` argument goes through `Lua_ToBool`, so `0` is true (§2.2). Campaign use of the switches [known: data]:
+`C02` disables slot 1 and re-enables it with the profile `ai_c2_catapult`; `C04` switches slot 4 off and ship
+construction off for slots 1 and 2; `C05` enables slot 1 with `ai_c5_pirates` and switches its sacrifices off;
+`C06` enables slot 2 with `ai_c6_severin`, foresting off, sacrifices off and back on at tick 602; `C07` and `C09`
+switch ship construction off for slots 1 and 2; `C08` forbids attacks for slots 1 and 3 and ships for slot 3;
+`C10` makes slots 1, 2 and 3 exclude each other from attacks.
 
 **Buildings** (`vi_`). "Building at the cell" = the building whose object occupies the cell in object layer 1
 (`FindBuildingAtOrNearest(cell, 0)` S 00558890); "finished" = both construction floats `<= 0`.
@@ -317,9 +328,9 @@ script calls it.
 | `vi_isSacrificeBuildingAtContinent(p, x, y)` → bool | C, P | a finished sacrifice building of `p` on that continent | yes |
 | `vi_destroyBuilding(p, x, y)` | C, P | building at the cell owned by `p`: `NVillage::System::RemoveBuilding(unique, true)` | yes |
 | `vi_destroyBuildingsInArea(p, x1, y1, x2, y2)` | P, C both | the same for every cell of the bounding rectangle, x outer, y inner, ascending | yes |
-| `vi_changePlayerOfBuilding(x, y, newPlayer)` | C, P on `newPlayer` | finished building at the cell: `ConquerBuilding` for the new owner | no |
-| `vi_addGoodsToDepot(p, x, y, good, amount)` | C, P | building at the cell owned by `p` whose type has `depot`: adds to its stock | yes |
-| `vi_enableProduction(p, x, y, bool)` | C, P | finished building at the cell owned by `p` that produces goods: `Production::SetEnabled` if the state differs | yes |
+| `vi_changePlayerOfBuilding(x, y, newPlayer)` | C, P on `newPlayer` | S 005ae830; the arguments are `(x, y, player)`, with no owner argument: the finished building at the cell is conquered for `newPlayer` (`ConquerBuilding`) whoever owns it | no |
+| `vi_addGoodsToDepot(p, x, y, good, amount)` | C, P | S 005aea40: building at the cell owned by `p` whose type has the `depot` byte (+0x54) set: adds to its stock | yes |
+| `vi_enableProduction(p, x, y, bool)` | C, P | finished building at the cell owned by `p` whose production passes `Production::ProducesGoods` S 00565550 (product slot 0 set and the catapult byte +0xb0 clear): `Production::SetEnabled` if the state differs | yes |
 | `vi_orderSacrifice(p, x, y, sacrifice)` | C, P | building at the cell owned by `p` with `workingMode == 9`: if `VillageSacrifice::CanOrder(id)`, `Order(id, 0)` | yes |
 | `vi_startSacrifice(p, x, y, target)` | C, P, P on `target` | same building test, and `VillageSacrifice::CheckCanStart() == 0` (S 00560f20: a sacrifice is on order, none is active, the goods are complete or the order was free, no cooldown, no running sacrifice of that definition, an enemy exists if the sacrifice targets one, not locked; [quests-sacrifices-stats.md](quests-sacrifices-stats.md) §3.2): sets the target player (field +0x0c) and calls `ai::village::VillageSacrifice::Start` | yes |
 
@@ -330,10 +341,10 @@ script calls it.
 | `na_getShipCount(p)` → int | P | finished ships of `p` (construction floats +0x48, +0x4c `<= 0`) | yes |
 | `na_isShipAtPosition(p, x, y)` → bool | C, P | `FindShipAtPosition(cell)` exists and belongs to `p` | yes |
 | `na_isShipOnRoute(p, x, y)` → bool | C, P | the ship route whose path contains the cell has an entry for `p`; **nothing** if no route passes the cell | yes |
-| `na_isShipAtRoutePosition(p, x, y)` → bool | C, P | a ship of `p` is at the cell and its movement's current route is the route through that cell; nothing if no route passes the cell | yes |
+| `na_isShipAtRoutePosition(p, x, y)` → bool | C, P | S 005aff90: compares the movement route (`Movement +0x80`) of `p`'s ship with the route through the cell. It is **not** a position test: the ship need not be at the cell, only travelling that route. Nothing if no route passes the cell | yes |
 | `na_createShip(p, x, y)` | C, P | `NNavy::System::CreateShip(player, cell)` | yes |
-| `na_sendShip(p, x, y, tx, ty)` | C both, P | ship of `p` at the cell: `Movement::MoveToTile(target)` | yes |
-| `na_sinkShipOnRoute(p, x, y)` | C, P | route through the cell with an entry of `p`: that ship is scheduled to sink at once unless already sinking | yes |
+| `na_sendShip(p, x, y, tx, ty)` | C both, P | ship of `p` at the cell: `Movement::MoveToTile(target)` S 005b9920, which inlines `UnmarkTile` (the ship's current tile) before `MarkTileAndMoveTo` | yes |
+| `na_sinkShipOnRoute(p, x, y)` | C, P | S 005af1a0: route through the cell with an entry of `p`: that ship is scheduled to sink at once unless its state is 6..8 (S 005ac8d0) | yes |
 | `na_destroyShip(p, x, y)` | C, P | ship of `p` at the cell is erased | no |
 
 **Quests** (`q_`), `i` = slot index 0..39
@@ -349,7 +360,7 @@ script calls it.
 | `q_hide(i)` | quest | `visible = false` | yes |
 | `q_isVisible(i)` / `q_isFinished(i)` / `q_isFailed(i)` → bool | quest | the flag | yes |
 | `q_updateInfo(i, text)` | quest | if the text differs: store it and stamp `textChangedTime` | yes |
-| `victory_setupQuests()` | – | victory mode (`MapInfo+0x1c8`) = 5: the match is decided by the main quests ([players-victory.md](players-victory.md) §3.6) | yes |
+| `victory_setupQuests()` | – | victory mode (`MapInfo+0x1c8`) = 5: the match is decided by the main quests ([players-victory.md](players-victory.md) §3.6). `VictoryCond_Update` S 00535d70 then runs the local quest test each tick: all main quests finished → `DeclareWinner(local player)` and every quest hidden; any main quest failed → victory state 3. The other modes write their own text and finished / failed flags into quest slot 0, which the victory update activates at tick 0 | yes |
 
 A text beginning with `!` is a localisation key (`!completed`, `!incomplete`, `!failed`), other texts are shown
 as they are (`"3/5"`); the scripts use the literal `"invalid"` for "no progress text" [known: data; inferred:
@@ -416,10 +427,10 @@ without a finished depot-type building dereferences a null pointer [known: bodie
 
 | Function | Effect | Sim state |
 |---|---|---|
-| `menu.addResource(p, good, amount)` S 005d9970 | adds to the stock of the first finished depot-type building of `p` | yes |
-| `menu.clearResources(p)` S 005d9c30 | empties that stock | yes |
-| `menu.createBuilding(p, type, x, y)` S 005d9a30 | `NVillage::System::PlaceBuilding`, then `Construction::Complete` | yes |
-| `menu.createBuildingWithSettler(p, type, x, y [, soldierGood])` S 005d9ac0 | if the type is a territory building: `AddTerritorySource(cell, radius 4, player)` first. Place and complete the building. If the type's `territoryBuilding` byte (+0xf5) is clear: spawn its worker; else create **three** soldiers of property `soldierGood` at the cell and link them. In both cases the territory updater is then activated. Nothing after the territory source happens if placement fails. The data passes the 5th argument for `fortress` and `tower` and omits it for temples, a forester and a catapult | yes |
+| `menu.addResource(p, good, amount)` S 005d9970 | adds to the output stock (`Depot +0x28`) of the first finished depot-type building of `p` | yes |
+| `menu.clearResources(p)` S 005d9c30 | empties that stock (`Depot +0x28`) | yes |
+| `menu.createBuilding(p, type, x, y)` S 005d9a30 | `NVillage::System::PlaceBuilding`, then `Construction::Complete` **only when the placement succeeded**: a failed placement leaves nothing behind | yes |
+| `menu.createBuildingWithSettler(p, type, x, y [, soldierGood])` S 005d9ac0 | one test of the type's `territoryBuilding` byte (+0xf5) decides both branches. Set: `AddTerritorySource(cell, radius 4, player)` first. Place and complete the building. Byte clear: spawn its worker; set: create **three** soldiers of property `soldierGood` at the cell and link them. The territory updater's `Activate` then runs unconditionally, for either kind. Nothing after the territory source happens if placement fails. The data passes the 5th argument for `fortress` and `tower` and omits it for temples, a forester and a catapult | yes |
 | `menu.createStreet(p, x1, y1, x2, y2)` S 005dada0 | street planner from cell 1 to cell 2, then `NNet::System::BuildStreet` | yes |
 | `menu.lockBuilding(p, type)`, `unlockBuilding`, `lockJob`, `unlockJob`, `lockSacrifice(p, s)`, `unlockSacrifice` | player lock maps 0, 3, 1 ([players-victory.md](players-victory.md) §3.10); the sacrifice variants also refresh an open sacrifice tab | yes (not saved) |
 | `menu.addSacrifice(p, s, notify)` S 005dac60 | lock map 2 (sacrifice available), refreshes an open sacrifice tab; if `notify` is true a type-4 message `!New Sacrifice available` to `p`. In the campaign the argument is the parameter `sendMessage` of the map's own wrappers (`enableStoneToDustSacrifice`, `enableWaterSacrifice` in `C05.lua`, `addTreeExchange` in `C06.lua`, `addPacifySachmet`, `addGenerateBeer` in `C07.lua`): quest callbacks pass `true`, so the message is sent; `onLoaded` and the player set-up pass `false` [known: data] | yes (not saved) |
@@ -436,6 +447,17 @@ without a finished depot-type building dereferences a null pointer [known: bodie
 | `menu.setLanguage(code)`, `menu.setVideoVoiceStream(code, n)`, `menu.setPlayerColor(i, r, g, b)` | `menu.cfg` only: language string, map language → voice stream index, player colour table entry `i` (alpha forced to 1.0) | start-up |
 | `txt.isValid(key)` → bool S 005da660 | the localisation table contains the key | read only |
 | `gfx.createParticel(effect, x, y [, dx, dy, dz])` S 005aca40 | starts the named particle effect at the world position of the cell, plus the float offset when argument 4 is a number; looping; reseeded from the render clock. Does nothing if the effect name is unknown | presentation only |
+
+**How a cinematic ends** (`nMenu::Cinematic::Update` S 005fb3e0; the phase table is in
+[camera-input-cutscenes.md](camera-input-cutscenes.md) §3.8) [known]: the phases run fade-in → playing → ending →
+restore HUD → restore speed. A page stays up for its text length × 0.1 s, at least 0.5 s, and then waits for its
+voice-over to finish. The ending phase calls `nGame::System::EndCinematic` S 00782bb0 (its only caller), which
+switches the AI, chests and sacrifices back on; after 0.5 s the HUD is restored, after 1.0 s more
+`CloseAllDialogs` hides the screen, and its `OnHide` S 005faee0 calls `quest_cinematicDone` (§4.3) and then writes
+the saved game speed back. Between `menu.startCinematic` and that point the local game speed is 1: the
+simulation keeps ticking at normal speed for the whole cinematic. So the simulation switches come back at least
+1.5 s of frame time before the script hears that the cinematic is over, and both moments depend on the local frame
+clock and the voice-over, not on ticks (§8).
 
 `ui.*` (quest log widgets, first argument = menu screen index, the scripts use `BOOKDIALOG = 24`; the index
 selects `nMenu::System + 0x10 + 4 × index`, where the book is index 2, so 24 reads `System + 0x70`, inside the pending
@@ -584,7 +606,7 @@ script path is empty; errors are silent (§3.4).
 | `onLogicTick(tick)` | `tickCounter` of the tick just executed (0 for the first) | once per pass of the tick loop in `NLogic::System::Update`, **after** all subsystem updates of that tick (the last is the victory-condition update) and after the scene's per-tick hook, before the tick listener; only if the flag argument of `Update` is true (the frame loop S 004018e0 passes true) and the map editor's batch editing is off, in which case no tick is executed either ([logic-core.md](logic-core.md) §3.1) | [known] S 005b20d0, S 00527070 |
 | `createQuestUi()` | – | when the book dialog is switched from its story pages to the quest list: the story/quest toggle button is clicked while the page text is visible. `nMenu::Book::ShowQuestView` hides the page buttons, page text and page counter, deletes the book's script-widget list, calls the function, stops the voice-over and sets the toggle caption to `!STORY` | [known] S 005b1f30, S 005fc900, S 005fcbc0 |
 | `destroyQuestUi()` | – | when the toggle button is clicked while the quest list is shown: the script-widget list is deleted first, then the function is called, then the page widgets are shown again and the caption becomes `!QUESTS`. It is **not** called when the book is closed while the quest list is shown (the only caller is the toggle branch of `nMenu::Book::Update`) | [known] S 005b1e80, S 005fcbc0 |
-| `quest_cinematicDone()` | – | in the hide handler of the cinematic screen (`nMenu::Cinematic::OnHide`), after the cursor and the overlay fade are restored and before the game speed saved by the cinematic is written back to `UserProfile +0x24` | [known] S 005b2360, S 005faee0 |
+| `quest_cinematicDone()` | – | in the hide handler of the cinematic screen (`nMenu::Cinematic::OnHide`), after the cursor and the overlay fade are restored and before the game speed saved by the cinematic is written back to `UserProfile +0x24`. The hide comes from `CloseAllDialogs` at the end of the restore-speed phase, so the callback runs at least 1.5 s of frame time after `EndCinematic` (§3.7) | [known] S 005b2360, S 005faee0, S 005fb3e0 |
 | `sacrifice_execute(sacrificeId)` | first dword of the sacrifice's definition ([inferred] its property id) | when a sacrifice effect of kind 1006 (`Effect_FunctionRunScript`) is applied (S 00660500). No shipped sacrifice uses that effect and no shipped script defines the function | [known] S 005b2410; data |
 | `<fn>(x, y)` | cell, pushed as two numbers | synchronously inside `logic.vi_forEachBuilding` (through S 005af860) and `logic.map_forEachDoodad` (S 005b1290 calls `CallGlobal_XY` itself, with the same path test) | [known] S 005af860, S 005b1290, S 005c9920 |
 | `<widget>_isClicked()`, `<widget>_isPressed()` | – | §4.4 | [known] S 004b12d0, S 004b1470 |
@@ -787,7 +809,8 @@ simulation state and draw from the simulation random generator.
   original behave the same (no `string`, no `table`).
 - Implement the C boundary exactly (§2.2, §2.3): truncating integer conversion, `0` is true for booleans, "no
   value" on a failed guard, int32 `sd_` store, float32 for speeds and progress. Where the original would crash
-  (null depot in `menu.addResource`, `nil` passed as a string) a remake should fail safely and log; the shipped
+  (null depot in `menu.addResource`, `nil` passed as a string, `ai_allowHarborPosition` / `ai_allowAttackingPlayer`
+  for an entry that is not listed, which erases at the vector's end) a remake should fail safely and log; the shipped
   scripts do not hit these paths in a normal game [inferred].
 - Reproduce the error model: run every callback protected, drop the rest of the callback on an error, keep the
   partial effects, continue next tick. Logging the error (which the original discards) is harmless.
@@ -858,6 +881,21 @@ simulation state and draw from the simulation random generator.
 | 00558730 / 00558890 | `NVillage::System::FindCompletedBuildingOfPlayerInList20` / `FindBuildingAtOrNearest` | first finished building of the player in the village list at `+0x20` (the depot the resource functions use); building at a cell, or the nearest within a radius |
 | 005d9970, 005d9a30, 005d9ac0, 005dada0 | `menu.addResource`, `createBuilding`, `createBuildingWithSettler`, `createStreet` | unguarded world edits |
 | 005dd3c0 / 005dd410 / 005dd5c0 | `menu.startCinematic` / `addCinematicPage` / `updateCinematic` | cinematics |
+| 005fb3e0 / 00782bb0 | `nMenu::Cinematic::Update` / `nGame::System::EndCinematic` | cinematic phases and page timing; the simulation switches back on (sole caller: the ending phase) |
+| 00535d70 | `VictoryCond_Update` | quest 0 at tick 0; mode 5 local quest test |
+| 00529040 / 00654bd0 / 00668be0 | `TransferPlayerAssets` / `RemoveSettlersOfPlayer` / `Street::SpawnCarrier` | `pl_changePlayer`: assets moved, settlers removed per kind vector, streets rebuilt with a carrier on the middle cell |
+| 00533160 | `GetAverageBuildingProductivity` | `pl_getBuildingProductivity`, ascending unique-id order |
+| 005aff90 / 005af1a0 / 005ac8d0 | `na_isShipAtRoutePosition` / `na_sinkShipOnRoute` / ship state 6..8 test | route comparison; sinking skips states 6..8 |
+| 005b9920 | `Movement::MoveToTile` | `na_sendShip`; `UnmarkTile` inlined before `MarkTileAndMoveTo` |
+| 005ae830 / 005aea40 / 00565550 | `vi_changePlayerOfBuilding` / `vi_addGoodsToDepot` / `Production::ProducesGoods` | conquest by cell; depot byte +0x54; production gate of `vi_enableProduction` |
+| 005ada40 / 005b2660 / 005add10 | `ai_isEnabled` / `ai_enable` / `ai_disable` | computer player on / off |
+| 00581c40 | `NAI::System::ActivatePlayer` | `ai_enable` back end |
+| 005add70 / 005ade50 / 005addd0 | `ai_allowAttack` / `ai_setAllowedAttackCount` / `ai_setAttackEnable` | attack switch and AttackSystem limiter (military system +0x144) |
+| 005adec0, 005adf20, 005adf80, 005adfe0, 005ae040, 005ae100, 005ae0a0 | `ai_enableExpansion`, `ai_enableNeeds`, `ai_enableCoinProduction`, `ai_enableForesting`, `ai_enableCatapultsLocal`, `ai_enableShipConstruction`, `ai_enableSacrifices` | computer player switches (`Lua_ToBool`) |
+| 005ada90 / 005824b0 | `ai_forbidHarborPosition` / its append | forbidden harbour vector, duplicates kept |
+| 005adb50 / 005824c0 / 00674ed0 | `ai_allowHarborPosition` / its erase / `Stl_VectorMapPos_EraseValue` | first equal entry erased, no not-found test |
+| 005adc10 / 00584840 / 005c09b0 | `ai_forbidAttackingPlayer` / `AddEnemyExclusion` / `NPlayer::Military::SetFlag` | exclusion appended; the game player's ignore-distance flag set |
+| 005adc90 / 00583650 | `ai_allowAttackingPlayer` / `RemoveEnemyExclusion` | first entry erased, flag cleared, no not-found test |
 | 0078ac10 / 0078a940 | `CutsceneCamera::LoadScript` / `Cutscene_BuildScriptPath` | cutscene files |
 | 0078a5b0 / 0078a660 | `cutscene.addPosition` / `addLookAt` | camera keys |
 | 005f6310 / 005d96e0 | `nMenu::Info::Open` / `nMenu::System::ToggleDialogInfo` | info page scripts (modes 1, 2); the only caller (mode 0) |

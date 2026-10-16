@@ -85,6 +85,8 @@ table in replay mode, where every `*_create` returns the id recorded for that ca
 call does nothing. The replay checks that the sequence of create calls matches the recording; a difference stops
 the match (the data stage was not deterministic). It costs milliseconds and reproduces the vocabulary exactly,
 helper functions included.
+As built, the replay covers the property scripts of `core.game` only; mods' `data*.lua` are not replayed yet
+[implemented, sadk-remake fcee142].
 
 ### 2.3 Profiles [draft]
 
@@ -277,7 +279,9 @@ them at the same point, so script globals they change (`questDialogOpen`, `quest
 machine. UI functions they call produce `ScriptUi` events for the player who raised the callback.
 
 The end of a cinematic is the command `CinematicFinished`; it runs `EndCinematic` (AI, chests, sacrifices back on,
-sacrifice ticks shifted) and then `quest_cinematicDone`.
+sacrifice ticks shifted) and then `quest_cinematicDone`. The original runs the two at least 1.5 s of frame time
+apart (the ending phase calls `EndCinematic`, `OnHide` calls `quest_cinematicDone` after the HUD and speed
+phases, LR §3.7); the remake runs them in one step [implemented, sadk-remake fcee142].
 
 ### 4.4 Teardown [draft]
 
@@ -295,6 +299,9 @@ The match state is dropped. The original only clears `createQuestUi` and keeps e
 The original's map scripts are single-machine logic (LR §8): quest targets evaluate `pl_getUser()` (37 call sites
 [data]), the quest machine waits for the local cinematic, scenario victory declares the local player the winner.
 
+As built, `logic` and `gfx` are registered in **every** match state, offline or not; the network rule of the table
+above (and item 2 of §12) is still open [implemented, sadk-remake fcee142].
+
 ### 4.6 Path resolution [draft]
 
 - `Default.CallScript(path)` and the cutscene names of `menu.addCinematicPage` take the original's `[data]\...` paths
@@ -306,6 +313,34 @@ The original's map scripts are single-machine logic (LR §8): quest targets eval
   `scripts/` folders in load order, then the converted installation's `scripts/mapTools/`.
 - An included file runs in the same state, with the same globals (the original: a new thread of the same
   `lua_State`, LR §3.2).
+
+### 4.7 The map-script host as built [implemented, sadk-remake fcee142]
+
+- `MapScriptSystem` is step 23 of the tick. Each world has one MoonSharp state, seeded from the game seed; the
+  property scripts are replayed for the vocabulary (§2.2); the top-level chunk runs at the world build's MapScript
+  phase, `onStarted` / `onLoaded` at tick −1, `onLogicTick` once per tick; `sacrifice_execute` arrives through
+  `ISacrificeScript`.
+- `Default.CallScript` resolves by bare file name (§4.6). An error aborts the callback and is reported once
+  (`ScriptReport`, §2.7). `logic.getRandom` is one `SimRandom` draw.
+- All 168 functions of `logic`, `gfx`, `menu`, `ui` and `txt` exist; one that is not built yet reports once and
+  returns a neutral value. `HexGrid.Spiral` visits the cells in the order of S 005af910, S 005b1290 and S 005afaa0
+  (LR §3.6.1).
+- The 40 quest slots and the `sd_` store live in the simulation (event `QuestChanged`). `VictorySystem` writes quest
+  0 into the real slots and runs victory mode 5 (LR §3.6, `victory_setupQuests`).
+- Commands: `core.game.cinematicfinished` (`EndCinematic`, then `quest_cinematicDone`, in one step, §4.3) and
+  `core.game.scriptcallback` (§4.3).
+- `ScriptUi` events go to the `ScriptUiPresenter`: pages, letters, books and tutorials appear in the message list,
+  pages and tutorials as message type 7, letters as type 8 [inferred: the original's types]. The map's own texts are
+  loaded.
+- Save hook: `CaptureSection` / `RestoreSection`, with the load order chunk, `RestoreSection`, `onLoaded` (§8.1).
+  A load runs the top-level chunk again, restores the section with the logic part and calls `onLoaded`; `onStarted`
+  does not run again [implemented, sadk-remake 8d0b24a] ([sim-boundary.md](sim-boundary.md) §9.1).
+
+Measured: the campaign maps C01..C11 run 5000 ticks each with 0 Lua errors. C01's opening: quests `Intro` (slot 0)
+and `sawmillInfo` (slot 18) at the start, the cinematic at tick 0, `Start` and the cutscene `"1intro"` at tick 1,
+`C01_Q01` (slot 8, marker on the temple at 76/65), `ReachIce` (slot 15), `EgyptReachPlace` (slot 2) and the
+tutorial chain at tick 2. `onStarted` places the Olympic temple for player 3, halves player 3's stock 7 times and
+destroys its castle.
 
 ## 5. The simulation tables
 
@@ -359,7 +394,7 @@ function without calls is implemented with the same guards and results, but test
 | `pl_hasCastle`, `pl_hasReachedPlayer`, `pl_getReachedPlayerPosition`, `pl_isPlayerSpotted`, `pl_getTribe`, `pl_isAttacking`, `pl_isUnderAttack`, `pl_getPositionUnderAttack` | Q | as LR §3.6; positions push nothing when absent | 2, 2, 1, 0, 0, 2, 1, 2 |
 | `pl_getSacrificeState` | Q | the delivered fraction of an ordered sacrifice; **nothing** when no building has it in delivery state (scripts compare with `>= 1` and abort there) | 2 |
 | `pl_sacrificeStarted`, `pl_sacrificeStartedOnContinent` | Q | the second pushes `true` or nothing, never `false` | 2, 1 |
-| `pl_changeTeam`, `pl_changePlayer`, `pl_setName` | SIM | `pl_changePlayer` moves buildings, flags, roads and ships and removes the old owner's settlers in the original's step order (unique ids are drawn in that order) | 17, 3, 2 |
+| `pl_changeTeam`, `pl_changePlayer`, `pl_setName` | SIM | `pl_changePlayer` moves buildings, flags, roads and ships and removes the old owner's settlers in the original's step order (unique ids are drawn in that order); each rebuilt street gets a carrier waiting on its middle cell (`Street::SpawnCarrier`, LR §3.6). A remembered street that cannot be rebuilt is skipped (the original crashes) [implemented, sadk-remake fcee142] | 17, 3, 2 |
 | `pl_clearResource`, `pl_halfResources`, `pl_removeResource` | SIM | the first finished depot of the player in village list order; `halfResources` divides every entry, integer division | 4, 22, 11 |
 | `pl_sendOrderSacrificeMessage` | MSG | to every player except `p` | 1 |
 
@@ -384,6 +419,11 @@ function without calls is implemented with the same guards and results, but test
 | `ai_allowAttack`, `ai_setAllowedAttackCount`, `ai_setAttackEnable` | SIM | 5, 1, 0 |
 | `ai_enableExpansion`, `ai_enableForesting`, `ai_enableSacrifices`, `ai_enableShipConstruction`, `ai_enableNeeds`, `ai_enableCoinProduction`, `ai_enableCatapultsLocal` | SIM | 8, 1, 4, 12, 0, 0, 0 |
 | `ai_forbidHarborPosition`, `ai_allowHarborPosition`, `ai_forbidAttackingPlayer`, `ai_allowAttackingPlayer` | SIM | 2, 1, 6, 0 |
+
+The guards and back ends are LR §3.6: the AI guard tests the computer player's `bActive`, only `ai_enable` uses the
+player guard, every switch reads its argument with `Lua_ToBool`. Removing a harbour position or an exclusion that is
+not listed does nothing in the remake; the original erases at the vector's end iterator
+[implemented, sadk-remake 2509f83].
 
 **Buildings** (`vi_`; `IVillage`, components `IStorage`, `IProduction`, `IVillageSacrifice`)
 
@@ -424,7 +464,7 @@ finished depot crashes it). The remake guards them and raises a Lua error instea
 | Function | Class | Notes | Calls |
 |---|---|---|---|
 | `menu.addResource`, `menu.clearResources` | SIM | the first finished depot of the player | 2, 1 |
-| `menu.createBuilding`, `menu.createBuildingWithSettler` | SIM | placed and completed; with settler: worker, or three soldiers for territory buildings; territory source first | 2, 9 |
+| `menu.createBuilding`, `menu.createBuildingWithSettler` | SIM | placed, and completed only when the placement succeeded (§12 item 5); with settler: worker, or three soldiers for territory buildings (`+0xf5`); territory source first; the territory updater is activated either way. The remake puts the soldiers on the call's cell in `IdleOutside` [implemented, sadk-remake fcee142; inferred: the original's soldier state] | 2, 9 |
 | `menu.createStreet` | SIM | planner then build | 1 |
 | `menu.lockBuilding`, `unlockBuilding`, `lockJob`, `unlockJob`, `lockSacrifice`, `unlockSacrifice` | SIM (not saved) | the player lock maps; scripts re-apply them in `onLoaded` | 3, 0, 0, 0, 1, 0 |
 | `menu.addSacrifice(p, s, notify)` | SIM + MSG | offer list (not saved); the campaign passes `true` from quest callbacks, so the message is sent, and `false` from `onLoaded` [data] | 5 |
@@ -594,7 +634,12 @@ public sealed class LogicPlayers : LuaLibrary
 3. Whether the original's `strtod` depends on the precision control (§2.5).
 4. Whether any HUD path opens the book other than `menu.openBookDialog` (§6.1); if none, the quest-list widgets are
    dead code in the original.
-5. The unguarded `menu.createBuilding`: whether construction completes when placement failed.
+5. Answered: the unguarded `menu.createBuilding` completes the building **only when `PlaceBuilding` succeeded**; a
+   failed placement leaves nothing behind (S 005d9a30, LR §3.7) [known].
 6. Generator draws inside `pl_changePlayer`, `menu.createBuildingWithSettler`, `menu.createStreet`,
    `map_killDeposits`, `map_createDoodad` and `ai_enable` (each subsystem document lists its draws).
 7. `map_getTerritoryPlayerId` for an unowned cell.
+8. Parts of the map-script host not built yet (§4.7): the readers of the lock maps (map 0:
+   `Village_CheckBuildingPlacement` S 005576e0 and the build menu S 00634db0; map 3: `SoldierTraining.IsJobLocked`),
+   `map_createChest`, the continent rebuild after a blocking doodad, the NPC functions `se_*`, waits (§2.8), the
+   cinematic camera paths, the book and tutorial screens, the minimap quest symbols.

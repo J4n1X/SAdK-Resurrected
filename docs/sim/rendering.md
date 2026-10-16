@@ -355,7 +355,7 @@ named in the handler's mapped comment. Slots +0x28, +0x2c, +0x34 and +0x38 point
 | +0x18, +0x1c | flag created / removed | map object `z_flag_00`, or `z_harbor_flag_00` when the flag has a harbor reference (the id of the reference object at flag +0x168, read at +0x17c, is valid), tinted with the owner's colour; register with the item manager (goods stacks at the flag) | S 00682ca0, S 00682de0 |
 | +0x20 | settler created | `CCharacterMgr::CreateCharacter` | S 0067f0f0 |
 | +0x24 | settler removed | destroy the character, if one exists | S 0067f120 |
-| +0x30 | fight strike | one-shot particle effect `HitDamage` at the attacker, facing the target | S 00683530 |
+| +0x30 | fight strike | one-shot particle effect `HitDamage` at the attacker's position, turned toward the target vertex | S 00683530 |
 | +0x3c, +0x40 | street added / removed | `StreetSet::AddStreetFromRoute` / remove and detach characters | S 0067f150, S 0067f160 |
 | +0x44 | street upgraded | `StreetSet::PromoteStreetToKind1` (texture set 1, §3.12) | S 0067f1a0 |
 | +0x48, +0x4c | deposit added / removed | map object of the deposit's gfx name; occupancy bit | S 006815e0, S 00681650 |
@@ -372,13 +372,13 @@ named in the handler's mapped comment. Slots +0x28, +0x2c, +0x34 and +0x38 point
 | +0x90, +0x94 | sea route created / removed | map object `RouteBuoy` at the first (and, with both end references valid, last) path cell; route decal when the path has more than one cell | S 00683040, S 00683260 |
 | +0x98 | projectile source set | kinds 0, 2, 3: a render projectile from the source settler's template, launched at `gameTime`; kind 1 (catapult [inferred]): the logic projectile is bound to the render projectile the source building already owns | S 00681780 |
 | +0x9c | projectile removed | remove the render projectile (kind 1: play its impact at `gameTime` first) | S 0067f340 |
-| +0xa0, +0xa4 | sacrifice started / removed | start / stop the effect on the sacrifice building | S 00681850, S 00681890 |
-| +0xa8, +0xb0 | sacrifice research / wait for goods | effect movies `sacrificeResearchGfx` / `sacrificeWaitForGoodsGfx` | S 006818d0, S 00681900 |
-| +0xac, +0xb4 | building effect stopped | stop the building's active effect | S 00681930 |
-| +0xb8 | ship effect instance | attach an effect to the ship graphic | S 0067f3b0 |
-| +0xbc | sacrifice applied to settler | attach the sacrifice's buff effect (`SacrificeProperty` `buffGfxName`) to the character | S 006819a0 |
-| +0xc0 | sacrifice applied to cell | one-shot particle effect of that name at the cell, only if the cell is explored by the local player | S 00681fd0 |
-| +0xc4 | building revealed by sacrifice | attach the buff effect to the building | S 00681960 |
+| +0xa0, +0xa4 | sacrifice started / removed | `SacrificeBuilding::StartEffect` S 006ace00 (the definition's movie, back-dated by the ticks already run, `particles.md` §3.13) / stop the building's movie | S 00681850, S 00681890 |
+| +0xa8, +0xb0 | sacrifice research / wait for goods | effect movies `sacrificeResearchGfx` (back-dated by the research's absolute start tick, S 006acf70) / `sacrificeWaitForGoodsGfx` (S 006ad050) | S 006818d0, S 00681900 |
+| +0xac, +0xb4 | research ended / order ended | stop the sacrifice building's movie (one shared handler) | S 00681930 |
+| +0xb8 | sacrifice applied to ship | `Ship::AddEffectInstance` with the definition's `buffGfxName` (`SacrificeProperty +0x3c`) | S 0067f3b0 |
+| +0xbc | sacrifice applied to settler | `CCharacter::AddEffect` with the `buffGfxName` | S 006819a0 |
+| +0xc0 | sacrifice applied to cell | one-shot particle effect `buffGfxName` at the cell, only if the cell is explored by the viewing player | S 00681fd0 |
+| +0xc4 | building revealed by sacrifice | `Building::AddAttachment` with the `buffGfxName` | S 00681960 |
 | +0xc8, +0xcc | chest created / removed | map object of the doodad property whose id is game config +0x44 (`chestDoodadId`), or +0x48 (`openChestDoodadId`) when the chest predicate `ai::logic::LogicChest::IsOpenable` S 00539210 holds; occupancy bit | S 006819e0, S 00681aa0 |
 | +0xd0 | chest opened | swap the closed model for the opened one | S 00680c80 |
 | +0xd4, +0xd8 | spawn point added / removed | marker map object; occupancy bit | S 00681b30, S 00681bb0 |
@@ -1451,9 +1451,12 @@ sinks at `0.4 * dt`; standing animals play one of two idles chosen with a privat
 `mesh`, `scale`, `<Animation
 name filename>`).
 
-**Projectiles** [inferred] S 006a3a40, S 006a3400: launched at `timeInfo[1]` from the
-current world position to the logic target, flight time from the logic event's tick span, ballistic arc; model,
-tumble `rotation`, `flightPFX`, `impactPFX`, `impactSound` from `projectiles.xml`.
+**Projectiles** [known] S 006a3d90, S 006a3a40, S 006a32b0, S 006a3400, S 006a3610, S 006a3af0: launched at
+`timeInfo[1]` from the current world position toward the target box; the `projectiles.xml` record is chosen by the
+logic type (0 → record 1, 1 → 0, 2 → 3, 3 → 2); flight time = flight ticks × 0.1 s; ballistic arc with gravity
+2.44269 for the catapult stone (type 1, S 00881a10) and 1.4715 otherwise, horizontal speed `distance / T`,
+vertical `g/2 · T + dy/T`; the flight emitter follows the arc, the impact plays `impactPFX` once and releases
+the flight emitter; model and tumble `rotation` from the same record. Details: `particles.md` §3.13.
 
 **Particles** [known] S 00685bb0, S 004dfdc0: an effect name
 maps to `[data]\scripts\effects\<name>.pfx`; emitters are culled, sorted back to front in depth buckets and drawn
@@ -1948,8 +1951,10 @@ path (`docs/sim/save-format.md` §7 lists camera, selection and windows as not s
   copies the loaded `nextTickTime` into `gameTime` S 0067eb10 (skipped while the menu system suppresses the
   UI); the logic's `PostLoad`; the environment manager's load of the map's environment data (§3.13); and, when
   its argument asks to resume, `OnWorldLoadStateChanged(true)`, which runs the map initialisation of §4.1;
-- handlers such as `OnSacrificeStarted` are also fired for objects that already exist ("re-attached after load")
-  [inferred] S 00681850.
+- the sacrifice post-load (`NSacrifice::System::PostLoad` S 0065f540) raises "sacrifice started" (+0xa0) for every
+  running sacrifice and "research started" (+0xa8) for every running research [known]; `StartEffect` S 006ace00
+  back-dates the movie by the ticks already run, so it resumes at the point it had reached (the research movie by
+  its absolute start tick, §3.2) [known].
 
 Rebuilt and therefore not reproduced exactly after a load [inferred]: random yaw and scale of map objects,
 palette choice of settlers created without a palette, idle variations, swarm state, particle state,
@@ -2090,6 +2095,10 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006890f0, 006883e0 | `CMapRenderer::ctor` / `InitForMap` | sub-renderer creation order; per-map initialisation |
 | 00688cd0, 00688d20 | `CMapRenderer::SetActive` / `ReinitForMap` | the two entries of the per-map initialisation |
 | 0067eed0, 0067ef30 | `Scene::OnWorldLoadStateChanged` / `OnLogicInitStateChanged` | renderers off and on around a load |
+| 00681850, 00681890, 006818d0, 00681930, 00681900 | `Scene` callback slots +0xa0, +0xa4, +0xa8, +0xac/+0xb4, +0xb0 | sacrifice building movies |
+| 0067f3b0, 006819a0, 00681fd0, 00681960 | `Scene` callback slots +0xb8, +0xbc, +0xc0, +0xc4 | `buffGfxName` on ship, character, explored cell, building |
+| 006ace00 / 006acf70 / 006ad050 | `S2CG::SacrificeBuilding::StartEffect` / `StartResearchEffect` / `StartWaitForGoodsEffect` | back-dated movies |
+| 006a3d90 / 006a32b0 / 006a3400 / 006a3610 / 006a3af0 | `ProjectileTable::AddProjectile` / `Projectile::ComputeLaunchVelocity` / `Update` / `ComputeImpactPoint` / `OnImpact` | projectile record, arc, target point, impact |
 | 00783790 | `Scene_LoadTerrainStaticDataAndMapObjects` | `terrain_static_data.xml`, `map_objects.xml` |
 | 006905e0 | `S2CG::CCharacter::SetPath` | path change; writes only scene objects |
 | 0069a9c0, 0069ab00 | `SwarmMgr::LoadSettings` / `ctor` | `flocks.xml` root keys, defaults, generator seed |

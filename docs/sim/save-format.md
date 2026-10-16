@@ -290,7 +290,12 @@ running match) [known] S 005aa260: the same `GameFile_SaveMap` writes both.
   map part + logic part written by an older build without the encryption wrapper; `FileStreamCrypt` cannot open
   it, a plain `FileStream` could. No code names it: the image holds the bytes `.sav` once (S 007e7a4c), referenced
   only by `MapPath_GetFileExtension` for type 10, whose folder is the save folder, and holds no `C02` literal
-  [known] (byte search, xrefs); so the file is unused by this build [inferred].
+  [known] (byte search, xrefs); so the file is unused by this build [inferred]. Its section versions are older
+  than this build's (Appendix A) almost throughout [known] (the file's tags): `MapInfo` v9 (15), `LogicSystem` v7
+  (8) followed by the obsolete `TriggerSystem` section that the v < 8 gate of §3.5 skips, `resources` v5 (6),
+  `PlayerObject` v0 (1), `SettlersSystem` v0 (1), `VillageBuilding` v1 (2), `AI Player` v2 (7), `Sacrifice System`
+  v3 (4), among others; `Game File Logic` v6 is already current. So the build that wrote it is older than the
+  current one in nearly every subsystem.
 - The save folder is created on demand by `Fs_CreateUserDataDirectories` S 0057bfb0 before every save [known].
 - File name: the name given, with each of `* / : < > ? \` replaced by `_` [known] S 005aa260. `"` and `|` are not
   replaced.
@@ -400,7 +405,10 @@ phase; `Player ShipNames`; i32 team;
 8 × { bool spotted, bool reached, cell reachedPos }; mobile `Stock` (always written); i32 state.
 The loader reads both stocks only if the active bool is set (S 005be500); the writer's unconditional mobile stock
 never disagrees with that because `PlayerTable::Store` writes a `PlayerObject` only for active players
-(S 005bde00) [known].
+(S 005bde00) [known]. Before reading a stock the loader empties it if its initialised byte (`Stock +0x04`) is set,
+and for an active player sets that byte to 1 before the stock's own `Load` [known] S 005be500. In `Player Military`
+the eight ignore-distance flags are bools, so 4 bytes each in the file (32 bytes), although the object holds them
+as one byte each [known] S 005c09d0.
 Field lists of the sub-records: `docs/sim/players-victory.md` §7.
 
 **3. Village** [known] S 00557a20, S 00557b60, S 00561f90. Buildings: i32 count; per building in vector order
@@ -411,13 +419,15 @@ constructor, S 00559b90) and a `VillageRemains` record. The first id is a **rema
 **building property id**: the constructor resolves them with `PropertiesDb::GetRemainsProperty` and
 `GetBuildingProperty` into `+4` and `+8` [known] S 00563fc0. A remains entry carries no owner player.
 Orders: `Order System`.
-Building record: `docs/sim/village-buildings.md` §7.
+Building record (`VillageBuilding` v2, components in the order of `StoreSavegame` S 0055c470; the hit points under
+the tag `Village Hitpoints`): `docs/sim/village-buildings.md` §7.
 
 **4. Settlers** [known] S 00654270. Six lists in kind order 0..5 (worker, constructor, carrier, soldier,
 specialist, NPC); each: u32 count; per settler { i32 owner player index, i32 settler property id, the settler's
 record through vtable slot +0x0c }. Records: `docs/sim/settlers-jobs.md` §7.
 
-**5. Transport** [known]. `Package System` (S 0064f640): bool initialised; u32 count; per package { i32 owner
+**5. Transport** [known]. A package container (`NTransport::PackageContainer`, e.g. inside the flag package stacks of
+`docs/sim/streets-transport.md` §7) stores its count as an **i32**, not as the stream's u32 count (`PackageContainer::Store` S 0064dd40). `Package System` (S 0064f640): bool initialised; u32 count; per package { i32 owner
 player index, `Transport Package` (unique, good id, location, target, two ints; S 00651530) }.
 `Transport PackageNeedSystem` (S 00650080): bool; u32 count; targets. `Transport BuildingNeedSystem` (S 00651840):
 bool; u32 count; `Transport NeedGood` records.
@@ -426,7 +436,9 @@ bool; u32 count; `Transport NeedGood` records.
 (S 00574920): i32 update countdown. `Military Attack` v1 (S 00575740): u32 tick stamp; u32 count; count ×
 { u32 packed cell-pair key, i32 path length }, in ascending key order. `Military Projectiles` (S 00573e50): bool;
 u32 count; projectiles. `Military Fights` (S 00573790): bool; u32 count; fights. `Military FightGroups`
-(S 00574360): bool; u32 count; groups. Records: `docs/sim/military.md` §7.
+(S 00574360): bool; u32 count; groups. Records: `docs/sim/military.md` §7 (the soldier record in the member
+order of `Soldier::Store` S 00658960). After the load, `NMilitary::Attack::PostLoad` S 00575800 empties the
+transient path-length cache and stamps it with the tick counter of the loaded game [known].
 
 **7. Street net** [known] S 006640d0. bool initialised; u32 total flag count; for player 0..7, each flag in vector
 order { i32 owner player index, `Flag` record }; u32 total street count; for player 0..7, each street { i32 owner
@@ -467,7 +479,12 @@ text; bool changed; u32 `field54`; u32 text-changed tick.
 
 **12. Sacrifices** [known] S 00662b40, S 00661dd0. `Sacrifices Player Data` v4, per player: u32 count and per
 running sacrifice { i32 owner player index, i32 sacrifice definition id, `Sacrifice Sacrifice` record };
-regenerations; research; dependencies; free tickets.
+regenerations; research; dependencies; free tickets. `Sacrifice DataDependencies` v2: bool; **i32** count (not the
+stream's u32 count); count × { i32 definition id, bool } (`docs/sim/quests-sacrifices-stats.md` §7). The running
+sacrifices are read by `SacrificePlayerData::LoadSacrifices` S 00662390 (called from `Load` S 00662ba0): per entry
+the owner index and definition id, a sacrifice constructed with its "loaded" flag, its `Load`, `push_back`; after
+the list it recomputes the modifier table of all players (`SacrificePlayerTable::RecomputeModifiers` S 00662fb0),
+so the modifiers are not stored but derived [known].
 
 **13. Chests** [known] S 00539360. `Logic Chest` v0: unique; cell; i32 owner player; i32 content kind; if kind is
 1: i32 good id, i32 good count; otherwise one u32 value; i32 open progress in ticks.
@@ -876,7 +893,8 @@ reimplementation must rebuild or accept as lost:
 | Pointers of any kind | resolved from unique ids in `PostLoad` | [known] |
 | Victory-condition state (who was eliminated, who won) | re-derived by the next ticks; a match that was already decided declares its winner again after a load (with the referee message of a lobby match, `docs/sim/players-victory.md` §3.7) | [inferred], `docs/sim/players-victory.md` §7 |
 | A ship's phase timer (`NNavy::Ship +0x44..+0x4c`: timer id, total, left; the sinking timer of `docs/sim/navy.md`) | not among the fields `Ship::Store` writes (unique, construction, movement, state, state countdown, expedition, ship number, cargo, condition, military); what a ship saved while sinking does after a load: `docs/sim/navy.md` | [known] S 005bb060 for the field list and the mapped `Ship` struct for the offsets; that the three fields are the sinking timer is taken from `docs/sim/navy.md`, not re-derived |
-| The transient half of the attack path-length cache | only the stamp `DAT_0088a4d0` and the map at `DAT_0088a4e0` are written | [known] S 00575740; `docs/sim/military.md` |
+| The transient half of the attack path-length cache | only the stamp `DAT_0088a4d0` and the map at `DAT_0088a4e0` are written; `NMilitary::Attack::PostLoad` empties the transient map and stamps it with the tick counter of the loaded game | [known] S 00575740, S 00575800; `docs/sim/military.md` |
+| Sacrifice modifiers | recomputed from the loaded running sacrifices at the end of `LoadSacrifices` | [known] S 00662390 |
 | The neutral player | rebuilt by `PlayerTable::Load` | [known] S 005be1b0 |
 | Per-player building counts, lock maps | refilled later / by the script | `docs/sim/players-victory.md` §7 |
 | Construction maps, object layers, A* grids, AI low-resolution cell grid | rebuilt: `MapModifier_InitAfterMapLoad`, `NAI::System::Load` resizes its grid from the map size | [known] S 005ac770, S 005821f0; `docs/map-format.md` §5.5 |
@@ -987,7 +1005,7 @@ S 00668050 reads them verbatim in current versions).
 | 2 | Answered (§8): a save/load cycle is checksum-neutral; a developed six-player game and the same game loaded from its save at tick 54,004 gave equal checksums on all 45 compared ticks [live, 2026-10-14] | — |
 | 3 | Pause and sacrifices: nothing of the pause is saved (it is game speed 0, §7) and running sacrifices are stored with their start ticks, so both saves are ordinary ones. Answered for the pause (§7): a save made during a pause loads unpaused at speed 1.0 and runs on from the saved tick [live, 2026-10-14]; the sacrifice save was not tried. Cinematic: a save can be written by `EmergencySave` S 005da7d0 (battery low) and, if a click gets through during the 1.0 s HUD fade, by an open save panel; it loads with the computer players and the chests switched off (`camera-input-cutscenes.md` §7) | open: the click during the fade (running game) |
 | 4 | Answered (autosave rows of the "when a save is written" table): the autosave fires while the game is paused and not during a cinematic. `Autosave::Update` S 0078b040 compares wall-clock seconds and has no pause test; `nGame::System::Update` S 00780d20 calls it every frame unless the UI is suppressed or `nGame::System +0x635` is set, and that byte is set by `BeginCinematic` S 00782b60 (called from `nMenu::Cinematic::OnShow`) and cleared by `EndCinematic` S 00782bb0. The interval keeps running during the cinematic, so an overdue autosave fires in the first frame after it | static: S 0078b040, S 00780d20, S 00782b60; live 2026-10-12 (`Update` runs once per frame) |
-| 5 | [TODO] Which build wrote `.sav` (type 10) files into the save folder, and whether those were containers. This build cannot answer it: no caller of `GameFile_Save` passes type 10 (§2.6), it only reads `.sav` as a fallback (S 005aaed0, S 005dfef0, S 005aaa30) | a `.sav` written by an old installation (or that installation's executable); the code of this build holds no writer to read |
+| 5 | [TODO] Which build wrote `.sav` (type 10) files into the save folder, and whether those were containers. This build cannot answer it: no caller of `GameFile_Save` passes type 10 (§2.6), it only reads `.sav` as a fallback (S 005aaed0, S 005dfef0, S 005aaa30). Partial evidence: the one `.sav` the install carries, `campaignMaps\C02.sav`, is plaintext (no container) written by an older build whose section versions are listed in §2.6 [known: the file's bytes]; whether the save-folder `.sav` files of that build had the same form stays open | a `.sav` written by an old installation (or that installation's executable); the code of this build holds no writer to read |
 | 6 | Answered (§2.1): each `Relink` looks the stored `Unique` up in its owner's container (table in §2.1) when the id's high dword is 0..0x7fffffff; the shared `Load` S 0059d3c0 has set the pointer to 0 and every lookup returns 0 on a miss, so a failed lookup leaves a null pointer | — |
 | 7 | `MapInfo` field meanings are in `docs/map-format.md` §4.2: `+0x48` who controls the slot (0 none, 1 computer, 2 local human, 3 remote human), `+0x68` tribe, `+0xc8` AI level and `+0x1c8` win condition are [known] from their setters and readers (S 004562d0, S 005abb60, S 005293e0, S 00529470, S 00535870); `+0x88` colour and `+0xa8` team are [inferred] from one reader each; `+0x1ec` is a network-game flag that no function tests. Answered: `+0x1cc` is the water preset index; its only reader is `S2CG::CMapRenderer::InitForMap` S 006883e0 (`WorldRenderer::SetWaterPreset`), and it is otherwise only cleared (constructor, `Reset`, `Load` below v4), loaded, stored and copied (S 00529a00, S 007849f0). `+0x1f0` is read only by "Continue" (`ContinueLastSavegame` S 005dfef0, refuses values ≥ 2, §3.5) and set to 1 by `MapInfo::Reset` S 0052b8d0 and `GameFile_Save` S 005aa260. Neither field reaches the simulation [known: decompile of every function] | — |
 | 8 | Answered (§3.3, `Net System`): map `player × 2 + k` holds the costs of net kind k (0 goods streets, 1 all streets); both readers index `flagNetworks + netKind + owner × 2` (S 00667f30, S 00664e70) | — |
@@ -1029,7 +1047,7 @@ S 00668050 reads them verbatim in current versions).
 | 005386e0 / 00538710 | `NLogic::Unique::Store` / `Load` | 64-bit id record |
 | 005389c0 / 00538a20 | `LogicRandom_Save` / `LogicRandom_Load` | random generator |
 | 005bde00 / 005be1b0 | `PlayerTable::Store` / `Load` | players |
-| 005be3c0 / 005be500 | `Player::Store` / `Load` | one player |
+| 005be3c0 / 005be500 | `Player::Store` / `Load` | one player; `Load` empties an initialised stock and marks an active player's stocks initialised |
 | 00557cc0 / 00559c80 / 00559cd0 | `NVillage::System::Store` / `Load` / `PostLoad` | village |
 | 00557a20 / 00559a10 | `StoreBuildings` / `LoadBuildings` | building list |
 | 0055c470 / 0055d290 | `NVillage::Building::StoreSavegame` / `Load` | one building |
@@ -1038,6 +1056,11 @@ S 00668050 reads them verbatim in current versions).
 | 0064f640, 00650080, 00651840 | `PackageSystem::Store`, `PackageNeedSystem::Store`, `NeedSystem::Store` | transport parts |
 | 0056ffe0 / 00570050 | `NMilitary::System::Store` / `Load` | military |
 | 00575740 | `NMilitary::Attack::Store` | path-length cache |
+| 00575800 | `NMilitary::Attack::PostLoad` | transient path-length cache emptied, stamped with the load tick |
+| 00658960 | `NSettlers::Soldier::Store` | soldier record (member order) |
+| 0064dd40 | `NTransport::PackageContainer::Store` | package container: tag, byte, i32 count, references |
+| 00662390 / 00662fb0 | `SacrificePlayerData::LoadSacrifices` / `SacrificePlayerTable::RecomputeModifiers` | running sacrifices read; modifiers recomputed |
+| 00773f80 | `NMovement::Fine::Store` | fine mover record, written without a section tag |
 | 006640d0 / 00668050 / 006654f0 | `NNet::System::Store` / `Load` / `PostLoad` | street net |
 | 0066d8e0 / 006707f0 | `NetContinentIds::Store` / `Load` | street-net continent ids |
 | 00581ad0 / 005821f0 / 005819a0 | `NAI::System::Store` / `Load` / `PostLoad` | AI |
@@ -1200,3 +1223,7 @@ Two names are used by two different tag objects: `Ai Cell` (versions 2 and 1) an
 S 00596130); `Ai Cell` v1 (S 0088b198, initialiser S 007c5d50) belongs to `NAI::Trigger` (`Store` S 005a7890,
 `Load` S 005a78e0) [known: the only references to each tag object]. A reader tells them apart by position and by
 the version, not by the name. The two `Movie Construct` objects are in the settler code.
+
+A tag object does not mean the record writes it: `Movement Fine` has a tag object, but `NMovement::Fine::Store`
+S 00773f80 writes its fields with no section tag (`docs/sim/settlers-jobs.md` §7) [known]; the nested `Movement Fine
+Path` record inside it does carry its tag.

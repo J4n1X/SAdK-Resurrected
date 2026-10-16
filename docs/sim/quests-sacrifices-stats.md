@@ -299,6 +299,15 @@ S 0053a9d0:
 The activation at tick 0 runs before the elimination and progress checks of that tick, the three slot updates
 after them. Slot 0 is written without a test of its `kind`.
 
+`VictoryCond_Update` S 00535d70, in this order `[known]`: the slot 0 activation (modes other than 5, tick 0 only);
+the elimination check of every player whose victory state is 0; the progress update of every such player; the
+declaration of the first player (index order) who is neither eliminated nor already a winner and has reached the
+condition (`DeclareWinner`, at most one per tick); then the local part. In mode 5 the local part is the scenario
+test, run only while the local player is not a winner and its state is 0: all main quests finished
+(`AreAllMainQuestsFinished` S 0052da20) → `DeclareWinner(local)` and every quest slot is hidden; else any main
+quest failed (`IsAnyMainQuestFailed` S 0052da60) → the local player's victory state becomes 3. In the other modes
+the local part is the slot 0 text and the finished / failed flags above.
+
 A map script that uses quests calls `logic.victory_setupQuests()` first, which selects mode 5 and thereby keeps
 the engine away from slot 0.
 
@@ -699,6 +708,13 @@ cool-down entry is erased, no research completes. Only the running sacrifices ar
 ticks through a cinematic and are settled in the first update after it `[known]` S 00661ff0 (the shift walks
 `sacrifices` only). The modifier tables stay in force during the pause, because they are not recomputed.
 
+The end of a cinematic `[known]` S 005fb3e0, S 005faee0: `nMenu::Cinematic::Update` runs the phases FadeIn →
+Playing → Ending → RestoreHud → RestoreTimeScale. A page lasts its text length × 0.1 s (at least 0.5 s) and waits
+for its voice-over. Ending calls `nGame::System::EndCinematic` (its sole caller), so the sacrifice pause ends there;
+0.5 s later the HUD is restored, 1.0 s after that all dialogs are closed, and `Cinematic::OnHide` S 005faee0 calls
+the script's `quest_cinematicDone` and then restores the time scale. The game ticks at speed 1 throughout, so the
+pause covers the playing time and `quest_cinematicDone` runs at least 1.5 s of game time after `EndCinematic`.
+
 #### 3.2.12 Lua interface
 
 `[known]` at the addresses given; arguments in Lua order:
@@ -717,6 +733,17 @@ ticks through a cinematic and are settled in the first update after it `[known]`
 | `menu.lockSacrifice` / `menu.unlockSacrifice(player, defId)` | S 005dab40 / S 005dabd0 | lock map 1 entry set / erased (codes 6 and 8) |
 | `menu.showSacrificeEffect()` | S 005d9550 | plays the HUD "sacrifice started" picture; presentation only |
 | script global `sacrifice_execute(defId)` | S 005b2410 | called by effect 1006 |
+
+#### 3.2.13 Presentation: the sacrifice building's movie
+
+Presentation only; no simulation state `[known]` S 006ace00, S 006acf70, S 006ad050 (particles.md §3.13). The scene's
+sacrifice building plays one effect movie at a time (callback slots +0xa0 started, +0xa8 research, +0xb0 waiting
+for goods; +0xa4, +0xac, +0xb4 stop it). `StartEffect` back-dates the running sacrifice's movie to
+`now − (end − start) · timeInfo[2]`, the ticks already run, so a sacrifice re-announced after a load resumes at
+the point it had reached. The research movie is back-dated by the research's **absolute** start tick
+(`startTick` of §3.2.10, not the ticks run), so its early keyframes are always past when it starts: the ignite
+sound keyframe never plays and the fire burns at once. A remake in compatibility mode need not reproduce it; it is
+a look, not a state.
 
 ### 3.3 Statistics
 
@@ -749,7 +776,9 @@ series 7 is the cumulative kill count; series 5 is the cumulative coin event cou
 **Lua readers** `[known]`: `logic.pl_getProducedGoodCount(player, good)` S 005b0e80 = last element of the good's
 history (the cumulative total; the good must be one of the tribe's goods or jobs); `logic.pl_getMilitaryStrength`
 = latest sample of series 4, 0 while the series is empty (S 0053ad50); `logic.pl_getRegionSize`,
-`logic.pl_getBuildingProductivity` (players-victory.md §3.11).
+`logic.pl_getBuildingProductivity` (players-victory.md §3.11). The average productivity
+(`GetAverageBuildingProductivity` S 00533160) is `(sum / count) × 100` over the productivity map, summed in
+ascending unique-id order (the float sum depends on that order).
 
 **The statistics screen and the end of a match.** There is no separate end-of-game data set: the end dialogs
 (`Victory`, `Report`, `Defeat`) open the same statistics panel that the HUD button opens during the match, on the
@@ -1312,6 +1341,7 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00536310 / 00536390 | `Quests::ClearQuestSlot` / `Quest::SetText` | free a slot; progress text |
 | 0052da20 / 0052da60 | `ai::game::GameQuery::AreAllMainQuestsFinished` / `IsAnyMainQuestFailed` | scenario predicates |
 | 0053a8b0 / 0053a730 / 0053a750 | `VictoryCond_ActivateQuest` / `SetQuestFinished` / `SetQuestFailed` | victory quest in slot 0 |
+| 00535d70 | `VictoryCond_Update` | slot 0 activation, eliminations, progress, declaration, mode 5 scenario test |
 | 005b1670, 005b1850, 005b1980, 005b1ab0, 005b1be0 | Lua `q_add`, `q_finish`, `q_reset`, `q_failed`, `q_updateInfo` | bindings with messages |
 | 005af580..005af790 | Lua `q_remove`, `q_hide`, `q_isVisible`, `q_isFailed`, `q_isFinished`, `q_isValid` | bindings |
 | 00535ef0 / 00535f40, 00536000 / 00536090 | `Quests::Store` / `Load`, `Quest::Store` / `Load` | save |
@@ -1330,6 +1360,8 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00662860 / 00662660 / 00662720 / 006626a0 | regenerations add / contains / remove expired / progress | cool-down |
 | 0065fae0 / 0065ff00 / 0065fde0 / 0065fbd0 / 0065fb80 / 0065fb40 | `SacrificeResearch::Start` / `SacrificeResearch::Update` / `ai::logic::SacrificeResearch::Complete` / `ai::logic::SacrificeResearch::Cancel` / `SacrificeResearch::IsAtBuilding` / `ai::logic::SacrificeResearch::GetProgress` | research |
 | 0065f550 / 0065f610 / 00661ff0 | `PauseForCinematic` / `ResumeAfterCinematic` / `ShiftStartTicks` | cinematic pause |
+| 005fb3e0 / 005faee0 | `nMenu::Cinematic::Update` / `OnHide` | end phases; `quest_cinematicDone`, time scale |
+| 006ace00 / 006acf70 / 006ad050 | `S2CG::SacrificeBuilding::StartEffect` / `StartResearchEffect` / `StartWaitForGoodsEffect` | back-dated movies (presentation) |
 | 00662040 / 00661f50 / 00662c70 | `HasSacrificeOfDef` / `FindSacrificeById` / `CollectIncomingSacrifices` | queries; incoming = other records in index order, `targetPlayer` = the player |
 | 00625200 | `nMenu::SacrificePanel::AssignIncomingSacrifices` | the only caller of `CollectIncomingSacrifices` (antibuff row) |
 | 0065f500 / 0065f650 / 0065f540 | `System::Store` / `Load` / `NSacrifice::System::PostLoad` | save |
@@ -1361,6 +1393,7 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00538460 / 00538440 / 005373b0 | `RegisterProductionEvent` / `ResetBuildingProductivity` / `GetProductivity` | building productivity |
 | 0053b2c0 / 0053b420 / 0053b8f0 | `PlayerStatistics::AddSample` / `CommitSamplePeriod` / `InitGoodAndJobHistories` | series and histories |
 | 0053ad50 / 0053adc0 / 005b0e80 | `GetLatestValue` / `GetGoodHistory` / Lua `pl_getProducedGoodCount` | readers |
+| 00533160 | `GetAverageBuildingProductivity` | `(sum / count) × 100`, ascending unique-id order |
 | 00537280 / 005384f0, 0053ab60 / 0053bad0 | `Statistics::Store` / `Load`, `PlayerStatistics::Store` / `Load` | save |
 | 00537110 / 00537150 | `ProductivityItem::Store` / `Load` | save of one productivity map value |
 | **Chests** | | |

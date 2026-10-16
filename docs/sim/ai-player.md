@@ -170,7 +170,15 @@ a resource object standing on a cell (good id of its deposit property, amount = 
 | CellFull (+0xcc) | map goodId -> {trigger, expireCount}: "no room for this in the cell" | S 005a64e0, S 005a6430 |
 
 A building is filed into exactly one list, by priority: military, depot, casern, consumer, kind 7, kind 9,
-default [known] `NAI_AddBuildingToCell` S 005978a0.
+default [known] `NAI_AddBuildingToCell` S 005978a0. The castle (headquarters) type has no soldier limit, so it
+fails the military test and lands in the **depot** list, not in the military list [known] S 005958c0,
+S 005957a0.
+
+**Unique ids drawn for a new building** [known] `OnBuildingAdded` S 00584030, `Building::Init` S 00596ba0: the
+`NAI::Building` mirror takes the village building's own Unique (no draw); then, in this order, one Unique per new
+production (§2.4), one per new need (missing inputs, consumer need, §3.3), and one for the AI cell when the
+building founds a new one. At activation on a computer slot the ids therefore follow: the castle building
+(`n`), its AI cell (`n + 1`), its flag (`n + 2`) [known] S 00581c40, S 00584030.
 
 ### 2.4 Need, Production, Building
 
@@ -241,6 +249,7 @@ See §6.1 for all fields, offsets, defaults and the values of the shipped profil
   then `OnBuildingAdded` for every existing own village building (order of the village building list) and
   `AddHarbor` for every flag of the player's flag list; `Player::AddHarbor` S 00584100 keeps only a flag whose
   reference at +0x17c is set ([inferred] its navy object, as `NNet::Flag::LinkNavyObject` is the other caller).
+  On a computer slot the id order is castle building, AI cell (castle + 1), flag (castle + 2) (§2.3) [known].
 - `Player::Activate` S 00582870 [known]: stores the start position and its continent id, resolves the profile,
   activates every module, creates the two per-player resource annotation grids, sets all switches of §2.5 to 1
   and `waterStreets` to the profile value.
@@ -300,6 +309,13 @@ What the **difficulty** changes is exclusively the profile (§6.1). The code rea
 2. If a cell exists, holds no building and no harbour (`Cell::IsEmpty`) and the corner test of step 1 fails
    (the player owns none of the corners any more): remove the cell.
 
+Edge cases of the validator [known]:
+- The perimeter search clamps the block's end to `size - 1` of the map, so the map's **last row and last
+  column are never tested** S 0059d950.
+- `IsInterior` S 005a7dc0 excludes row 0 and column 0, so a neighbour position in the first AI-cell row or
+  column is never used as the continent reference of step 1.
+- The corner test S 00596000 reads the first corner without a check and only then tests the others.
+
 **CellFull expiry** (every 37 ticks, all cells): a "full for good G" mark is cleared once game time exceeds its
 start time + `expireCount * 600` s; `expireCount` is then incremented (linear back-off) [known] S 005a6430.
 `expireCount` starts at 0 (`CellFullElement::ctor` S 005a61c0) and is never reset, so the first mark of a good in a
@@ -324,11 +340,13 @@ an **expansion request of kind 2** at map position `(lowResX*16, lowResY*16)`.
 
 **CellDepotCreation** (every 1423 ticks) [known] S 0059e4c0: if no depot order is pending, among cells whose
 no-depot trigger is armed and whose demolish trigger is off, pick the one with the **earliest** trigger time
-(must be before now); request construction of the tribe's plain depot type (first tribe building with `depot`
+(the best time starts at "now", and only a strictly earlier one replaces it, so a trigger armed at the current
+game time is never picked); request construction of the tribe's plain depot type (first tribe building with `depot`
 and not (casern and territory building), S 0059f940) in that cell with priority 15; restart the trigger.
 
 **CellClearing** (every 53 ticks, one AI-cell position per call, the same row-major sweep over the whole map as
-the validator; a position without a cell does nothing) [known] S 0059d500, S 005a7d90: only if no order of its
+the validator; a position without a cell does nothing) [known] S 0059d500, S 005a7d90. The gates below are tested
+**before** the cursor advances, so while one fails the sweep stands still [known]. Only if no order of its
 own is pending, its own enabled byte (set by its `Activate` S 0059d490) is set, `expansionEnabled`, and the tool
 stock is at least 10 (`NAI_IsCountBelow10` S 00582f00 tests the tribe's `workerToolGoodId`). With `count` =
 `Cell::CountObjectsOfType(output good of the producer's slot 0)` and `A` = amount, on the cell's low-res resource
@@ -350,14 +368,15 @@ equal to the wanted resource [known] `AiTribe_FindMode1ProducerOfResource...` ca
 ### 3.3 Need creation (the build order)
 
 `NeedCreation::Update` S 0058d370 [known], every 47 ticks, only with `needsEnabled`. `depot` = first own
-building with the depot flag (normally the headquarters); every need created here is attached to it.
+building with the depot flag (normally the headquarters); every need created here is attached to it. The
+stage-1 needs for `C[0]` are linked to `depot` without a test that one exists [known].
 `C` = the input list of the tribe's `constructionGoodId` (a "WareGroup" good with two inputs, e.g.
 Bavarians: `plank`, `stoneBav`, `Goods.lua` `gp_addCost(constructionResourcesBav, ...)`).
 
 | Stage change | Condition | Needs created |
 |---|---|---|
 | 0 -> 1 | game time > 0 | `max(1, profile.startFrameProducerCount)` needs for `C[0]`, then 1 need for `C[1]` |
-| 1 -> 2 | game time > 300 s **and** every good of `C` has at least one object in some AI cell (`Cell::CountObjectsOfType > 0`) | if `profile.maximumSmithies != 0`: for soldier kind 0 and 1, one need per input good of the level-0 soldier good (`MilitaryConfig::GetSoldierId(tribe, kind, 0)`); then set `Casern.placementEnabled` (MilitarySystem+0x268) |
+| 1 -> 2 | game time > 300 s **and** for every good of `C` the number of productions of that good, summed over the AI cells, is above 0 | if `profile.maximumSmithies != 0`: for soldier kind 0 and 1, one need per input good of the level-0 soldier good (`MilitaryConfig::GetSoldierId(tribe, kind, 0)`); then set `Casern.placementEnabled` (MilitarySystem+0x268) |
 | 2 -> 3 | game time >= 800 s | if the tribe has a `secondCarrierId` (!= -1) with a non-empty input list: one need per input good |
 | 3 -> 4 | game time > 1200 s | if `coinProductionEnabled` and `profile.maximumMints != 0`: one need for `soldierUpgradeGoodId` |
 
@@ -404,10 +423,13 @@ instantiated, then walk the needs of `needsA` that have no cell until one `TryPl
 member good chosen by **weighted random**, weight = the member good's `gp_setAiRandomValue` (GoodProperty
 +0x8c; e.g. `bread` 6, `fishScots` 10, `sheepHam` 1, `fleshham` 5 in `Goods.lua`): the members of the group
 for the player's tribe are laid out as cumulative weights and `rand % totalWeight` picks the first member
-whose cumulative weight is above the roll. A group need that already has a child is left alone unless the
-child has no cell **and** is queued with the ResourceSystem (`placementPending`, step 3 below); then the
-child is removed and a new one is rolled among the members that have neither `enableDeposits` nor
-`enableFields`.
+whose cumulative weight is above the roll. The members are the tribe's goods list filtered by the group good's
+cost list, in tribe list order [known] `PropertyGroupIter` S 007767c0 / S 00776690. The cumulative weights are
+the keys of a map keyed by the running total, so a member with weight 0 has the same key as the member before
+it and **replaces** it: that earlier member can never be chosen [known] S 005943c0. A group need that already
+has a child is left alone unless the child has no cell **and** is queued with the ResourceSystem
+(`placementPending`, step 3 below); only then is the child removed and a new one rolled among the members that
+have neither `enableDeposits` nor `enableFields`.
 
 **Placement** `TryPlaceNeed` S 00593ea0 [known]:
 
@@ -472,6 +494,9 @@ score(G) = (planned - existing)
          * max(averageProductivity(G), 0.1)                   -- statistics, 1.0 when no producer exists
 ```
 
+`averageProductivity(G)` (`GetAverageProductivity`) is the mean over the player's production units of `G`
+(§2.4), i.e. a building with an amount of 2 counts twice [known] S 00593190.
+
 `stock` = the player's stock (gamePlayer+0x34, `pStock`: goods stored in the player's buildings), `stock2` =
 the second stock object at gamePlayer+0xa0 (`pMobileStock`: goods and units outside buildings). Both are caches
 that the player update refills once per 22-tick cycle (`players-victory.md` §3.9), so every stock test of
@@ -489,7 +514,9 @@ first tribe building that produces the good in slot 0 or 1): the normal map hold
 special map is used when the need has a resource cell in which the first entry of the wanted resource has
 `sourceKind` 1 and no entry of it has another kind. A need that is not special and has `enableFields`
 without `enableDeposits` gets **no request**: its resource claim is released and it is detached from its
-cell, so arrangement places it again.
+cell, so arrangement places it again. The request's target is set with `InitAtCell` S 005a17e0 (by cell) or
+`InitAtPos` S 005a1650 (by position and radius); each writes only its own fields and leaves the other target
+fields of the order as they were [known].
 
 **Arbitration** `ConstructionSystem::Tick` S 00592210 [known]. Order owners register with the construction
 system in this order [known] `ConstructionSystem::Activate` S 00592a20 (called first), then `Player::Activate`
@@ -497,6 +524,8 @@ S 00582870: ForesterConstruction, ShipConstruction, ConstructionHunter (§7; it 
 NeedsConstruction, CellDepotCreation, CellClearing, MilitaryBuildingCreation, CatapultConstruction, Casern.
 The sacrifice site planner is not an order owner: it only adds a need, which NeedsConstruction builds (§3.15).
 Each owner offers at most one request `{buildingType, position or cell, radius, priority, timestamp}`.
+The owner id stored with an order [known]: CellDepotCreation 1, NeedsConstruction 2, MilitaryBuildingCreation 3,
+ForesterConstruction 4, CellClearing 6, ShipConstruction 7, ConstructionHunter 8.
 
 - Every 600 ticks: `backoffCounter = backoffLimit = 0`.
 - **No active order**, every 50 ticks: if `backoffCounter < backoffLimit`, increment `backoffCounter` and do
@@ -508,7 +537,7 @@ Each owner offers at most one request `{buildingType, position or cell, radius, 
 
   | State | Action | Next |
   |---|---|---|
-  | 1 CheckCost | does the player's stock hold **twice** the building's two cost lists (`BuildingProperty` +0x58 and +0x68, each added twice to the tested set)? In cell mode with no AI cell at the request position: 5 | 2 (start the place search) / 4 |
+  | 1 CheckCost | does the player's stock hold **twice** the building's two cost lists (`BuildingProperty` +0x58 and +0x68, each added twice to the tested set: frame cost x 2 + cost x 2)? In cell mode with no AI cell at the request position: 5 | 2 (start the place search) / 4 |
   | 2 Searching | one `SearchConstructionPlace::Update` step: up to 10 candidate cells, ending early after the first cell that gets as far as `ScoreSite` (§3.6) | 3 found / 5 none |
   | 3 Place | still placeable: place the building through the village system | 6 / back to 1 |
   | 4 cannot afford, 5 no place | owner callback `OnOrderFinished(arg)` with `arg = (state != 5)`: 1 = could not afford, 0 = no place found; the owners penalise the place only for 0 | idle |
@@ -530,7 +559,8 @@ AI cell at the order position and the need still exist: if the need is still fil
 marked "full" for the need's good (`CellFull::MarkFull(cell, need.typeId)`); a resource-bound
 need releases its claim; and in every case the need is detached from its cell, so that arrangement places it
 again. When the order could not be afforded (argument 1) it only clears its order slot, and the need stays
-where it is [known] S 00592b30. Military owners: §3.8.
+where it is [known] S 00592b30. On success its `OnPlaced` S 00592b10 does nothing but reset the order
+slot [known]. Military owners: §3.8.
 
 ### 3.6 Site search inside a cell
 
@@ -546,6 +576,7 @@ where it is [known] S 00592b30. Military owners: §3.8.
   walking path from the search origin to the candidate is computed (map A*; with `waterStreets` the AI's
   construction path analyzer, where a cell with map state bit 2 costs 1 if it is shallow water and is blocked
   otherwise, and a cell with bit 7 is blocked, S 005893a0); no path counts as 1000000, the origin itself as 0.
+  The path length is the step count of the found path (`GetPathStepCount` S 00676a90) [known].
   With `D = maxDistance` (the radius): the candidate is kept only if `pathLength < 2 * D` and
   `s * (2D - pathLength) / (2D)` beats the best.
 - The best score starts at 0.0 in both modes and for every owner, so only a site with a positive weighted
@@ -570,27 +601,32 @@ multiplies:
      good: `score = supplier(that good)`.
    - Otherwise, with `G` = the slot-0 product: if `G.enableDeposits` and `bp.size != 8`:
      `score = ` number of deposits of `G.miningGood` in the flood-fill area of radius `R` around `pos`
-     (S 00540940); else if `G.enableFields`: `score = ` sum of the map resource amounts of `G.miningGood` in the
+     (S 00540940; the fill spreads over cells that hold a deposit or are walkable and counts the undepleted
+     deposits of the mining good [known] S 00542890 / S 00542900); else if `G.enableFields`: `score = ` sum of the map resource amounts of `G.miningGood` in the
      same kind of flood-fill area of radius `R` (amount 1000 counts as 7, S 005409f0); else if `G` has inputs:
      `score = ` sum over the inputs of
      `supplier(input)`; a product without inputs keeps 1.0.
    - `supplier(g)` S 00532640: the nearest own building of the type that produces `g`
      (`PropertiesDb::FindBuildingProducingGood`; search radius 1000): `max(1, 15 - hexDistance)`, or 0.1 when
-     there is none. When no building type produces `g`, the building is instead the nearest own finished
+     there is none. The type is the **first** producing type of the whole building property map (not
+     restricted to the player's tribe), and the nearest building of it counts in any construction state:
+     construction sites included (`completedOnly` 0) [known] S 00557830. When no building type produces `g`, the building is instead the nearest own finished
      building of the village's depot list (+0x20), without a distance limit, whose continent is reachable
      from the continent of `pos` (`BuildingList_FindNearestReachable` mode 1: connected for the player by
      sea, or listed in the building's network continent ids) [known] S 005586d0, S 00557fe0.
 3. Working mode 7: `score = ` hunting term S 00532540: `(R - distance)` to the nearest huntable animal within
-   `R`, plus `(R - distance)` to the nearest animal spawn point of the product within `R`; 0 when neither exists.
+   `R`, plus `(R - distance)` to the **first** animal spawn point within `R` that can give the product (spawn
+   point list order, not the nearest) [known] S 0052cae0 / S 00539060; 0 when neither exists.
 4. Working mode 2 (Farming): `score += ` number of the 12 cells of the hex ring at distance 2 where the planting
    deposit can be placed or that already hold a resource object of the same good (S 005326e0).
-5. `territoryBuilding`: `score = ` territory term S 005345d0: 0 when an own territory building is closer than
-   5 cells; else (number of cells in the hex rings 0..`bp.territoryRange` that lie on the continent of `pos` and
+5. `territoryBuilding`: `score = ` territory term S 005345d0 (it walks the village's territory building list,
+   +0x3c [known]): 0 when an own territory building is closer than 5 cells; else (number of cells in the hex rings 0..`bp.territoryRange` that lie on the continent of `pos` and
    are not owned by the player) + (distance to the nearest own territory building, 100 when there is none);
    0 when no cell is gained and that distance is below 6.
-6. `depot`: `score = ` 0 when an own depot-type building lies within 10 cells, else 1 (S 00533760).
-7. `casern`: `score = ` 0 when an own building of the village's casern list (+0x74) that is not a depot lies
-   within 10 cells, else the result of `MinDistanceToEnemyMilitaryBuilding(pos, player, 1, 1)` (S 00534230
+6. `depot`: `score = ` 0 when an own depot-type building is closer than 11 cells (hex distance <= 10), else 1
+   (S 00533760).
+7. `casern`: `score = ` 0 when an own building of the village's casern list (+0x74) that is not a depot is
+   closer than 11 cells (hex distance <= 10), else the result of `MinDistanceToEnemyMilitaryBuilding(pos, player, 1, 1)` (S 00534230
    calling S 005337e0; 1000 when the player has no such enemy building or harbour): farther from the enemy
    scores higher.
 8. Spacing from farms, only if `bp.size != 8`: `d = 4`, or 3 when the type itself has working mode 2; `F` = the
@@ -638,13 +674,16 @@ S 005894a0, S 005896d0:
 - Search (S 005a3d00): a flag with neither a building (+0x1c) nor a navy object (+0x17c) advances the cursor.
   Otherwise a breadth-first flood fill from the flag's cell (S 005a2db0) over cells that are walkable or
   shallow water (always allowed here), have map state bit 7 (0x80 deposit) clear and lie within hex distance
-  10 of the source (S 005a94e0), stopping at the first cell with a flag of the player that is neither the
-  source flag nor on the tried list (S 005a9580). Nothing found: cursor + 1 and reset.
+  10 of the source (S 005a94e0), stopping at the first cell with a flag of the player whose walking-net
+  continent differs from the source flag's, i.e. a flag **not yet connected** to the source (S 005a9580
+  [known]). Nothing found: cursor + 1 and reset.
 - A source flag that already has a street does not connect to a found flag without one: that flag joins the
-  tried list and a retry is counted. A found flag is first only remembered (`lastTarget`); while the same
-  flag is found again, each update runs the next strategy step 1..7 of `EvaluateStrategy`. When step 7 built
-  something the cursor moves on and the search is reset; otherwise the next update puts the target on the
-  tried list and counts a retry.
+  tried list and a retry is counted. A found flag is first only remembered (`lastTarget`: the latch is on
+  the found flag, not on the source); while the same flag is found again, each update runs the next strategy
+  step 1..7 of `EvaluateStrategy`. When step 7 built something the cursor moves on and the search is reset;
+  otherwise the next update puts the target on the tried list and counts a retry. The constructor
+  S 005a33e4 starts the strategy step at 7, so the first target found after activation is skipped once
+  [known].
   A retry (S 005a2950) clears the strategy state (costs 1000 / 1000, step 0); the 6th retry moves the cursor on
   and resets the search (S 005a2400).
 - Strategy steps (S 005a34a0; costs are path lengths, `best` and `best2` start at 1000):
@@ -658,7 +697,8 @@ S 005894a0, S 005896d0:
   remembered cell; 3 / 4 remove the street found by `PlanBetweenFlags`, build source -> target, then a street
   from the target (3) or the source (4) to the plan's end cell; 5 remove that street, build source -> target,
   then from the removed street's end flag that is not the target to the remembered cell; 6 plan again with
-  water and build in segments.
+  water and build in segments. Every street is built through the AI's own street planner
+  (`BuildStreetTo` S 005a3050), and each built street draws **2 Uniques** (§8) [known].
 - A planned path is accepted only if its number of steps (cells minus one) is at most **twice the hex
   distance** of its two ends [known] S 005a96b0, S 005a97d0, S 005a3050. Both planners walk the search result
   back with the randomised path walk, so among equally cheap routes the choice is random and consumes logic
@@ -677,6 +717,7 @@ S 005a52c0, S 005a4f30, S 005a47e0: walks the AI building map (key = Unique, asc
 a building with the consumer flag (§2.4) is skipped; a key above the current one is adopted and processed on
 the next update; past the end the key restarts at -1. For the current building, `stage` selects one partner
 per pass (S 005a52c0):
+(Every "connected by road" depot search here runs on the goods net, kind 0 [known].)
 - construction site (a remaining construction float > 0), stage 0 only: the nearest depot connected by road
   to the site's flag that holds one of the goods of the input list of the tribe's good +0xb4 (the first good
   of that list for which one is found);
@@ -689,10 +730,10 @@ per pass (S 005a52c0):
 No partner left: the building is done and the key advances. With a partner, `OptimizeRouteBetween`
 S 005a4f30 compares the two buildings' flags; flags not in the same road network: done, nothing built.
 Otherwise with `oldCost` = road path cost between them:
-- `oldCost > 4 x hex distance`: plan along the direct map path and build a street towards flags found near it
-  (`OptimizeViaMapPath`, not re-read here [inferred]);
-- otherwise walk the cells of the road path; at path index `i` take an own flag near the cell (`FindFlagNear`,
-  the street flood fill of above); if it is in the same road network, plan a street from it to the cell and
+- `oldCost > 4 x hex distance`: plan along the direct map path (no random draws, §8) and build a street
+  towards flags found near it (`OptimizeViaMapPath` S 005a4cc0 [known]);
+- otherwise walk the cells of the road path; at path index `i` take an own flag near the cell (`FindFlagNear`
+  S 005a4b60, the street flood fill of above; its continent test can never match [known]); if it is in the same road network, plan a street from it to the cell and
   build it if `cost(flag -> partner flag) + len(new) + cost(cell flag -> building flag) < oldCost - 2`.
   More than 2 failures at one index move to the next index; no flag near the cell moves on at once.
 A finished pair raises `stage` and clears the path state.
@@ -719,7 +760,8 @@ Three request producers post an **ExpansionTarget** `{kind, x, y, time}` each; `
 **ResourceSystem** (every 23 ticks) [known] S 00590820, S 00590400: for the first queued need, scan every
 low-res resource cell (x outer, y inner) and in it every resource element of the need's mining good with
 amount > 2 whose area id is in the player's `ConqueredContinents` set (the continent ids of its cells,
-rebuilt every 1323 ticks):
+rebuilt every 1323 ticks; both periods [known] from the schedule in `Player::Update` S 00582af0). The set is
+empty until its first rebuild, so no element qualifies before it [known].
 
 ```
 C     = the own AI cell nearest to the low-res cell's origin (x * 16, y * 16)
@@ -732,8 +774,9 @@ score = (base + amount) / (failureCounter(low-res resource cell) + 1)
 ```
 
 The best element (score above 0, strict, so the first of equal scores) gives the request: kind 1, position =
-4 x the first resource cell (x outer, y inner, inside the low-res cell's range) whose total amount of the good
-is > 0; no such cell, no request. It runs only while its own request slot is empty, and the need is taken off
+4 x the first resource cell (x outer, y inner) whose total amount of the good is > 0; no such cell, no request.
+That target loop runs over 5 x 5 resource cells from the low-res cell's first one, both bounds inclusive, so
+it also looks one row and one column past the low-res cell [known]. It runs only while its own request slot is empty, and the need is taken off
 the queue with `placementPending` cleared whether or not a cell was found, so NeedsArrangement tries it again
 (§3.4) [known] S 00590820, S 00590340.
 
@@ -751,7 +794,8 @@ the queue with `placementPending` cleared whether or not a cell was found, so Ne
    continent of the start position and inside the player's military map grid (the start cell always). A cell
    qualifies if enemy-minus-allied threat < 40 and (one of its **8** neighbours inside the grid has a non-zero
    own `threat` (+0x04), or it has own `score` (+0x14), no own `threatUnfinished` (+0x08), and one of its 8
-   neighbours has zero own `score`). Score = `100 / (4 * hexDist((x * 8, y * 8), target) + max(1, own threat))
+   neighbours has zero own `score`). `threatUnfinished` is filled from a building's effective construction,
+   i.e. the upgrade construction while one runs [known]. Score = `100 / (4 * hexDist((x * 8, y * 8), target) + max(1, own threat))
    / (counters[0] + 1)` (distance 1 when there is no target; `counters` of the `TerritoryMap` element); the
    visitor never stops the fill, the best score starts at 0.0 and only a strictly higher one replaces it, so the
    first maximum in fill order wins; the result is the map position `(x * 8, y * 8)`.
@@ -771,7 +815,7 @@ the queue with `placementPending` cleared whether or not a cell was found, so Ne
    if aggressive and the nearest reachable own finished building of the village's depot list (+0x20)
       or of its casern list (+0x74) lies at hex distance <= 4 (S 005a7f60):   r += 1
    if stock of the LAST input of the construction good > 40:           r += 1
-   if tick counter < 18000 and no enemy has been spotted yet:          r -= 1
+   if logic tick < 18000 and no enemy has been spotted yet:            r -= 1
    rank = max(r, 0) - bias
    ```
 
@@ -783,14 +827,15 @@ the queue with `placementPending` cleared whether or not a cell was found, so Ne
    attempt ended with "no place" (callback argument 0), the AI tries to **upgrade** the first own, idle,
    affordable territory building around the spot (S 0059adc0, [inferred]); success counts as a successful
    expansion and halves `counters[0]`, failure increments `counters[0]` and reports failure. When the last
-   attempt could not be afforded (argument 1) only the order slot is cleared.
+   attempt could not be afforded (argument 1) and no rank is left, only the order slot is cleared: the target
+   stays remembered, and step 1 of the next update reports it to the ExpansionSystem as **succeeded** [known].
 
 **Expedition** (every 211 ticks) [known] S 005a02c0: only when the stock holds the full cost of the tribe's
 expedition building (`ShipConfig::GetExpeditionBuilding` for the tribe; both cost lists of the building
 property, +0x58 and +0x68, added together; `Stock::HasAll`). Then, over the AI cells in cell-vector order
 and the harbours of each cell (cell +0xfc) whose flag cell is not a forbidden harbour position
 (`ai_forbidHarborPosition`, Player +0xb0), for each exit of the harbour with a valid ship route, in exit
-order: if the player has an active expedition on the route, it is told to found a colony when it is waiting
+order (an AI harbour's Unique is its flag's Unique [known]): if the player has an active expedition on the route, it is told to found a colony when it is waiting
 for orders (else nothing happens); otherwise, if the route's far-end harbour cell is unexplored for this
 player (exploration grid byte 0) or that harbour has no owner (+0x08 == -1), and `CanAssignShip` allows it,
 the nearest idle ship is assigned to the route (`AssignNearestIdleShip`). Details of ships and missions:
@@ -812,11 +857,13 @@ plain ware (type 0), without `enableFields` (+0x51), not the coin good, not an i
 goods with `enableDeposits` (+0x50) only if they are the first carrier input, the good planted by the tribe's
 first working-mode-2 building, or the slot-0 product of the tribe's working-mode-3 producer of `fish`
 (`0x4012E5A3`) (S 0058bf30). `IsProductionWanted(G)` = not (controllable and count >= limit); it also
-gates SelectConstruction (§3.5).
+gates SelectConstruction (§3.5). The cursor holds a good id, not a list index; a tribe without any controllable
+good makes the advance loop run forever [known] S 0058bcb0.
 
 **LockSmith** (every 337 ticks, not during need stage 1) [known] S 0058d130: tool good = `workerToolGoodId`.
-- stock < 20: create one need for the tool good (once), or re-enable production in the need's building;
-- stock >= 20: disable production in that building (if finished);
+- stock < 20: create one need for the tool good (once), or switch production **on** in the building of the
+  production that serves the tool need (S 0058d0c0), without a test that the building is finished;
+- stock >= 20: switch production **off** in that building, only if it is finished;
 - **stock == 0** and the player has a completed building in the village's list +0x20, which is the list of
   buildings whose type has `depot` (`village-buildings.md` §2.2; lookup
   `NVillage::System::FindCompletedBuildingOfPlayerInList20` S 00558730, first match in list order): **one tool
@@ -833,13 +880,14 @@ stock of its product < 5, else 0.5. Every other entry of the group whose type is
 types produce `P`) in the group of the first input of that type's product (S 0058ccd0): 0.3 if stock(`P`) >
 4; else 1.0 if some need for `P` in `needsA` has a building (Need +0x7c valid) that has all its needs served,
 has workers (`Workers::HasWorkers`), has `P` with a positive amount in the recipe of its slot-0 product and
-none of that product in its own stock; else 0.5.
+none of that product in its own stock; else 0.5. The building stock read here is its **input** stock [known].
 
 **GoodsArrangement** (every 643 ticks, 10-step cycle; steps 3-6, 8, 9 do nothing) [known] S 0058cb70,
 S 0058c600, S 0058c7e0, S 0058c480. The three "arranged" goods (S 0058c3a0) are the inputs of the tribe's
 `constructionGoodId` (+0xb4; in `Goods.lua` `plank` and the tribe's stone) and its `soldierUpgradeGoodId`
 (+0xb8, the coin good) as the third. A building's good flag is the collection flag of `goodFlags`
-(`Building_SetGoodFlagEnabled` S 00557630, the flag of command 0x2001e, `village-buildings.md` §2.3); every
+(`Building_SetGoodFlagEnabled` S 00557630 / S 00563980, which **sets** the flag to the given value and does not
+toggle it [known]; the flag of command 0x2001e, `village-buildings.md` §2.3); every
 flag write skips a building that is still a construction site (+0x44 floats +0x70 / +0x74 > 0).
 - Step 0 (S 0058c600): over the finished buildings of every cell's **depot** list, min and max stock of each
   arranged good (min starts at 100000; ties keep the first building in cell and list order). For a good with
@@ -871,7 +919,8 @@ finished one is disabled when `A > threshold` and enabled otherwise. If the cell
   or `enableFields` (+0x51) or the building has working mode 7, it is still a construction site (a
   construction float +0x70 / +0x74 > 0, §2.2) or has at least one occupant, and
   `ScoreSite(type, position) <= 0` (for working-mode-3 buildings with a positive score: zero productivity
-  instead). A working-mode-7 building is kept while its first worker is in a work cycle: the virtual call
+  instead; the keep test is written `!(s <= 0)`, so a NaN score keeps the building [known]). The demolition
+  calls `RemoveBuilding(unique, true)` directly [known]. A working-mode-7 building is kept while its first worker is in a work cycle: the virtual call
   slot +0x28 resolves for a worker to `NSettlers::Worker::IsInWorkCycle` S 0065c7d0 (Worker vftable S 007f84dc
   slot 10), true in the states 0x1d, 0x1e (work movies), 0x20 `BringGoodHome`, 0x21 `ReturnHome`, 0x24 and 0x35
   `BringGoodOut` (`settlers-jobs.md` §2.4) [known]; the test runs only when the building has a worker. A building
@@ -1706,6 +1755,9 @@ through the owner pointer from another module is not excluded].
     plans (`streets-transport.md` §8).
   The **order and count** of draws must match, because the generator is shared with the rest of the
   simulation.
+- **Unique ids** come from the shared logic id counter, so their order is part of the state as well: per new
+  building its productions, then its new needs, then a new AI cell (§2.3; the mirror reuses the building's
+  id); 2 per street the AI builds (§3.7); a harbour mirror reuses its flag's id (§3.8) [known].
 - `PickRandomTargetPlayer` computes `rand % candidateCount` and divides by zero with an empty list; callers
   pre-check the category condition [inferred] S 0059d120.
 - **Iteration orders** that decide ties: cells in creation order (vector); buildings, needs, productions,
@@ -1762,7 +1814,7 @@ through the owner pointer from another module is not excluded].
 | 2 | Answered (§3.13): the defence fraction the AI computes on attack-watch creation is never effective; `StartAttack` S 00576500 replaces it with the player setting in its next statement, every fight is created there, and `DispatchDefenders` reads the field 10 ticks later | static: S 00576500, S 0053cf50, S 00570760, S 00573c30, S 005715a0 |
 | 3 | Answered (§2.3): the cell demolish trigger is never armed. No code arms it and no shipped file carries AI cells (33 `.s2m` maps, map part only; no `.a2m`, no `.aav`) | static: callers of S 005a7960 (S 005949e0, S 00594a70, S 00594b20, S 005a6fe0), S 005a7940, S 005a78e0, S 005a9fa0 / S 005a9ec0; file list of the data tree |
 | 4 | Answered (§3.6): without a producing building type the supplier is the nearest own finished depot of the village's depot list, any distance, on a reachable continent (S 00532640, S 005586d0, S 00557fe0); map state bit 5 = 0x20 territory border, bit 17 = 0x20000 ship ground; construction flags 2 / 4 = a medium / a large building fits (S 00675610) | — |
-| 5 | Answered for the listed functions, each re-read line by line and the rules corrected where they differed: streets (§3.7: S 005a3ed0, S 005a3d00, S 005a34a0, S 005a3170, S 005a4550, S 005a5730), placement costs (§3.4: S 00593ea0, S 00593c20, S 00593cd0), site search loop (§3.6: S 005a91e0, S 005a9080, S 005a8ee0), ResourceSystem scoring (§3.8: S 00590820, S 00590400), low-res site query (S 005a8bf0, S 005a8cc0), Expedition (S 005a02c0), FoodArrangement / GoodsArrangement (§3.9: S 0058ced0, S 0058cb70), SoldierCreation (§3.10: S 00599860), strength ratio (§3.12: S 0059ec60, S 0059e6c0), sacrifice ordering (§3.15: S 0058a360, S 0058a250, S 0058a0d0). [TODO] residue, still [inferred]: `StreetRouteOptimizer`'s branch for a road cost above 4 x the hex distance (`OptimizeViaMapPath`); the 23- and 1323-tick periods of ResourceSystem / ConqueredContinents (from the callers); "holds the good" of the depot search of `StreetRouteOptimizer` (from the callee name `FindNearestConnectedWithGood`) | static: `OptimizeViaMapPath` (called from S 005a5730); the callers of `ResourceSystem::UpdateExpansionTarget` and of the ConqueredContinents rebuild; `FindNearestConnectedWithGood` |
+| 5 | Answered for the listed functions, each re-read line by line and the rules corrected where they differed: streets (§3.7: S 005a3ed0, S 005a3d00, S 005a34a0, S 005a3170, S 005a4550, S 005a5730), placement costs (§3.4: S 00593ea0, S 00593c20, S 00593cd0), site search loop (§3.6: S 005a91e0, S 005a9080, S 005a8ee0), ResourceSystem scoring (§3.8: S 00590820, S 00590400), low-res site query (S 005a8bf0, S 005a8cc0), Expedition (S 005a02c0), FoodArrangement / GoodsArrangement (§3.9: S 0058ced0, S 0058cb70), SoldierCreation (§3.10: S 00599860), strength ratio (§3.12: S 0059ec60, S 0059e6c0), sacrifice ordering (§3.15: S 0058a360, S 0058a250, S 0058a0d0). `OptimizeViaMapPath` S 005a4cc0 and the 23- and 1323-tick periods (schedule in S 00582af0) are answered [known]; the found-flag test S 005a9580 accepts an own flag on another walking-net continent (§3.7). [TODO] residue, still [inferred]: "holds the good" of the depot search of `StreetRouteOptimizer` (from the callee name `FindNearestConnectedWithGood`; the search runs on the goods net, kind 0) | static: `FindNearestConnectedWithGood` |
 | 6 | Answered (§7): `ResourceMap::Load` takes the single-element branch for `v == 0` and tests the resource id (S 00588b70, disassembly); `AiFightData_Load` drops the extra ints for `v == 0` (S 0059b6c0); the `Player::Load` gates are confirmed from the disassembly; skipped fields keep their constructor values, listed per section | — |
 | 7 | Answered (§3.16): no. A map script is only the `<MapInfo name>.lua` sidecar (S 005b1fe0); the 31 `.s2m` files carry no Lua, the 20 free-game maps have no sidecar, and `vi_addGoodsToDepot` occurs only in campaign scripts and `mapTools/spawnDepots.lua` (included only by campaign scripts), never under a player-kind test | — |
 
@@ -1784,19 +1836,31 @@ through the owner pointer from another module is not excluded].
 | S 00582870 / S 005839a0 | `NAI::Player::Activate` / `Deactivate` | lifecycle |
 | S 00582af0 | `NAI::Player::Update` | the per-player schedule (§4) |
 | S 00584030 / S 005836d0 | `NAI::Player::OnBuildingAdded` / `OnBuildingRemoved` | building mirror; headquarters loss |
+| S 00596ba0 / S 00596d70 | `NAI::Building::Init` / `NAI::Building` helper | productions and needs of a new mirror (§2.3, §3.3) |
 | S 005841e0 | `NAI::Player::AddNeed` | create a need for a good |
 | S 0058aac0 | `NAI::CellSystem::Update` | cell sub-steps |
-| S 0059df90 | `NAI::CellValidator::Update` | create / remove cells |
+| S 0059df90 / S 0059de60 / S 0059d950 | `NAI::CellValidator::Update` / position step / perimeter search | create / remove cells; last map row and column untested (§3.2) |
+| S 005a7dc0 / S 00596000 | `IsInterior` / `NAI_CellPosition_AnyCornerHasGridValue` | validator neighbour and corner tests |
 | S 00594b20 | `NAI::Cell::UpdateThreatTrigger` | when a cell asks for a military building |
 | S 0059e1c0 / S 0059e4c0 / S 0059d500 | `CellExpansion` / `CellDepotCreation` / `CellClearing::Update` | per-cell requests |
 | S 0058d370 | `NAI::NeedCreation::Update` | build order stages |
 | S 00594650 / S 00593ea0 / S 005943c0 | `NeedsArrangement::Update` / `TryPlaceNeed` / `InstantiateGroupNeed` | which cell |
+| S 00593aa0 / S 00593b50 / S 00593c20 / S 00593cd0 | inputs check / queue missing input / `minDistanceToSupplier` / `minDistanceToConsumer` | placement terms (§3.4) |
+| S 007767c0 / S 00776690 | `PropertyGroupIter` | members of a group good (§3.4) |
 | S 00593190 | `NeedsConstruction::SelectConstruction` | what to build next |
+| S 00593070 / S 00592b30 / S 00592b10 | `NeedsConstruction` request / `OnOrderFinished` / `OnPlaced` | order owner 2 (§3.5) |
+| S 00592df0 / S 00592fa0 / S 005936e0 / S 00592c40 | `CanStaffProducer` / `NeedsConstruction` helper / `RebuildTypeMaps` / `FindProducerBuilding` | producer choice (§3.5) |
 | S 00592210 / S 00592070 | `ConstructionSystem::Tick` / `ConsiderNeedRequest` | order arbitration and back-off |
 | S 005a1ac0 | `BuildingConstruction::Update` | order state machine |
+| S 005a17e0 / S 005a1650 | `ConstructionOrder::InitAtCell` / `InitAtPos` | order target; other fields untouched |
 | S 005a91e0 / S 005a9080 | `SearchConstructionPlace::Update` / `EvaluateCell` | site search |
+| S 005a8ee0 / S 005a9010 / S 005a8e40 | flag-surroundings test / candidate cursor steps | site search candidates (§3.6) |
+| S 00676a90 | `GetPathStepCount` | path length of the site search |
 | S 00534830 | `GameQueryHelper::ScoreSite` | site quality (outside NAI) |
 | S 00532640 / S 00532540 / S 005326e0 | `ScoreSupplierProximity` / `ScoreHuntingGrounds` / `ScorePlantableRing` | `ScoreSite` terms |
+| S 00557830 | nearest own building of a type (`completedOnly` 0 here) | supplier proximity |
+| S 00542890 / S 00542900 | deposit-count flood fill | deposit term |
+| S 0052cae0 / S 00539060 | spawn-point search | hunting term: first spawn point in range that gives the product |
 | S 005345d0 / S 00533760 / S 00534230 | `ScoreTerritoryGain` / `ScoreSpacingFromOwnStockBuildings` / `ScoreEnemyMilitaryDistance` | `ScoreSite` terms |
 | S 00596700 | `NAI::Building::UpdateTypeFlags` | classification of a building mirror |
 | S 00597010 | `NAI::Need::ctor_ForType` | need creation; resource-bound bytes |
@@ -1805,6 +1869,8 @@ through the owner pointer from another module is not excluded].
 | S 005a96b0 / S 005a97d0 | street `PlanPath` / `PlanBetweenFlags` | randomised street path |
 | S 00782b60 / S 00782bb0 | `nGame::System::BeginCinematic` / `EndCinematic` | clear / restore `NAI::System.enabled` |
 | S 005a3ed0 / S 005a34a0 | `StreetConstruction::Update` / `EvaluateStrategy` | streets |
+| S 005a9580 / S 005a3050 / S 005a33e4 | found-flag test / `BuildStreetTo` / `StreetConstruction` ctor | target flag (not yet connected), street build, step 7 at start |
+| S 005a4b60 / S 005a4cc0 | `FindFlagNear` / `OptimizeViaMapPath` | route optimiser |
 | S 005a4550 / S 005a5730 | `StreetOptimizer::Update` / `StreetRouteOptimizer::Update` | street improvement |
 | S 005898a0 | `StreetPathAnalyzer::GetStepCost` | street path cost |
 | S 00590fd0 | `ExpansionSystem::Update` | expansion arbiter |
@@ -1814,8 +1880,9 @@ through the owner pointer from another module is not excluded].
 | S 005a8040 / S 005a8310 | `MilitaryBuildingRanking::ComputeSiteRank` / `Build` | which military building |
 | S 005a02c0 | `Expedition::UpdateShipRoutes` | expedition ships |
 | S 0058bcb0 / S 0058b9e0 | `ProductionControl::Update` / `IsStockBelowLimit` | producers on/off |
-| S 0058d130 | `LockSmith::Update` | tools; the free tool |
+| S 0058d130 / S 0058d0c0 | `LockSmith::Update` / production switch of the tool need's building | tools; the free tool |
 | S 0058ced0 / S 0058cb70 | `FoodArrangement::Update` / `GoodsArrangement::Update` | distribution |
+| S 00557630 / S 00563980 | `Building_SetGoodFlagEnabled` | sets (not toggles) a collection flag |
 | S 005a41d0 / S 005a5d00 | `ForesterConstruction::Update` / `ShipConstruction::Update` | foresters, shipyards |
 | S 0058de80 / S 0058dae0 | `DestructionSystem::Update` / `CanDemolishBuilding` | demolition |
 | S 00585380 | `NAI::MilitarySystem::Update` | military schedule |
