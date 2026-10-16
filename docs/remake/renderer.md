@@ -458,7 +458,7 @@ follows whichever it is.
 | Kind | `COLOR` | `INSTANCE_CUSTOM` |
 |---|---|---|
 | map objects | rgb = owner colour (flags), a = level fade (depletion) | x = growth (trees, wheat), y = fall angle / sway phase, z = flags (shadow-only, mirror-excluded), w = free |
-| characters | rgb = player colour, a = flags | x = clip index, y = clip start time, z = palette slot, w = LOD and state flags |
+| characters (as built, §9.1) | r = owner index (−1 none), g / b = palette block column and row, a = clip speed | x = clip (−(clip + 1) for a clip played once), y / z = start on the presentation clock as 2y + z, w = free |
 | goods | — | x = flags |
 | particles | rgba = colour × opacity | xy = atlas cell, z = size, w = rotation or stretch |
 
@@ -467,7 +467,12 @@ height in model space and side, construction stage, two animation layers (§13).
 
 **Normal length**: the original's normals are `1/s` long for a model of scale `s` (RE §3, RR §3). Instead of a
 material uniform per scale (the viewer's `normal_scale`), the light include derives `s` from the instance matrix's
-column lengths and restores the length, so instances of one batch may differ in scale.
+column lengths and restores the length, so instances of one batch may differ in scale. Characters are the exception:
+their normals are unit length (`CMesh::FillVertices` normalises them and their world matrix carries no scale).
+
+**Half floats on Compatibility**: the Compatibility renderer packs a MultiMesh's `COLOR` and `INSTANCE_CUSTOM` into half
+floats (`unpackHalf2x16` in its `scene.glsl`), so a value needing more precision (a start time) is split over two
+channels. Player colours are a global table (`sadk_player_colors`, §7.3), indexed by the owner in `COLOR.r`.
 
 ### 7.5 The shader map [draft]
 
@@ -632,6 +637,61 @@ animals, ships and animated building parts use one skinning path of their own in
 - **Unseen characters cost nothing**: their visibility notifier takes them out of their batches (§4.7), so neither
   their vertices nor their interpolation are processed; the pose is computed from the clock in the vertex shader, so
   a character shows the right point of its clip the moment it comes back into view.
+
+### 9.1 As built [implemented 2026-10-16, sadk-remake 5aa8e1b]
+
+- **Feed** (`Core.Game.Rendering.Characters.CharacterLayer`, the map layer `core.game.characters`, order 600):
+  `Add(id, CharacterSpec, tick, CharacterPose)` gives the first sample (previous = current, so nothing glides in);
+  `Sample(id, tick, pose)` once per tick in which the character moved (previous ← current ← the new sample); `Remove`;
+  `Play(id, ClipRequest(clip, startTick, once, speed))`; `PlayType(id, type, startTick, once?, item?, building?,
+  speed)` resolves the clip by the original's lookup order (building, profession, carried good, default, with the
+  tribe-mask test; `AnimationChoice`). `CharacterSpec(Family, Type, Owner, TribeId)`: families `settler`, `ox`, `animal`,
+  `ship` in an open registry (`CharacterFamilies.Register`); `Type` is the settler definition name, the animal's element
+  name, the ship's tribe. `CharacterPose(Position, Heading)`, the heading being the original's yaw. The clock
+  (`CharacterClock(Tick, Alpha, TickInterval)`) shows `Tick − 1 + Alpha`, one tick behind.
+- **Data**: `CharacterSettings` reads `settler_config.xml`, `settler_animations.xml` (events, idle groups), `animals.xml`,
+  `ships.xml` and `globalSpeed`; executable defaults only with their address.
+- **Baking** (CPU, once per skeleton per render context, `BakedSkeleton`): clip 0 is the rest pose, then every clip at
+  its own key times, three columns of `inverseBind × world` per bone, in an RGBA32F texture at most 4096 texels wide,
+  plus a clip table of first frame, key count and length. The loop mode is per request, not per clip: one file plays
+  both once and looping (WorkLoop0 against StandFish; a carrier's boat clip loops). Sizes: the settler skeleton has 46
+  bones and 87 clips (86 files and the rest pose), 11,566 frames, 4002 × 399 texels, 24.4 MB, driven by the long work
+  clips (fishing 60 s = 1080 keys, work_well 38.75 s); animals 0.2–1.4 MB, the ox 2.7 MB. RGBA16F would halve it at about
+  0.05 % relative error (not done). Meshes bind their bone lists to the skeleton by name; characters with the same
+  meshes and textures share one look and its batches.
+- **Layer**: batches per (look, level, region) with dense slots; per-frame interpolation of the characters in view
+  only; the level by eye distance (30 / 40 / 60 from the data, compared with ≥, no hysteresis); a node-free visibility
+  notifier per character whose box covers the last step, moved once per tick, grown by the margin and the shadow reach
+  (bounds: the bone bounds over all baked frames, grown by the largest |p × inverseBind| of each vertex's main bone); a
+  `CharacterNode` proxy per character with inspectable state; samples put on the ground once per tick and the height
+  interpolated in between (the remake's choice).
+- **Palettes**: settler palettes in the original's 1024² atlas, packed in its order; blocks freed and reused.
+- **Shaders**: `sadk/skin.gdshaderinc` (engine); `characters/settler` after `skin_color_mesh.fx` (the index map read at
+  the nearest mip with red decremented, the light inside the palette lookup, owner colour, specular, fog; the colour is
+  computed in `light()`); `characters/animal` for `animals.fx` and `donkey.fx` (the original light model, alpha ≥
+  128/255); `characters/ship` for `ships.fx`; all in `fx-map.xml`. Each vertex does up to 4 influences × 3 texel fetches,
+  twice when blending keys; zero weights are skipped.
+- **Pitfall**: an RGBA8-unorm `CUSTOM0` next to an RGBA-float `CUSTOM1` gave `CUSTOM1` wrong components on Compatibility
+  (torn hands and arms); both are RGBA float.
+- **Settings**: `CharacterLod` (Original, the default; Refined = Godot's levels of LOD0 at the triangle counts nearest
+  the original's: egypt_1 4396 / 1196 / 596 / 296 against 4396 / 1098 / 548 / 274) and `CharacterOwnPhase` (off; the
+  global `sadk_anim_own_phase`).
+- **Measured** (Compatibility on a CPU renderer: draw calls and CPU times only): 1000 walkers in view, 79 batches, 676
+  draws, 2.12 M primitives with notifiers (696 draws, 2.20 M without); interpolation, levels and slot writes 0.7–1.1 ms
+  per frame for 1054 characters (the proxy nodes 0.15–0.2 ms), batch uploads 0.12–0.15 ms (about 22 buffers), a motion
+  sample about 1 µs with its ground height.
+- **Answered while building it**: AM §10 Q11, `PLAYER_COLOR_WEIGHT` is the index of the mesh subset drawn
+  (`S2CG::Ship::OnMaterialChange` S 006a49b0 from the index `SkinnedMeshRenderer::RenderInstances` S 0076e8a0 passes;
+  `PLAYER_COLOR` from `Ship::BeginRender` S 006a4ae0; the shipped ships have hull 0 and sail 1). AM §10 Q1 [inferred
+  from the pictures]: with the stored quarter-turn inverse bind, a settler turned by `RotationY(h)` faces (sin h, 0, cos
+  h) in the original's axes. Data: the Bavarian ship's idle file holds no animation (the original plays none either);
+  three ramp tables written without the `[data]` prefix resolve below `[data]`.
+- **Not built yet**: attachments (goods in hands, tools, boats), animation events, idle variations, the death sink,
+  turning by fixed steps, route splines, the evade offset, boat bobbing, fog of war (`CalcFOW`), the two-bone Low
+  technique (Q16). Open: the atlas's untouched texels (Q15; the remake starts them transparent black); where swimming
+  settlers stand in height.
+- **Gallery**: `core.game.charactergallery {map, tribe (Bavarian by default), clip, owner, walkers, field, view=grid|
+  first|walker|animals|ship|lod|field, lod, level, notifiers, ownPhase, stats, …}`.
 
 ## 10. Terrain [draft]
 
