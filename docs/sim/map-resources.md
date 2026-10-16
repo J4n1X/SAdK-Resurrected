@@ -292,7 +292,7 @@ replaces them (§6) [known].
 | +0x20 | `cell` | MapPos | at most one deposit per cell [inferred from layer 3] |
 | +0x28 | `finePos` | vertex | where it is drawn; also the doodad conflict test |
 | +0x30 | `reservingBuilding` | ReferenceBuilding | the building that linked it; none = id high dword negative |
-| +0x50 | `depletedTicks` | int | 0 = alive; 1..20 = being removed |
+| +0x50 | `depletedTicks` | int | 0 = alive; 1..20 = being removed (21 for the rest of the pass that removes it, §3.9) |
 | +0x54 | `ttlWithoutOwner` | int | from `lifeTime`; -1 = none |
 
 **`NResources::Animal`** (size 0xb8, vtable S 007e7ef8) [known] S 005418e0, S 005420c0:
@@ -304,7 +304,7 @@ replaces them (§6) [known].
 | +0x10 | `id` | Unique | |
 | +0x20 | `timeStamp` | float32 | tick / 10 of the last walk start |
 | +0x24 | `home` | MapPos | the spawn cell; never changes [inferred: no writer besides the constructors] |
-| +0x2c | `movement` | `NResources::Movement` | `NMovement::Base` first: current cell at Animal +0x30, target cell of the walk +0x38, next cell +0x40 (-1, -1 before the first step), step progress float +0x4c; then the owner animal, the path and the cell it is registered on in `animalsByCell` [known] S 00772ba0, S 005437c0 |
+| +0x2c | `movement` | `NResources::Movement` | `NMovement::Base` first: current cell at Animal +0x30, target cell of the walk +0x38, next cell +0x40 (-1, -1 before the first step), step progress float +0x4c; then the owner animal, the path and the cell it is registered on in `animalsByCell` [known] S 00772ba0, S 005437c0. Animals move with `NMovement::Base` and the `NResources::Movement` slots (vtable S 007e7f74), not with the settlers' `ai::movement::Movement` [known] |
 | +0x88 | `state` | int | see §3.10 |
 | +0x8c | `counter` | int | meaning depends on the state |
 | +0x90 | `hunter` | ReferenceBuilding | reservation by a hunter's building |
@@ -445,10 +445,10 @@ Every settler movement owns one cell-grid mover and one fine-grid mover (S 00773
 (`NMovement::Rough::BeginStep` S 00773a40) has the step rate `speed * landFactor(from, to) / HexDistance`, a fine step
 (`NMovement::Fine::BeginStep` S 00773ec0) `4 * speed * plainFactor(from, to) / HexDistance`, with `speed` the
 value the sacrifice modifier table returns for the settler (S 00663310). When a settler moves on which grid is
-`docs/sim/settlers-jobs.md` §3.8. Animals use neither: `NMovement::Base::BeginStep` S 007728d0 takes
-`speed / HexDistance` with no slope factor, `speed` being the animal property's `movementSpeed` (virtual slot 10
-of `NResources::Movement`, S 00543700) [known]; a step between neighbour cells therefore takes about
-`1 / movementSpeed` ticks [inferred].
+`docs/sim/settlers-jobs.md` §3.8. Animals use neither: `NMovement::Base::BeginStep` S 007728d0 sets the step rate
+to `1 / (HexDistance / speed)`, evaluated on the x87 stack and stored as float32, with no slope factor, `speed`
+being the animal property's `movementSpeed` alone (virtual slot 10 of `NResources::Movement`, S 00543700) [known];
+a step between neighbour cells therefore takes about `1 / movementSpeed` ticks [inferred].
 
 Round-trip cost of a step (street length, AI path cost): `1/f(a,b) + 1/f(b,a)` as float32 S 0052e320.
 
@@ -797,10 +797,15 @@ requires that neither the cell nor its 6 neighbours is blocked (0x1).
    deposit is marked depleted (`depletedTicks = 1`, the "disappearing" event is raised if `growth >= 0`);
 3. else `depletedTicks += 1`.
 
-`System::Update` S 00540340 then [known]: a deposit whose `depletedTicks == 20` is queued for removal; a deposit
+`System::Update` S 00540340 then [known]: a deposit whose `depletedTicks == 20` is queued for removal, and the
+loop does **not** advance past it, so the same deposit is updated a second time in that pass (`depletedTicks`
+becomes 21, and it grows once more if it is still growing) and then stays on the list by the next rule; a deposit
 that is not depleted, has `growth >= 1.0` and `ttl < 0` is dropped from the active list; all others stay. After the
 pass the queued deposits are removed (`RemoveResource` S 0053f2a0, last queued first), each invalidating the
-construction flags around its cell. A depleted deposit therefore lives for 19 more updates [inferred].
+construction flags around its cell. A depleted deposit is therefore removed in the pass in which its counter
+reaches 20, 19 updates after the one that marked it, with the counter at 21 [known: S 00540340]. The second
+update leaves nothing behind (the deposit is gone at the end of the pass), so only the removal tick matters
+[inferred].
 
 **States of a deposit** [known] S 00542a10, S 0053e860:
 
@@ -861,11 +866,13 @@ the `rnd % count`-th (unsigned modulo); -1 if none. The deposit is created with
 If the walk cannot start the deposit is removed again (S 0077bc50).
 
 **Data** [known, `deposits.lua`]: 53 types. Trees: good `wood`, no next stage, default growth 0.1 start and 0.0009
-per tick (1000 ticks to full). Stone piles: good `stone`, `stone_06 -> stone_05 -> ... -> stone_01` by
-`dp_nextDeposit` (the same for `med_stone_*`), blocking, no random offset, underground pattern `pattern_meadow2`.
-Fields: `field_01` (good `corn`, start 0.2, speed 0.00075: 1067 ticks; lifetime 3000; blocking; underground
-`pattern_acre`; needs a plantable pattern) and `field_egypt` (good `egyptCorn`, speed 0.0005: 1600 ticks). One
-more type, `tent` (good `good_helper`, start 0.01, speed 0.1, blocking). `dp_setDoodadAfterDestruction`
+per update; the float32 sum reaches 1.0 on the **1001st** update, not the 1000th (after 1000 it is still below 1.0,
+after 1001 it is 1.0008838, bits 0x3f801cf6) [inferred: float32 evaluation of §3.9 step 1]. Stone piles: good
+`stone`, `stone_06 -> stone_05 -> ... -> stone_01` by `dp_nextDeposit` (the same for `med_stone_*`), blocking, no
+random offset, underground pattern `pattern_meadow2`. Fields: `field_01` (good `corn`, start 0.2, speed 0.00075:
+full on the 1067th update; lifetime 3000; blocking; underground `pattern_acre`; needs a plantable pattern) and
+`field_egypt` (good `egyptCorn`, start 0.2, speed 0.0005: full on the 1600th update), both counted in float32 like
+the trees. One more type, `tent` (good `good_helper`, start 0.01, speed 0.1, blocking). `dp_setDoodadAfterDestruction`
 is not used by the shipped data.
 
 ### 3.10 Animals
@@ -875,11 +882,29 @@ cell, state 0, `counter = LogicRandom % n` (one draw, signed division), register
 `AnimalAreas` (by home) and through its movement in `animalsByCell`. `n = trunc((float)moveDistance / movementSpeed
 * idleTimeFactor)`, computed on the x87 stack from the property's float32 values and truncated toward zero
 (S 00541994..005419ac); with the shipped data (idle factor 3.0 by default) a deer gets `2 / 0.045 * 3` -> 133 and a rabbit
-`4 / 0.07 * 3` -> 171 [inferred from `animals.lua`].
+`4 / 0.07 * 3` -> 171 [inferred from `animals.lua`]. The constructor's order [known] S 005418e0: `home`; the
+movement constructor (which registers the animal's cell in `animalsByCell`); state 0; the random draw and
+`counter`; `stackIndex = 0`; the new `Unique` (so the random draw comes before the id draw); "animal added"
+(slot 0x54).
 
 Callers [known]: animal spawn points (`NLogic::SpawnAnimal::Spawn` S 00538f40: only if the spawn's low-res block
-holds at most 4 animals; one `LogicRandom` draw picks the animal type from the spawn's list; the new animal gets
-state 6), `NSettlers::Worker::Update` (also state 6) and the editor.
+holds at most 4 animals, i.e. `IsCrowdedAt` is true above 4; one `LogicRandom` draw, made before the modulo,
+reduced unsigned modulo the length of the spawn's type list, picks the animal type, so an empty list divides by
+zero after the draw; the new animal gets state 6), `NSettlers::Worker::Update` (also state 6) and the editor. A
+spawn point fires (`LogicSpawnSystem::Update` S 0052ccc0) when `(tick zero-extended to 64 bits + the spawn's 64-bit
+id) % (rate × spawnPointUpdateTime)` is 0, a signed 64-bit remainder (`__allrem`); details in
+`docs/sim/quests-sacrifices-stats.md` [known].
+
+**Breeding cap** [known]: `Production::CanStartProduction` S 00565bd0 refuses a cycle of a building with
+`workingMode == 10` while `AnimalAreas::GetCountAt` S 00542480 for the 16 × 16 block of its anchor is above 19
+(`> 0x13`); animals count in the block of their home cell (`docs/sim/village-buildings.md` §3.7).
+
+**Animals under a new building** [known]: `PlaceBuilding` S 0055a090 calls `RemoveAllAnimalsAt` S 0053f840 for every
+footprint cell after its map-update batch has closed. It copies the cell's animal list and erases each animal
+(`EraseAnimal` S 0053f400); the animal is not killed (no dying, no goods): its destructor sets state 9, and when a
+hunter had reserved it, the unlink with `erase = false` resets the state to 2 or 0 (S 00541ad0) before the object
+is freed; "animal removed" (slot 0x58) is raised. `RemoveAnimalsOnBlockedCells` S 0053f4a0 is called only from the
+map export (`GameFile_ResetWorldForMapExport` S 005aa150), never in play.
 
 **States** (`Animal::Update` S 005420c0, once per tick; its first statement runs `NMovement::Base::Update` on the
 animal's movement, in every state) [known unless noted]:
@@ -891,12 +916,14 @@ animal's movement, in every state) [known unless noted]:
 | 2 walking | when the movement's step progress float (Animal +0x4c) is **negative** (the test is `< 0`, not `<= 0`). The movement is then at rest: `NMovement::Base::Update` S 00772950 resets the progress to -1.0 when the last step of the path completes (S 007749f0), while `StartMoveTo` S 00772b00 sets 0 and a running step is >= 0. Then: if it is the only animal on its cell `counter = (int)((float32)(tick/10 - timeStamp) * idleTimeFactor * 10.0)` (property `+0x4c`, 3.0 in the shipped data; the difference is stored as float32 before the two multiplications, truncation toward zero) [known] S 0054231f..0054235e, else `counter = 0`; state 0. The animal then stays in state 0 for `counter + 1` ticks, so with the factor 3.0 it idles three times as long as its walk took: a long walk is followed by a long idle [known: live 2026-10-12, 400 arrivals, 295 with a counter, all matching within 1] | |
 | 4 linked by a hunter | no behaviour in `Update` (a step in progress still finishes, the movement is updated in every state); still huntable by the test of `IsAliveAndUnreserved` once the reservation is gone | set by `NVillage::Building::SetHuntedAnimal` S 0055c3a0 (`counter` untouched); no code read sets it back |
 | 5 dying | `counter += 1`; at `dyingTime` -> state 7 | set by `NMovie::GoHunting::Update` (S 00541b00, `counter = 0`) |
-| 6 just spawned | steps one cell north-east: `StartMoveTo(current + dir 1)` (-> state 2) and `timeStamp += 0.1 / movementSpeed` | |
+| 6 just spawned | steps one cell north-east: `StartMoveTo(current + dir 1)` (-> state 2) and `timeStamp += 0.1 / movementSpeed`, where 0.1 is the double at S 007db630 = 0x3FB99999A0000000, the float32 0.1 widened, not the double 0.1 [known] | |
 | 7 dead, waiting for the pickup | no behaviour in `Update` | set from state 5; left only through the pickup (state 8) or by being erased |
 | 8 disappearing | `counter += 1`; at `disappearingTime` `Update` returns true and the system erases the animal | set by `NMovie::PickupProduct::Start` (S 00541b30, `counter = 0`) |
 | 9 destroyed | none: written by the destructor S 00541a00 as its first statement, so that the unlink it calls sees a dead animal | |
 
-`StartMoveTo(target)` S 00541b50: `timeStamp = (float)tick / 10`, movement target = `target`, state 2.
+`StartMoveTo(target)` S 00541b50: `timeStamp = float32((u32 tick) / 10.0)` (the double 10.0 at S 007e2508), movement
+target = `target`, state 2. State 2 is set even when no path was found: `NMovement::Base::StartMoveTo` S 00772b00
+then returns false, and the result is not read [known].
 
 **Roam scheduling** (state 1) [known]: at most 2 roam searches run per tick, and the animal that waited longest goes
 first:
@@ -910,7 +937,9 @@ system.roamTurn = 0;  system.roamSearchesThisTick += 1;  run the search
 
 **Roam search** (`AnimalRoamSearch` S 00543950, S 00543900, S 005439b0; flood fill S 00541ec0) [known]:
 
-- start = the current cell, or `home` if `HexDistance(home, current) > range`;
+- start = the current cell, or `home` if `HexDistance(home, current) > range`. Nothing tests that the start lies
+  inside the map: an animal spawned on row 0 steps to row −1 in state 6 (direction 1 lowers y, §3.1), and its
+  next roam search reads outside the grids [inferred from S 00543950, S 00541ec0];
 - `countdown = LogicRandom % (3 * d * (d + 1)) + 1` with `d = moveDistance` (one draw);
 - a cell can be entered if it is within `range` of `home` and walkable (the start cell is exempt from the
   walkability test);
@@ -921,7 +950,10 @@ system.roamTurn = 0;  system.roamSearchesThisTick += 1;  run the search
 - result = the last target, else the fallback; with neither `counter = 100` and the animal stays in state 1.
 
 The path is found by `NResources::Path::FindPath` S 00543b20 with the shared `AnimalAStar` (§3.12) and built with
-`randomize = true`.
+`randomize = true`. The path's prepare slot (vtable S 007e7fb4, +0x18 = the empty stub S 00472360) does nothing, so
+the path is not cleared before a search, and for adjacent cells `BuildPathReversed` appends to what it holds; the
+path is cleared on arrival by `NMovement::PathBase::Reset` S 00772d30 [known]. An entry of `animalsByCell` whose
+list becomes empty is kept [known].
 
 **Cell index** [known] S 00543890: whenever the movement reaches a cell the animal is registered on the cell it
 occupies (the next cell while a step is in progress, else the current cell).
@@ -1337,7 +1369,8 @@ sign (permanent <-> temporary) makes old records unreadable [inferred].
 ## 8. Determinism notes
 
 - **Random generator** (`LogicRandom_Next`, `docs/sim/logic-core.md`). Draws made by this subsystem, each exactly as
-  listed [known]: deposit creation at a cell (1, always); animal creation (1); animal spawn (1 for the type, only
+  listed [known]: deposit creation at a cell (1, always); animal creation (1, before the animal's id is drawn,
+  §3.10); animal spawn (1 for the type, only
   when the spawn's block is not crowded, so 2 per spawned animal with the creation draw); roam search (1 per search); sowing (1 if the type has underground patterns); planting (1 for the place, only when the
   place search was stopped with at least one candidate, §3.9; 1 more for a random tree type); geologist cell (1 if
   a candidate exists); fishing spot (1 if a candidate exists);
@@ -1366,7 +1399,9 @@ sign (permanent <-> temporary) makes old records unreadable [inferred].
   the `timeStamp` step of state 6 are float32 expressions truncated to int (§3.10); the slope speed factors and
   the round-trip cost are float32 (§3.2). Heights, slope classes, A* costs and amounts are integer.
   The growth sum decides the tick on which a field becomes harvestable, so it must be accumulated in float32 in the
-  same order.
+  same order: a tree (0.1 + n × 0.0009) is full on the 1001st update, where exact arithmetic gives the 1000th (§3.9).
+  An animal's step rate is the float32 of `1 / (HexDistance / movementSpeed)` and its `timeStamp` uses the doubles
+  10.0 (S 007e2508) and the widened float32 0.1 (S 007db630) (§3.2, §3.10).
 - **Shared scratch state.** The visited grid and each A* instance are shared; a search must finish before the next
   one starts (the in-use byte guards the visited grid) [inferred].
 - **Order dependence inside one tick.** The roam scheduler (`roamTurn`, `roamSearchesThisTick`) depends on the
@@ -1439,6 +1474,8 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 0067b910 / 0067b5a0 | `RefreshTerritoryBorderBits` / `IsTerritoryBorderCell` | border bit |
 | 00673bd0 / 00674100 / 00673910 / 006744f0 / 00674560 / 00673370 | flatten, level, smooth, street shaping | terrain edits |
 | 0053f840 / 0053f400 | `RemoveAllAnimalsAt` / `EraseAnimal` | animals removed under a new building's footprint: each leaves `AnimalAreas`, runs its virtual destructor and leaves the id map |
+| 0055a090 | `PlaceBuilding` | calls `RemoveAllAnimalsAt` per footprint cell after its batch closes |
+| 0053f4a0 / 005aa150 | `RemoveAnimalsOnBlockedCells` / `GameFile_ResetWorldForMapExport` | map export only |
 | 00674360 / 00674470 | `SetCellPattern` / `ExchangePatternInRect` | pattern edits |
 | 00672df0 / 006730e0 | flush elevation rect / flush both rects | change notification |
 | 00532180 / 005321c0 / 005322b0 / 00532400 | `MapUpdateBatch_Begin` / `_End` / `InvalidateConstructionRadius` / radius-4 wrapper | batching |
@@ -1455,6 +1492,8 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 0077f670 / 00780300 | `LookForFishing::Start` / fishing visitor | fish |
 | 00540340 | `NResources::System::Update` | per-tick resources |
 | 00540b40 / 00540aa0 / 00540c40 / 00540e60 / 00540740 / 0053f2a0 | create / add full / harvest / kill / set ttl / remove | deposits |
+| 005ad7e0 / 00540870 / 00542a30 / 00542b60 | `CreateDepositFromScript` (Lua `map_createDeposit`) / `FindNearestFreeDeposit` / free-deposit search predicate | deposits |
+| 0077bb30 / 005477e0 | `PickRandomDepositTypeForCell` / deposit property map order | planting |
 | 005432d0 / 00542f80 / 005431a0 / 00542a10 / 00542de0 / 00542f00 | deposit ctors / update / available / mark depleted / post-load | deposits |
 | 0052eb10 / 0052e150 / 0052ef40 | deposit placement rule | deposits |
 | 0077ebf0 / 0077eda0 / 0077bcb0 / 00779330 / 005477e0 | work result / work start / planting / empty place / tree type pick | deposits from the settler side |
@@ -1475,7 +1514,12 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 00565f80 / 0055c860 / 00565550 | `OnProductionFinished` / consume linked cell / produces-goods flag | mines, planting |
 | 005574f0 / 00556df0 / 00546c70 | sign list add / sorted insert / property map find | data order |
 | 0041eca0 / 005657b0 / 007750d0 | base A* `CanSearch` (address-shared "return true" stub) / `PrepareSearch` (shared empty stub) / `FreePath` ctor | path-finding |
-| 00542700 / 005424c0 / 00542440 | animal areas init / add / crowded | density |
+| 00542700 / 005424c0 / 00542440 / 00542480 | animal areas init / add / crowded / `GetCountAt` (breeding cap) | density |
+| 0052ccc0 / 00565bd0 | `LogicSpawnSystem::Update` / `Production::CanStartProduction` | spawn trigger; breeding cap |
+| 005429c0 | huntable predicate | hunting interface |
+| 007e7f74 / 007e7fb4 / 00472360 / 00772d30 | `NResources::Movement` vtable / `NResources::Path` vtable / its empty prepare slot / `NMovement::PathBase::Reset` | animal movement and path |
+| 007db630 / 007e2508 | doubles 0.1f widened / 10.0 | animal time stamps |
+| 00544080 | doodad lookup by vertex | doodads |
 | 00544e00 / 00545150 / 005446c0 / 005454f0 / 00544480 / 00544b70 / 00544ad0 / 00543dc0 | doodads: add, add at cell, update, removal rule, remove, rect check, vertex check, find | doodads |
 | 00676900 / 00676700 / 00676840 / 00676d10 / 00676e80 / 00676a90 | A*: find, step, base cost, build path, reversed, step count | path-finding |
 | 0067bef0 / 0067c0e0 / 0067c300 / 0067c560 | node lists: relax, descent directions, reset, sorted insert | path-finding |

@@ -330,9 +330,10 @@ The command flow (start at a flag, extend by clicks, finish on a flag or on a fr
 **Search.** `StreetPlanner::ExtendTo(cell)` S 00663bf0 runs `NMap::AStar::FindPath(from = current path end,
 to = clicked cell)` with the `NLogic::AStarStreet` cost functions, then `BuildPath(randomize = false)` [known]. If
 `from` and `to` are hex neighbours the path is accepted without evaluating a step cost [known] S 00676900. A
-clicked cell that already lies on the planned path starts no search: the path is cut back to end on that cell
-and the street under construction is cancelled and started again with the shortened path
-(`StreetPlanner::CommitPathTo` S 00663a00) [known].
+clicked cell that already lies on the planned path starts no search (`StreetPlanner::CommitPathTo` S 00663a00)
+[known]. Inside one map-update batch it cuts the path back to end on that cell, cancels the street under
+construction (planner state 6), starts a new one at `path[0]` (`StreetPlanner::BuildStreet` → `CreateStreetAtFlag`,
+which draws a new street id), adds the cut path with `AddPoints` and sets state 2.
 
 The cell search itself is `NMap::AStar` (owner: `map-resources.md` §3.12); what decides *which* street is found
 [known] S 00676700, S 0067bef0, S 0067c560, S 0067c0e0, S 00676d10:
@@ -403,13 +404,18 @@ S 00776500, S 00676840, S 0052fb10, S 005300e0].
 S 005b71d0 starts the navy's planner with type 3 and calls `BuildStreet(..., 3)` [known]; no other caller with
 type 3 was found [inferred, caller list of `BuildStreet`]. (`NNavy::Expedition::Update` S 005b8ac0 uses the same
 planner for a **type 0** street from the harbour flag to the entrance flag of the expedition building [known].)
-Its search state and step cost: `PrepareSearch` S 00776260,
+Its search state and step cost: `PrepareSearch` S 00776260 acts in mode 3 only. When the target cell (`to`) has
+the harbour-exit bit 0x4000, `mode3State` = the exit bit of the start cell (`from`: 0 or 1); else, when the target
+has the harbour bit 0x2000, `mode3State` = 2; otherwise the state is left as the previous search set it [known].
 `GetStepCostMode3` S 007761f0: if the target cell is a harbour exit, steps are free (cost 1) when the start cell is
 not an exit and restricted to ship-route cells (bit 0x8000) when it is; if the target is a harbour cell, cost 1
 everywhere [known]. Details: `navy-and-military.md`.
 
 **A street may be completed** (`GameQuery::CanCompleteStreet` S 005300e0) when: `path[0]` carries a flag; the last
 cell carries a flag, or `CanSplitStreetWithFlagAt(lastCell, type, player)`; and first and last flag differ [known].
+It reads only the object-layer-0 ids of the two end cells and tests no owner: either end may hold another
+player's flag. The owner tests are made by `BuildStreet` (steps 1 and 4 below), which then refuses the street
+[known] S 005300e0, S 00666d00.
 
 `CanSplitStreetWithFlagAt(cell, type, player)` S 0052f980 [known]: type is 0 or 1; layer 2 at the cell holds a
 street; that street is attached; and `CanPlaceFlagAt(cell, player, allowBorder = false)`.
@@ -430,9 +436,11 @@ cells 0x1 and water 0x4 only allowed for type 2; own flag still on the first cel
    that passes there). Its `Unique` draws (§8) therefore come after the new street's id.
 4. The last cell must now carry a flag of the player different from the start flag; else delete the new street
    (its id stays drawn) and return null.
-5. Register the street (`streetsByPlayer`, `streetById`); append `path[1..]` cell by cell with
+5. Register the street (`streetsByPlayer`, `streetById`); append `path[1..n−1]` cell by cell with
    `Street::AppendCell(cell, notify = false)` (§3.4: no street events, terrain change deferred to the batch),
-   reporting each cell to the map-update batch.
+   reporting each of these cells to the map-update batch (`RemoveObstructedDoodadsAtCell` and
+   `InvalidateConstructionAroundCell`). `path[0]` is not reported here; for a player's street,
+   `CreateStreetAtFlag` reported it when the construction started.
 6. `AttachStreetToFlags` S 006662f0: start flag = the flag-layer object on `path[0]` if it is a flag of the
    street's owner, end flag likewise on the last cell; a missing one is created with the flag constructor directly
    (no split, no harbour link) and appended to `flagsByPlayer` / `flagById` (its only caller is `BuildStreet`,
@@ -446,7 +454,8 @@ The street under interactive construction (`NNet::StreetConstructorStreet`, S 00
 attached (no end flag reference), so it is neither updated nor usable until `BuildPlannedStreet` hands its path to
 `BuildStreet` [known]. `CreateStreetAtFlag` needs a flag of the player on the cell, constructs the street (one id
 drawn), registers it in `streetsByPlayer` / `streetById` like a finished street (so it is saved, §7, and removed by
-`PostLoad` for its missing flag references) and reports the cell to the map-update batch; `AddPoints` appends with
+`PostLoad` for its missing flag references) and reports its cell (`path[0]`) to the map-update batch
+(`RemoveObstructedDoodadsAtCell`, `InvalidateConstructionAroundCell`); `AddPoints` appends with
 `notify = false` inside one batch [known] S 00666590, S 006688d0. It never becomes the finished street:
 `BuildPlannedStreet` S 005289b0 takes its path out of the planner, which cancels it (`RemoveStreet`; its
 destructor unlinks no flags and raises no event, since it is not attached, S 00669210), and then `BuildStreet`
@@ -455,8 +464,10 @@ creates a new street. So a street built by the player costs one id per start or 
 
 ### 3.3 Removing flags and streets
 
-- **`RemoveStreet(id)`** S 006652d0 [known]: clear a selection of it; raise a map-change notification for every
-  path cell; stable-erase from `streetsByPlayer`; delete; erase from `streetById`. Callers [known, caller list]:
+- **`RemoveStreet(id)`** S 006652d0 [known]: clear a selection of it; open a map-update batch of its own;
+  `InvalidateConstructionAroundCell` for every path cell (no doodad report); stable-erase from `streetsByPlayer`;
+  delete (the destructor below runs inside the batch); erase from `streetById`; close the batch. Callers [known,
+  caller list]:
   the player command `0x20009` (`HandleRemoveStreet` S 00781290: street id → `RemoveStreet`, no owner check,
   `game-commands.md`); cancelling a street under construction (`StreetConstructorStreet::Cancel` S 00668880);
   `PlaceFlag` (split) and `RemoveFlag`; the two territory functions below; `PostLoad` (§7); the navy
@@ -473,10 +484,12 @@ creates a new street. So a street built by the player costs one id per start or 
   attached land street draws 1, a street under construction none. An unlinked carrier has no street reference any more, so his next
   `Carrier::Update` S 0065b710 calls `Settler::StopAndSetState3` and he goes home (§3.8, "Losing the job")
   [known].
-- **`RemoveFlag(id)`** S 00665c10 [known]: clear a selection of it; remove every street attached to the flag
-  (repeatedly the first link); stable-erase from `flagsByPlayer`; delete the flag; erase from `flagById`; raise a
-  map-change notification for the cell; if the flag had a building reference, `NVillage::System::RemoveBuilding`
-  for that building. Callers [known, caller list]: the player command `0x20005` (`HandleRemoveFlag`
+- **`RemoveFlag(id)`** S 00665c10 [known]: clear a selection of it; open a map-update batch of its own; remove
+  every street attached to the flag (repeatedly the first link; each `RemoveStreet` nests its batch inside this
+  one); stable-erase from `flagsByPlayer`; delete the flag; erase from `flagById`;
+  `InvalidateConstructionAroundCell` for the flag's cell; if the flag had a building reference,
+  `NVillage::System::RemoveBuilding(building, spill = true)` for that building, still inside the batch; close the
+  batch. Callers [known, caller list]: the player command `0x20005` (`HandleRemoveFlag`
   S 007813d0); the per-tick territory test below; `NVillage::System::RemoveBuilding` S 00559db0, which removes
   the flag on the cell one step in direction 1 from the removed building's position (any owner; [inferred] its
   entrance flag) when that flag has no remove block reason, all six stacks are empty and
@@ -569,7 +582,8 @@ type-3 links plus (one if this street is linked to it) [known].
 
 So flag cells carry bit 0x2 while at least one land or water street ends there, layer 2 names the street only on
 its inner cells (and on the open end of a street under construction), and type 3 streets leave no trace on the
-map [inferred].
+map [inferred]. A street under construction counts: started at a flag with no other street, it passes the
+first-cell rule and sets bit 0x2 on that flag's cell while it is planned [known: S 00670d40, S 006710a0].
 
 ### 3.5 Connectivity: links and net continents
 
@@ -607,7 +621,8 @@ Carrier link changes (kind 0 only) [known]:
 1. empty `pathCostCache[player*2 + kind]` of the flag's owner;
 2. set `searchMark = −1` on all flags of that owner;
 3. depth-first collect every flag reachable from `flag` through links whose street has `usable[kind]`, in link
-   order (`NNet_CollectConnectedFlags` S 00666250);
+   order (`NNet_CollectConnectedFlags` S 00666250): a pre-order recursion in which an unvisited flag
+   (`searchMark < 0`) gets `searchMark = 1`, is appended to the list, and then has its links followed;
 4. draw a **new** `Unique`; for every collected flag remove its old continent from `NetContinentIds` and store the
    new id in `netContinent[kind]`;
 5. `NetContinentIds::AddNetContinent(newId, collectedFlags)` S 006705c0: for every collected flag, the map
@@ -1250,7 +1265,9 @@ fromCell, toCell, currentStreet)` S 007735b0 [known]:
 - else path search with kind 1, no carrier penalty, the current street preferred (cost 1); the next flag of the
   route is the leg's goal; between two flags joined by several streets the **shortest** one is walked, unless the
   current street already leads there (`Flag::FindShortestLinkToFlag` S 0066a1f0, `StreetPath::ComputeRoute`
-  S 007741e0).
+  S 007741e0). `FindShortestLinkToFlag` has no preferred-street parameter: it returns the link to that flag
+  whose street has the strictly smallest `length`, so among equal lengths the first in link order wins; the
+  exception for the current street is made by its caller [known].
 
 `ai::settlers::SettlerMovement::AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next flag of the
 route also has a harbour link and the shortest street between them is a sea street with a valid ship route, the
@@ -1271,8 +1288,11 @@ search ends as soon as more than `n` have been counted, returning candidate `n`.
 transport itself: `navy-and-military.md`.
 
 `NNet::System::FindNearestFlagWithLink` S 00663f50 (used by `MoveToHome`) returns the player's flag nearest by hex
-distance whose net continent of the given kind equals a given id, restricted to the same map continent as the
-position [known for the code; inferred for the purpose].
+distance whose net continent of the given kind equals a given id [known for the code; inferred for the purpose].
+The flags are visited in vector order and only a strictly nearer one replaces the best, so the first of equally
+near flags wins. The map-continent filter applies only when the position's map continent id is not −1: then the
+flag's cell must lie on the same map continent; with −1 at the position every flag qualifies [known]
+(`settlers-jobs.md` §3.4).
 
 ---
 
@@ -1479,7 +1499,13 @@ S 0065a930 reads the building reference only if the `SettlersCarrier` section ve
   The order inside the composite operations: `BuildStreet` §3.2 (the street's id before a split at its end),
   `PlaceFlag` §3.1 (carrier unlink, `RemoveStreet`, the new flag, street A, street B, the carrier's relink), the
   street destructor §3.3, the interactive construction §3.2, a dispatch from a building §3.11 (settler before
-  package).
+  package). Counts that follow [inferred from §3.1–§3.5]: a street the player starts once (`0x20006`) and ends
+  with `0x20004` on a free cell draws 6 ids: the street under construction; then the new flag (own id, kind 0,
+  kind 1), the finished street and the kind-1 re-flood of `StreetLink_LinkFlags`. Splitting a manned street with
+  a flag draws 11, in this order: [kind 0 at the start flag, kind 0 at the end flag] (the carrier unlink that
+  empties the street), [kind 1] (the destructor's flag unlink), [flag, kind 0, kind 1], [street A, kind 1],
+  [street B, kind 1], [kind 0] (the carrier relinked to his half). A street that ends inside another draws its
+  own id first, then the ids of the split.
 - **Container orders that decide outcomes** [known]: flag links in attach order (search tie-breaks, flood-fill
   order); `flagsByPlayer` / `streetsByPlayer` in creation order with stable erase; packages on a flag by stack
   index then push order; the free-package vector in registration order; the need vector in creation order; bucket
@@ -1667,3 +1693,7 @@ disappears without being booked when there is no such building.
 | 0053c8c0 | `TransportLink_LinkPackageToOrder` | target set for a need |
 | 005644f0 / 00564360 | `SettlerSpawn::SpawnCarrier` / `ConsumeSettlerGood` | carrier spawned with a package |
 | 0066b640 / 005289b0 | `FlagPackageStacks::Init` / `NLogic::System::BuildPlannedStreet` | flag stacks / finishing a planned street |
+| 00776260 | `NLogic::AStarStreet::PrepareSearch` | mode-3 search state from the harbour bits |
+| 00663a00 | `StreetPlanner::CommitPathTo` | a click on the planned path: cut, restart, re-add |
+| 0066a1f0 / 00663f50 | `NNet::Flag::FindShortestLinkToFlag` / `NNet::System::FindNearestFlagWithLink` | parallel streets; nearest flag of a net continent |
+| 00532960 | `Entity_IsIdle_88_Flags` | block reason 4 of `GetRemoveBlockReason`: `constructionTime < 1` and not the headquarters type |

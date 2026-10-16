@@ -1099,6 +1099,20 @@ crossings as hexagon fans, water-street buoy chains, sea-route strips with the 1
 to §3.8); built per street on a worker thread from `EntityAdded` / `StreetUpgraded` / removal, rebuilt on height
 changes under it. Street previews of the placement mode come from `IQueries` and draw with the preview tint.
 
+**As built** [implemented 2026-10-16, sadk-remake fb451d1]:
+
+- **Mesh**: `StreetMesher` follows the Hermite route spline with tangent factor 1.3 and 31-chord segment lengths;
+  the strip has 8 slices per segment and leaves out a slice at a flag with several streets; a crossing is a
+  hexagon fan.
+- **Layer**: `StreetLayer` (map layer order 450) keeps one `MeshInstance3D` per street and one per crossing, named by
+  street id or crossing cell; texture sets 0 and 1; draw order through render priority. A street is rebuilt on its
+  add, remove and upgrade and on `MapChanged(Heights)` under it. `street.gdshader` applies a depth offset of 0.1 and
+  the normal map; the parameters come from `graphics.xml` `<Street>`.
+- **Differences from the original**: the strip is a grid sampled from the heights, not the strip clipped against
+  the terrain triangles; every flag node gets a crossing; the other streets at a node are rebuilt when its street
+  count changes [inferred]; water streets and sea routes are not drawn yet; the normal map's
+  channel convention is [inferred].
+
 ### 15.2 Territory borders
 
 Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt for the changed rectangle of

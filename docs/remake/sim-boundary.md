@@ -217,6 +217,13 @@ carries a `RemoveReason` (`Entered`, `Died`) and, for a settler that entered a b
 settler's `EntityAdded` comes before the `LeaveBuilding` walk its constructor starts, with no step between. `Died` is
 emitted when the settler is erased, one tick after it reached state 6 (SJ §3.3).
 
+Living map as built (sadk-remake 514d96c): the engine holds the event types (`LivingMap.cs`). `DepositShown(id, type,
+cell, finePos, reason, growth)` is the deposit's `EntityAdded`, emitted where the original raises "deposit shown"
+(sowing, a deposit made full, a load with growth ≥ 0, MR §5.3): a deposit planted but not yet sown is not announced,
+and a field sown anew is shown again with its new growth. `DepositDepleted(id, depletedTicks)` comes from the marking
+(growth ≥ 0), `SpawnTriggered(id)` from both spawn kinds. An animal's `EntityRemoved` carries `Obstructed` (erased
+under a new building, MR §3.10) or `Destroyed` (a hunt abort).
+
 `SimEvent` is an open base record: a mod's component emits its own event types, and the presentation maps event
 types to handlers, so a mod brings render and audio behaviour for its own events ([mods.md](mods.md) §8.2).
 
@@ -258,7 +265,9 @@ engine interface; `IQueries` is not built yet.
 
 Entity views are component-shaped (`IConstructionView`, `IHitpointsView`, `IProductionView`, `IMovementView`,
 `IActionTimerView`, `IMilitaryFlagView`, `IGrowthView`, ...), so a mod's component adds its own view interface and
-the panels and render kinds ask for capabilities, not types ([binding] architecture §5).
+the panels and render kinds ask for capabilities, not types ([binding] architecture §5). As built (sadk-remake
+514d96c): `IGrowthView` (growth and removal counter) and `IMotionView` (the last motion sample) are engine
+interfaces.
 
 **`IQueries` rules**: own scratch buffers (the original shares A* instances, the visited grid and flood-fill marks
 inside flags between the simulation and the street preview, MR §2.8, §2.9), no random draw, and **no lazy filling
@@ -287,7 +296,8 @@ As built (sadk-remake a2bd808): `TickRecord.Motion` holds the samples taken afte
 implement `IMotionSource`, in tick order (`World.CollectMotion`). A `MotionSample` carries the from and to fine
 positions, the progress, the street, the heading and the flags `FineMode`, `Queued`, `Aboard` and `Dying`. `Street` is
 the street the settler serves (`CurrentStreet`), not the street of the leg it walks; which one the route spline needs
-is open (§11 item 4).
+is open (§11 item 4). Animals publish the same types: `MotionSample`, `MotionFlags` and `EntityStateChanged` are
+defined once in the engine (`Motion.cs`, `EntityStateEvents.cs`) for settlers and animals (sadk-remake 514d96c).
 
 The simulation publishes **logic** values only: what it stores and saves. The presentation turns them into world
 positions per tick (route spline, height snap, evade offset, boat bobbing) and keeps `prev` / `current` per object,
@@ -320,6 +330,30 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   soldier with 3 hit points dies after 3 strays. A settler that reaches its home is in state 2 at tick 39 and erased at
   40 (`Entered`, with `Into`). The stray count matches SJ §3.4, the dying times SJ §3.2 (dying time 28, skeleton
   after 14) and the removal ticks SJ §3.3.
+
+### 6.5 The street net as built [implemented 2026-10-16, sadk-remake fb451d1]
+
+- **Seams**: the village, the settlers and the transport plug into the street net through `IStreetNetHooks`
+  (registered with `AddHooks`). Without them nobody carries, nothing is ordered and no building blocks a flag's
+  removal. `FlagQueue` is null when no navy is loaded. `StreetType` is an engine type.
+- **Not yet**: streets order no first carrier. The carrier good is `GoodRulesDef.StreetCarrier`, and the data stage
+  does not attach that rule yet.
+- **Scripted sessions**: `Sadk.Headless world --commands=<file>` runs one command per line (tick, command id, the
+  fields as JSON) and can log the session; the match mode replays such a log (`replay=`).
+- **Measured**: an 18-command script starting at the castle flag (46, 55) built 6 streets and 7 flags, the split at
+  (49, 55) included; its replay gave 128 net-tick checksums, none of which differed.
+
+### 6.6 The living map as built [implemented 2026-10-16, sadk-remake 514d96c]
+
+- **Presentation**: `AnimalFeed` takes the animals from the motion samples. The render type is the animal type's
+  `gfxName`; it plays Walk while moving, Stand1 or Stand2 at rest (chosen from a private presentation stream seeded
+  0x5432ACE0, §8), and Dying once. `DepositGrowth` scales a tree by (min(1, 3g), g, min(1, 3g)), raises a field's
+  wheat by g and sinks a disappearing deposit by `depletedTicks / 20`; `growthWidth` and `growthHeight` come from
+  `visuals/map-objects.xml`.
+- **Ambients**: the original's ambient sound emitters and swarms are presentation only (the swarms are dormant,
+  `../sim/ambient-swarms.md`), so the living map simulates nothing for them.
+- **Measured**: 20 maps run for 2000 ticks, twice, gave equal state hashes; about 0.4 ms per tick on average
+  (noisy).
 
 ## 7. The way back: commands [draft]
 
@@ -434,7 +468,19 @@ These matter more in the remake than in the original, because Harmony patches ca
    building the build mode (to review): **B** opens the build menu without a cell, the original's "choose a type, then
    click cells" mode, which the original has but never reaches (ingame-ui §3.8.10), as the remake's own addition; the
    cell marker is a translucent hexagon, since the picture of the original's decal (S 006b0d00) is not known; the info
-   box has its fade-in only.
+   box has its fade-in only. Taken while building the street net (to review, §6.5): `StreetType` is an engine type;
+   `0x2000B` is always refused (result "no-effect"; the original's executor does nothing, GC); no owner check on
+   `0x20005` and `0x20009`, as in the original, until a mode switch exists; the hook defaults (nobody carries, nothing
+   is ordered, no building blocks); `Initialised` and `NetContinents.InUse` are set at `Start` [inferred]; the checksum
+   writes each record's fields in the original's order but the flag cores first rather than interleaved as
+   `StoreForChecksum` does, and the flag-stack part leaves out each package container's active byte, so the street
+   net's checksum bytes differ from the original's [inferred]; a split whose half cannot be built hands the carrier
+   to the other half (the original would crash). Taken while building the living map (to review, §6.6): guards
+   against division by zero (move distance 0, idle quotient 0, spawn interval 0, empty spawn list); the roam search
+   refuses a start cell outside the map (the original reads past its grids, MR §3.10); the removal reasons
+   `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once [inferred]; growth visuals step
+   per tick instead of the original's 0.1 s fade [presentation]; the good flag `GroundResourceOnWater` replaces the
+   hard-coded fish id.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

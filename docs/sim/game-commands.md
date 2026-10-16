@@ -491,8 +491,10 @@ side action 29 additionally cancels a running placement mode right after queuein
 the block reason is 0). Executor S 007813d0: flag found among all players' flags and
 `NNet::Flag::GetRemoveBlockReason` S 00669f70 = 0 → `NNet::System::RemoveFlag` S 00665c10 (deletes every street
 attached to the flag, the flag, and an attached building). Block reasons, in order: with an attached building: 3
-the building is in a fight, 2 it is headquarters-type, 4 it is not player-buildable; then 1 the flag has a harbour
-link and its cell lies in its owner's territory; else 0. Owner check: none.
+the building is in a fight, 2 it is headquarters-type (`depot`, `casern` +0xf1 and `territoryBuilding` +0xf5 of its
+property all set), 4 its type's `constructionTime` (`BuildingProperty+0x88`) is below 1 and it is not the
+headquarters type (`Entity_IsIdle_88_Flags` S 00532960); then 1 the flag has a harbour link and its cell lies in
+its owner's territory; else 0. Owner check: none.
 
 **`0x20006` GE_Street_StartConstruction** — `Event3Integer`: cell x, y, water flag (0/1). Sender
 `SendBuildStreetCommand` S 00781d40 (first click of the street placement mode; the cell is the mode's start
@@ -502,9 +504,10 @@ waypoint, the flag is "street type = 2"). Executor `HandleBuildStreet` S 00783e1
    player must have a flag on the cell; for kind 2 `NNet::Flag::GetWaterStreetBlockReason` S 0066a020 must be 0
    (1 = the flag already has a harbour/navy link, reference at flag +0x168; 2 = the flag's cell does not have
    grid-state bit `0x8`, the shore bit [inferred name]) [known];
-   then a path-less street is created at the flag (`NNet::System::CreateStreetAtFlag(player, cell, kind)`,
-   S 00668830) and, only if that returned a street, the state becomes 5; otherwise the state keeps its previous
-   value (6 after step 1, or whatever an earlier command left);
+   then a path-less street is created at the flag (`StreetConstructorStreet::Begin` S 00668830 →
+   `NNet::System::CreateStreetAtFlag(player, cell, kind)` S 00666590: one street id drawn, the flag's cell
+   reported to the map-update batch) and, only if that returned a street, the state becomes 5; otherwise the state
+   keeps its previous value (6 after step 1, or whatever an earlier command left);
 3. if the state is not 5 (it failed) and the sender is the local player, the placement mode is closed.
 
 **`0x20008` GE_Street_BuildToPosition** — `Event2Integer`: cell x, y. Sender `SendExtendStreetCommand` S 00781e80
@@ -512,9 +515,10 @@ waypoint, the flag is "street type = 2"). Executor `HandleBuildStreet` S 00783e1
 1. not active → nothing (only the local preview is refreshed);
 2. already ready → `BuildPlannedStreet`;
 3. else `StreetPlanner::ExtendTo(cell)` S 00663bf0:
-   - the cell is already on the path → `CommitPathTo` S 00663a00: the path is cut back to that cell, the
-     construction is cancelled and restarted from the path's first cell with the same owner and type, the cut path
-     is added, state 2;
+   - the cell is already on the path → `CommitPathTo` S 00663a00, inside one map-update batch: the path is cut
+     back to that cell; the construction, if active, is cancelled (state 6); a new one is started at the path's
+     first cell with the same owner and type (`StreetPlanner::BuildStreet` → `CreateStreetAtFlag`, a new street
+     id); the cut path is added with `AddPoints`; state 2;
    - else an A* search (`NLogic::AStarStreet`) from the path's last cell to the cell: found → the route is
      appended to the street when it is not empty, state 3; not found → state 1. The route comes from
      `NMap::AStar::BuildPath(out, randomize = false)` S 00676d10, which writes the search's start cell (the
@@ -992,7 +996,10 @@ net ticks; 6 session slots; 8 street planners.
 - Lookups by `Unique` id are map lookups; `0x2002B` and the minimum attack fraction iterate vectors in insertion
   order. No command handler draws a random number itself [known for the handlers; callees such as `StartAttack`
   not audited here]. The street search of `0x20008` builds its route with `randomize = false` and draws none
-  [known, S 00676d10].
+  [known, S 00676d10]. The street commands draw unique ids: `0x20006` one (the street under construction), each
+  restart by `CommitPathTo` one, and `0x20004` ending a street on a free cell five (the flag's three, the finished
+  street, one net-continent re-flood); `docs/sim/streets-transport.md` §8 has the counts and their order, also for
+  a flag that splits a manned street (11).
 - Local state changes that bypass the command path exist only outside network matches: pause, the options
   panel and the typed cheats of `nMenu::Game::OnKeyDown` S 005ec340, which are accepted in net mode 0 only
   (`WhatTheHell` speed 20; `WhatCanEyeSee` calls `MapModifier::ExploreArea` from the map centre with the map
@@ -1125,6 +1132,8 @@ net ticks; 6 session slots; 8 street planners.
 | 005301c0, 0052f8a0 | `GameQuery::CanPlaceBuildingTypeAt`, `CanPlaceFlagAt` | placement checks |
 | 0055cd40, 00669f70, 005670c0 | destroy / remove-flag / upgrade block reasons | validation |
 | 006636e0, 00663bf0, 00663a00, 00663900, 005289b0 | street planner | street protocol |
+| 00668830, 00666590 | `StreetConstructorStreet::Begin`, `NNet::System::CreateStreetAtFlag` | the street under construction of `0x20006` |
+| 00532960 | `Entity_IsIdle_88_Flags` | block reason 4 of `0x20005` |
 | 005c0930, 005c2bf0, 005c0d40 | `NPlayer::Military::ResetDefaults`, `GoodPriorities::InitFromGoodTable`, `GoodArrangementGroup::ResetToDefaults` | reset commands |
 | 00410f70 | `NComm_Manager::Process_MainLoop` | net tick length adaptation (`0x3000D`) |
 | 0040a530, 0040a810 | `NComm_Manager` constructor, `ResetSession` | start values of `L`, `speedUp`, `T` |
