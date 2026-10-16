@@ -719,7 +719,9 @@ Settlers are not selectable by a click [inferred: no branch of this function sel
 **Right click** (`MenuSelection::HandleRightClick` S 00617bc0) [known]: mode 2: when slot 11 of the
 create-building box returns 0 its slot 9 is called with 1 and the click is consumed (the box steps back one
 level [inferred]), else `mode = 1` and the selection is reset; mode 3: cancel street building unless the
-planner is busy (`MenuSelection::Cancel` S 006162e0: sound `uiCancel`, `mode = 1`, `StreetBuildMode::Cancel`
+planned street can already be completed (S 0078b180: `planner0.IsConstructionActive() && CanComplete()`; then
+the click keeps mode 3 and `MenuSelection::Update` ends the mode, [ingame-ui.md](ingame-ui.md) §3.5)
+(`MenuSelection::Cancel` S 006162e0: sound `uiCancel`, `mode = 1`, `StreetBuildMode::Cancel`
 S 0078b1d0, selection reset; the street mode switches the cursor's placement mode off and sends `0x20007`
 when a waypoint beyond the start cell exists, otherwise it is just ended without a command); mode 4 →
 `mode = 1`, reset; mode 1: the selection is reset. The action panel is closed unless it is waiting for a
@@ -738,9 +740,11 @@ plan result is 4 is refused and switches the cursor's placement mode off. Every 
 cell to the waypoints, moves the anchor to it (or, when the first planner reports through its slot 5 that it
 is done, switches the cursor's placement mode off instead), refreshes the preview and sends `0x20008`. Per frame `nGame::System::Render` refreshes the preview for the cursor cell
 (`StreetBuildMode::UpdatePreview` S 0078bbe0: only when the cursor cell changed; the cell is appended
-temporarily to the waypoints, the path is re-planned on the mode's second planner, and the shorter of the two
-candidate paths is shown as preview street). `MenuSelection::Update` S 006163f0 cancels mode 3 as soon as the
-street mode is gone, has no waypoints, is invalid or flagged cancelled.
+temporarily to the waypoints, the path is re-planned on the mode's second planner; the shorter of the two
+paths is drawn as a preview street and the rest of the longer one as a second, alpha or red tinted, preview
+street, [world-objects-rendering.md](world-objects-rendering.md) §3.6). `MenuSelection::Update` S 006163f0
+cancels mode 3 as soon as the street mode is gone, has no waypoints, is invalid, flagged cancelled, or its
+planned street can already be completed (S 0078b180).
 
 **Cell marker** (`Cursor::UpdateCellMarker` S 007885e0) [known]: only with `bActive` and an active human player,
 and only when the cursor cell projects onto the screen.

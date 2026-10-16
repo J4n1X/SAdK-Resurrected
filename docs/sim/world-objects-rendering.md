@@ -308,7 +308,12 @@ The buoy model is loaded with the 48-byte street layout [known] S 006e2350.
 5. A package item is placed by its constructor [known] S 006d0480: with a valid flag reference (`logicItem
    +0x48` object, id at `+0x5c` not negative) it joins that flag's pile (§3.2) and, when the package already lies
    (`logicItem +0x70` set), takes its slot matrix at once with `landed` = true; otherwise, with a valid ship
-   reference (`+0x98` object, id at `+0xac`), it is bound to that ship's visual.
+   reference (`+0x98` object, id at `+0xac`), it is bound to that ship's visual. A package has a flag reference
+   when its item is created only after loading a save; a package made during play has none yet, and its item
+   joins the pile later through the scene callback at +0x68 (`OnLogicItemAddedToPile` S 0069c920, §3.2) [known].
+6. The destructor `Item::dtor` S 006d06a0 [known]: when the item is attached, the character's override item is
+   cleared only if it still is this item (`CCharacter::ResetIfTargetMatches` with the item's handle); the item
+   is removed from its pile (`RemoveItem`, §3.2) and its ship binding dropped.
 
 ### 3.2 Goods at a flag: the pile
 
@@ -351,15 +356,26 @@ holds `count + 1` layouts (`count` attribute of `<StackLayouts>`); the loader do
 children with `count`. `distance` is the `distance` attribute. Install: `count="2" distance="0.5"` [known]
 `items.xml`.
 
+Limits of the loaders [known] S 0069d650, S 006d0eb0, S 006d0d80: the offsets of a layout are written without
+a bound check, so a seventh and later `offset*` attribute overwrites the next layout's offsets (a layout is
+six float[3], 0x48 bytes); more children than `count` write past the end of the table. The install's
+`<StackLayouts>` holds three XML comments beside its two `<Layout>` children; since the element name is not
+tested, the shipped data stays inside the table only if the XML reader does not hand comments to the loop as
+children [inferred].
+
 **Removing an item** `ItemPile::RemoveItem` S 006ceb50 [known]: in the stack whose key is the item's good id and
-that holds the item, every item above moves down one slot and takes that slot's matrix; slot 5 is cleared; the
+that holds the item (stacks are searched in order; a stack with that key that does not hold the item is passed
+over and the search goes on in the later stacks with the same key), every item above moves down one slot and
+takes that slot's matrix; slot 5 is cleared; the
 removed item is given the matrix of the highest slot that was occupied before the removal, or keeps its own
 matrix when it was the top item; a stack with six empty slots becomes free (`key` = -1). `itemCount` decrements
 whether or not the item was found. The return value is the stack direction in radians (`d * 1.0471976`), 0 when
 the item was in no stack.
 
 **Merging** `ai::render::ItemPile::MergeStacks` S 006cee50 [known]: for each used stack whose slot 5 is empty, while a later
-stack with the same key exists, move that stack's slot-0 item into this one (remove, then add).
+stack with the same key exists, move that stack's slot-0 item into this one (remove, then add). The moved item
+is not given the matrix of its new slot: `AddItem` step 1 sets no matrix, so the item keeps the transform
+`RemoveItem` gave it in its old stack [known] S 006cee50, S 006cece0, S 006ceb50. Presentation only.
 
 **Visibility** `SetPilesVisibleInRect(minCell, maxCell, visible)` S 0069c300 [known] switches all piles whose
 flag cell is inside a cell rectangle (inclusive): the block rectangle grown by one cell on every side when
@@ -377,6 +393,12 @@ update (`ItemMgr::Update` S 0069c520), for an item that is not frozen, not attac
 otherwise `fallVelocity = 0`, `landed = true` and the item takes its slot matrix (`ApplySlotTransform`
 S 006ce970). An item created for a package that already lies (`logicItem +0x70` set) is placed in its slot at
 once [known] S 006d0480.
+
+`ApplySlotTransform` itself does not set `landed` [known] S 006ce970. So a good put on the pile without a
+carrier (a spilled good, which takes its slot at once, see the hand-over below) is in its slot but not landed:
+an item at ground level lands on the next `Item::Update`, while an item in a higher slot is above the terrain,
+falls from its slot at 0.981, and on reaching the ground jumps back up into its slot matrix [known for the two
+functions; the visible drop and pop is read from them]. Presentation only.
 
 **Carrier hand-over.** Scene callbacks `OnLogicItemAddedToPile` S 0069c920 and `OnLogicItemRemovedFromPile`
 S 0069c960 find the item of the package and the pile of the package's flag (`logicItem +0x48`) and call
@@ -413,10 +435,30 @@ without a logic package are skipped. With `lying` = `logicItem +0x70`, "carrier 
 - item bound to a ship: it stays while the package is not `lying`, has no valid carrier and the ship still
   equals the package's ship (`logicItem +0xa0`); otherwise the ship binding is dropped.
 
+Each call takes one of these branches, so a change of carrier takes two logic ticks [known] S 006d09b0,
+S 006d0830: in the first the item, still bound to the old character, is detached (identity rotation at its last
+position, `landed` = false: it starts to fall, `Item::Update` S 006d0720); in the next, bound to nobody, it is
+attached to the new carrier, and `AttachToCharacter` clears `landed` and `fallVelocity` again. For one tick the
+good drops from the old carrier's hand. Presentation only.
+
 An item on a ship is not drawn (`visible` = false) [known] S 006d0720.
 
-**Building site** `ai::render::BuildingScaffold` [known] S 006d82f0, S 006d8240, S 006d7f50, S 006d8070: when the
-revision counter of the site's stock (`source +0x18`) changes, all site items are destroyed and rebuilt: for
+**Building site** `ai::render::BuildingScaffold` [known] S 006d82f0, S 006d8240, S 006d7f50, S 006d8070.
+
+Lifetime and place [known] `S2CG::Building::Update` S 006abcf0 (per frame, not while the building is being
+demolished): the building counts as under construction while its own construction (`Building +0x44`) has
+`remainingA` (+0x70) or `remainingB` (+0x74) above 0. Only then, and only when no scaffold exists, one is
+created; its source is that construction's stock (construction +0x10), and it is visible unless the building
+visual is hidden. An upgrade runs on another construction object (`Building +0x104`), so an upgrade never gets
+a scaffold. The scaffold is destroyed when the building is neither under construction nor upgrading. Its
+position is `0.5 × (anchor cell centre + entrance flag cell centre)` (`CellToWorldPos` of `Building +0x20` and
+of the flag cell, the flag from the reference at `Building +0xa0`), after which x is replaced by the anchor's
+x [known: disassembly S 006abdec–S 006abe1a]; `BuildingScaffold::SetPosition` S 006d7d70 sets identity
+rotation and the terrain height there. So the goods lie inside the footprint, half way toward the door on the
+anchor's x. While the scaffold exists, `RebuildIfSourceChanged` runs in that update every frame (and the
+building's sacrifice effects are not updated).
+
+Contents: when the revision counter of the site's stock (`source +0x18`) changes, all site items are destroyed and rebuilt: for
 every good of the stock map with a count above 0, in map order, `count` frozen items whose `visible` is the
 scaffold's. Layout `LayoutItems` S 006d8070 [known, disassembly]: `pos` starts at the translation of the
 scaffold's matrix (`+4`); every item gets that matrix with the translation below. Per good: `step` = the type's
@@ -557,10 +599,22 @@ appended to the waypoints) and `points0`. Both are `NNet::StreetConstructorPoint
 constructors that only record points; each belongs to one `ai::logic::StreetPlanner` of the build mode
 (`planner0` +0x10 with `points0` +8, `planner1` +0x14 with `points1` +0xc) [known]. The shorter path (`points0`'s when both have the same number of
 cells) becomes a preview street of mode 0. From the longer path the cells from its end back to the last cell of
-the shorter path become a second preview street: mode 1 (alpha) when the longer path is `points1`'s, mode 2
-(red) when it is `points0`'s. Either street needs at least 2 cells. A result of kind 2 makes the preview a
-`WaterStreet`. [TODO] not established: what `points0` holds and therefore what red tells the player; read
-`StreetBuildMode::RebuildPath` and the writers of the build mode's `points0`.
+the shorter path, that cell included, become a second preview street (the whole longer path when the shorter
+one is empty): mode 1 (alpha) when the longer path is `points1`'s, mode 2 (red) when it is `points0`'s. Either
+street needs at least 2 cells. Both previews take the street type of the longer path, so a longer path of
+kind 2 makes both a `WaterStreet`.
+
+**What the two paths hold** [known] S 0078b220, S 0078b510, S 0078be80, S 0078bbe0:
+
+- `points0` is `planner0`'s accepted plan: every click extends it by `PlanSegment` (S 0078b220,
+  [ingame-ui.md](ingame-ui.md) §3.5), and after every street command of the player
+  (`StreetBuildMode::OnPlannerCommand` S 0078be80, with the player's shared planner active and its path valid)
+  `RebuildPath` S 0078b510 rebuilds it through the waypoints, with the shared planner's street id at
+  `points +0x28`.
+- `points1` is `RebuildPath` through the waypoints plus the cursor cell.
+
+So the tail is drawn red when `points1` is the shorter path, i.e. when the cursor lies on the plan: the red
+part is what a click there would cut back (`CommitPathTo`); the alpha tail is the extension a click would add.
 
 ### 3.7 Water streets and sea routes
 
@@ -1042,8 +1096,9 @@ Layout 1 (a pyramid in the stack's local x / y): offsets `(-1,0,0) (0,0,0) (1,0,
 `Tool`, `Bow`, `Leather`, `Fleshham`, `Pretzel`, `Sheep`, `Claymore`, `Halberd`, `Kilt`, `Clay`, `CornBread`,
 `Gemstones`, `Cheese`, `Milk`, `Salt`. Layout 2 (flat, 2 x 3 in x / z): offsets `(-0.5,0,-1) (0.5,0,-1)
 (-0.5,0,0) (0.5,0,0) (-0.5,0,1) (0.5,0,1)`; goods `Water`, `Flour`, `Coal`, `IronOre`, `Gold`, `weissbeer`,
-`Whisky`. Every other good (`Plank`, `Crossbow`, tools, ...) uses the built-in vertical stack. Offsets are in
-units of the item's own bounding box size.
+`Whisky`. Every other good (`Plank`, `Crossbow`, tools, ...) uses the built-in vertical stack: the bindings
+`good4 = "Plank"` and `good20 = "Crossbow"` of layout 1 stand in an XML comment. Offsets are in units of the
+item's own bounding box size.
 
 **`game/settings/graphics.xml`**, element `Street`: the keys of §2.2 plus `shader="street_shader.fx"`,
 `texture0` / `normal0` = `[data]\map\textures\simple_street.dds` / `simple_street_n.dds`, `texture1` / `normal1`
@@ -1151,13 +1206,14 @@ A remake may therefore change any rule of this document without affecting synchr
 |---|---|---|
 | 1 | Answered (§3.1 item 1): not with the shipped data. The four package creators (callers of S 0064fb10) test no type, but they only receive wares: needs expand `EitherGroup` recipe entries (S 00565a70), construction costs are wares, a worker carries a stored good out only if it is a Ware (S 0055b120), and no building whose product slot 0 is a group good carries its product. Changed data could make such packages | — |
 | 2 | Answered as far as the code decides: a good that finds no slot is left in no stack, and `ApplySlotTransform` S 006ce970 copies 64 bytes from `pile - 0x1b4` into its matrix; the pile is its own heap block (S 0069c390), so the transform is arbitrary. The case needs `cfg_setFlagPackageLimit` of 7 or more: for a limit up to 6 the pile's `ceil(count / 6)` stacks per good never exceed the logic's `ceil(count / limit)` (shipped limit 2) | static: S 006cece0, S 006ce7a0, S 006ce970; `docs/sim/streets-transport.md` §2.4 |
-| 3 | What the build mode's `points0` holds, and therefore what the red preview tint tells the player (§3.6) | static read of `StreetBuildMode::RebuildPath` and the writers of `points0` |
+| 3 | Answered (§3.6): `points0` is `planner0`'s accepted plan (extended per click by `PlanSegment` S 0078b220, rebuilt by `RebuildPath` S 0078b510 in `OnPlannerCommand` S 0078be80); `points1` is the plan through the waypoints plus the cursor cell. Red means `points1` is shorter: the cursor lies on the plan and the red tail is what a click there would cut back (`CommitPathTo`) | — |
 | 4 | Whether the settler blob is visible in the running game (statically every vertex is raised to 3.4e38, §3.9) | a screenshot at shadow level 1 to 3 |
 | 5 | Layout of `decals.dds` (the blob uses the whole texture: uv offset (0, 0), scale (1, 1)) | look at the texture |
 | 6 | Answered (§3.10): sun and moon are not drawn. The pass handle `Sun` is stored at `SkyRenderer.hSunPass` (+0x2c) by S 006af300 and the two quads are built, but no function of the decompiled program reads the handle: none of the functions that hold the `SkyRenderer` pointer (`CEnviromentMgr` constructor, destructor, `Update` S 00683d50, `RenderSkydome` S 00683e50) nor a `SkyRenderer` method begins that pass [inferred]. Not observed in the running game | static: S 006af300, S 006af490, S 00683e50 |
 | 7 | Contents of `TIMER.x`, `.z`, `.w` and of `CAMERA_FOCUS`; where the `POSTFX` define is supplied (§3.11) | writers of S 00887460..S 00887490; callers of `CShaderProgram::Reload` S 004ec260 |
 | 8 | The class behind `CGraphicDevice +0x1b4` that fills the dome position (§3.10) | writer of that field |
 | 9 | Animated items (`AnimatedItem`, `ItemEvent`) are unused by the install's data; their play rules | static read of S 006c9660, S 006b0800 if a mod needs them |
+| 10 | How a carrier on a water street shows its good (the carrier's own attachment, besides the boat item of §3.3) | static read of `CharacterCarrier::UpdateAttachedItem` S 006c8ee0 |
 
 ---
 
@@ -1179,7 +1235,7 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 0069c920 / 0069c960 | `ItemMgr::OnLogicItemAddedToPile` / `OnLogicItemRemovedFromPile` | scene callbacks |
 | S 0069c520 / 0069c4e0 | `ItemMgr::Update` / `UpdateAllCarrierAttachments` | per frame / per logic tick |
 | S 0069c5c0 | `ItemTypes_FindByName` | item type index of a name, -1 when absent |
-| S 006d0480 | `S2CG::Item::ctor` | item for a package |
+| S 006d0480 / 006d06a0 | `S2CG::Item::ctor` / `dtor` | item for a package (pile only with a flag reference, i.e. after a load); removal from the pile and the character |
 | S 006d0720 | `Item::Update` | follow, fall, land |
 | S 006d09b0 / 006d0830 / 006d0620 | `Item::UpdateCarrierAttachment` / `AttachToCharacter` / `UpdateAttachedTransform` | carried goods |
 | S 006d0bd0 / 006d0c20 | `Item::OnAddedToPile` / `OnRemovedFromPile` | pile entry and exit, stack direction to the carrier |
@@ -1190,6 +1246,10 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 006d0090 / 006cfd30 | `ItemRenderer::UpdateInstancing` / `BuildInstancedMesh` | instancing switch |
 | S 006cfc20 | `ai::render::ItemRenderer::CreateResources` | plain item streams, `item_shader.fx` |
 | S 006d82f0 / 006d8240 / 006d8070 | `ai::render::BuildingScaffold::RebuildIfSourceChanged` / `ai::render::BuildingScaffold::BuildStacks` / `ai::render::BuildingScaffold::LayoutItems` | goods on a building site |
+| S 006abcf0 / 006d7d70 | `S2CG::Building::Update` / `ai::render::BuildingScaffold::SetPosition` | scaffold life cycle and place (anchor x, half way to the flag) |
+| S 0078bbe0 / 0078b890 | `ai::game::StreetBuildMode::UpdatePreview` / `CreatePreviewCasters` | street build preview |
+| S 0078b220 / 0078b510 / 0078be80 | `StreetBuildMode::PlanSegment` / `RebuildPath` / `OnPlannerCommand` | `points0` (accepted plan) and `points1` (plan to the cursor) |
+| S 006c8ee0 | `CharacterCarrier::UpdateAttachedItem` | carried good on a water street [TODO] |
 | S 006c3f10 | `ai::gfx::StreetRenderer::LoadConfigXml` | `<Street>` of `graphics.xml` |
 | S 006d7a80 / 006d6ff0 / 006d6db0 / 006d75b0 | `ai::math::RouteSpline::ctor` / `ComputeTangent` / `EvaluateSegment` / `EvaluateFrame` | street path |
 | S 006d71a0 | `RouteSpline::ApproxSegmentLength` | segment length from 31 chords |

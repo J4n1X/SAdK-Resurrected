@@ -595,7 +595,7 @@ world and all character keys except `p` are swallowed [known] S 005eaae0, S 005e
 | Right click on the action panel | cancel the selection | [inferred] S 005f06f0 |
 | Right click in the build menu | leave build placement (mode 1, selection reset) | [inferred] S 00634040 |
 | Right click on the tutorial panel | close it | [inferred] S 005f9720 |
-| Esc | Camera in cinematic mode: back to standard. Otherwise the hotkey 27 of whichever visible widget has it: info box `closeButton`, the `closeButton` of statistics / settings / load / save / quest log; in the requester "No"; in the sacrifice target chooser close | [known: data]; [inferred] S 00787790, S 005ffc70, S 00626d60 |
+| Esc | Camera in cinematic mode: back to standard. Otherwise the hotkey 27 of whichever visible widget has it: info box `closeButton`, the `closeButton` of statistics / settings / load / save / quest log; in the requester "No"; in the sacrifice target chooser close. Street placement (§3.5) resets the selection, so no info box is visible and Esc does not end it [inferred] | [known: data]; [inferred] S 00787790, S 005ffc70, S 00626d60 |
 
 Hotkeys set in the shipped `menuingame.xml` [known: data]:
 
@@ -679,6 +679,21 @@ the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTi
 
 ### 3.5 Clicks on the world: `MenuSelection` [known] S 00617910, S 00617bc0, S 006176d0, S 00617770, S 00617800
 
+**What a left click selects** (`nGame::Cursor::SelectAtCursor` S 00788370, only while the cursor is active)
+[known]: the game selection is cleared, then the first hit wins:
+
+1. a flag of the local player on the cursor cell (`FindLocalPlayerFlagAtCell` S 00787bf0) → Flag;
+2. the entity under the mouse (`PickVisibleEntityAtMouse` S 00787cc0) → Building; [TODO] not established: what
+   this ray pick hits (buildings, ships, routes); a read of S 00787cc0 settles it;
+3. a building on or next to the cursor cell (`PickSelectableEntityAtCell` → `NVillage::System::
+   FindBuildingAtOrAdjacentCell` S 00558990): grid bit 0x1 = a building is anchored on the cell; else grid bit
+   0x100 = a neighbour in directions 0..2 has bit 0x1 and holds a large type (size mask bit 2 set, bit 1
+   clear) → Building;
+4. a ship under the mouse (S 00787a30) → Ship; a ship route under the mouse (S 00787b00) → ShipRoute;
+5. a street on the cell that has both flags and belongs to the local player → Street.
+
+Nothing hit → nothing selected. `MenuSelection` then derives the selection kind (§3.6).
+
 **Left click** (`HandleClick`). First the clicked cell is copied from the game cursor (system +0x24 / +0x28)
 into +0x8c / +0x90. Then by mode:
 
@@ -706,19 +721,56 @@ into +0x8c / +0x90. Then by mode:
 
 **Right click** (`HandleRightClick`): mode 2 → if the create-building box is not visible, show it and return
 "consumed"; else mode = 1 and reset. Mode 3 → with no street mode active: consumed, nothing else; else the test
-`Unk_Member10_Vslot2ThenVslot5` S 0078b180 on the active street mode (two virtual calls, slots 2 and 5, on the
-object at street mode +0x10; [TODO] not established: what they test, a read of that object's class settles
-it): true → keep mode 3, false → `Cancel` and consumed. Mode 4 → mode = 1, reset. Any other mode → reset. The
+S 0078b180 on the active street mode: `planner0` (street mode +0x10) `IsConstructionActive() &&
+CanComplete()` [known] S 0078b180 (read as: the planned street can already be completed). True →
+keep mode 3, false → `Cancel` and consumed. Mode 4 → mode = 1, reset. Any other mode → reset. The
 paths that do not return "consumed" then close the action panel unless confirming and return "not consumed".
+
+A right click in street placement therefore never steps back a segment: in the one state where it keeps mode 3
+(test true), `MenuSelection::Update` (below), which requires the test to be false, ends the mode itself
+[known] S 00617bc0, S 006163f0.
 
 **Street placement start** (`BeginStreetBuild` S 00615e30, action 9): mode = 3,
 `nGame::System::BeginStreetBuildMode(position of the selected flag)`, selection reset. `MenuSelection::Update`
 S 006163f0 [known] stays in mode 3 only while all of these hold: a street mode exists, its point vector
 (+0x24 / +0x28, 8-byte entries) is not empty, `ai::game::StreetBuildMode::IsValid` is true, the test S 0078b180 above is
-false and its byte +0x39 is 0; otherwise it calls `Cancel`.
+false and its byte +0x39 (`cancelled`) is 0; otherwise it calls `Cancel` (not silent).
 
-**Cancel** (S 006162e0) [known]: plays `uiCancel` unless silent, mode = 1, calls `StreetBuildMode::Cancel` if
-a street mode with a non-empty point vector and byte +0x39 = 0 exists, then resets the selection.
+**Cancel** (S 006162e0) [known]: plays `uiCancel` unless silent, mode = 1, calls `StreetBuildMode::Cancel` with
+`deferred` = `silent` if a street mode with a non-empty point vector and byte +0x39 = 0 exists, then resets the
+selection.
+
+**The street build mode** `ai::game::StreetBuildMode` (0x3c bytes) [known] S 0078b850, S 0078b4a0,
+S 0078b1d0, S 0078b220, S 0078be80; the two planners and their point recorders are in
+[world-objects-rendering.md](world-objects-rendering.md) §3.6:
+
+- Fields: waypoint vector +0x20 (begin +0x24, end +0x28, 8-byte cells), `planner0` +0x10, `planner1` +0x14,
+  `pendingRemove` +0x38, `cancelled` +0x39, `valid` +0x3a.
+- `Begin(startCell)` S 0078b850: clears `pendingRemove` and `cancelled`, sets `valid`, pushes the start cell,
+  switches the cursor to placement mode (true, 2) with the start cell as anchor.
+- `IsValid` S 0078b4a0: the start waypoint still holds a flag of the player (`NNet::System::FindFlagAt`); the
+  player's shared planner (`g_pGameSystem` per-player table), if its construction is active, has a valid path
+  (`IsPathValid`); and `valid` is set.
+- `Cancel(deferred)` S 0078b1d0: switches the cursor's placement mode off and sets `cancelled`. Deferred: sets
+  `pendingRemove` and nothing else. Otherwise, with one waypoint the mode is ended without a command
+  (`EndStreetBuildMode`); with more it sends **`0x20007`** (`SendCancelStreetCommand`).
+- `PlanSegment(planner, target, fullSearch, ref)` S 0078b220, the plan of one click. The first segment
+  (`fullSearch`): water (kind 2) is a candidate when the start waypoint is an unlinked shore flag of the player
+  (`GameQuery::IsPlayerUnlinkedShoreFlagAt`) and `CanStreetStepTo(start, target)` passes; land (kind 0) when
+  `CanStreetPassCell(target)` passes. With both, both are planned and land wins only if its path is strictly
+  shorter (a failed water plan counts as endless). Neither → 1. The chosen kind is planned
+  (`BuildStreet`, `ExtendTo`); a failed water plan is retried as land from the first waypoint; result 0 when a
+  path was found, else 1. Later segments: 4 when the planner can already complete, else `ExtendTo(target)`
+  and 1 when the planner's state (+8) is 1 (no route), else 0 [known].
+- `OnPlannerCommand` S 0078be80, after a street command of the player: when the player's shared planner is
+  active and its path valid, `RebuildPath` S 0078b510 rebuilds `points0` and the preview is refreshed;
+  otherwise the mode is ended (`EndStreetBuildMode`).
+
+**Street actions in mode 3** (`ExecuteAction` S 00623730) [known]: action 29 (create flag) sends `0x20004` at
+the remembered cell and then, in mode 3, calls `Cancel(silent = true)`: no sound, and the street mode is only
+marked (`deferred`), so no `0x20007` is sent. Action 28 (destroy street) in mode 3 sends nothing itself and
+calls `Cancel(false)`: `uiCancel`, and `0x20007` when the street has more than one waypoint. Outside mode 3,
+action 28 sends the street removal.
 
 **Reset** (`ResetSelection` S 00615d10) [known]: hide the active box, target id = −1, kind = −1, hide the
 confirmation box and close the action panel unless confirming, set the four action buttons to action 0, show
@@ -815,20 +867,42 @@ What each box shows, and which commands its own controls send:
 | Ship S 0063c100 | ship name; tabs goods / settlers aboard | none |
 | Casern S 0063b590, S 0063abc0 | 2 × 3 soldier buttons (`compStd0..2`, `compBow0..2`): stock, queued, lock state, accept flag; recruit costs per class (`costStd`, `costBow`, shared `costBoth0/1` as `have/need`); upgrade cost | click on a soldier button → **`0x2001E` GE_Depot_ToggleFlags_UID** (building, that soldier good) |
 | TerritoryBuilding S 0063a4b0 | soldier slots (capacity scaled by health, at most 12) with the garrison; border-distance icon (3 classes); health bar and `N%`; soldier count text | none (action buttons) |
-| Construction S 006397e0 | progress = ((1 − a) + (1 − b)) ÷ 2 of the two remaining-work fractions (+0x70, +0x74) as bar and `N%`; building icon; missing and delivered material; the builder | none |
+| Construction S 006397e0 (ctor S 00639210) | progress = ((1 − a) + (1 − b)) ÷ 2 of the two remaining-work fractions (+0x70, +0x74) as bar and `N%` (text `"%.0f%%"`, rounded); building icon; missing and delivered material, one button per unit (list below); the builder | none |
 | Flag S 00638b10 | goods lying at the flag; help text `!Infobox_Flag_Help` or `!Infobox_Harbor_Help` (flag with a harbour) | none |
 | Fight S 006382e0 | local player's name `VS` opponent's name; two soldier counts per side (unknown side: `?`); a changed counter pulses (scale 1.4 → 1.0 in 0.5 s) | none (action 12) |
 | SacrificeSelect S 00637340 | up to 2 × 8 `sacrificebutton`s (`sacrifice_<row>_<col>`): the player's available sacrifices; row 1 = those whose static-access property is positive, row 0 the others | click → **`0x20024` GE_Sacrifice_Order** if the sacrifice can be ordered, else **`0x20027` GE_Sacrifice_StartResearch** if research is possible, else nothing (S 0062f390) |
 | SacrificeRunning S 00636d80 | the sacrifice, its cost goods, title `!SACRIFICE READY` / `!SACRIFICE` / `!PREPARING SACRIFICE`, remaining time `m:ss`, progress bar, description | none (action buttons) |
-| Production / Mine S 00635c50 | input goods incl. those in the production slots; the worker; up to two products with tooltips; productivity bar and percent; buildings without inputs hide the input column and use the `noEntryPercentPos` / `noEntryPercentOffset` layout | none (action buttons) |
+| Production / Mine S 00635c50 (ctor S 00635710) | input goods incl. those in the production slots, one button per unit (list below); the worker; up to two products with tooltips; productivity bar and percent: the building's entry of `Statistics::GetProductivity` S 005373b0, which returns −1.0 for a building without an entry, the percent text truncated (`__ftol2`); buildings without inputs hide the input column, use the `noEntryPercentPos` / `noEntryPercentOffset` layout and the box width `width − contWorker.x + contEntry.x` (computed in `LoadFromXml` S 006350f0 at S 00635312) | none (action buttons) |
 | CreateBuilding | §3.8.10 | **`0x20002`** |
-| Depot S 00633b60, S 00632e40 | tab 0: all goods of the tribe with stock, in-transit count for the tribe's special cost good, arrow = accept flag; tab 1 (only for buildings whose property bytes +0x54, +0xf1, +0xf5 are set): soldiers per kind and level | click on a good button → **`0x2001E`** (building, good id) |
+| Depot S 00633b60, S 00632e40 (ctor S 00633460) | tab 0: the tribe's goods of type `Ware` only, in tribe order (`GoodList::SetFromGoodIdVector` S 0064a150 with type filter 0), each with its stock count and `+N` = `NTransport::NeedGoods::CountRequestedByAssignment` over the requests of the depot component (building +0x3c, its +0x44) for that good ([TODO] the function is not read); the entry of the tribe's second-carrier cost good instead shows `+N` = the second carriers referenced by the building (+0x108); arrow = accept flag; tab 1 (only for buildings whose property bytes +0x54, +0xf1, +0xf5 are set): soldiers per kind and level, count = stock plus the village's soldiers of that level and kind, `+N` = the settlers of that soldier good referenced by the building | click on a good button → **`0x2001E`** (building, good id) |
 | Catapult S 006329f0 | preview of the target and its owner; stones in stock and on the way; the worker; health bar and `N%` | none (action buttons) |
 | BuildingDefault S 00631d80 | headline and the worker | none |
 | Street, CreateFlag, SacrificePanelSelect | frame only | none |
 
 Good buttons everywhere: a click on one that carries a unit id closes the action panel (unless confirming) and
 focuses the camera on that unit [inferred] S 0062fe50.
+
+**Good lists** (`nMenu::GoodList`, buttons `nMenu::GoodButton`) [known]:
+
+- Defaults (`GoodList::ctor` S 006494d0): `sort` 0, `aggregate` 1, `append` 0. The XML attributes `collapse`
+  (→ `aggregate`), `sort`, `append` and `count` override them (`GoodList::LoadFromXml` S 0064b270, at
+  S 0064b2bd); the construction and production box constructors switch `aggregate` off. `aggregate` is the
+  "show count" argument every button gets.
+- `GoodList::SetEntries` S 00649100: sorts the entries when `sort` is set, starts at the first free button when
+  `append` is set, writes entry `i` into the next button and stops when the buttons run out; the remaining
+  buttons are cleared. It never adds buttons: entries beyond the list's `count` are not shown.
+- `SetFromCountMapAndPendingGoods` S 0064a3b0 (construction, production and catapult boxes): first one entry
+  of amount 1 per unit of every good in the count map; then one entry per open need: amount 1 with the arrow
+  and the serving package's unique id (the button can focus it) when a package serves the need, else amount 0
+  with the "not available" mark.
+- Count text (`GoodButton::SetEntry` S 00630530), only with "show count": `%u/%u` (amount / max) when a
+  maximum is set, coloured `full` when amount = max, else `empty`; else `%u` in `normal`, or `empty` when the
+  amount is below 1; with an extra amount `%u%s%u` with `+` for a positive extra, `empty` when amount + extra
+  is below 1. Colours from the constructor S 0062fff0: full (0, 1, 0, 1), empty (1, 0, 0, 1), normal
+  (1, 0.81, 0.62, 1). The six indicator pictures (arrow, not available, upgrading, moving, fighting, working)
+  follow the entry's flags; the arrow hides "not available" and "fighting" hides "moving"; a non-negative
+  progress shows the health bar. The tooltip is kind 2 (good) or, for kind 3 with a valid unit, the soldier
+  tooltip.
 
 ### 3.7 Action buttons [known] S 006243c0, S 005f05c0; [inferred] S 00623600, S 00623470, S 00624430, S 005f0880
 
@@ -840,7 +914,9 @@ The panel (`actionbuttonpanel`) holds `btAction1..4` (templates `bt_action1..4`,
   from the XML element `actionbuttons` (attributes `start`, `size`, `spacing`, `mouseoveroffset`: shipped
   `576 288`, `44 45`, `48 48`, `0 96`): rectangle x = start.x + column × spacing.x, y = start.y + row ×
   spacing.y, w × h = size, with the fixed (column, row) per action below; the tooltip is the action's command
-  name; availability is evaluated. Icon and tooltip are rewritten only when the action number changes.
+  name from the table `g_IngameCommandNames` S 0087fb10 (31 strings, one per action 0..30; read by `SetAction`
+  and `SetAvailability` S 00623470) [known]; availability is evaluated. Icon and tooltip are rewritten only
+  when the action number changes.
   The table is built in the `MenuSelection` constructor and again at the end of its `LoadFromXml`
   [known] S 00622f40, S 006164f0. [TODO] not established: how `mouseoveroffset` is applied (it is only stored
   by S 00624470; a read of the readers of `g_ActionButtonMouseOverOffset` settles it).
@@ -860,12 +936,19 @@ The panel (`actionbuttonpanel`) holds `btAction1..4` (templates `bt_action1..4`,
   button is disabled and marked, and its tooltip is the failure text for the action's failure code
   [known] S 00623470. The texts are the `tag`
   attributes of the elements `<ActionName>_<code>` under `actionfailurecodes` in the XML (the element is a
-  child of `btAction4` in the shipped file, read once into a global table) [inferred] S 00624470.
+  child of `btAction4` in the shipped file, read once into a global table) [inferred] S 00624470. The shipped
+  list also has `Action_Flag_BuildWaterStreet_0..2` (`!ConnectWaterStreetFailure_None` / `_isHarbor` /
+  `_noWaterNear`), but no action number carries that name: a leftover of a removed water-street action
+  [known: data and the 31-entry action tables].
 - **Click or hotkey**: actions {4, 8, 12, 21, 23, 28} (destroy building, destroy flag, retreat, abort research,
-  abort sacrifice, destroy street) set a pending flag and open the confirmation box (`!`-keyed title and text,
-  Yes / No); when the box reports result 0 (Yes) the action is executed once. All other actions execute at
-  once (`ExecuteAction`, [game-commands.md](game-commands.md) §5.1). Note that the red-highlight set and the
-  confirmation set differ (2 and 30 are red without confirmation) [known].
+  abort sacrifice, destroy street) set a pending flag and open the confirmation box: title `!Execute Action`,
+  text `!Are you sure you want to execute this action?`, message box mode 1 (Yes / No, §3.8.7) [known]
+  `ShowExecuteConfirmation` S 005f0c80; when the box reports result 0 (Yes) the action is executed once. All
+  other actions execute at once (`ExecuteAction` S 00623730, [game-commands.md](game-commands.md) §5.1). Note
+  that the red-highlight set and the confirmation set differ (2 and 30 are red without confirmation) [known].
+  `ExecuteAction` repeats two tests for itself [known] S 00623730: action 4 sends `0x20003` only for a building
+  of the local player whose `Building::CanDestroy` S 0055cdc0 holds (`GetDestroyBlockReason` S 0055cd40 is 0),
+  and otherwise does nothing; actions 28 and 29 in street placement behave as in §3.5.
 - **Placement** (`PositionAtCursor`): the panel is centred on the cursor, clamped to the screen; with the
   "smart cursor" option (user profile byte +0x31) the cursor is warped onto the focused button.
 - **Closing**: any key, a middle click, the cursor entering the world, a click on a good button: fade out in
@@ -1151,7 +1234,9 @@ format; its lookup variant returns `(MBT)<key>` for a missing key [inferred] S 0
 
 **When a string is localised**: `nUi::Text::SetText(str, localize)`; the XML loaders pass
 `localize = (first character == '!')` for `content`, `string<N>`, tip `description` [known] S 004b46d0. Code
-passes `!`-keys explicitly. Colour markup inside texts: `<r g b a>` tags and `<right>`, `<c>` are interpreted
+passes `!`-keys explicitly. The names of buildings (and of goods) are keys without `!`: the key is the
+property's name itself (`Bakery` → `Bäckerei`, `Wood` → `Baumstamm` in the German `ui.txt`; 468 of its keys
+have no `!`) [known: data], localised by code that passes the name with `localize` set. Colour markup inside texts: `<r g b a>` tags and `<right>`, `<c>` are interpreted
 by the text block renderer [inferred] S 00627e30; [TODO] the full markup grammar (a read of `nUi::TextBlock`
 draw, S 004b7dc0 onwards, settles it).
 
@@ -1471,12 +1556,14 @@ reads the icon grid parameters from `actionbuttons`.
 | 3 | Text markup grammar of `TextBlock` (`<r g b a>`, `<right>`, `<c>`, others) | static read of `nUi::TextBlock` layout / draw |
 | 4 | Meaning of building property +0x3c = 8 and of the owner test behind selection kinds 0xb / 0xf; of property +0xb0 (taken as "catapult" from the box it selects) and +0xf5 / +0x54 (minimap colours, depot soldier tab) | static read of the `BuildingProperty` loader ([properties-data.md](properties-data.md)) |
 | 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12]. Partly answered: the colour fade is itself what shows the build-placement icons, which draw only while its alpha is > 0 (§3.4, [rendering.md](rendering.md) §3.14) [known] S 00688c40, S 005eac30 | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0 |
-| 6 | The condition under which a right click in street placement steps back instead of cancelling | static read of S `Unk_Member10_Vslot2ThenVslot5` and `ai::game::StreetBuildMode` |
+| 6 | Answered (§3.5): a right click never steps back. The test S 0078b180 is `planner0.IsConstructionActive() && CanComplete()`; when it holds, the right click keeps mode 3 and `MenuSelection::Update` S 006163f0, which needs the test to be false, ends the mode; otherwise the right click cancels | — |
 | 7 | Answered (§3.3.1): the letter hotkeys fail with Caps Lock or Shift (character-code comparison) [live, 2026-10-12] | — |
 | 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
 | 9 | The Root virtual slot +0x84 called after the tree update in `nMenu::System::Update` (§4) | read of the `nUi::Root` vftable |
 | 10 | Reader of `Good_NotAvailable` / `Good_MovingToConstructionSite` in `iconconfig.xml`; what names `uiTip.dds` (§6) | string search in the binary |
 | 11 | Whether `nMenu::Messages::Update` also runs through the widget tree (it is called directly by the frame function, §4) | read of the Messages vftable and of where `SetupHud` attaches the panel |
+| 12 | What the click's ray pick `nGame::Cursor::PickVisibleEntityAtMouse` hits before the cell tests (§3.5) | static read of S 00787cc0 |
+| 13 | What the depot box's `+N` counts: `NTransport::NeedGoods::CountRequestedByAssignment` (§3.6) | static read of that function |
 
 ---
 
@@ -1535,6 +1622,21 @@ reads the icon grid parameters from `actionbuttons`.
 | 00616f40 | `nMenu::MenuSelection::SetSelectionKind` | actions per kind, info box switch |
 | 006167b0 | `nMenu::MenuSelection::CreateInfoBoxes` | kind → info box class |
 | 006176d0 / 00617770 / 00615e30 | `BeginBuildPlacement` / `SelectCell` / `BeginStreetBuild` | modes 2, 3 |
+| 006163f0 / 006162e0 / 00615d10 | `nMenu::MenuSelection::Update` / `Cancel` / `ResetSelection` | mode 3 watch, cancel, reset |
+| 00788370 / 00787bf0 / 00787cc0 / 00787a30 / 00787b00 | `nGame::Cursor::SelectAtCursor` / `FindLocalPlayerFlagAtCell` / `PickVisibleEntityAtMouse` / `PickShipAtMouse` / `PickShipRouteAtMouse` | what a left click selects |
+| 00558990 | `NVillage::System::FindBuildingAtOrAdjacentCell` | building on the cell or a large neighbour |
+| 0078b180 | `Unk_Member10_Vslot2ThenVslot5` | `planner0.IsConstructionActive() && CanComplete()` |
+| 0078b850 / 0078b4a0 / 0078b1d0 | `ai::game::StreetBuildMode::Begin` / `IsValid` / `Cancel` | street build mode |
+| 0078b220 / 0078be80 / 0078b510 | `StreetBuildMode::PlanSegment` / `OnPlannerCommand` / `RebuildPath` | segment plan, re-plan after a command |
+| 0055cdc0 / 0055cd40 | `NVillage::Building::CanDestroy` / `GetDestroyBlockReason` | action 4 gate |
+| 0087fb10 | `g_IngameCommandNames` | 31 action command names (tooltips) |
+| 00639210 / 00635710 / 00633460 | `nMenu::InfoBoxConstruction::ctor` / `InfoBoxProduction::ctor` / `InfoBoxDepot::ctor` | box constructors |
+| 006397e0 / 00635c50 / 00633b60 | `InfoBoxConstruction::Update` / `InfoBoxProduction::Update` / `InfoBoxDepot::Update` | box contents |
+| 006350f0 | `nMenu::InfoBoxProduction::LoadFromXml` | width without inputs (S 00635312) |
+| 005373b0 | `NLogic::Statistics::GetProductivity` | −1.0 without an entry |
+| 006494d0 / 0064b270 / 00649100 | `nMenu::GoodList::ctor` / `LoadFromXml` / `SetEntries` | list defaults, XML overrides, entries into buttons |
+| 0064a150 / 0064a3b0 | `GoodList::SetFromGoodIdVector` / `SetFromCountMapAndPendingGoods` | depot list (type filter); per-unit and per-need entries |
+| 0062fff0 / 00630530 | `nMenu::GoodButton::ctor` / `SetEntry` | count colours, count formats, indicators |
 | 00623600 / 00623da0 / 00623730 | `nMenu::ActionButton::SetAction` / `RefreshAvailability` / `ExecuteAction` | action buttons |
 | 006243c0 / 005f05c0 | `nMenu::ActionButton::OnClick` / `IsActionKindInSet_4_8_C_15_17_1C` | confirm rule (actions 4, 8, 12, 21, 23, 28) |
 | 00624470 | `nMenu::ActionButton::LoadFromXml` | icon grid parameters, failure texts |

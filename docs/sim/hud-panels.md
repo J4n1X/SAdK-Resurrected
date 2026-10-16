@@ -498,6 +498,12 @@ Structure and the confirm sequence are in [ingame-ui.md](ingame-ui.md) §3.8.2. 
 - 19 slots = ranks 0..18. Slot `r` shows `GoodPriorities::GetGoodAtRank(r)` of the **local copy**; −1 → the
   slot is disabled and drawn with the "not used" texture rectangle; else the good's icon, the good's name as
   tooltip, enabled.
+- Ranks need not be a permutation [known] S 005c2690, S 005c27c0: the default ranks of the Scots are not
+  (several goods share the ranks 0, 4, 5 and 13). `GetGoodAtRank` returns the first entry in list order holding
+  the rank, so of goods sharing a rank only one has a slot. `MoveRank(from, to)` walks every entry: each entry
+  holding `from` gets `to`, and each entry whose rank lies between the two (inclusive of `to`) moves one step
+  toward `from`'s side (−1 when `from < to`, else +1); so all goods sharing the picked-up rank move together,
+  including those the panel does not show.
 - Clicks are handled only while the panel is visible. Click on a slot while nothing is picked up: the drag
   widget gets `rank = slot index`, becomes visible and shows that good's icon. Any click in the panel other
   than `btConfirm` while a rank is picked up: the first slot whose hover flag (+0x144) is set is the target;
@@ -1124,6 +1130,7 @@ survives from one match to the next inside one program run depends on the object
 | 004c9940 / 004c7f90 / 004c9410 / 004c8fd0 / 006424e0 | `nUi::Graph::LoadFromXml` / `Draw` / `SmoothPoints` / `BuildLineMesh` / `SetPoints` | curve widget |
 | 006460d0 / 00645e90 / 006287b0 / 00628720 / 00628780 | `GoodInfo::Refresh` / `SetupGoodTooltip` / `GoodInfoPanel::OnChildClicked` / `ApplyGoodSet` / `RefreshGoodSet` | goods bar |
 | 00620970 / 00620460 / 00620580 / 00620c90 | `IngameSettingsPanel::OnButtonClick` / `RefreshGoodSlots` / `CommitSlotDrag` / `CancelSlotDrag` | confirm, priority slots |
+| 005c2690 / 005c27c0 | `NPlayer::GoodPriorities::GetGoodAtRank` / `MoveRank` | first good at a rank; move every entry of a rank |
 | 006410e0 / 006413c0 / 006412f0 / 006412a0 | `GoodArrangementPanel::RefreshWaregroupButtons` / `ShowGoodDistribution` / `OnSliderValueChanged` / `GetSelectedGoodId` | distribution |
 | 0062bc70 / 0062bfd0 / 006464c0 / 006463c0 | `nMenu::Tooltip::CreateByKind` / `TooltipCache_GetOrCreate` / `Tooltip::Open` / `Update_adjC` | rich tooltips |
 | 00647150 / 00647740 / 00647d20 / 00648070 / 00648700 | `TooltipBuilding` / `TooltipSacrifice` / `TooltipGood` / `TooltipSoldier` / `TooltipInfoboxBuilding` `::ShowFor` | tooltip content |
