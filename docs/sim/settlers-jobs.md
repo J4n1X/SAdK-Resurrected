@@ -449,12 +449,35 @@ Called first by every class `Update`: **[known]**
      the state after `Settler::Update`). **[known]**
    - **5**: if `remaining <= 0` → `state = 6`. Otherwise if `total - remaining == 14.0` exactly and the configured
      skeleton doodad id is not -1 and no doodad is at the settler's fine position: add the skeleton doodad there.
+     The test is `NDoodads::System::FindDoodadAtFinePos` S 00544080: the static index (key
+     `y × vertexWidth + x`), then a scan of the temporary doodads, then the blocking index. A second death on the
+     same vertex therefore adds no second skeleton. **[known]**
 
 `StartDying()` (S 00656760): `state = 5`; reset a running animation; abort movement if busy; start animation kind
 6 for `cfg SettlerDyingTime` ticks. **[known]**
 
 `StopAndSetState3()` (S 00656740) = "lose the job": call virtual slot 14 (release links), `state = 3`, start the
 `LeaveMap` movie. **[known]**
+
+**The soldier's settler part.** `Soldier::Update` (S 006594a0) runs these rules before its state switch, in this
+order **[known]**:
+
+1. It remembers the cell, then runs the base update.
+2. Not active (2.4): only when the state is 3, the ship reference is valid and the settler is aboard
+   (`SettlerMovement::IsAboardShip`) → `state = 0x26`. Otherwise nothing more happens.
+3. Moving (`IsBusy`) and on another cell than before the base update: if
+   `NMap::Exploration::HasUnexploredInRadius(previous cell, owner, 2)`, explore radius 2 around the previous
+   cell (`MapModifier::ExploreArea`).
+4. Hit points `< 1` → `ReleaseHomeAndProjectiles`, then `StartDying()`; return.
+5. Regeneration of the hit points.
+6. A state other than 1, 0x11 and 7 with no valid ship, home building or order building reference and no fight →
+   `StopAndSetState3()`.
+7. State 1: no linked building, or a linked building that is not a headquarters (`depot`, `casern` and
+   `territoryBuilding` all set) → `LeaveBuilding` movie, state 0x11; a headquarters → state 0xc. State 0x11:
+   when `LeaveBuilding` finishes, `TryStartGoToWorkplace`; if that cannot start → `StopAndSetState3()`.
+
+The combat and ship states are in [`military.md`](military.md) §3.5.1. A soldier goes home in state 3 like any
+settler, but each stray costs it a hit point (3.4).
 
 ### 3.3 Removal (`UpdateSettlerVector`, S 00654a10)
 
@@ -516,9 +539,11 @@ two modes: **[known]**
 
 `MoveToHome::Start` (S 007776f0), with `R = gameConfig +0x30` (default 30, no Lua setter found): **[known]**
 
-1. Target building = the home reference if valid; else (soldier that can complete an order where it stands →
-   success at once) the mode-0 search from the settler's cell (soldiers: list `+0x74`, others: list `+0x20`;
-   `R` is passed but unused in mode 0), layer 1.
+1. Target building = the building of the home reference if the reference is valid; else (soldier that can
+   complete an order where it stands → success at once) the mode-0 search from the settler's cell (soldiers:
+   list `+0x74`, others: list `+0x20`; `R` is passed but unused in mode 0), layer 1. A valid home reference that
+   no longer resolves to a building gives no target, and the search of this step is not tried: `Start` goes on
+   with step 3.
 2. If a building was found: street-walk to the cell one step in direction 1 from the building cell (its flag
    cell); success ends `Start`. If the street walk cannot start, continue with step 3.
 3. Mode-0 search from the cell one step in direction 1 from the settler's cell (so that cell must hold a flag
@@ -556,6 +581,14 @@ in ring order: start at the neighbour in direction 4, then step in directions 0,
    acceptable neighbour becomes the target and decrements `n`; stop when `n < 0`. So the target is acceptable neighbour number `n + 1`, or the last acceptable one when
    there are fewer; with none the target stays the settler's own cell.
 3. Start `MoveToPosition(target)` as step 0x16; `Start` returns whether that could start.
+
+`Stray::Update` (S 0077e020; vftable 00834cd4, ctor S 0077df60): in step 0x16 it returns
+`MoveToPosition.Update()` ("movement not busy", S 00777c50), in any other step false. **[known]**
+
+On unexplored ground no neighbour is acceptable, so the target stays the settler's own cell. `MoveToPosition` to
+the cell the settler stands on starts with success at once (3.8.3), and the stray is over at the movie's next
+update. A homeless settler there strays in place, drawing one random number per stray, and dies where it stands
+after the last stray (for a soldier: when its hit points are used up). **[inferred]** (from the rules above)
 
 ### 3.5 Worker
 
@@ -1111,8 +1144,14 @@ eight carriers over 1,347 ticks: 59 flat cells of 17 ticks and 2 of 18 after the
 5 of 28 and 2 of 29]**
 
 Exact sequences for a walk on constant slope, from the float32 rules above (`Advance`, `BeginStep`, the start
-at 0) **[known: computed in float32]**. On mixed ground the carry-over left by the previous cell decides
-between the two values of a slope cell, which is how the live sample above mixes them:
+at 0) **[known: computed in float32]**. The carry-over a cell starts with is at most the previous cell's step
+rate. After a cell of the same factor, or of a slower one, it decides between the two values of the table,
+which is how the live sample above mixes them. After a *faster* cell it can exceed the slower cell's own step
+rate and end that cell below its lower value. With the shipped factors this happens at 0.4: after a flat cell
+the carry-over is up to 0.058, worth two and a half advances at 0.0232, so the cell takes 41 to 44 ticks (42 to
+44 after a cell at 0.8 or 0.6). Cells at 0.8 and 0.6 after flat ones stay at 21 / 22 and 28 / 29. **[known:
+arithmetic of the rules above]** (the remake's implementation of these rules took 41 ticks for a 0.4 cell after
+flat cells on `MP_2P_steinfjord`)
 
 | Factor | Step rate | Ticks per cell, cells 1, 2, 3, ... |
 |---|---|---|
@@ -1382,7 +1421,7 @@ construction record are in [`navy.md`](navy.md).
 | State | Rule |
 |---|---|
 | 1 | `state = 0x29` |
-| 0x29 | cell target set (`x != -1`): stop the movement; if centred on a cell start `MoveToPosition(target)` (0x12), else start `ReturnToLogicGrid` (0x2f); if the start fails clear the cell target and stay in 0x29. No cell target: if the fine target is inside the map start `MoveToFinePosition(target)` (0x1a); if that fails clear the fine target and stay in 0x29 |
+| 0x29 | cell target set (`x != -1`): stop the movement; if centred on a cell start `MoveToPosition(target)` (0x12), else start `ReturnToLogicGrid` (0x2f); if the start fails clear the cell target and stay in 0x29. No cell target: if the fine target is inside the vertex grid (`MapPos_IsInBounds` S 00542f50: `0 <= x < vertexWidth`, `0 <= y < vertexHeight`) start `MoveToFinePosition(target)` (0x1a); if that fails clear the fine target and stay in 0x29 |
 | 0x1a | `MoveToFinePosition` finished → clear the fine target, `state = 0x29` |
 | 0x2f | `ReturnToLogicGrid` finished → `state = 0x29`; then, in the same call, the state-0x12 rule runs (the case falls through) |
 | 0x12 | `MoveToPosition.Update()` finished → clear the cell target, `state = 0x29` |
@@ -1798,7 +1837,7 @@ worker's `lastWorkTick`. **[known]**
 | # | Question | What would settle it |
 |---|---|---|
 | 1 | Answered (§3.5.2): a worker stays in state 0x24 only while the stock can supply; with one unit per production cycle it releases one settler on its first tick in 0x24, stays one more tick and goes to Rest (0x23), in the observed buildings every 390 ticks. A building with several units in stock was not seen [live, 2026-10-14] | — |
-| 2 | Answered (§3.8.1, movie timer): 17 or 18 ticks per flat cell (18 for the first cell of a walk), 21 / 22 at slope factor 0.8, 28 / 29 at 0.6; 4 ticks per pick-up or put-down phase | live 2026-10-12: hook on `Settler::Update` S 00656ec0 |
+| 2 | Answered (§3.8.1, movie timer): 17 or 18 ticks per flat cell (18 for the first cell of a walk), 21 / 22 at slope factor 0.8, 28 / 29 at 0.6, after a cell of the same factor (a slower cell after a faster one can end earlier); 4 ticks per pick-up or put-down phase | live 2026-10-12: hook on `Settler::Update` S 00656ec0 |
 | 3 | Answered (§3.10): yes, it re-centres and stays; the fall-through and the shared `Update` S 00777c50 decide it. Not observable with the shipped data: the three calls of `se_moveNPCTo` / `se_moveNPCToFine` (C05.lua, C06.lua) are commented out | static: S 0065ddf0, S 0065e010, vftable slots S 008345d4 and S 00834534 |
 | 4 | Answered (§3.6.2, effect of the street swap): it takes place whenever the carrier of the package's next street is idle (`Transport_IsCarrierFreeForStreetSwap`) or waits at a full flag the other way; the package is carried across the full flag without being put on it [inferred: the street route planner S 007735b0 was not re-read for this case]. How often this happens in a match does not change the rule | — |
 | 5 | Answered (§3.6.2, from the code: `IsFlagFullWaitExceeded` S 0077a0c0, state 0x12 of S 0065b200): after the 361st failed attempt the next step-0x14 check hands the good to the storehouse found by the mode-0 search (none found: the good is lost) and discards the package; an observation would only confirm it. Measured: attempts every 10th tick after an initial run, `!flag blocked` at the 180th attempt (about 150 to 165 s at speed 1); the limit does not apply to a carrier without a street (S 0065ad70) | — |
@@ -1886,7 +1925,10 @@ worker's `lastWorkTick`. **[known]**
 | 0077a260 / 0077a2f0 | `NMovie::GoToPackageTarget::Start` / `Update` | carrier walk, full-flag wait, swap |
 | 0077b6d0 / 0077b630 | `NMovie::Rest::Start` / `Update` | rest counter |
 | 0077ae80 / 0077aec0 / 0077d420 | `IdleOutside` / `ReturnFromIdle` | idling outside |
-| 0077e0c0 | `NMovie::Stray::Start` | homeless wandering |
+| 0077e0c0 / 0077e020 / 0077df60 | `NMovie::Stray::Start` / `Update` / ctor (vftable 00834cd4) | homeless wandering |
+| 00544080 | `NDoodads::System::FindDoodadAtFinePos` | skeleton test: one doodad per vertex |
+| 00542f50 | `MapPos_IsInBounds` | vertex-grid bounds (NPC fine target) |
+| 006594a0 | `NSettlers::Soldier::Update` | soldier state machine; settler part in 3.2 |
 | 00777240 | `NMovie::WaitForShip::Update` | parking at a flag |
 | 0077daf0 / 0077fb50 / 0077fe70 | `ConstructBuilding::Update` / `Construct::Update` / `Start` | building work |
 | 00564360 / 005643c0 / 00564e00 / 00564eb0 | `NVillage::SettlerSpawn` consume / can-supply / spawn / entered | tool → settler → tool |

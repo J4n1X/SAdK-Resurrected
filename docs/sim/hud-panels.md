@@ -677,7 +677,7 @@ text does not resolve ([TODO] not established: that flag; the disassembly of S 0
 
 | Overlay | Owner | Where specified |
 |---|---|---|
-| Build-placement icons on the cells (while placing a building, and in info-map mode) | `ConstructionMapRenderer` | [rendering.md](rendering.md) §3.14; the flags per cell: [map-resources.md](map-resources.md) §3.5 |
+| Build-placement icons on the cells (info-map mode; not while placing a building) | `ConstructionMapRenderer` | [rendering.md](rendering.md) §3.14; the flags per cell: [map-resources.md](map-resources.md) §3.5 |
 | Selection markers (decals under the selected object, its targets) | `CMapRenderer::UpdateSelectionMarkers` | [rendering.md](rendering.md) §3.14 |
 | Territory borders | renderer | [rendering.md](rendering.md) §3.8 |
 | Fog of war / unexplored area | renderer | [rendering.md](rendering.md) §3.7, [map-resources.md](map-resources.md) §3.7 |
@@ -707,6 +707,13 @@ settles it.
 
 `btInfoMap1` (space) toggles info-map mode with a 0.2 s colour fade; `btInfoMap2` / `btInfoMap3` toggle overlay
 categories 0 / 1 ([ingame-ui.md](ingame-ui.md) §3.4, §3.8.6).
+
+The build-placement icons have no switch of their own [known]: the renderer draws them only while the alpha of
+its overlay tint is > 0 (S 00688c40). The tint is 0 from the `CMapRenderer` constructor S 006890f0 and is changed
+only by `nMenu::Game::StartOverlayColorFade` S 005eac30, called by `btInfoMap1` (`OnButtonClick` S 005eb850) and by
+the cinematic screen (S 005fb3e0, S 005faee0). The fade is linear over 0.2 s from the last drawn colour to
+`(1, 1, 1, on ? 1 : 0)`, and `nMenu::Game::Update` S 005efea0 does not advance it while the game is paused.
+Opening the build menu on a cell (placement, [ingame-ui.md](ingame-ui.md) §3.5) does not show them.
 
 ### 3.7 Minimap
 
@@ -1125,6 +1132,7 @@ survives from one match to the next inside one program run depends on the object
 | 005eb120 | `nMenu::Game::ShowCommMessageAsLetter` | session notices as letters |
 | 006403c0 / 0063fd10 / 00641030 | `OverlayBuilding::UpdateFromBuilding` / `UpdateMissingGoodIcons` / `Update` | building overlay |
 | 0055fd00 / 006d2820 / 006d2d80 | `NVillage::Military::HasMilitaryFlag` / `CMilitaryFlagRenderer::DrawFlags` / `GetFlagMeshPath` | military flags |
+| 005eac30 / 00688c40 | `nMenu::Game::StartOverlayColorFade` / construction overlay draw test | info-map tint fade; the build icons draw only while its alpha > 0 |
 | 005f39b0 / 005f10a0 / 005f1980 / 005f49e0 | `nMenu::MiniMap::ctor` / `LoadFromXml` / `Update_Face4` / `Render` | minimap life cycle |
 | 005f1070 / 005f3dd0 / 005f16d0 | `MiniMap::RefreshMapTexture` (slot 34) / `CaptureMapTexture` (slot 35) / `MiniMap_ApplyExplorationMask` | scene render of the map image; copy into the minimap texture; fog mask |
 | 005f3be0 / 005f1170 / 005f1190 | `MiniMap::Create` / `OnDeviceReset` / `MarkDirty` | 512 × 512 capture texture; new capture after a device reset; overlay rebuild request |

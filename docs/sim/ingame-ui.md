@@ -618,6 +618,8 @@ Other files: `menuLoadSave.xml` `btLoad` 13 (Enter), `btDelete` `d`; the load/sa
 rows the hotkeys `0`..`9` in code [inferred] S 0060da50; message box buttons get Enter / Esc / `i` by mode
 (§3.8.7).
 
+No key opens the build menu: it opens only by a left click on a buildable cell (§3.5, §3.8.10) [known].
+
 ### 3.4 The game screen: construction and HUD inventory
 
 `nMenu::Game` is constructed once at start-up with `menuingame.xml` [known] S 005ee5d0. `LoadFromXml`
@@ -634,7 +636,7 @@ listed in the code's string references; shipped values in §6]:
 | `btStatistics` | round button | | | toggles `StatisticPanel` (§3.8.1) |
 | `miniMap`, `miniMapBorder` | `MiniMap` | bottom right, 188 × 188, round mask | §3.8.5 | |
 | `btQuests` (in `miniMapBorder`) | round button | | | toggles the quest log |
-| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene; in that mode the ground shows what can be built where (flag, small, medium, large building, harbour, nothing) and no overlay is hidden [live, 2026-10-12, maintainer] |
+| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene; in that mode the ground shows what can be built where (flag, small, medium, large building, harbour, nothing) and no overlay is hidden [live, 2026-10-12, maintainer]. The fade is the tint of the build-placement icons, which draw only while its alpha is > 0, so this button is the player's only switch for them [known] S 005eac30, S 00688c40 ([rendering.md](rendering.md) §3.14) |
 | `btInfoMap2`, `btInfoMap3` | round buttons | | | toggle overlay layers 0 and 1 of the `OverlayPanel` (§3.8.6) |
 | `btSpeed` with pictures `x2`, `x3` | round button | | `x2` visible at speed 2, `x3` at speed 3 | **`0x20023` GE_Logic_SpeedUp** via `SendCycleGameSpeedCommand` |
 | `btOptions` | round button | | | shows `OptionsPanel` |
@@ -1074,14 +1076,20 @@ handed to `nMenu::System` (+0x68) and started on the next update.
 
 #### 3.8.10 Build menu (`infoboxCreateBuilding`) [inferred] S 00634db0, S 006343f0; [known] S 00617910, S 006176d0; S 006340b0
 
-- **Content**: for every building id of the local player's tribe whose property `constructionTime` (+0x88) > 0
-  and whose `size` mask (+0x3c, [properties-data.md](properties-data.md) §3.6) is not 0, one `BuildingButton`
-  (clone of the template child `buildingButton`, icon from `IconConfig`, tooltip kind 0) on the tab of the
-  lowest set bit among bits 0..4: 0 `!SMALL` (size 7), 1 `!MEDIUM` (6), 2 `!BIG` (4), 3 `!MINE` (8),
-  4 `!SHIP_SIZE` (16) [known] S 00634db0; captions [known: `menuingame.xml` `tabButton0..4`]. A button is
-  enabled unless the filter stored at +0x1638 is not 0 and `Building_TypeFitsConstructionFlags(filter, type)`
-  fails, or the type is locked for the player (`menu.lockBuilding`). Tabs without an enabled button
-  are disabled; the tab of the filter's highest bit is selected first.
+- **Content**: for every building id of the local player's tribe whose property `constructionTime` (+0x88) > 0 and
+  whose `size` mask (+0x3c, [properties-data.md](properties-data.md) §3.6) is not 0, one `BuildingButton` (clone of
+  the template child `buildingButton`, icon from `IconConfig`, tooltip kind 0 with the building's name,
+  `BuildingButton::CreateForBuilding` S 0064b610) on the tab of the lowest set bit among bits 0..4: 0 `!SMALL`
+  (size 7), 1 `!MEDIUM` (6), 2 `!BIG` (4), 3 `!MINE` (8), 4 `!SHIP_SIZE` (16) [known] S 00634db0; captions [known:
+  `menuingame.xml` `tabButton0..4`]. `IconConfig` keys a building's icon per tribe by the building's name in lower
+  case with spaces replaced by underscores [known] S 0061236d (inside `IconConfig::LoadFromXml` S 00611320). A
+  button is enabled unless the filter stored at +0x1638 is not 0 and
+  `Building_TypeFitsConstructionFlags(filter, type)` (S 0052e510) fails, or the type is locked for the player
+  (`ai::player::Player::IsLocked`, `menu.lockBuilding`). Tabs without an enabled button are disabled. The tab of
+  the filter's highest bit among bits 0..4 is selected; then `EnsureEnabledTabSelected` S 00634160 keeps the
+  selected tab if it is enabled and otherwise selects the first enabled one, so with a filter of none of those bits
+  the previously selected tab stays when it is still enabled [known] S 00634db0, S 00634160. Every rebuild starts
+  with `ClearBuildingButtons` S 00634210, which also resets the chosen type (+0x1630) to −1 [known].
 - **Layout**: grid from `itemsOffset`, `itemsSize`, `itemsSpread`, `numItemsPerLine` (shipped `6 6`, `56 56`,
   `71 64`, 7; constructor defaults 0 0, 80 80, 85 85). The row wrap happens once per tab, at index =
   `numItemsPerLine`: the column counter is not reset after the wrap [inferred] S 006343f0. A remake that wants
@@ -1089,11 +1097,15 @@ handed to `nMenu::System` (+0x68) and started on the next update.
 - **Opening**: a left click on an empty cell where something can be built (§3.5); the box is opened in
   "direct" mode with the clicked cell remembered. Help text: `!Infobox_Anchor_Help` (filter bit 0x10),
   `!Infobox_Mine_Help` (bit 0x8), else `!Infobox_CreateBuilding_Help`.
-- **Choosing** [known] S 006340b0: a click on a building button stores the type (+0x1630). In direct mode
-  with the remembered cell (`MenuSelection +0x8c`) inside the map it sends **`0x20002` GE_Building_Create**
-  (type, cell) immediately, sets mode 1 and resets the selection. With the direct flag clear the clicked
-  button is marked instead and the next left click on the world sends `0x20002` for the cell under the cursor
-  (§3.5 mode 2). The only writer of the direct flag found is `BeginBuildPlacement`, which sets it to 1.
+- **Choosing** [known] S 006340b0: a click on a building button stores the type (+0x1630); a type id of 0 is
+  ignored. In direct mode with the remembered cell (`MenuSelection +0x8c`) inside the map it sends **`0x20002`
+  GE_Building_Create** (type, cell) immediately, sets mode 1 and resets the selection. With the direct flag clear
+  the clicked button is marked instead and the next left click on the world sends `0x20002` for the cell under the
+  cursor (§3.5 mode 2). The only writer of the direct flag is `BeginBuildPlacement` S 006176d0, which always sets
+  it to 1, so that "choose a type, then click cells" mode exists but cannot be reached [known].
+- **No build key**: the menu opens only by a left click on a buildable cell (§3.5, S 00617910); choosing a type
+  sends the command at once and closes the menu (S 006340b0). No hotkey of `menuingame.xml` and no key handler
+  of §3.3.3 opens it [known].
 - Action button 1 = 29 "create flag" at the clicked cell (**`0x20004` GE_Flag_Create**).
 
 ### 3.9 Screen flow
@@ -1201,7 +1213,9 @@ Per frame (`CApplicationEx::FrameTick_InGame` S 004018e0; the calls below are in
 3. Everything below is skipped while the game is paused (Game +0xfff9).
 4. Delete closed panels: the loading panel (+0xcc70, hidden first), then +0xcc7c, +0xcc80, +0xcc84, +0xcc78,
    each when it is no longer visible.
-5. Scene colour fade (0.2 s linear interpolation of four floats, started by `btInfoMap1`).
+5. Scene colour fade (0.2 s linear interpolation of four floats, started by `btInfoMap1` and the cinematic
+   screen through `StartOverlayColorFade` S 005eac30): the tint of the build-placement icons, which draw only
+   while its alpha is > 0 ([rendering.md](rendering.md) §3.14).
 6. `btBack` / `btForward` enabled when `Selection_IsKind1` of the game selection is true; the children
    `x2` / `x3` of `btSpeed` are shown when the profile's speed scale truncates to 2 / 3.
 7. `MenuSelection::Update`; the four debug toggles.
@@ -1456,7 +1470,7 @@ reads the icon grid parameters from `actionbuttons`.
 | 2 | Exact attribute semantics of Slider, Slider2, SliderEx, StackedSlider, ListBox2, Graph, TextScroller, EditEx | static read of each `LoadFromXml` and `Update` (§3.1.9) |
 | 3 | Text markup grammar of `TextBlock` (`<r g b a>`, `<right>`, `<c>`, others) | static read of `nUi::TextBlock` layout / draw |
 | 4 | Meaning of building property +0x3c = 8 and of the owner test behind selection kinds 0xb / 0xf; of property +0xb0 (taken as "catapult" from the box it selects) and +0xf5 / +0x54 (minimap colours, depot soldier tab) | static read of the `BuildingProperty` loader ([properties-data.md](properties-data.md)) |
-| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12] | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0 |
+| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12]. Partly answered: the colour fade is itself what shows the build-placement icons, which draw only while its alpha is > 0 (§3.4, [rendering.md](rendering.md) §3.14) [known] S 00688c40, S 005eac30 | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0 |
 | 6 | The condition under which a right click in street placement steps back instead of cancelling | static read of S `Unk_Member10_Vslot2ThenVslot5` and `ai::game::StreetBuildMode` |
 | 7 | Answered (§3.3.1): the letter hotkeys fail with Caps Lock or Shift (character-code comparison) [live, 2026-10-12] | — |
 | 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
@@ -1529,6 +1543,9 @@ reads the icon grid parameters from `actionbuttons`.
 | 006247a0 / 00624700 | `nMenu::AttackSlider::UpdateLabels` / `ExecuteAttack` | attack |
 | 00631820 / 00631310 | `nMenu::InfoBox::ctor` / `LoadFromXml` | info box frame |
 | 00634db0 / 006340b0 | `nMenu::InfoBoxCreateBuilding::RebuildBuildingButtons` / `OnChildClicked` | build menu |
+| 00634160 / 00634210 | `InfoBoxCreateBuilding::EnsureEnabledTabSelected` / `ClearBuildingButtons` | tab kept or first enabled; chosen type reset to −1 |
+| 0064b610 / 0052e510 | `nMenu::BuildingButton::CreateForBuilding` / `Building_TypeFitsConstructionFlags` | button icon and name tooltip; filter test |
+| 005eac30 | `nMenu::Game::StartOverlayColorFade` | info-map tint fade, the build icons' only switch |
 | 00632e40 / 0063abc0 | `nMenu::InfoBoxDepot::OnChildClicked` / `nMenu::InfoBoxCasern::IUpdateable_Update` | `0x2001E` senders |
 | 0062f390 | `nMenu::SacrificeButton::OnClicked` | `0x20024` / `0x20027` |
 | 00626c20 / 00627210 | `nMenu::SacrificeTargetPanel::OnChildClicked` / `ShowTargetChoice` | `0x20026` |

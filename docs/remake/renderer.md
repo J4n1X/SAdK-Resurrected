@@ -1112,6 +1112,26 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - Selection markers: decals laid on the terrain triangles like the ground decals (Godot's `Decal` is not available on
   the Compatibility renderer), additive, spinning, from the UI's selection.
 
+**As built** [implemented 2026-10-16, sadk-remake d2d47ee]:
+
+- **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `Renderer/BuildMode/`) keeps one rendering-server MultiMesh per
+  16 × 16-cell region, one instance per cell with an icon at the cell's point on the drawn terrain surface. A region is
+  asked again only when a `MapChanged(ConstructionFlags)` event marks it; the original asks every visible cell every
+  frame. Icon index, atlas cell and quad follow RE §3.14 (`ConstructionIcons`, shader
+  `shaders/overlay/buildicons.gdshader`); the cell under the cursor gets no icon; nothing draws while the info-map
+  fade's alpha is 0.
+- **Menu**: built at run time from `menuingame.xml`, `templates.xml` and `iconconfig.xml`: the original's tabs, grid,
+  icons and filter (ingame-ui §3.8.10).
+- **Intents**: `core.game.build {type, x, y}` submits `0x20002` for the local player (the menu's buttons send through
+  it); `core.game.infomap` toggles info-map mode (space); `core.game.buildmenu {x?, y?}` with a cell acts as a left
+  click there, without one opens the menu type first. **B** opens the type-first menu, the original's unreachable
+  "choose a type, then click cells" mode (ingame-ui §3.8.10), as the remake's own addition.
+- **Cell marker**: a translucent hexagon; the original lays a decal (`SelectionMarker::UpdateDecal` S 006b0d00) whose
+  picture is not known. The info box has its fade-in only.
+- **Open**: the construction lock (`Player::IsLocked`, `menu.lockBuilding`) is not exposed to the menu yet; the
+  create-flag box and `0x20004`; selecting own buildings; the help text keys come from ingame-ui §3.8.10, which is
+  [inferred].
+
 ### 15.4 Fog of war
 
 §4.5.

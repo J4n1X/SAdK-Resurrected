@@ -210,6 +210,13 @@ are linked. `PlayerAdded` carries the slot kind; a computer's name change at the
 name is a text key (`<tribe>_AI_<level>_<slot>`), so the simulation does not depend on the language. An empty world
 also emits `WorldBuildBegin` and `WorldBuildEnd`.
 
+Settlers as built (sadk-remake a2bd808): `SettlerPathChanged` is emitted at the start of a walk and at a step on a
+changed path, where the original calls callback slot +0x5c; `ActionTimerStarted`, `EntityStateChanged` and
+`CarriedPackageChanged` replace the scene's per-tick polling of timers, states and carried goods. `EntityRemoved`
+carries a `RemoveReason` (`Entered`, `Died`) and, for a settler that entered a building, `Into` (that building). A
+settler's `EntityAdded` comes before the `LeaveBuilding` walk its constructor starts, with no step between. `Died` is
+emitted when the settler is erased, one tick after it reached state 6 (SJ §3.3).
+
 `SimEvent` is an open base record: a mod's component emits its own event types, and the presentation maps event
 types to handlers, so a mod brings render and audio behaviour for its own events ([mods.md](mods.md) §8.2).
 
@@ -276,6 +283,12 @@ public readonly record struct MotionSample(
     byte     Flags);     // swimming, aboard, dying, ...
 ```
 
+As built (sadk-remake a2bd808): `TickRecord.Motion` holds the samples taken after each tick from the systems that
+implement `IMotionSource`, in tick order (`World.CollectMotion`). A `MotionSample` carries the from and to fine
+positions, the progress, the street, the heading and the flags `FineMode`, `Queued`, `Aboard` and `Dying`. `Street` is
+the street the settler serves (`CurrentStreet`), not the street of the leg it walks; which one the route spline needs
+is open (§11 item 4).
+
 The simulation publishes **logic** values only: what it stores and saves. The presentation turns them into world
 positions per tick (route spline, height snap, evade offset, boat bobbing) and keeps `prev` / `current` per object,
 the original's split (RE §3.10, AM §3.17, §3.18). Only entities that moved or changed are in a frame. On
@@ -293,6 +306,20 @@ Values the original draws from the **simulation** generator and only displays st
 views [known, sources as cited]: the deposit display position (`Deposit::ctor_AtCell`, one draw per deposit, MR
 §3.9), randomised walking paths (SJ §3.8.3), the soldier's alternative work clip length (`attackWaitTime + rnd %
 10`, SJ §8), carrier parking spots (SJ §3.8.6), sow patterns (MR §3.9), and `lookAtPos` (hashed, SJ §8).
+
+### 6.4 The settler core as built [implemented 2026-10-16, sadk-remake a2bd808]
+
+- **Services**: the settler services and job interfaces resolve to the first system that implements them.
+- **Debug command** `core.game.debug.spawnsettlers`: no original id; refused in a session that has a game seed.
+- **Measured** in the remake's tests, against SJ: ticks per cell on flat ground 18, 17, 17, 17, 18, 17, 17, 17; fine
+  steps 5, 4, 4; factor 0.8: 22, 22, 21, 22, 21, 22; 0.6: 29, 29, 29, 28, 29, 29; 0.4: 44, 43, 43, 43, 43, 43; downhill
+  and water as flat (all as SJ §3.8.1). A 0.4 cell after flat cells on `MP_2P_steinfjord` took 41 ticks: the carry-over
+  of a faster cell can end a slower one early (SJ §3.8.1).
+- **Measured, going home**: a homeless settler's strays start at tick 3 + 19k, exactly 27 strays with 27 random draws;
+  dying starts at tick 515, the skeleton appears at 529, state 6 at 543, the settler is erased at 544 (`Died`). A
+  soldier with 3 hit points dies after 3 strays. A settler that reaches its home is in state 2 at tick 39 and erased at
+  40 (`Entered`, with `Into`). The stray count matches SJ §3.4, the dying times SJ §3.2 (dying time 28, skeleton
+  after 14) and the removal ticks SJ §3.3.
 
 ## 7. The way back: commands [draft]
 
@@ -400,7 +427,14 @@ These matter more in the remake than in the original, because Harmony patches ca
    construction flags are recomputed over the area's bounding rectangle instead of the original's spiral (same
    result); computer slots draw no AI ids yet (the original draws an AI cell id per building of a computer player, so
    ids diverge in every shipped free game with computer slots until the AI exists); the refined-mode check of
-   0x20002 waits for a mode switch.
+   0x20002 waits for a mode switch. Taken while building the settler core (to review): the motion sample's `Street` is
+   the street the settler serves, not the street of the leg it walks (open whether the route spline needs the leg's);
+   settler services and job interfaces resolve to the first system implementing them; the debug command
+   `core.game.debug.spawnsettlers` has no original id and is refused in a session with a game seed. Taken while
+   building the build mode (to review): **B** opens the build menu without a cell, the original's "choose a type, then
+   click cells" mode, which the original has but never reaches (ingame-ui §3.8.10), as the remake's own addition; the
+   cell marker is a translucent hexagon, since the picture of the original's decal (S 006b0d00) is not known; the info
+   box has its fade-in only.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

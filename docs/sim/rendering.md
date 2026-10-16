@@ -1538,9 +1538,11 @@ textures from `decals.xml` (3 `<Texture>` entries; the first is `[data]\gfx\deca
 [TODO] not established: the UV rectangle per style inside those textures (`SelectionMarker::UpdateDecal` S 006b0d00).
 
 **Build-placement overlay** `ConstructionMapRenderer::AddCellsInRect` S 006b36d0: for every cell of every visible
-block (except the cell of the object being placed) the construction flags of the cell for the local player
-(`docs/sim/map-resources.md` §3.5) choose an icon; cells whose flags are 0 get none, and nothing is drawn when
-the player's byte +0x50 is clear [known]:
+block, except the cell the cursor hovers, the construction flags of the cell for the local player
+(`docs/sim/map-resources.md` §3.5) choose an icon. Cells whose flags are 0 get none, and nothing is drawn when
+the player's byte +0x50 is clear [known]. The cell left out is the cursor's: `Begin` is handed
+`nGame::System + 0x10`, the game cursor, and `AddCellsInRect` skips the cell at its +0x14 / +0x18 [known]. The
+icon index is:
 
 ```
 base  = 0 if flags & 0x04, else 1 if 0x02, else 2 if 0x01, else 3 if 0x08, else 4 if 0x10
@@ -1551,11 +1553,34 @@ index = base + 0     if 0x20 set and 0x40 clear
 index = 16           if none of the five base flags is set (no modifier)
 ```
 
-`index` selects one float of the 17-entry table `g_ConstructionMapIconTable` (the icon's texture coordinate)
-[known] S 006b36d0. Icons are camera-facing quads of size `iconSize 3.0` at `iconOffset "0 0 -1.0"`
-(`<Landscape>` attributes [known, file]), at the cell's world position, batched 50 at a time, tinted by the
-overlay colour, drawn only while its alpha > 0 [inferred]; `infomap_shader.fx`. [TODO] not established: the
-contents of the icon table (filled at run time) and the icon atlas layout; read the writer of the table.
+`index` selects one float of the 17-entry table `g_ConstructionMapIconTable` S 0088da78 (the icon's texture
+coordinate) [known] S 006b36d0.
+
+**Icon atlas** [known]: `CreateResources` S 006b3870 binds `[data]\map\textures\ui_ingame3.dds`. The quad's own UVs
+start at u0 = 16/1024, v0 = 808/1024 and span 88/1024 on both axes (S 007cacc0, S 007cacf0, S 007cad10; 1024.0 =
+S 00881e70). S 007cad30 fills the table with `step = 88/1024`: entry k is `k × step` for k = 0..10 and
+`(k − 11) × step + 1` for k = 11..16. `infomap_shader.fx` splits an entry `w` again: `u += frac(w)`,
+`v += (w − frac(w)) × 88/1024`. So the integer part is the row and the fraction the column offset: entries 0..10
+are row 0, entries 11..16 row 1. The shipped atlas holds there, in index order [known: data]: row 0 large, medium,
+small, mine, harbour with a flag ring (0..4, flag bit 0x20 only), then large, medium, small with crossed swords
+(5..7, military bit 0x40 only), then the same three with swords and flag (8..10, both bits); row 1 the five plain
+icons (11..15, neither bit) and a lone flag (16). The modifier ranges overlap: mine + military gives index 8 and
+harbour + military index 9, both "swords and flag" icons of building sizes [known: arithmetic of the formula]. The
+flags the construction map stores never produce these two, because 0x40 is set only together with 0x1
+(`docs/sim/map-resources.md` §3.5) [inferred].
+
+**Quads** [known] S 006b3870, `infomap_shader.fx`: four corners at ±size/2 along the view x axis and 0..size
+along the view y axis, so the icon stands on the cell's world position and faces the camera; `iconOffset` is
+added in view space (−1 on z = one unit toward the camera). Size and offset come from the `<Landscape>`
+attributes `iconSize 3.0` and `iconOffset "0 0 -1.0"` [known, file]; without them the defaults are 1.5
+(S 008814ec) and 0 (S 0088cf68). The quads are batched 50 at a time and tinted by the renderer's overlay colour.
+
+**When it is drawn** [known]: only while the tint alpha is > 0 (S 00688c40). The alpha is 0 from the
+`CMapRenderer` constructor S 006890f0 and is changed only by `nMenu::Game::StartOverlayColorFade` S 005eac30.
+Its callers are `btInfoMap1` (`OnButtonClick` S 005eb850) and the cinematic screen (`nMenu::Cinematic::Update`
+S 005fb3e0, and `OnHide` S 005faee0, which restores the fade state the cinematic saved). The fade runs linearly
+over 0.2 s from the last drawn colour to `(1, 1, 1, fadeIn ? 1 : 0)`; `nMenu::Game::Update` S 005efea0 does not
+advance it while paused. So the icons belong to info-map mode; placing a building does not show them.
 
 ---
 
@@ -1975,7 +2000,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
 | 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
 | 12 | Argument of the buoy bobbing sine of the territory border (§3.8) | static: disassembly of S 006b2ae0 |
-| 13 | Selection marker styles (UV rectangles, colours) and build icon atlas layout | static: `SelectionMarker::UpdateDecal`, `ConstructionMapRenderer::AddCellsInRect` |
+| 13 | Selection marker styles (UV rectangles, colours). The build icon atlas layout is answered (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`) | static: `SelectionMarker::UpdateDecal` |
 | 14 | Answered (§6.1): rotations and phase speeds build the normal-map texture matrices, `tex0Scale`/`tex1Scale` reach only the fixed-function texture coordinates, `color` is read by nothing | - |
 | 15 | Answered (§3.5): the terrain vertices are world positions, so the caustics pass adds nothing | - |
 | 16 | Meaning of shadow level 1 (global S 0088d6bc) and of the shadow flags 0x18 / 0x1a / 0x5a | static: readers of S 0088d6bc and of `Scene +0x34` |
@@ -2009,6 +2034,10 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006889d0 | `S2CG::CMapRenderer::RenderObjectsAndWater` | clipped objects, border, caustics, water |
 | 006888f0 | `S2CG::CMapRenderer::Update` | per-frame map update |
 | 00689500 | `S2CG::CMapRenderer::UpdateSelectionMarkers` | selection markers |
+| 006b36d0 / 006b3870 | `ai::render::ConstructionMapRenderer::AddCellsInRect` / `CreateResources` | build icon per cell; quads, shader, atlas |
+| 007cad30 / 007cacc0, 007cacf0, 007cad10 | build icon table filler / atlas origin and icon size initialisers | `g_ConstructionMapIconTable` S 0088da78 |
+| 00688c40 | (construction overlay draw test) | draws only while the tint alpha > 0 |
+| 005eac30 | `nMenu::Game::StartOverlayColorFade` | the only writer of the overlay tint (info map, cinematic) |
 | 00689f10 | `S2CG::CLandscape::Render` | base, unexplored, transition, ground cover |
 | 0068a4a0 | `S2CG::CLandscape::UpdateVisibleCells` | terrain culling |
 | 0068a120 | `S2CG::CLandscape::SetFogOfWarOverlay` | exploration overlay switch |
