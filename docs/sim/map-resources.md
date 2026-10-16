@@ -218,7 +218,7 @@ S 00532180, S 005321c0:
 | +0x44 | `growingStartSize` | `dp_setGrowingStartSize` | 0.1 | growth value after sowing |
 | +0x48 | `growingSpeed` | `dp_setGrowingSpeed` | 0.0009 | growth per tick |
 | +0x4c | `randomFinePosOffsetState` | `dp_setRandomFinePosOffsetState` | true | random display offset |
-| +0x50 | `elevationSize` | `dp_setElevationSize` | 1 | read by nothing [known: §10 #5] |
+| +0x50 | `elevationSize` | `dp_setElevationSize` | 1 | stop distance of the worker's fine walk onto the deposit (`MoveToDeposit::Update` S 007778f0, `docs/sim/settlers-jobs.md` §3.5.5) [known: §10 #5] |
 | +0x54 | `blocking` | `dp_setBlocking` | false | sets grid bit 0x1 on the cell |
 | +0x58 | `undergroundPatterns` (vector of int) | `dp_addUndergroundPattern` | empty | pattern set when sown |
 | +0x68 | `doodadAfterDestruction` | `dp_setDoodadAfterDestruction` | -1 | doodad left by the last harvest |
@@ -644,11 +644,15 @@ Only the spiral of radius `radius` is recomputed, although rule 2 lets a source 
 
 **Lost territory message** [known] S 006797f0: during a recomputation every player who owned a cell that now has a
 different owner is flagged; with `notify` set, each flagged player gets the message `!Lost Territory.` (category 1,
-empty text, at the source position) unless an identical message near that position is still pending.
+empty text, at the source position) unless an identical message near that position is still pending. In the full
+recomputation (`RecalcFullMap` S 00679ac0) the flag array `lost[0..7]` has one byte in front of it: a cell whose
+old owner was -1 or is unchanged writes `lost[-1]`, a sink byte that the notification does not read [known].
 
 **Full recomputation** `Territory::RecalcAll` S 0067a3b0 -> `RecalcFullMap` S 00679ac0 (x outer, y inner), then
 `MapModifier::RefreshTerritoryAll` S 00672eb0: border bits of the whole map, whole construction map,
-`TerritoryChanged`, `RemoveStreetsOutsideTerritory`, buildings outside territory. Caller chain [known]:
+`TerritoryChanged`, `RemoveStreetsOutsideTerritory`, buildings outside territory
+(`MarkBuildingsOutsideTerritoryNear((0, 0), 0x7fffffff)`, S 00558170, through the wrapper
+`NVillage::System::Call00558170_ZeroMax` S 00558870) [known: S 00672eb0, S 00558870]. Caller chain [known]:
 `ai::map::MapModifier::RecalcTerritoryAll` S 00672f10 <- `Logic_RecalcTerritoryForPlayer(player, enable)` S 00538d10 (anchor =
 the player's first building, or (-1, -1)) <- the start and stop of a sacrifice's toggle effects (S 00661cf0,
 S 00661d60); S 00672f10 has no other caller. Neither argument changes the source list [known] S 0067a3b0,
@@ -709,10 +713,11 @@ loses one unit; returns whether one was found.
 **Mines** [known for the calls; the production side is `docs/sim/village-buildings.md` §3.9]: a mine links the
 nearest cell whose resource type equals the **mining good** of its product (good property +0xbc, §2.3) within
 its working radius (`Resources_FindNearestMapResourceCell` S 00540660: breadth-first, limited by hex distance
-only, not by walkability, S 00542970). Each use calls
-`ConsumeAnyResourceAtCell(linked cell)` (S 0055c860, called from `NVillage::Production::OnProductionFinished`
-S 00565f80 and from `NMovie::Working::Update` mode 3); when it returns false the link is reset to (-1, -1) and the
-building searches again on its next search tick. `OnProductionFinished` [known] S 00565f80: a building whose
+only, not by walkability, S 00542970). Each use calls `FieldConnection::ConsumeFieldResource` (S 0055c860,
+called from `NVillage::Production::OnProductionFinished` S 00565f80 and from `NMovie::Working::Update` mode 3),
+which runs `ConsumeAnyResourceAtCell(linked cell)` and, when that returns false, resets the link to (-1, -1)
+itself, for the mine and the fisher alike [known: S 0055c860]; the building searches again on its next search
+tick. `OnProductionFinished` [known] S 00565f80: a building whose
 property has the training byte +0xf1 finishes a training instead; otherwise, **only** for a building with property
 `size == 8` (`SizeMine`) and `workingMode == 6` (`Producing`), one unit is consumed from the linked cell, and
 when that returns false the cycle ends **without delivering products**; every other building, and a mine whose
@@ -729,9 +734,11 @@ fish cell (type 0x4012e5a3) within `fishingDistance` (`config.lua`: 1) (S 007803
 `LogicRandom % count`; then the nearest cell within `fishingDistance` of that spot that holds the mining good of
 the hut's first product is stored in the building's field connection. With no candidate, production enabled
 and productivity < 0.5: message `!No resources found.`
-(category 3). After the work animation (`Working::Update` mode 3, S 0077ebf0): with a linked cell
-`ConsumeAnyResourceAtCell(link)`, otherwise `ConsumeResourceNear(settler cell, fishingDistance, mining good of
-the product)`.
+(category 3). After the work animation (`Working::Update` mode 3, S 0077ebf0) [known]: with a linked cell
+`ConsumeFieldResource` (one unit off the link, the link reset when the cell runs empty, as for the mine),
+otherwise `ConsumeResourceNear(settler's logic cell, fishingDistance, type)` with `type` = S 00553070 called on
+the workplace's `BuildingProperty` (register moved into ECX at 0077ed18): the `miningGood` (good property
++0xbc) of the good in product slot 0 (`bp_setGoods`).
 
 **Regrowth** [known] S 005390e0: a resource spawn point adds 1 unit of its first resource id to every in-map cell
 of the spiral of its radius (`AddResourceAtCell`, so only cells that may hold it and are empty or of that type).
@@ -740,10 +747,16 @@ the shipped maps uses one of them, so regrowth does not occur in shipped content
 
 **Geologist** ("scholar" in the code) [known]:
 
-1. `SearchScholarDiggingPosition::Start` S 007794b0: flood fill from the settler's cell through cells that are
-   walkable and explored by the owner; the visitor collects cells accepted by `IsCellDiggableByScholar` and stops
-   the search as soon as one candidate exists or a visited cell is farther than 5 from the start. One candidate is
-   chosen with `LogicRandom % count` (in practice the first accepted cell).
+1. `SearchScholarDiggingPosition::Start` S 007794b0: flood fill from the owner's virtual target cell (settler
+   vtable slot 11, `docs/sim/settlers-jobs.md` §2.3: the workplace's flag cell for a Worker in mode 11, the target
+   flag's cell for a Specialist), not from the settler's own cell, through cells that are walkable and explored by
+   the owner; the radius is measured from that same cell. The visitor (S 0077e730) first adds the cell to the
+   candidates if `IsCellDiggableByScholar` accepts it, and only then tests the distance: it stops the search as soon
+   as one candidate exists, or, with none yet, at the first visited cell farther than 5 from the start. A
+   diggable cell farther than 5 is therefore still taken when it is the first cell of the flood fill beyond the
+   radius. The list holds at most one cell; the draw `LogicRandom % count` is still made and picks it.
+   A worker's job start runs this search twice (`Worker::TryStartDiggingJob` S 0065cd10, then `GoDigging::Start`
+   S 0077b170; `docs/sim/settlers-jobs.md` §3.5.3).
 2. `IsCellDiggableByScholar` S 0052dfa0: mining bit 0x10 set; none of 0x1, 0x80, 0x400; no flag (layer 0) and no
    dig reservation (layer 4) on the cell; and `FindDoodadAtCell(cell, 1)` finds nothing, that is no **temporary**
    doodad whose property `type` is 1 (`doodad_Type_Sign`, `doodads.lua`) stands on the cell's sample vertex. Other
@@ -835,8 +848,11 @@ cell must be walkable and within `radius`. The found deposit is linked to the bu
 | 2 | **farm**: if the linked deposit is available: as mode 1; otherwise as mode 0 |
 | 3 | ground resource (§3.8) |
 
-`Working::Start` S 0077eda0 [known]: if the linked deposit is available and its property's good is `wood`,
-`SetDepositTtl(deposit, (int)workDuration + 5)` puts it on the active list with that countdown. The animation is
+`Working::Start` S 0077eda0 [known]: if the linked deposit is available (`growth >= 1.0`, `depletedTicks == 0`)
+and its property's good is `wood`, `SetDepositTtl(deposit, (int)workDuration + 5)` puts it on the active list
+with that countdown. The good test reads `DepositProperty::GetGoodProperty(deposit +0x1c)->id` (S 005552a0: the
+good record of the type's `dp_setGood`, +0x3c) and compares it with 0xcd6ec133 (`CMP [EAX], 0xcd6ec133` at
+0077edff) [known: disassembly]. The animation is
 kind 5 instead of 4 for a mode-2 building whose deposit is not available (sowing instead of reaping).
 
 **Harvest** `System::HarvestDepositAt(cell)` S 00540c40 [known]:
@@ -861,8 +877,10 @@ The deposit type is the building's planting type, or, when that type has tree ty
 iteration order of the deposit property map, S 005477e0: ascending id compared as a **signed** 32-bit int, so the
 hashes with the top bit set come first [known for the map's find S 00546c70, which compares the keys as signed
 ints; inferred for the insert]) whose `treeTypes` contain both the cell pattern's `treeType` and `mapTreeType`,
-the `rnd % count`-th (unsigned modulo); -1 if none. The deposit is created with
-`CreateDeposit(type, cell, full = false)` and linked; the worker walks to it and runs `Working` (mode 0 sows it).
+the `rnd % count`-th (unsigned modulo); -1 if none. A deposit previously linked to the building is unlinked, then
+the new one is created with `CreateDeposit(type, cell, full = false)` and linked; the worker walks to it and runs
+`Working` (mode 0 sows it). The draws therefore come in the order place, tree type (only for a type with tree
+types), direction of the new deposit's display position [known: S 0077bcb0].
 If the walk cannot start the deposit is removed again (S 0077bc50).
 
 **Data** [known, `deposits.lua`]: 53 types. Trees: good `wood`, no next stage, default growth 0.1 start and 0.0009
@@ -1288,7 +1306,7 @@ destructor), doodad added (0x78), doodad destroyed (S 005310a0), spawn triggered
 | File | Keys | Read by | Example values |
 |---|---|---|---|
 | `scripts/properties/patterns.lua` | `pa_create`, `pa_setBlocked`, `pa_setForBuilding`, `pa_setForPlanting`, `pa_setForMining`, `pa_setForShip`, `pa_setTreeType`, `pa_setMiniMapColor` | §3.3, §3.9 | 114 patterns; helpers: meadow = building + planting; earth and stone ground = building; rock = mining; sand and sea ground = nothing; snow, swamp, lava = blocked; ship = `pattern_pavement` 0xdecade01; `pattern_acre` 0xca56701a = building + planting |
-| `scripts/properties/deposits.lua` | `dp_create`, `dp_setGood`, `dp_nextDeposit`, `dp_setGrowingStartSize`, `dp_setGrowingSpeed`, `dp_setBlocking`, `dp_setRandomFinePosOffsetState`, `dp_setElevationSize`, `dp_addUndergroundPattern`, `dp_setLifeTime`, `dp_setNeedForPlantablePattern`, `dp_addTreeType` | §3.9 | see §3.9 "Data"; `mapTreeType_Bavarian = 100`, `_Egyptain = 101`, `_Scot = 102` |
+| `scripts/properties/deposits.lua` | `dp_create`, `dp_setGood`, `dp_nextDeposit`, `dp_setGrowingStartSize`, `dp_setGrowingSpeed`, `dp_setBlocking`, `dp_setRandomFinePosOffsetState`, `dp_setElevationSize`, `dp_addUndergroundPattern`, `dp_setLifeTime`, `dp_setNeedForPlantablePattern`, `dp_addTreeType` | §3.9; `dp_setElevationSize`: the worker's walk onto the deposit (§2.5, `MoveToDeposit::Update` S 007778f0) | see §3.9 "Data"; `elevationSize` 2 on stone pile stages 03..06 of both chains, 1 on stages 01..02; `mapTreeType_Bavarian = 100`, `_Egyptain = 101`, `_Scot = 102` |
 | `scripts/properties/animals.lua` | `an_create`, `an_setRange`, `an_setMoveDistance`, `an_setMovementSpeed`, `an_setAvoidBuildings`, `an_addStackGood`, `an_setRespawn`, `an_setDyingTime`, `an_setDisappearingTime`, (`an_setIdleTimeFactor` is not called by the shipped script, so the default 3.0 applies) | §3.10 | deer: 6, 2, 0.045; rabbit: 8, 4, 0.07 |
 | `scripts/properties/doodads.lua` | `dd_create`, `dd_setBlocking`, `dd_setLifeTime`, `dd_setDeleteByStreet`, `dd_setType`, `dd_setIndestructable` | §3.11 | sign lifetime 3000 |
 | `scripts/properties/signs.lua` | `si_addSignDoodadId(good, threshold, doodad)` | §3.8 | `(coal, 3, doodad_coalSignM)` |
@@ -1372,8 +1390,9 @@ sign (permanent <-> temporary) makes old records unreadable [inferred].
   listed [known]: deposit creation at a cell (1, always); animal creation (1, before the animal's id is drawn,
   §3.10); animal spawn (1 for the type, only
   when the spawn's block is not crowded, so 2 per spawned animal with the creation draw); roam search (1 per search); sowing (1 if the type has underground patterns); planting (1 for the place, only when the
-  place search was stopped with at least one candidate, §3.9; 1 more for a random tree type); geologist cell (1 if
-  a candidate exists); fishing spot (1 if a candidate exists);
+  place search was stopped with at least one candidate, §3.9; 1 more for a random tree type; then the creation draw
+  of the new deposit); geologist cell (1 per search that finds a candidate; a worker's digging start searches
+  twice, §3.8); fishing spot (1 if a candidate exists);
   `BuildPath` with `randomize` (1 at the start if the ends are not adjacent, plus 1 at every step where the current
   direction stops descending). Free walkers (S 00775170) and animals (S 00543b20) always build the randomised
   path, so **every successful free-walker path search of a settler consumes random numbers**, except between
@@ -1442,6 +1461,8 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 - the exploration border is asymmetric (§3.7);
 - adding to an unlimited ground resource cell turns it into 7 units (§3.8);
 - the X-size and water signs are unreachable through the geologist (§3.8);
+- the geologist's search tests the cell before the radius, so it can dig one cell beyond radius 5, and a worker's
+  digging start searches twice (§3.8);
 - A* stops at the first reach of the start cell (§3.12);
 - the cell dirty rectangle grows only towards the origin when flushed (§3.4).
 
@@ -1455,7 +1476,7 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 2 | Answered (§3.10, step 6): an animal in state 4 at an aborted hunt stays in state 4 with a frozen counter and stands still, but stays huntable, so another hunter can take and kill it [live, 2026-10-12] | — |
 | 3 | Answered (§3.10, state 2): the idle counter after a walk is `(int)((tick/10 - timeStamp) * idleTimeFactor * 10)`, three times the walk's ticks with the shipped factor; the animal idles `counter + 1` ticks | disassembly S 0054231f..0054235e; live 2026-10-12 (400 arrivals) |
 | 4 | Answered (§3.10): yes. The exploration test of the hunter's search reads `Animal +0x38`, the movement's target cell (the cell of the last arrival while the animal is at rest); the roam search does not look at exploration, so such destinations occur | static: S 00542c40, S 005418e0, S 00772b00 |
-| 5 | Answered (§2.5, §6): `DepositProperty.elevationSize` (+0x50) is read by nothing: a decompile of every function shows the field only in the constructor S 005553d0 and the folded setter S 00555a70 / S 0054e100, none of the 15 callers of the deposit property getters reads +0x50, and the only one-instruction getters of a dword at +0x50 belong to `Carrier` and `KMesh` [known]. `GoodProperty +0x51` (`fieldsEnabled`, set for the mined goods and fish in `Goods.lua`) is read through the folded byte getter `Generic_GetByte_51` S 0046b620, by AI code only [known]: `ProductionControl::IsGoodControllable` S 0058bad0 returns false for such a good, `DestructionSystem::CanDemolishBuilding` S 0058dae0 treats it like a deposit good, `GameQueryHelper::ScoreSite` S 00534830 skips the supplier-proximity score for it, `NeedsArrangement::InstantiateGroupNeed` S 005943c0 leaves it out of the group weight, and `Need` copies it into `bypassCellCap` (S 00597010, `PostLoad` S 00596f70). The other callers of S 0046b620 are lobby code on other classes | — |
+| 5 | Answered (§2.5, §6): `DepositProperty.elevationSize` (+0x50) is the stop distance of the worker's fine walk onto the deposit: `NMovie::MoveToDeposit::Update` S 007778f0 reads the int at `+0x50` of the record reached through `deposit +0x1c` and passes it to `SettlerMovement::SetStopDistance` before `MoveToFinePos(deposit fine position)` [known]. The read goes straight through the record pointer, not through a getter, so it does not show among the callers of the deposit property getters; besides it the field appears in the constructor S 005553d0 and the folded setter S 00555a70 / S 0054e100. `GoodProperty +0x51` (`fieldsEnabled`, set for the mined goods and fish in `Goods.lua`) is read through the folded byte getter `Generic_GetByte_51` S 0046b620, by AI code only [known]: `ProductionControl::IsGoodControllable` S 0058bad0 returns false for such a good, `DestructionSystem::CanDemolishBuilding` S 0058dae0 treats it like a deposit good, `GameQueryHelper::ScoreSite` S 00534830 skips the supplier-proximity score for it, `NeedsArrangement::InstantiateGroupNeed` S 005943c0 leaves it out of the group weight, and `Need` copies it into `bypassCellCap` (S 00597010, `PostLoad` S 00596f70). The other callers of S 0046b620 are lobby code on other classes | — |
 | 6 | Answered (§3.1): no. Every variable direction passed by simulation code to S 00675000 is bounded to 0..5 (loop counters, ring iterators, `GetHexDirectionTo`, `rand() % 6`, the shipped door direction 4, the street side directions of S 00673370); 6 and 7 occur only as constants in the two editor tools | — |
 | 7 | Answered (§3.8 regrowth): no. The `Logic SpawnSystem` sections of the 31 shipped maps that have one (11 campaign, 20 free game; `Presentation.s2m` and `X_MediterranDemo.s2m` have none) hold 226 spawn points, all with one of 10 of the 12 property ids of `spawnpoints.lua` (`a3b370d8`, `523db953`, `fca5c872` .. `fca5c879`), and all 12 are `SpawnType_Animal`; no map script calls `sp_create` [known, data]. Resource regrowth (`SpawnResource::Spawn` S 005390e0) never runs in a shipped map | — |
 
@@ -1484,11 +1505,14 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 00600e90 | spiral iterator `{maxRadius, ring, dir, step, x, y}` (centre first, then the rings of §3.1) | geometry |
 | 00679510 / 0067a030 / 00679960 / 00679ac0 | cell owner / collect sources / recalc area / recalc map | territory |
 | 00673af0 / 00673b20 / 00673a50 / 00672eb0 | add source / remove source / local follow-up / full follow-up | territory |
+| 00558870 / 00558170 | `NVillage::System::Call00558170_ZeroMax` / `MarkBuildingsOutsideTerritoryNear` | whole-map outside-territory marking of the full follow-up |
 | 006797f0 / 00674ad0 | lost-territory message / border contacts | territory events |
 | 00674800 / 00677570 / 00542b10 / 00677670 | `ExploreArea` / `RevealHexArea` / `IsExplored` / `HasUnexploredInRadius` | exploration |
 | 00674210 / 006745e0 / 00674650 / 006746c0 / 00674e70 | ground resource: may hold, add, consume, consume near, consume any | ground resources |
 | 0067a800 / 00540660 | count cells of type in radius / nearest resource cell | ground resource queries |
 | 0077b2f0 / 0052dfa0 / 007794b0 / 00556cb0 | sign placement / diggable cell / dig search / sign lookup | geologist |
+| 0077e730 / 0065cd10 / 0077b040 / 0077b170 | dig search visitor / `Worker::TryStartDiggingJob` / its test search / `GoDigging::Start` | geologist |
+| 00553070 / 007778f0 / 005552a0 | product-slot-0 mining good / `MoveToDeposit::Update` (`elevationSize`) / `DepositProperty::GetGoodProperty` | settler side of resources and deposits |
 | 0077f670 / 00780300 | `LookForFishing::Start` / fishing visitor | fish |
 | 00540340 | `NResources::System::Update` | per-tick resources |
 | 00540b40 / 00540aa0 / 00540c40 / 00540e60 / 00540740 / 0053f2a0 | create / add full / harvest / kill / set ttl / remove | deposits |
@@ -1511,7 +1535,7 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 00545210 / 00545260 / 00541bf0 / 00542f00 | doodad object `Store` / `Load` / `Animal::PostLoad` / `Deposit::PostLoad` | save |
 | 00677f30 / 00531fa0 | `NMap::CallbackManager::AddListener` / listener set insert | events |
 | 0053bda0 | `NResources::Animal::IsDead` (state 5, 7, 8 or 9) | hunter sequence |
-| 00565f80 / 0055c860 / 00565550 | `OnProductionFinished` / consume linked cell / produces-goods flag | mines, planting |
+| 00565f80 / 0055c860 / 00565550 | `OnProductionFinished` / `FieldConnection::ConsumeFieldResource` (consume linked cell, reset the link when empty) / produces-goods flag | mines, fishers, planting |
 | 005574f0 / 00556df0 / 00546c70 | sign list add / sorted insert / property map find | data order |
 | 0041eca0 / 005657b0 / 007750d0 | base A* `CanSearch` (address-shared "return true" stub) / `PrepareSearch` (shared empty stub) / `FreePath` ctor | path-finding |
 | 00542700 / 005424c0 / 00542440 / 00542480 | animal areas init / add / crowded / `GetCountAt` (breeding cap) | density |

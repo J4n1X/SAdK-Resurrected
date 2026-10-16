@@ -348,7 +348,7 @@ Use of these fields is specified in [map-resources.md](map-resources.md) §2.5 a
 | +0x44 | `growingStartSize` | float | `dp_setGrowingStartSize` | 0.1 | growth value after planting (fields 0.2) |
 | +0x48 | `growingSpeed` | float per tick | `dp_setGrowingSpeed` | 0.0009 | `field_01` 0.00075, `field_egypt` 0.0005 |
 | +0x4c | `randomFinePosOffsetState` | bool | `dp_setRandomFinePosOffsetState` | true | random display offset within the cell |
-| +0x50 | `elevationSize` | i32 | `dp_setElevationSize` | 1 | 1 or 2 on stone piles; no reader in the program [known] ([map-resources.md](map-resources.md) §2.5) |
+| +0x50 | `elevationSize` | i32 | `dp_setElevationSize` | 1 | 2 on the stone pile stages 03..06 of both chains (`stone_*`, `med_stone_*`), 1 on stages 01..02 [known: data]. The stop distance of the worker's fine walk onto the deposit: `NMovie::MoveToDeposit::Update` S 007778f0 reads it straight through the record pointer (`deposit +0x1c`, no getter) and passes it to `SetStopDistance` [known] ([settlers-jobs.md](settlers-jobs.md) §3.5.5, [map-resources.md](map-resources.md) §2.5) |
 | +0x54 | `blocking` | bool | `dp_setBlocking` | false | the cell is not walkable |
 | +0x58 | `undergroundPatterns` | vector&lt;pattern id&gt; | `dp_addUndergroundPattern` | empty | pattern painted under the deposit (`pattern_acre` under fields, `pattern_meadow2` under stone) |
 | +0x68 | `doodadAfterDestruction` | doodad id | `dp_setDoodadAfterDestruction` | -1 | never set by the shipped scripts [known: data] |
@@ -1139,7 +1139,7 @@ Registered but never called by the shipped scripts [known: data against the bind
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Answered ([map-resources.md](map-resources.md) §2.5): `DepositProperty.elevationSize` (+0x50) has no reader [known] | — |
+| 1 | Answered (§2.6, [map-resources.md](map-resources.md) §2.5 and §10 #5): `DepositProperty.elevationSize` (+0x50) is read by `MoveToDeposit::Update` S 007778f0 as the stop distance of the worker's fine walk onto the deposit [known] | — |
 | 2 | Answered (§2.1, §2.10): `GameConfig+0x4c`, `GameConfig.bulldozeTime`, `MilitaryConfig+0x108`, `GameConfig+0x3c` and `MilitaryConfig+0x10c` are never read (the property database is reached only through `EnsureInstance` S 0054a140; none of its 593 callers and none of the typed block methods reads them); `+0x4c` has no meaning in the shipped code. Still `[inferred]` only: `ShipConfig+0x00` and the sign table's byte (the ship keeps the config pointer), and `GoodProperty.value` / `plantable` (no caller of `GetGoodProperty` S 00547560 reads them, but good records are also reached through pointers kept in other objects) | — |
 | 3 | Answered (§2.3, §7): `TribeProperty.sacrifices` has no reader (only `AddSacrifice` and the ctor touch it), and nothing but `MapInfo::Load` (with `ResetSacrificesFromTribes`) and the copy `Assign` fills `MapInfo+0x204`; a new map's list stays empty | — |
 | 4 | Answered (§2.6): no worker search selects a deposit whose good is a settler good; both good-keyed deposit searches (S 00540870, S 00540940) use the wanted good's `miningGood`, and no good has `miningGood = good_helper`, so a `tent` is never harvested | — |
@@ -1195,6 +1195,9 @@ Registered but never called by the shipped scripts [known: data against the bind
 | S 005556c0, S 005554d0, S 00555510 | `Properties_ShipConfig_ctor`, `ShipConfig::GetSpeed`, `GetExpeditionBuilding` | ship block |
 | S 00555780 | `Properties_GameConfig_ctor` | game config defaults |
 | S 005553d0, S 00547430, S 00532480 | `DepositProperty::ctor`, `TreeTypesContains`, `CountChainStages` | deposits |
+| S 005552a0 | `DepositProperty::GetGoodProperty` | good record of `dp_setGood` (+0x3c); the wood test of `NMovie::Working::Start` S 0077eda0 |
+| S 007778f0 | `NMovie::MoveToDeposit::Update` | reader of `elevationSize` (+0x50) |
+| S 00553070 | `Global552c30_GetFieldBC` | on a `BuildingProperty`: `miningGood` (+0xbc) of the product slot 0 good; the fisher's resource type without a field connection |
 | S 005477e0, S 0077bb30 | `PropertiesDb::PickRandomDepositForPattern`, `Afforest_PickRandomDepositForCell` | random tree type for a cell |
 | S 00555c00, S 00555970, S 005558a0 | `ai::properties::PatternProperty::ctor`, `DoodadProperty::ctor`, `RemainsProperty::ctor` | defaults |
 | S 00555190, S 00554f50, S 00554fe0, S 00555070 | `AnimalProperty::ctor`, `HasStackGood`, `GetStackGoodCount`, `GetStackGood` | animals |

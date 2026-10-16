@@ -105,7 +105,7 @@ Virtual slots of `Settler` (Worker vftable 007f84dc read from memory): **[known]
 | 10 | `+0x28` | `IsInWorkCycle` (2.4). Constructor S 0065e2a0: state 0x1b with `ConstructBuilding` step 10, or state 0x1c with `ConstructShip` step 2, 10, 0x13 or 0x18; Specialist S 0065eb00: state 10 or 11; NPC: always false **[known]** |
 | 11 | `+0x2c` | target cell of "go to working place": cell `+0x28` of a flag. Worker S 0065cca0: the workplace's flag; Constructor S 0065e450: the flag (`building +0xa0`) of its site `+0x188`; Soldier S 00658e50: the flag of the building referenced at `+0x1c0` if that reference is valid, else of the one at `+0x358`; Specialist S 0065ec60: its target flag `+0x138`; Carrier S 0065ab00: the cell at `Street +0x28` of its street; NPC S 0065dd40: a static `(-1,-1)` **[known]** |
 | 12,13 | `+0x30/+0x34` | animation-speed flag / factor used by `Fight::Update`; base returns false / 1.0 (S 0041ecc0, S 00656880); only `Soldier` overrides them (S 00658ea0, S 00658ed0) **[known]** |
-| 14 | `+0x38` | release links before going home. Base, Constructor and NPC: empty (S 005657b0). Worker: release the dig reservation. Soldier S 00658f40: unlink from the building at `+0x1c0`, release the ship link, unlink order and pairing. Specialist S 0065eaa0: unlink from its target flag and release the reserved dig cell **[known]** |
+| 14 | `+0x38` | release links before going home. Base, Constructor and NPC: empty (S 005657b0). Worker: release the dig reservation. Soldier S 00658f40: unlink from the building at `+0x1c0`, release the ship link, unlink order and pairing. Specialist S 0065eaa0: unlink from its target flag and release the reserved dig cell **[known]**. The unlink, `StreetLink_UnlinkFlagSpecialist` S 0053c670, removes the specialist from the flag's specialist list (`Flag +0x138`) and clears the specialist's flag reference (`+0x138`); its other callers are `Specialist::dtor` S 0065edf0 and `NNet::Specialists::UnlinkAll` S 0066cf10 **[known]** |
 
 Vftables (15 slots each, read from memory): Settler 007f83bc, Soldier 007f842c, Carrier 007f847c, Worker
 007f84dc, NPC 007f8544, Constructor 007f8594, Specialist 007f8604. **[known]**
@@ -675,7 +675,11 @@ In this order: **[known]**
      the idle position, else `CatapultAttack` (0x1d). Otherwise "failed".
    - 8: `state = 0x1d`, no movie. Done.
    - 9 and anything else: nothing. Done.
-   - 11: if `GoDigging` can start: `ReturnFromIdle` (0x13) when at the idle position, else `GoDigging` (0x1d).
+   - 11: `TryStartDiggingJob` (S 0065cd10): if `GoDigging` can start (S 0077b040 runs the `Start` of its
+     `SearchScholarDiggingPosition`, a full search): `ReturnFromIdle` (0x13) when at the idle position, else
+     `GoDigging` (0x1d), whose `Start` (S 0077b170) searches again. A call that starts `GoDigging` therefore runs
+     two flood fills and up to two `LogicRandom` draws (one per search that finds a cell); a call that starts
+     `ReturnFromIdle` runs one, and the next call after the walk back runs two more.
 4. If the chosen movie's `Start` returned false ("failed") → `RestOrIdleOutside()`.
 
 `ReturnFromIdle` only walks the worker back in; when it finishes the state-0x13 rule calls `ChooseNextWork` again,
@@ -723,8 +727,17 @@ The leaf movies **[known]**: `MoveToPosition(cell)` = `MoveToCell(cell, astarMod
 `MoveToFinePosition(pos)` = `MoveToFinePos(pos)` (S 00779630); `ReturnToLogicGrid::Start` (S 00777c70) clears
 a set stop distance and fine-walks to the centre of the rough mover's current cell (`movement +0x30`, the
 cell of the last cell-grid walk) when that cell is inside the map, else to the centre of the logic cell
-(`MoveToCellCenter` S 00657f10); `MoveToWorkingPlace` (S 007775a0) = `MoveToStreetPosition` (S 007780e0) =
-`StartStreetMoveTo` the owner's virtual target cell (slot 11, 2.3). All of them, and `MoveAwayFromDeposit`,
+(`MoveToCellCenter` S 00657f10). `ReturnToLogicGrid` started with a target cell (`SetTarget` S 00778880,
+vftable S 008345bc slot 5; `GoAfforest` passes the new deposit's cell) clears a set stop distance; when the
+settler's fine position is more than 4 fine units from the target cell's centre it fine-walks to one of the up to
+three cell centres nearest the settler (`FinePos::GetNearestPatternVertices` S 006753f0 over S 00675240: the
+in-map cell centres of the 5×5 cells around the settler that are closer than 5 fine units, by increasing distance;
+an exact hit returns that one alone), the walkable one (`Map_IsCellWalkable`) nearest the target, the first of the
+list when none is walkable; otherwise it fine-walks to the target cell's centre. `MoveToWorkingPlace`
+(S 007775a0) = `MoveToStreetPosition` (S 007780e0) = `StartStreetMoveTo` the owner's virtual target cell (slot 11,
+2.3). The Specialist's `ReturnToWorkingPosition` (vftable S 0083467c; `Start` S 007781b0) = `MoveToCell(target
+flag cell, astarMode false)` (flag reference `Specialist +0x138`, cell `flag +0x28`); its `Update` is
+S 00777c50. All of them, and `MoveAwayFromDeposit`,
 finish when the movement is not busy (`IsBusy` false: S 00777c50, S 007780f0, the forwarding `Update`
 S 00777590 of `MoveToWorkingPlace`); they keep no state of their own (section 7).
 
@@ -764,26 +777,35 @@ S 005e4e90), so step 7 lasts exactly one tick.
 - `MoveToDeposit` (S 00777990, S 007778f0): needs a valid deposit reference (else fails); `MoveToCell(deposit
   cell (+0x20), false)` and, if that started or the settler already stands there, stop distance 1; the
   internal state is 0 and `Start` returns the walk result. `Update`, once the movement is not busy: state 0 →
-  clear the stop distance, set the stop distance to the int at `DepositProperty +0x50` (deposit `+0x1c`) and
-  `MoveToFinePos(deposit fine position, +0x28)`, state 1; state 1 → clear the stop distance, finished.
+  clear the stop distance, set the stop distance to the int at `DepositProperty +0x50` (`elevationSize`,
+  `dp_setElevationSize`: 2 on the stone pile stages 03 to 06 of both chains, `stone_*` and `med_stone_*`, 1 on
+  stages 01 and 02 and by default [known: data]; read straight from the record reached through deposit
+  `+0x1c`) and `MoveToFinePos(deposit fine position, +0x28)`, state 1; state 1 → clear the stop distance,
+  finished. With the stop rule of 3.8 the worker therefore ends `elevationSize` fine steps short of the
+  deposit's display position.
 
 **`Working`** (`Start` S 0077eda0, `Update` S 0077ebf0): **[known]**
 - Duration = `BuildingProperty +0xd8` (`bp_setProductionTime`, e.g. 55 for woodcutter and forester), animation
   kind 4. For mode 2 with a deposit whose amount is `< 1.0` or whose flag `+0x50` is set, kind 5 instead.
-- If the linked deposit has amount `>= 1.0`, is unflagged and the property record reached from
-  `deposit +0x1c` has id `0xCD6EC133`, its time-to-live is set to `trunc(duration) + 5` ticks
-  (`NResources::System::SetDepositTtl`). `0xCD6EC133` is the good `wood` (`Goods.lua`,
-  `gp_create("cd6ec133")`) **[known]**; that the record is the deposit's product good, so that the rule
-  means "a tree being felled", is **[inferred]**. The effect of the TTL on other searchers is in
-  [`map-resources.md`](map-resources.md).
+- If the linked deposit has amount `>= 1.0`, is unflagged (`depletedTicks`, deposit `+0x50`, is 0) and the
+  good it yields is `wood`, its time-to-live is set to `trunc(duration) + 5` ticks
+  (`NResources::System::SetDepositTtl` S 00540740). The test is `DepositProperty::GetGoodProperty(deposit
+  +0x1c)->id == 0xCD6EC133` (S 005552a0 resolves the record's `good`, `+0x3c`, `dp_setGood`, through the good
+  table; `CMP [EAX], 0xcd6ec133` at 0077edff), and `0xCD6EC133` is the good `wood` (`Goods.lua`,
+  `gp_create("cd6ec133")`), so the rule means "a tree being felled" **[known]**. The effect of the TTL on other
+  searchers is in [`map-resources.md`](map-resources.md).
 - When the animation ends, by working mode:
   - 0: if the deposit property has a product pattern list (`+0x5c`), set the cell pattern at the deposit position
     to entry `LogicRandom % count`; then reset the deposit amount from its property.
   - 1: unlink the deposit from the building and harvest it (`NResources::System::HarvestDepositAt`).
   - 2: if the deposit `IsAvailable()`: unlink and harvest it; otherwise as mode 0.
-  - 3: if the building holds a fish reservation (`building +0x94 != -1`) validate/release it; otherwise
-    `MapModifier::ConsumeResourceNear(worker cell, cfg FishingDistance, type)` with `type` = the id returned by
-    S 00553070 (field `+0xbc` of a global property record). That this id is the fish resource is **[inferred]**.
+  - 3: if the building holds a field connection (`building +0x90`, cell `+0x94/+0x98`, `+0x94 != -1`):
+    `FieldConnection::ConsumeFieldResource` (S 0055c860): one unit off the connected cell
+    (`ConsumeAnyResourceAtCell`); when the cell is empty afterwards the function itself resets the connection to
+    `(-1, -1)` (the same function serves the mine, [`map-resources.md`](map-resources.md) §3.8). Otherwise
+    `MapModifier::ConsumeResourceNear(worker's logic cell, cfg FishingDistance, type)` with `type` = S 00553070
+    called on the workplace's `BuildingProperty` (moved into ECX at 0077ed18): the `miningGood` (`+0xbc`)
+    of the good in product slot 0 (`BuildingProperty +0x44`, `bp_setGoods`), for a fisher `fish`. **[known]**
   - others: nothing.
 
 **`BringGoodHome`** (S 0077c720, S 0077c740): step 4 `BringGoodToWorkingPlace`, then `EnterBuilding` (0x0c),
@@ -868,11 +890,20 @@ building's production produces goods (`Production::ProducesGoods`), `Production:
 is the building's planting deposit, or, when that deposit property has a non-empty list at
 `DepositProperty +0x74`, the pick of `Afforest_PickRandomDepositForCell(cell)`; any previously linked deposit
 is unlinked, the new deposit is created at the place and linked. Then, if the worker is neither at its idle
-position nor on the workplace's work cell: `ReturnToLogicGrid` (0x0e); otherwise `StartProductionCycle()`
-when the production produces goods, and `LeaveBuilding` (8). → `MoveToDeposit` (9; on failure the new deposit
-is removed, S 0077bc50, and the movie ends) → `Working` (10) → unlink the deposit from the building;
-finished. **[known]** That the property key read for the planting deposit is `bp_setPlantingDeposit` and
-that list `+0x74` is the tree-type list is **[inferred]** (names of the mapped fields).
+position nor on the workplace's work cell: `ReturnToLogicGrid` (0x0e) with the new deposit's cell as its target
+(`SetTarget`, above); otherwise `StartProductionCycle()` when the production produces goods, and
+`LeaveBuilding` (8). → `MoveToDeposit` (9; on failure the new deposit is removed, S 0077bc50, and the movie
+ends) → `Working` (10) → unlink the deposit from the building; finished. **[known]** The random draws of
+`Start` come in this order **[known]** (S 0077bcb0): the place (`LookForEmptyPlace`, `LogicRandom % count`),
+then the tree type (`Afforest_PickRandomDepositForCell`, only when the planting type has a tree-type list), then
+the unlink of the old deposit (no draw), then the direction draw of the new deposit
+(`NResources::System::CreateDeposit`, [`map-resources.md`](map-resources.md) §3.9). That the property key read
+for the planting deposit is `bp_setPlantingDeposit` and that list `+0x74` is the tree-type list is
+**[inferred]** (names of the mapped fields).
+
+The search leaves `LookForEmptyPlace`, `LookForFishing` and `LookForAnimal` do their work in `Start`; their
+`Update` is the constant `true` (S 005e4e90), like that of `LookForDeposit`, so the step after them starts one
+tick later. **[known]**
 
 **`GoFishing`** (S 0077cda0, S 0077cea0): step 7 `LookForFishing` → `LeaveBuilding` (8) → in the update in
 which `LeaveBuilding` finishes: step 9, look-at position = the fish reservation cell (`building +0x94`), and
@@ -889,13 +920,19 @@ target `(-1, -1)`, fail.
 animal reference, `building +0x70`) → `LeaveBuilding` (8) → `MoveToAnimal` (9) → on arrival, if the animal
 reference is still valid: unless the animal's state is already 5, 7, 8 or 9 set it to 5 (killed); `Working` (10)
 → finished with step 10. An invalid reference or a failed walk ends the movie with step ≠ 10.
-`MoveToAnimal` (S 00777a20, S 007785f0): free-walk to the animal's cell with stop distance 1, then fine-walk to
-the animal's fine cell centre with stop distance 1, or 2 when the building's `productionTime` is non-zero.
-**[known]**
+`MoveToAnimal` (S 00777a20, S 007785f0): `Start` tests only that the workplace's animal reference has an id hi
+below `0x80000000` (building `+0x84`; the animal is not looked up for validity), then free-walks to the animal's
+**walk target** cell (`Animal +0x38`, the target cell of its current walk, the cell it rests on when idle) with
+stop distance 1. `Update`, once the movement is not busy: if the reference still passes the same test, it
+fine-walks to the centre of the animal's **current** cell (`Animal +0x30`) with stop distance 1, or 2 when the
+building's `productionTime` is non-zero; on arrival, or with the reference gone, it clears the stop distance
+and finishes. **[known]**
 
 **`GoDigging`** (mode 11 and the Specialist; S 0077b170, S 0077b4b0): `digsRemaining = 10`. Loop:
-`SearchScholarDiggingPosition` (7; flood-fill radius 5 around the settler's target, pick `LogicRandom % count`),
-reserve the cell (`MapModifier::SetDigReservationAtCell`, object layer 4) → `LeaveBuilding` (1) only for a
+`SearchScholarDiggingPosition` (7, S 007794b0; the flood fill starts at the owner's virtual target cell, slot 11:
+the workplace's flag for a worker, the target flag for a Specialist, not the settler's own cell; radius 5 from
+that cell, pick `LogicRandom % count`; details in [`map-resources.md`](map-resources.md) §3.8), reserve the
+cell (`MapModifier::SetDigReservationAtCell`, object layer 4) → `LeaveBuilding` (1) only for a
 Worker standing on its workplace's work cell → `MoveToPosition` (9) → `DigForResources` (10;
 S 0077e840: animation of 80.0 ticks, kind 5 when the cell has neither `GridStates` bit `0x200` nor a resource
 entry, else kind 4) → place the resource sign doodad for what the cell holds (S 0077b2f0) and, only when the
@@ -1738,11 +1775,13 @@ worker's `lastWorkTick`. **[known]**
 
 - **Random numbers.** Simulation code uses `LogicRandom_Next` (S 005389b0, Park-Miller on the global logic seed)
   in: `LookForEmptyPlace::Start` (one draw, only when the search found candidates),
-  `SearchScholarDiggingPosition::Start` (one, only with candidates), `Stray::Start` (one, unless the water rule
+  `SearchScholarDiggingPosition::Start` (one, only with candidates; a worker's digging start runs it twice,
+  3.5.3), `Stray::Start` (one, unless the water rule
   already chose a target), `LookForFishing::Start` (one, only with candidates), `Working::Update` (one draw in
   mode 0 and in the not-available branch of mode 2, only when the deposit property has a pattern list),
   `Fight::Start` (one call site), and the per-pattern planting pick `Afforest_PickRandomDepositForCell`
-  (S 0077bb30, one draw per call, called from `GoAfforest::Start` S 0077bcb0). **[known]** These are the
+  (S 0077bb30, one draw per call, called from `GoAfforest::Start` S 0077bcb0, after the place draw and before
+  the creation draw of the new deposit, 3.5.5). **[known]** These are the
   eight call sites in the movie code (S 00776000..00781000). Settler actions also draw
   inside callees: every free-path search that is not the building↔flag shortcut builds its path with
   `randomize = true` (`FreePath::FindPath` S 00775170 → `NMap::AStar::BuildPathReversed`; the number of draws
@@ -1791,7 +1830,7 @@ worker's `lastWorkTick`. **[known]**
 
 ## 9. Notes for a reimplementation
 
-**Corrections found by the remake's port (2026-10-16)** [known]:
+**Rules that are easy to misread** [known]:
 - The first pop of a free or fine path is already the first step, not the start cell: `PathBase::Build` (S 00772c50)
   and `FinePath::SetTarget` set the index to count − 1, which points at `from`; `ComputeRoute` does the same for street
   legs; only a zero-distance entry runs the pop loop again. "Walking toward element k: index k" holds.
@@ -1913,7 +1952,20 @@ worker's `lastWorkTick`. **[known]**
 | 0077f670 / 0077cea0 | `NMovie::LookForFishing::Start` / `GoFishing::Update` | fishing job |
 | 0077cba0 | `NMovie::GoHunting::Update` | hunting job |
 | 0077b170 / 0077b4b0 | `NMovie::GoDigging::Start` / `Update` | scholar digging |
+| 0065cd10 / 0077b040 | `NSettlers::Worker::TryStartDiggingJob` / `GoDigging::StartSearchPosition` | mode 11: test search, then the movie's own |
+| 007794b0 | `NMovie::SearchScholarDiggingPosition::Start` | dig cell search from the slot-11 cell |
 | 0077eda0 / 0077ebf0 | `NMovie::Working::Start` / `Update` | work animation and its effect |
+| 005552a0 | `DepositProperty::GetGoodProperty` | good record of `dp_setGood`; the wood test of `Working::Start` |
+| 00553070 | `Global552c30_GetFieldBC` | on a `BuildingProperty`: `miningGood` of the product slot 0 good (fisher without a field connection) |
+| 0055c860 | `NLogic::FieldConnection::ConsumeFieldResource` | one unit off the connected cell; resets the connection when empty |
+| 00540740 | `NResources::System::SetDepositTtl` | felling countdown |
+| 00777990 / 007778f0 | `NMovie::MoveToDeposit::Start` / `Update` | walk to the deposit; `elevationSize` stop distance |
+| 00777a20 / 007785f0 | `NMovie::MoveToAnimal::Start` / `Update` | walk target, then current cell of the animal |
+| 00778880 | `NMovie::ReturnToLogicGrid::SetTarget` (vftable 008345bc slot 5) | re-centre toward a target cell |
+| 006753f0 / 00675240 | `FinePos::GetNearestPatternVertices` / `CollectNearPatternCells` | up to three nearest cell centres |
+| 007781b0 | `NMovie::ReturnToWorkingPosition::Start` (vftable 0083467c; `Update` 00777c50) | Specialist back to its flag |
+| 0053c670 | `StreetLink_UnlinkFlagSpecialist` | Specialist ↔ flag unlink |
+| 005e4e90 | constant `true` | `Update` of the `LookFor*` leaves, `Start` of `WaitForFreeFlag` |
 | 00777460 / 00777430 | `NMovie::ProduceGood::Start` / `Update` | workshop production |
 | 0077c510 | `NMovie::BringGoodOut::Update` | carry product to the flag |
 | 0077c740 / 0077f270 / 0077f020 | `BringGoodHome` / `BringGoodToWorkingPlace` / `ReturnToWorkingPlace` `Update` | carry harvest home |
