@@ -1174,7 +1174,7 @@ to ticks.
 | 005be2d0 | `Player::SetPlayerSpotted` | `spotted[j] = 1` |
 | 005be330 / 005be350 | `ai::player::Player::IsStateNotDefault` / `ai::player::Player::IsStateDefault` | start-resources predicates |
 | 005bf8a0 | `ai::player::Player::Update` | caches and warnings |
-| 005be2f0 | `Player::RecountStocks` | refill both stock caches |
+| 005be2f0 | `Player::RecountStocks` | refill both stock caches: `CollectPlayerBuildingStocks` S 00532a30 sums the output stocks of the depot list, then of the casern list without depots; `CollectPlayerUnitCounts` S 00532ca0 counts packages, the tribe's last non-soldier good among the settlers, and soldiers |
 | 005be970 / 005bf040 / 005bfeb0 | `Player::IsLocked` / `Unlock` / `SetLockFlag` | lock maps |
 | 005be3c0 / 005be500 / 005be6e0 | `Player::Store` / `Load` / `StoreChecksum` | save and checksum |
 | 005abb60 | `Game_CreatePlayersFromDescriptor` | players, castles, starting stock, fog |

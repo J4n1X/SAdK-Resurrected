@@ -352,7 +352,9 @@ following must hold, in this order:
    (`GetAverageHeightInRadius` S 00675f40; radius 2 for `size & 1`, radius 1 for mines) must be within −3..+3
    [known].
 6. Mines (`size & 8`): the anchor must be a free owned cell without street carrying grid bit 0x10
-   (S 0052f820); nothing else is checked [known].
+   (S 0052f820); nothing else is checked [known]. The ownership test asks the player with `allowBorder` fixed to
+   false and the optional second player with the caller's `allowBorder`; `HandlePlaceBuilding` S 00781980 passes no
+   `ignoreCentre`, no second player and no border allowance [known].
 7. Otherwise every footprint cell must be inside the map, hold no layer-0 object, be a free owned land cell
    (owned, not blocked 0x1, not deposit 0x80, not building footprint 0x100), carry no street (0x2) and carry
    the buildable bit 0x200 (bit 0x20000 when `size == 0x10`) [known] S 0052f460, S 0052f3d0.
@@ -405,7 +407,11 @@ S 005321c0); there is no "building changed" message:
       S 0055b020: the map's initial goods for the tribe, plus the tribe's `tp_addBonusResources` list,
       `TribeProperty+0x90`, when `ai::player::Player::IsStateDefault(owner)`; the table of who qualifies is in
       [players-victory.md](players-victory.md) §3.4), not `depot` → spawn one soldier of kind 0;
-      otherwise (normal play) only `TerritoryUpdater::ActivateIfOccupied`. The start castle of a match is
+      otherwise (normal play) only `TerritoryUpdater::ActivateIfOccupied`, which does not test the construction
+      state: a site of a type with neither soldiers nor workers activates its source at placement [known,
+      S 005653d0]. The territory updater runs before the anchor is marked in layer 1 (step 7) and before the
+      building joins the village vector (step 2 below), so the building's own `OnTerritoryChangedAt` does not see
+      it [known, S 0055d980]. The start castle of a match is
       placed by `Game_CreatePlayersFromDescriptor` S 005abb60 without a placement check and takes the normal
       branch: its `constructionTime` of −1 has completed it in step 4 already, and its initial stock comes from
       that caller, the only other caller of `Depot::AddInitialStock` [known: callers of S 0055b020];
@@ -1053,7 +1059,8 @@ and removes a **source**.
   expedition landing: an extra source of radius 4 is added before the building is placed (S 0055a820).
 - When territory changes, the map calls `MarkBuildingsOutsideTerritoryNear(pos, radius)`: every building
   within hex distance `< radius` with a footprint cell that is no longer a territory cell of its owner is
-  marked and removed in the next `System::Update` (§3.5) [known] S 00558170.
+  marked and removed in the next `System::Update` (§3.5) [known] S 00558170. The footprint test
+  (`IsFootprintOutsideTerritory` S 0055c0b0) asks `IsPlayerTerritoryCell(owner, water = false, border = false)`.
 
 ### 3.15 Hit points [known]
 

@@ -492,14 +492,21 @@ rectangle; when the outermost batch ends, `MapModifier_FlushElevationDirtyRect` 
 16 vertices, clamps it and raises `ElevationRectChanged` [known].
 
 **Flag placed** `FlattenAroundCell(cell)` S 00673bd0 (from `NNet::Flag::ctor`): the cell's sample vertex and the 6
-vertices around it (vertex ring 1) take the height of the sample vertex [known].
+vertices around it (vertex ring 1) take the height of the sample vertex [known]. It opens its own elevation bracket and
+grows the dirty rectangle only by vertices whose height changed [known].
 
 **Level a cell** `LevelVertexDisk(vertex, h)` S 00674100 [known]:
 
 1. every vertex of the vertex spiral of radius 2 around `vertex` is set to `h`;
 2. `SmoothElevationRing3` S 00673910: walking vertex ring 3 in ring order, each in-map ring vertex is set to the
-   integer average (truncating) of its in-map 6 vertex neighbours. The pass is sequential: a ring vertex sees the
-   already smoothed value of the ring vertex before it.
+   integer average (truncating) of an in-map hexagon of vertices. The neighbour walker is cumulative (disassembly
+   00673995..006739f5): it steps once in each direction 0..5 from the ring vertex without returning, so the averaged
+   hexagon is the one around ring vertex + direction 1, which contains the ring vertex itself; it is not the ring
+   vertex's own six neighbours [known]. The pass is sequential: a ring vertex sees the already smoothed value of the
+   ring vertex before it.
+
+`LevelVertexDisk` opens its own elevation bracket and grows the dirty rectangle only by vertices whose height changed
+[known].
 
 Callers [known]: `LevelCellToAverageHeight(cell, radius)` S 006744f0 (start of bulldozing, `h` =
 `Elevations::GetAverageHeightInRadius`) and `LevelCellToCellHeight(cell, refCell)` S 00674560 (bulldozing levels a
@@ -1431,6 +1438,7 @@ Behaviour that looks unintended but is what the code does, to be kept or conscio
 | 0067b390 / 0067b150 / 0067b740 / 0067b820 / 0067b650 / 0067b2c0 | `MapCellUpdater::RefreshBit*` | derived grid bits |
 | 0067b910 / 0067b5a0 | `RefreshTerritoryBorderBits` / `IsTerritoryBorderCell` | border bit |
 | 00673bd0 / 00674100 / 00673910 / 006744f0 / 00674560 / 00673370 | flatten, level, smooth, street shaping | terrain edits |
+| 0053f840 / 0053f400 | `RemoveAllAnimalsAt` / `EraseAnimal` | animals removed under a new building's footprint: each leaves `AnimalAreas`, runs its virtual destructor and leaves the id map |
 | 00674360 / 00674470 | `SetCellPattern` / `ExchangePatternInRect` | pattern edits |
 | 00672df0 / 006730e0 | flush elevation rect / flush both rects | change notification |
 | 00532180 / 005321c0 / 005322b0 / 00532400 | `MapUpdateBatch_Begin` / `_End` / `InvalidateConstructionRadius` / radius-4 wrapper | batching |

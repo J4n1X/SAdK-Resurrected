@@ -394,7 +394,13 @@ These matter more in the remake than in the original, because Harmony patches ca
    checksum keeps the original's coverage (map, resources, doodads and spawns stay out) and the whole state goes into a
    separate state hash; a unit type the registry lacks leaves the object out with a warning (the original inserts
    default properties); the whole-map exploration notice goes to every player (the original sends it for its local
-   player); a map reference's hash covers the world part's bytes including mod overlays.
+   player); a map reference's hash covers the world part's bytes including mod overlays. Taken while building the
+   placement core (to review): where the original reads memory unchecked (an anchor or flag cell outside the map, an
+   `IsGroundLevel` neighbour outside the vertex grid) the remake returns false or skips; with no batch open the
+   construction flags are recomputed over the area's bounding rectangle instead of the original's spiral (same
+   result); computer slots draw no AI ids yet (the original draws an AI cell id per building of a computer player, so
+   ids diverge in every shipped free game with computer slots until the AI exists); the refined-mode check of
+   0x20002 waits for a mode switch.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.
