@@ -68,7 +68,7 @@ The table always has exactly 8 slots; every loop over players is `for i in 0..7`
 | +0x64 | map<int,u8>[4] | lockMaps | four lock maps, 0xc bytes each, §3.10 | `[known]` S 005be970 |
 | +0x94 | i32 | team | team number; -1 = no team | `[known]` S 005be280 |
 | +0x98 | u8[8] | spotted | spotted[j] = this player has seen player j | `[known]` S 005be2d0 |
-| +0xa0 | ptr | pMobileStock | `NLogic::Stock`: goods/units outside buildings (cache, §3.9) | `[known]` S 005be2f0; `[inferred]` meaning |
+| +0xa0 | ptr | pMobileStock | `NLogic::Stock`: units outside buildings, namely the player's packages, the carriers of one counted good and the soldiers (cache, §3.9) | `[known]` S 005be2f0, S 00532ca0 |
 | +0xa4 | u8[8] | reached | reached[j] = this player's border has touched player j's | `[known]` S 00674ad0 |
 | +0xac | i32[8][2] | reachedPos | cell (x,y) of the first border contact with player j; (-1,-1) = none | `[known]` S 005be230 |
 | +0xec | i32 | state | **start-resources / difficulty level** 0..3 of the match (same value for every player), §3.4 | `[known]` S 005abb60 passes `desc+0x20`; name `state` is a misnomer |
@@ -679,7 +679,12 @@ Called for every active slot, in slot order, at the start of each logic tick (§
    `index * 2`, so players do the heavy work on different ticks.
 3. If `updatePhase == 0`: clear `pStock` and refill it from all of the player's buildings
    (`GameQueryHelper::CollectPlayerBuildingStocks`); clear `pMobileStock` and refill it
-   (`GameQueryHelper::CollectPlayerUnitCounts`).
+   (`GameQueryHelper::CollectPlayerUnitCounts` S 00532ca0) `[known]`: one unit of its good per package of the
+   player (`packagesByPlayer`); one unit of good `g` per settler of the player in the **carrier list** (the vector
+   at `NSettlers::System +0x24`, settler type 2) whose good is `g`, where `g` is the last entry of the tribe's job
+   list (`TribeProperty +0x30`) whose `settlerType` is not soldier (nothing when there is none); one unit of its
+   good per soldier of the player in the **soldier list** (the vector at `+0x34`, settler type 3). Other settlers
+   (workers, builders, specialists) are not counted.
 4. If `updatePhase == 1`: for every building property in the property map (map order = ascending id):
    `buildingCounts[id] = CountPlayerBuildingsOfType(player, id)` → {first, second}. The count (S 00532e70) walks
    the village's building list (the vector at `NVillage::System +0x04`) and takes a building of this player
@@ -698,10 +703,12 @@ Called for every active slot, in slot order, at the start of each logic tick (§
      -10, ... (minus 10 per entry); then the tribe's worker tool good (`workerToolGoodId`) with threshold 5.
    - For each required good in that order: if `pStock.count(good) + pMobileStock.count(good) < threshold`: look
      for an existing message of type 3 with text `!low resources`, arg = the good's name and position within
-     hex distance < 1 of (-1,-1); if found, reset its timer to 600.0 and notify listeners; else add a new one.
+     hex distance < 1 of (-1,-1) (`Messages::FindMatchingWithArg` S 005c1e40: type, text, argument and position
+     must match); if found, reset its timer to 600.0 and notify listeners; else add a new one.
    - Soldiers: sum `pStock.count(soldier good)` over both soldier classes (0, 1) and every level of the tribe
-     (`MilitaryConfig::GetSoldierId(tribe, class, level)`); if the sum is `< 5`: same refresh-or-add with a type
-     1 message `!low soldiers`, empty arg.
+     (`MilitaryConfig::GetSoldierId(tribe, class, level)`); if the sum is `< 5`: refresh-or-add with a type
+     1 message `!low soldiers`, empty arg; the lookup is `Messages::FindMatching` S 005c1fd0, which compares type,
+     text and position but not the argument `[known]`.
 
 `pStock`, `pMobileStock` and `buildingCounts` are therefore caches up to 22 ticks old. `pStock` is in the
 checksum, so the recount tick matters.
@@ -1206,6 +1213,7 @@ to ticks.
 | 005be330 / 005be350 | `ai::player::Player::IsStateNotDefault` / `ai::player::Player::IsStateDefault` | start-resources predicates |
 | 005bf8a0 | `ai::player::Player::Update` | caches and warnings |
 | 005be2f0 | `Player::RecountStocks` | refill both stock caches: `CollectPlayerBuildingStocks` S 00532a30 sums the output stocks of the depot list, then of the casern list without depots; `CollectPlayerUnitCounts` S 00532ca0 counts packages, the tribe's last non-soldier good among the settlers, and soldiers |
+| 00532ca0 / 00532e70 | `GameQueryHelper::CollectPlayerUnitCounts` / `CountPlayerBuildingsOfType` | the mobile stock (packages, carriers of the counted good, soldiers) and the building counts of §3.9 |
 | 005be970 / 005bf040 / 005bfeb0 | `Player::IsLocked` / `Unlock` / `SetLockFlag` | lock maps |
 | 005be3c0 / 005be500 / 005be6e0 | `Player::Store` / `Load` / `StoreChecksum` | save and checksum |
 | 005abb60 | `Game_CreatePlayersFromDescriptor` | players, castles, starting stock, fog |

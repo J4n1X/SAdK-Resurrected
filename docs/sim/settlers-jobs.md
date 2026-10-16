@@ -493,9 +493,14 @@ The element count is read once before the loop and decremented on erase, so sett
 the loop are not updated until the next tick (consequences in 3.1, "When a new settler is first updated").
 **[known]** (S 00654a10)
 
-Destructors unlink: the base dtor discards a carried package (`NTransport::System::DiscardPackage`), unlinks home
-building and ship, and deletes the movement object; `Worker` removes itself from its workplace's worker list;
-`Carrier` releases its packages and frees its street slot. **[known]** (S 006568b0, S 0065d220, S 0065afb0).
+Destructors unlink: the base dtor (S 006568b0), in this order, discards a carried package
+(`NTransport::System::DiscardPackage`), unlinks the home building, unlinks the ship link (`+0xf8`) with
+`Settler_UnlinkShip` when that ship's expedition is active (ship `+0x30` → `+0x08`), else with
+`NavyLink_UnlinkMilitarySoldier`, and destroys and frees the movement object (`SettlerMovement::Destruct`
+S 00657050: if queued, leave the flag's waiting list; if the movement's ship reference is valid, leave that
+ship's cargo list; then the movies and the base); `Worker` removes itself from its workplace's worker list;
+`Carrier` releases its packages and frees its street slot. **[known]** (S 006568b0, S 00657050, S 0065d220,
+S 0065afb0).
 
 ### 3.4 Going home (`NMovie::LeaveMap`, state 3)
 
@@ -1354,7 +1359,7 @@ Queued at a flag (`waitFlag` valid): finish a running move first, then by `flagW
 | State | Rule |
 |---|---|
 | 2 | `++flagWaitTicks`; if the flag has more than 1 waiter and `flagWaitTicks > 10`: start the `WaitForShip` movie, state 3 |
-| 3 | unless the settler has a ship and the flag is that ship's docking flag: when `(unique.idLo + tick) % 23 == 0`, replan; if there is no next flag any more or it changed: start `ReturnToLogicGrid`, state 5. Else if `WaitForShip.Update()` finished: state 7 |
+| 3 | unless the settler has a ship and the flag is that ship's docking flag (`IsWaitFlagShipDockFlag` S 00657160: the ship of the settler's ship link `+0xf8` has a valid `targetHarbor`, movement `+0x60`, and that harbour's flag is the waited-at flag): when `(unique.idLo + tick) % 23 == 0` (32-bit unsigned sum), replan; if there is no next flag any more or it changed: start `ReturnToLogicGrid`, state 5. Else if `WaitForShip.Update()` finished: state 7 |
 | 5 | state 6; free-walk to the flag's cell |
 | 6 | state 0; `Abort()` |
 
@@ -1365,19 +1370,34 @@ Queued at a flag (`waitFlag` valid): finish a running move first, then by `flagW
 `flagWaitTicks = 0`; in street mode (path mode 2) remember `streetMode = 1` and stop the rough move; with path
 mode 0 and no fine move active `streetMode = 0`; with path mode 1 `streetMode` is left unchanged. **[known]**
 
-`WaitForShip` (S 00777240): walk to the parking cell with stop distance 1 (0x16), fine-walk to the parking spot
-(0x19), wait (0x14) until the parking cell is released, `ReturnToLogicGrid` (0x0e), free-walk to the flag cell
-(0x18; `astarMode` is set to 1 for this walk), finished. A parking cell of `-1` at the start (step 0x0f)
-finishes the movie at once. **[known]** The movie name says "ship"; the queue is entered through rule 2 of
-3.8.5.
+`WaitForShip::Update` (S 00777240), steps **[known]**:
 
-Aboard a ship: `EnterShip` (S 00657cd0) stops everything and sets `flagWaitState = 4`; while 4 with a valid ship
-the settler counts as busy and is not moved by this code. `DisembarkAt(ship)` (S 00657d90) clears `streetMode`
-and `flagWaitState`. If the ship movement's harbour reference (`+0x60`) is valid it puts the settler on the
-cell the owner's virtual slot 0 returns and, if `streetMode` had been 1, restarts the street route (path
-mode 2, `AdvanceStreetRoute`). With no harbour it puts the settler on the first walkable in-map neighbour of
-the ship's cell (the neighbour in direction 4, then stepping in directions 0, 1, 2, 3, 4); if none of the six
-is walkable the position is not changed; the street route is not restarted in this branch. **[known]**
+| Step | Rule |
+|---|---|
+| 0x0f (start) | parking cell `-1` → finished at once; else `MoveToPosition(parkingCell)` → 0x16, and only when that walk started: stop distance 1 |
+| 0x16 | arrived: clear the stop distance, `MoveToFinePos(parkingSpot)` → 0x19 |
+| 0x19 | arrived → 0x14 |
+| 0x14 | wait until the parking cell is `-1` (released by the call-out, `navy.md` §3.9); then `ReturnToLogicGrid` → 0x0e |
+| 0x0e | arrived: `astarMode = 1`, `MoveToPosition(the waited-at flag's cell)` → 0x18 |
+| 0x18 | arrived → finished |
+
+"Arrived" is a direct test of the movement's interpolator (`progress < 0`) in every step, not the `Update` of the
+sub-movie. The movie name says "ship"; the queue is entered through rule 2 of 3.8.5.
+
+Aboard a ship: `EnterShip(ship, unlink)` (S 00657cd0) **[known]**: the `ship` argument is not used. With `unlink`
+set it first leaves the flag queue (`StreetLink_UnlinkWaitingSettler` → `DetachFromFlag` S 006575c0: the wait-flag
+reference cleared, the parking spot given back with `FlagParking::ReleaseSpot`, parking cell and spot `(-1, -1)`,
+`flagWaitState = 0`); then it stops a running rough or fine move, leaves fine mode, ends a street or free path (path
+modes 2 and 1), clears a set stop distance and sets `flagWaitState = 4`. It writes neither `streetMode` nor the
+movement's ship reference (that is set when the cargo links the settler, `navy.md` §3.9). While 4 with a valid ship
+the settler counts as busy and is not moved by this code. `DisembarkAt(ship)` (S 00657d90) clears `streetMode` and
+`flagWaitState`. If the ship movement's harbour reference (`+0x60`) is valid it puts the settler on the cell the
+owner's virtual slot 0 returns and, if `streetMode` had been 1, restarts the street route with `StartMode2_From128`
+S 00772f90 (`holdStep = 0`, the rough mover's current cell = the settler's cell, path mode 2) and
+`AdvanceStreetRoute`, not with `StartStreetMoveTo`: the route target is kept and no move is stopped first. With no
+harbour it puts the settler on the first walkable in-map neighbour of the ship's cell (the neighbour in direction 4,
+then stepping in directions 0, 1, 2, 3, 4); if none of the six is walkable the position is not changed; the street
+route is not restarted in this branch. **[known]**
 
 `ai::settlers::SettlerMovement::IsBusy` (S 00657570) = queued at a flag, or aboard, or `progress >= 0`. **[known]**
 
@@ -1709,7 +1729,7 @@ own fields and its sub-movies (each sub-movie through its virtual `Store`, slot 
 | `BringGoodOut` | 0077c3c0 | `EnterBuilding`, `LeaveBuilding`, `WaitForFreeFlag` (`+0x2c`), `PutDownPackage` (`+0x34`), `PickupProduct`, step |
 | `IdleOutside`, `ReturnFromIdle` | 0077ae00, 0077d350 | `MoveToFinePosition`, step |
 | `Rest` | 0077b640 | int `restTicksLeft` |
-| `CatapultAttack` | 0077b7e0 | `RotateCatapult`, `ShootCatapult`, step |
+| `CatapultAttack` | 0077b7e0 | `RotateCatapult`, `ShootCatapult` (both write nothing, below), step: only the step reaches the stream |
 | `Pickup` | 00778a90 | int state, int good id |
 | `Drop` | 007789f0 | int state |
 | `PutDownPackage` | 0077a860 | `Drop`, step |
@@ -1982,6 +2002,9 @@ worker's `lastWorkTick`. **[known]**
 | 00542f50 | `MapPos_IsInBounds` | vertex-grid bounds (NPC fine target) |
 | 006594a0 | `NSettlers::Soldier::Update` | soldier state machine; settler part in 3.2 |
 | 00777240 | `NMovie::WaitForShip::Update` | parking at a flag |
+| 00657cd0 / 00657d90 / 00772f90 | `SettlerMovement::EnterShip` / `DisembarkAt` / `StartMode2_From128` | boarding and landing; the street restart |
+| 006575c0 / 00657330 / 00657160 | `SettlerMovement::DetachFromFlag` / `RecallFromParkingCell` / `IsWaitFlagShipDockFlag` | flag queue: leave, call-out, no replan at the ship's dock |
+| 006568b0 / 00657050 | `NSettlers::Settler::dtor` / `SettlerMovement::Destruct` | unlink order of a removed settler |
 | 0077daf0 / 0077fb50 / 0077fe70 | `ConstructBuilding::Update` / `Construct::Update` / `Start` | building work |
 | 00564360 / 005643c0 / 00564e00 / 00564eb0 | `NVillage::SettlerSpawn` consume / can-supply / spawn / entered | tool → settler → tool |
 | 0055b6a0 | `NVillage::Workers::SpawnWorker` | worker of a pre-built building |

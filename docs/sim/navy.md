@@ -338,7 +338,9 @@ the settlers that were only assigned [known]. So everything aboard a sinking shi
 **Ownership transfer** (`System::TransferShipsOfPlayer(from, to)` S 005b44e0) [known]: for each ship of `from`,
 in vector order: an **unfinished** ship is deleted; a finished ship is deleted and a new finished ship is
 created for `to` on the same cell (new id, new name number, no cargo, state 0, appended at the end of the
-vector).
+vector). Its only caller is `NLogic::System::TransferPlayerAssets` S 00529040, the Lua function
+`pl_changePlayer` (`players-victory.md` §3.12) [known]. The loop goes on past the erased ship, so with
+`from == to` it reaches each re-created ship again and never ends [known: the loop of S 005b44e0].
 
 ### 3.3 The ship-building site
 
@@ -676,12 +678,14 @@ ship (it joins the cargo's settler list, not yet aboard).
 **`LoadAtHarbor`** S 005bd4e0, returns "worked":
 1. If `(tick + id) % 3 != 0` → return true (no work done).
 2. `AssignWaitingSettlers()`.
-3. Waiting list of the harbour flag, in order: every settler bound for the opposite harbour sets `worked`; the
-   **first** such settler whose `flagWaitState` is 2 or 7 boards (`SettlerMovement::EnterShip(ship, true)`)
-   and the scan stops.
-4. The flag's settler list (flag `settlerRefs`): every settler bound for the opposite harbour sets `worked`;
-   the first one that stands still, holds a parking cell and has `flagWaitState` 2, 3 or 7 is called out of
-   its parking place (parking cell released, state 2 → 7) and the scan stops. One settler boards per call.
+3. A **copy** of the harbour flag's waiting list (`Flag +0x188` `waitingSettlers`, `streets-transport.md`
+   §2.2), in order: every settler bound for the opposite harbour sets `worked`; the **first** such settler whose
+   `flagWaitState` is 2 or 7 boards (`SettlerMovement::EnterShip(ship, true)`) and the scan stops.
+4. The **same** list again, now the live one (after the boarding of step 3 took that settler out of it): every
+   settler bound for the opposite harbour sets `worked`; the first one that is not moving (interpolator
+   `progress < 0`), holds a parking cell and has `flagWaitState` 2, 3 or 7 is called out of its parking place
+   (`SettlerMovement::RecallFromParkingCell` S 00657330: parking cell released, state 2 → 7) and the scan stops.
+   Step 4 runs whether or not step 3 boarded somebody. One settler boards and one is called out per call.
 5. Packages on the flag's active stacks, in stack-iterator order, with `pending = 0`. The iterator
    (`NNet_FlagPackageStacks_IterNext` S 0066cdd0) keeps an index per stack: loading a package removes it from
    its stack, the next package moves into its slot, and the iterator's next step passes over that package
@@ -735,8 +739,13 @@ street mode and `flagWaitState` are cleared; then
   each of the directions 0..4"; if none is walkable the settler is not placed at all (it keeps its old
   position and is no longer aboard) [known as read].
 
+With a harbour the street route restarts through `StartMode2_From128` S 00772f90 (`holdStep = 0`, the rough
+mover's current cell = the settler's cell, path mode 2) and `AdvanceStreetRoute` S 00657b80, not through
+`StartStreetMoveTo`: the route target is kept and nothing is stopped first (`settlers-jobs.md` §3.8.6).
+
 A homeless passenger (settler state 3) continues with the going-home rules of `settlers-jobs.md` §3.4; the
-parking call-out of `LoadAtHarbor` step 4 is S 00657330 (parking cell := (-1,-1), `flagWaitState` 2 → 7).
+parking call-out of `LoadAtHarbor` step 4 is `RecallFromParkingCell` S 00657330 (parking cell := (-1,-1),
+`flagWaitState` 2 → 7). Boarding (`EnterShip`) and the settler-side unlinks are in `settlers-jobs.md` §3.8.6.
 Waiting at a harbour flag draws one random number per settler for its parking spot
 (`FlagParking::FindFreeSpot`, `streets-transport.md`).
 
@@ -758,9 +767,9 @@ route, lie still, **hold an anchorage** and stand in the same water body as `exi
 distance wins (limit 100000, first in ship-vector order on ties). `AssignNearestIdleShip` uses
 `exitCell = route.path[0]` (harbour A's exit), whichever end the player owns [known] S 005ba720.
 
-**Assigning** (S 0053c010) [known]: add the ship to the route's list (which may create the sea street),
-`Movement::SetRoute`, `expedition.state = 0`, `expedition.bActive = 1`. On its next still tick the ship goes
-from state 0 to 4.
+**Assigning** (`Navy_AssignShipToRoute` S 0053c010) [known], in this order: add the ship to the route's list (which
+may create the sea street), `Movement::SetRoute`, `expedition.state = 0`, `expedition.bActive = 1`. On its next
+still tick the ship goes from state 0 to 4.
 
 **`Expedition::Update`** S 005b8ac0, called on still ticks in ship state 4; returns true when the expedition
 is over [known]:
@@ -774,7 +783,7 @@ Before the switch, unless the state is 7 or 8: if both route ends now belong to 
 | 3 | `GatherCargo()` (below); when true → `SailToOppositeRouteEnd()` → 4 |
 | 4 | explore radius 10 around the target harbour's cell for the owner. Harbour unowned → message `!Ship waiting for Orders` → 5. Owned → `!Harbor is already captured!` → 7 |
 | 5 | wait. If the harbour got an owner → `!Harbor is already captured!` → 7 |
-| 6 | if the harbour has an owner → back to 5 (which then reports and returns). Else found the colony (below); no building position → `!No Valid Position for Building found!` → 7 |
+| 6 | if the harbour has an owner → back to 5 without a message (state 5 reports `!Harbor is already captured!` on its next run). Else found the colony (below); no building position → `!No Valid Position for Building found!` → 7 |
 | 7 | `ReleaseUnitsAndOrders()`; `MoveToHarbor(ChooseStartHarbor())` → 8 |
 | 8 | `cargo.UnloadStep()`; when false → `Finish()`, return true |
 
@@ -801,10 +810,11 @@ losing a harbour takes the owner's ships off its routes and deactivates their ex
    - Units exist, nobody linked to the cargo: every settler in the harbour flag's waiting list whose ship
      reference is this ship is linked to the cargo and boards (`EnterShip`, then `ai::settlers::SettlerMovement::Abort`).
    - Units exist and somebody is linked to the cargo: `ready = true`.
-2. Materials. `missing` = `frameCost ++ cost` of the tribe's expedition building, minus one per package aboard
-   (by good type). If `missing` is not empty: `ready = false`; subtract the open `NeedGoods` requests; if
-   nothing is left to request, load every package on the harbour flag that is flagged for transport, lies on
-   the flag, has a valid target and whose target is this ship (and cancel its request); otherwise add
+2. Materials. `missing` = `frameCost ++ cost` of the tribe's expedition building, minus one per package aboard (by
+   good type; `RemoveAmount` S 005525b0 replaces an entry that reaches 0 with the list's last entry, so the order of
+   the remaining entries changes). If `missing` is not empty: `ready = false`; subtract the open `NeedGoods`
+   requests; if nothing is left to request, load every package on the harbour flag that is flagged for transport,
+   lies on the flag, has a valid target and whose target is this ship (and cancel its request); otherwise add
    requests for the remainder (`NeedGoods::AddRequests`).
 
 How the order finds a soldier and how the requests are served belong to the village order system and the
@@ -823,7 +833,8 @@ is one.
 **The order to found** is the lockstep command `0x2001C` (§5.1): state 5 → 6.
 
 **Founding** (state 6) [known] S 005b8ac0, in this order:
-1. `FindBuildingPosition` S 005b7e50 (ring walk, rules in `../navy-and-military.md` §6).
+1. `FindBuildingPosition` S 005b7e50 (ring walk, rules in `../navy-and-military.md` §6). It calls
+   `CanPlaceBuildingAt` with player −1 and the ship's owner as the alternative player, borders allowed [known].
 2. `NVillage::System::PlaceExpeditionBuilding(player, cell)` S 0055a820 [known], in this order:
    `MapModifier::AddTerritorySource(cell, radius 4, player, notify = false)` (so that the building can be
    placed on land that was nobody's); `PlaceBuilding` of type `expeditionBuilding[tribe]`;
@@ -883,6 +894,12 @@ S 005ba250, S 005b9f30, S 005ba190 [known]; additions:
   still linked" and the state is kept [known] S 005ba250, S 005bcd10.
 - `Finish` S 005ba190: `bActive = 0`; unlink from the fight; unlink every mission soldier (last to first);
   take the ship off its route. The ship then returns to state 0 and calls `ReturnToOwnHarbor` (§3.8).
+- `HarborList::FindNearestWithPlayerShipRoute` S 005b6090 writes to its `*status` the result of the **last**
+  harbour it evaluated, not of the harbour it returns [known].
+- The reach test `Military_IsEnemyTerritoryInRange` S 00575850 walks only the hex ring at `R + 1` around the
+  target; cells inside the ring are not tested [known].
+- `Military_GetAttackOriginCell` S 00576d00 reads the building's anchor without a null test when a harbour
+  exists and no building was found (`military.md` §3.5, origin cell) [known].
 
 ### 3.12 Sea streets and reachability
 
@@ -1213,9 +1230,10 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 - The sea attack rules have known gaps that the `navalcombatfix` mod addresses
   (`../navy-and-military.md` §7); decide per rule whether the remake keeps the original behaviour.
 - Rendering needs from the logic only: cell, next cell, `progress`, ship state, cargo empty or not, the
-  construction values and `buildCell` [inferred: of the renderer only the callers `S2CG::Ship::Update`
-  (`ShipConfig::GetSpeed`) and `S2CG::Ship::UpdateVisuals` (`ai::navy::NavyCargo::IsEmpty`) were seen; `S2CG::Ship` was
-  not read].
+  expedition's and the military mission's active bytes, the construction values and `buildCell` [inferred for
+  `S2CG::Ship::Update` S 006a54c0 (`ShipConfig::GetSpeed`); `S2CG::Ship::UpdateVisuals` S 006a5cc0 is read: it
+  takes the status mesh from the two active bytes and `NavyCargo::IsEmpty`, and the swell from "under way"
+  (`progress >= 0`), `animation-models.md` §3.17]. The swell is presentation only.
 
 ## 10. Open questions
 
@@ -1270,7 +1288,12 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005baf20 / 005b96c0 / 005b3c40 | `Ship::dtor` / `Movement::dtor` / `System::DeleteAllShips` | destruction order |
 | S 0055e8c0 | `NVillage::Construction::dtor` | removing a ship-building site deletes its ship |
 | S 00538c90 / 00538a60 | `NLogic::Edit` slot 1 (byte +4) / `SetBatchEditing` | instant ship completion |
-| S 00657d90 / 006567b0 / 00657330 | `SettlerMovement::DisembarkAt`, settler slot 0 (harbour cell), parking call-out | passengers |
+| S 00657d90 / 006567b0 / 00657330 | `SettlerMovement::DisembarkAt`, settler slot 0 (harbour cell), `RecallFromParkingCell` | passengers |
+| S 00657cd0 / 00772f90 | `SettlerMovement::EnterShip` / `StartMode2_From128` | boarding; the street restart on landing |
+| S 0053c010 / 005525b0 | `Navy_AssignShipToRoute` / `RemoveAmount` | expedition start; the missing-materials list |
+| S 005b6090 / 00575850 / 00576d00 | `HarborList::FindNearestWithPlayerShipRoute` / `Military_IsEnemyTerritoryInRange` / `Military_GetAttackOriginCell` | sea-attack finders (§3.11) |
+| S 00529040 | `NLogic::System::TransferPlayerAssets` | the only caller of `TransferShipsOfPlayer` |
+| S 006a54c0 / 006a5cc0 | `S2CG::Ship::Update` / `UpdateVisuals` | ship animation, swell, status mesh (`animation-models.md` §3.17) |
 | S 0066b970 | `FlagPackageStacks::CannotTakePackage` | can the harbour flag take a package |
 | S 0066cdd0 | `NNet_FlagPackageStacks_IterNext` | index-based package iterator of `LoadAtHarbor` |
 | S 0064cd60 / 0064d0b0 | `Transport_LoadPackageIntoHolder` / `NTransport::System::UnloadPackageFromCargo` | cargo load / unload |

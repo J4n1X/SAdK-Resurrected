@@ -641,14 +641,18 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
    `FillDefaultSettlers`, §3.11, then spawn one settler per unit of every settler good at the entrance).
 5. If `spill`, and (type has `remains` or it is a ship site), and the type is not a headquarters type: spill
    goods (below).
-6. Remove from indexes, map and vector; destroy the object (its components cancel orders, requests and links).
-   The spill of step 5 therefore happens before the destructor. `Building::dtor` S 0055ce70 runs in this order
-   [known]: raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; when the sacrifice
-   research reference (`Building+0x12c`) is valid, unlink the research (`Building_UnlinkSacrificeResearch`);
-   unlink the deposit or animal (an animal is erased); unlink the entrance flag; clear the map mark and the
-   blocking; cancel the orders; unlink the projectiles; notify the AI; destroy the components in the order depot,
-   construction, workers, production, settler spawn, territory updater, bulldozing, military, good flags,
-   catapult, upgrade, ordering, hit points, soldier training and, last, the sacrifice component.
+6. Remove from indexes, map and vector; destroy the object (its components cancel orders, requests and links). The
+   spill of step 5 therefore happens before the destructor. `Building::dtor` S 0055ce70 runs in this order [known]:
+   raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; when the sacrifice research
+   reference (`Building+0x12c`) is valid, unlink the research (`Building_UnlinkSacrificeResearch`); unlink the
+   deposit or animal (an animal is erased); unlink the entrance flag; clear the map mark and the blocking; cancel
+   the orders; unlink the projectiles flying at the building (`MilitaryLink_UnlinkProjectileFromTargetBuilding`
+   S 0053ce30); notify the AI; destroy the components in the order depot, construction, workers, production, settler
+   spawn, territory updater, bulldozing, military, good flags, catapult, upgrade, ordering, hit points, soldier
+   training and, last, the sacrifice component. The catapult component's destructor S 005676d0 unlinks the
+   catapult's own projectile (S 0053cdd0). Both unlinks turn the projectile into a position projectile at the
+   building's anchor and keep its player index (`ProjectileOwner::ClearBuilding` S 005704c0,
+   [military.md](military.md) §3.10 step 6).
 7. If `leaveRemains && spill`: create `Remains` at the position (blocks the same footprint; burn time from
    the remains property; its tribe key is the building's `variantKey`).
 8. Remove the flag at anchor + direction 1 when all three hold: `Flag::GetRemoveBlockReason()` is 0
@@ -1131,12 +1135,12 @@ and removes a **source**.
 - Regeneration (S 0055b910): when `tick − lastRegenTick >= mi_setRegenerationRate` (100) and
   `hitpoints < health`: `lastRegenTick = tick`, and unless the game-wide flag `GameSystem+0xec` is set,
   `hitpoints += 1`.
-- Damage (S 0055b970, only caller: catapult hit S 0055e080): ignored while `GameSystem+0xec` is set; else
-  subtract. The catapult hit posts `!Building hit by Catapult` to the owner, and when the damage is at least
-  the current hit points `!Building destroyed by Catapult` (owner) and `!Enemy Building destroyed by Catapult`
-  (attacker). The catapult is the only damage source of building hit points. Its rules (target filter and
-  candidate order, `candidates[targetSeed mod count]`, ammunition = first `bp_setGoods` good taken from the
-  input stock and requested again, projectile flight time, damage divided by the hit owner's
+- Damage (S 0055b970, only caller: catapult hit S 0055e080): ignored while `GameSystem+0xec` is set; else subtract.
+  The catapult hit posts `!Building hit by Catapult` to the owner, and when the damage is at least the current hit
+  points `!Building destroyed by Catapult` (owner) and `!Enemy Building destroyed by Catapult` (attacker). The
+  catapult is the only damage source of building hit points. Its rules (target filter and candidate order,
+  `candidates[targetSeed mod count]`, ammunition = the first cost (`costs[0]`) of the `bp_setGoods` good, taken from
+  the input stock and requested again, projectile flight time, damage divided by the hit owner's
   `Effect_BuildingArmor` factor) are owned by [military.md](military.md) §3.10; the functions are
   `Catapult::SelectTarget` S 00567d20, `HasAmmo` S 00567a30, `Fire` S 005678b0, `OnCatapultHit` S 0055e080.
 - Every change (S 0055b8b0): rebalance input requests (if production enabled, `IsEnabled` of §3.7), clamp stock (non-depot types),
@@ -1692,6 +1696,7 @@ references go through untagged variants, the other components through their norm
 | S 00561e20 | `VillageOrder_LinkSettlerToDestination` | order completion |
 | S 00562940 / 00562140 / 00568b80 / 00568c40 | `OrderSystem::CreateOrder` / `RemoveOrder` / `Order::ctor` / `Order::dtor` | order life cycle; the ctor draws a unique id |
 | S 0055ce70 | `NVillage::Building::dtor` | teardown order of a building (§3.5) |
+| S 0053ce30 / 005676d0 / 0053cdd0 / 005704c0 | `MilitaryLink_UnlinkProjectileFromTargetBuilding` / `Catapult::dtor` / `MilitaryLink_UnlinkProjectileFromCatapult` / `ProjectileOwner::ClearBuilding` | projectiles of a removed building (§3.5) |
 | S 005598a0 / 00558ec0 / 00564210 | `System::CreateRemains` / `RemoveRemains` / `Remains::ctor` | remains; radius-4 invalidation; unique id |
 | S 0077dcb0 / 0077dd70 / 0077dd80 | `NMovie::GoToConstructionPlace::ctor` / `Start` / `Update` | the builder's walk to the site |
 | S 0055bc10 / 0055bcd0 | `OrderContainer::CancelAllOrders` / `CancelOrdersForGood` | orders of a dying target |
@@ -1707,7 +1712,7 @@ references go through untagged variants, the other components through their norm
 | S 0055d4e0 | `Building::ctor_Transfer` | constructor used by ownership change |
 | S 00782840 / 0055eeb0 / 00782910 | `HandleCommand_2002A` / continue helper / `HandleCommand_2002B` | continue construction, player left |
 | S 006634f0 / 006630b0 / 00663390 / 006634d0 / 00663430 / 00663450 | `SacrificeModifiers` init / own effect / production factor / territory sum / miner flag / corn doubling | modifiers read by this subsystem |
-| S 00567d20 / 00567a30 / 005678b0 / 0055e080 | `Catapult::SelectTarget` / `HasAmmo` / `Fire` / `Building::OnCatapultHit` | catapult (rules in military.md) |
+| S 00567d20 / 00567a30 / 005678b0 / 0055e080 | `Catapult::SelectTarget` / `HasAmmo` / `Fire` / `Building::OnCatapultHit` | catapult (rules in military.md); `HasAmmo` reads `costs[0]` of the slot good |
 | S 00558800 / 00565300 | `System::RefreshTerritoryForPlayer` / `TerritoryUpdater::Refresh` | territory radius change |
 | S 0052fbe0 / 0052f460 / 00675610 | `GameQuery::CanPlaceBuildingAt` / `IsBuildingFootprintFree` / `ConstructionMap_ComputeCellFlags` | placement rules (map side) |
 | S 0055ac80 / 0055ac20 | `FootprintIter::Next` / multi-cell step | footprint shape |

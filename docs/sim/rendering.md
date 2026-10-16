@@ -851,11 +851,11 @@ unless tagged]:
 
 - *Animated model.* The `mesh` file is also loaded as the type's animated model (`CAnimatedObject`, scale 1.0,
   `BuildingDesc +0x5c`). Its skeleton holds the moving parts (`door`, `wheel`, ... bones), `MILFLAG`
-  (`BuildingDesc +0xbc`), the fire points `FIRE_%02d` and the `boneLink<i>` bones of `<Production>`. `DoorOpen`,
-  `DoorClose` and `Working` (`+0x80`, `+0x84`, `+0x88`, -1 when absent) are animation-only KEX files played on
-  that skeleton; the child elements of an animation element (`<Sound start name duration>`,
-  `<Particle start duration name slot offset>`) become timed events of that animation
-  (`EffectScriptMgr::LoadAnimEvents`).
+  (`BuildingDesc +0xbc`), the `FIRE_%02d` nodes (of which every third, from `FIRE_03`, is a fire point, §3.9) and
+  the `boneLink<i>` bones of `<Production>`. `DoorOpen`, `DoorClose` and `Working` (`+0x80`, `+0x84`, `+0x88`, -1
+  when absent) are animation-only KEX files played on that skeleton; the child elements of an animation element
+  (`<Sound start name duration>`, `<Particle start duration name slot offset>`) become timed events of that
+  animation (`EffectScriptMgr::LoadAnimEvents`).
 - *LOD meshes* (`BuildingDesc +0x54`, parts of 0x18 bytes): part 0 = the `mesh` file, part 1 = the path up to
   its first `.` + `LOD0` + the rest, part 2 = `...LOD1...`, as long as the file exists (`.gr2` is read as
   `.KEX`). Each part is one mesh of its file: the mesh named `House`, else the first mesh. Data: 36 of the 106
@@ -1088,13 +1088,14 @@ uses part 0; otherwise part 1 (the `LOD0` file) starts at `d >= (10 / (1 - objec
 root values (66.7 world units at preset 0). A LOD change also rebuilds the bone binding. Frames and ruins have
 no distance LOD.
 
-**Demolition** [known] S 006ab840, S 006aaab0, S 006a1f20: started on removal when `LeavesRemains` holds
-(§3.2). Start: one-shot particle effect `DemolitionDust`, or `SmallDemolitionDust` when bit 0x4 of the building
-property's flags at +0x3c is clear; a 3D sound; the ground decal and the material pile are removed;
+**Demolition** [known] S 006ab840, S 006aaab0, S 006a1f20: started on removal when `LeavesRemains` holds (§3.2).
+Start: one-shot particle effect `DemolitionDust`, or `SmallDemolitionDust` when bit 0x4 of the building property's
+`size` mask (+0x3c, `bp_setSize`) is clear: small (7), medium (6) and large (4) types have the bit, so only mines
+(8) and ship sites (16) get the small dust; a 3D sound; the ground decal and the material pile are removed;
 `demolishProgress = 0`. Per frame: `demolishProgress = min(1, demolishProgress + dt * 0.35)` and
-`worldPos.y = terrainHeight(cell) - modelHeight * progress^2`; the fire points follow. On the logic tick after
-the progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` with its own decal
-S 006d4e00 [inferred].
+`worldPos.y = terrainHeight(cell) - modelHeight * progress^2`; the fire points follow. On the logic tick after the
+progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` with its own decal S 006d4e00
+[inferred].
 
 **Fire** `Building::UpdateFireEffects` S 006abbb0 [known, disassembly]: the first `burning` fire points run the
 effect `BuildingFire`, the others are stopped, with
@@ -1103,11 +1104,33 @@ effect `BuildingFire`, the others are stopped, with
 burning = toInt((1 - Hitpoints::GetRatio()) * firePointCount + 0.5)        // toInt truncates
 ```
 
-Fire points are the nodes `FIRE_%02d`; without such nodes: 5 random points over 80 % of the bounds, from a
-private generator with the static seed 0x5432ace0 S 006ac510 [inferred].
+**Fire points** (`Building::InitFirePoints` S 006ac510) [known, disassembly]: the nodes `FIRE_03`, `FIRE_06`,
+`FIRE_09`, ... of the animated model, the number stepping by 3 from 3 (`XOR EDI,EDI` at S 006ac54f, `ADD EDI,3`
+at S 006ac551, the loop back from S 006ac6c1), up to the first name the model lacks; each node's matrix times the
+building's world matrix gives the point. `FIRE_00` is never a fire point. The shipped files number their nodes
+`FIRE_00` upward without gaps, and only the military models (guard house, watchtower, fortress or stronghold,
+castle of each tribe, with their `LOD0` files) have any [known, files], so every other building takes the
+fallback: 5 points, two draws each from a process-wide generator with the static seed 0x5432ace0 (S 0088da38,
+built on first use): `x = cx + (2r − 1) · 0.4 · sx`, `z = cz + (2r − 1) · 0.4 · sz` with centre `c` and size `s`
+of the world bounds, `y` = the centre's height. `InitFirePoints` is called only from the building constructor
+(S 006acc23), so the generator advances in building creation order across the whole process.
 
-**Buff effects** [inferred] S 006abcf0: `ShipSpeedUp`, `BuildingArmor`, `WorkerPause` while the corresponding
-state holds.
+**Effects in `Building::Update`** (S 006abcf0) [known]: nothing runs while `demolishProgress > 0`, so the
+fires keep burning unchanged while the building sinks. The buffs run only when the building has no scaffold and
+`showEffects` is set; each starts its effect at the building's position with identity rotation
+(`StartByName(name, active 1, emitting 1, time, position, identity)`) while its condition holds and stops it
+(`Stop(true)`) otherwise:
+
+| Slot | Effect | Condition |
+|---|---|---|
+| `fxShipSpeedUpA` | `ShipSpeedUp` | size 8 (mine) and working mode (`+0x80`) 6, and the miners do not need food (`SacrificeModifierQuery::MinersNeedFood` false) |
+| `fxBuildingArmor` | `BuildingArmor` | an active military building (`IsActiveMilitaryBuilding`) and `ScaleCatapultDamage(100) < 100`; for other buildings the slot is left as it is |
+| `fxShipSpeedUpB` | `ShipSpeedUp` | a territory building whose sacrifice-modified territory range differs from `bp_setTerritoryRange` |
+| `fxSacrificeBuff` | `ShipSpeedUp` | working mode 2 and the sacrifice-modified goods differ from the type's goods |
+| `fxScaleBuff` | `ShipSpeedUp` | a type with goods whose sacrifice-modified production time differs from `bp_setProductionTime` |
+| `fxWorkerPause` | `WorkerPause` | a type with goods whose `restTime` is below the sacrifice-scaled time |
+
+Then the work-cycle and one-shot clips, and `UpdateFireEffects` (above).
 
 **Military flags** `CMilitaryFlagRenderer::DrawFlags` S 006d2820 (disassembly), S 006d2d80, S 006d2ec0 [known]:
 every building is registered on creation (S 006a2bf0); a flag is drawn for one that is not hidden, whose own
@@ -1957,7 +1980,7 @@ a generator of its own:
 | map object yaw and per-axis scale (§3.11) | static S 0088d4ec | 0x5432ace0 (initialiser S 007cab10) | S 0068dd40, S 0068f120 |
 | resource hint cell, pick and next check time (§3.12) | static S 0088d47c | 0x400 (initialiser S 007caaf0) | S 0068b220, S 0068ac10 |
 | palette of a settler created without one (§3.10) | static S 0088d7c8, built on first use | 0x5432ace0 | S 00695490 |
-| fallback fire points of a building without `FIRE_xx` nodes (§3.9) | static S 0088da38, built on first use | 0x5432ace0 | S 006ac510 |
+| fallback fire points of a building without a `FIRE_03` node (§3.9) | static S 0088da38, built on first use | 0x5432ace0 | S 006ac510 |
 | animal idle choice (0 or 1) | static S 0088decc, built on first use | 0x5432ace0 | S 006ce2c0 |
 | swarm spawn zone, spawn box, flock sizes and actor scatter | member of `SwarmMgr` (`+0x8`); the swarms draw through a generator pointer [inferred: the same object] | the manager's own address (`PUSH ESI` with `ESI = this` before the generator constructor, S 0069ab2b): differs from run to run | S 0069a320, S 00699ed0, S 006cd6b0, S 006cd950, S 007702c0, S 00770640 |
 
@@ -2135,7 +2158,8 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006aa640, 006aa3b0, 006aa6f0 | `Building::TriggerWorkCycle` / `PlayStateAnimation` / `PlayOneShotAnimation` | door and work clips |
 | 006aa9d0 | `S2CG::Building::SetModelVariant` | LOD level and its bone binding |
 | 006ab5b0, 006ab710, 006a1250 | `Building::BeginUpgrade` / `EndUpgrade` / `BuildingRenderer::BeginBuildingUpgrade` | upgrade display |
-| 006abbb0, 006ac510 | `Building::UpdateFireEffects` / `InitFirePoints` | fire |
+| 006abbb0, 006ac510 | `Building::UpdateFireEffects` / `InitFirePoints` | fire; fire points `FIRE_03`, `FIRE_06`, ... or the five fallback points |
+| 006ab840 | `Building::StartDemolition` | dust by bit 0x4 of the size mask, sink start |
 | 006d3880, 006d4060, 006a0990 | `BuildingDesc::LoadFromXml` / `LoadResources` / `ctor` | `buildings.xml`, meshes, defaults |
 | 006d50e0 | `S2CG::BuildingMaterial::Create` | texture usages of a subset |
 | 006b4400, 006da2a0 | `HouseDecalRenderer::AddDecal` / `GroundDecalMesh::Build` | ground decal laid on the terrain |

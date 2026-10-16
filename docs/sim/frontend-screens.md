@@ -582,6 +582,12 @@ a choice.
 **Map info shown**: only the three texts and the preview of §3.4. The dialog itself shows names only: no size,
 player count or picture per row [known: no such widget is bound in S 00615430].
 
+**Layout** (`menuselectmapdialog.xml`) [known: file]: the frame `Dialog` (320 × 436) holds `MapList` at
+(38, 80), size 281 × 272, whose `container` child is only 241 × 200, and a scroll slider at (250, 25), size
+18 × 220. That the list draws with the container's width and the list's height is [inferred]. The frame's last
+child is a label `text` with `!LOBBY_SELECTMAP_DIALOG` and only `anchor="top"`; placed by those values it would
+stand at the frame's corner. Whether the original draws it is not established [TODO].
+
 **Info cache**: reading a map's `MapInfo` for the panel goes through the cache files
 `<Local AppData>\SAdK\<name>.info` and `<name>.usermapinfo` (`save-format.md` §3.11). The caches of all map types
 are refreshed once at start (`app-shell.md` §3.3).
@@ -761,6 +767,10 @@ frame (status key `!Preparing...`, a string of S 0062ab00).
   `state` is the global S 0088c138 ([inferred] 0 at process start: no initialiser was read). The remainder is
   unsigned. The install has `!tip00` .. `!tip50`.
 - The full width of `redBar` and the x distance `glow.x − redBar.x` are taken from the laid-out widgets.
+- The bar frame is drawn in halves: `blackBar0` uses the mapping `986 185 −250 22` and `goldBar0`
+  `1017 120 −281 60`, the same texture rectangles as `blackBar1` (`736 185 250 22`) and `goldBar1`
+  (`736 120 281 60`) with a negative width and the left edge at the rectangle's right [known: file]; that a negative
+  width draws the rectangle mirrored, so that the left half is the right half's mirror image, is [inferred].
 
 **Progress** (`SetProgress` S 0062b2e0, `Update` S 0062aa00) [known]: each call sets `progressText` to the status
 text (a text key), stores the fraction, and **renders one frame synchronously**: background colour
@@ -810,6 +820,9 @@ S 00600c50, S 005fe6c0, S 006201f0, S 0061ff50:
   The title goes to the label `title`, the text to the label `text`; in a network role (1..4) the text key gets
   the suffix `MP` (`!DescWon` → `!DescWonMP`). Install values: `!TitleWon`, `!DescWon`, `!TitleDefeat`,
   `!DescDefeat`. The dialog then fades in over 0.2 s.
+- **Layout** (`menuGameEnd.xml`) [known: file]: the frame `dialog` (480 × 244, centred) holds the label `text`
+  (pos 30, 86, size 440 × 100) and the two buttons; `title` is a child of the root, centred horizontally at
+  y = 46. That title and text both appear inside the centred frame is [inferred].
 - **Buttons**. `btContinue` (`!Continue Game`): toggle the statistics panel (`Game::ToggleStatisticPanel`) and
   fade the dialog out (0.2 s); the match goes on. `btEnd` (`!Quit`): the same, and the statistics panel's
   "leave on close" byte (+0x1028) is set, so closing the statistics leaves the match. A click on any other
@@ -1069,6 +1082,7 @@ simulation state while a match runs, with these boundaries:
 | 2 | Answered (§3.6): after a delete prompt the overwrite prompt's "yes" deletes the save instead of writing it [live, 2026-10-12] | — |
 | 3 | Whether a credits line's alpha factor above 1 is clamped (§3.8) | static: `nUi::Text::SetColor` S 004b3ce0 and the text draw |
 | 4 | Whether the activate-main latch (`Main +0x228`) or the `Info` gate (`Overlapped +0xbfc`) is ever set through a pointer the byte search cannot see (§2.1, §3.11). Also searched: no `LEA` forms the address of either byte in a function of the two classes (the `LEA` hits with displacement 0x228 and 0xbfc belong to other classes), and the only store to `+0xbfc` in `Overlapped` is the constructor's 0 (S 0062e5ee). Left: a store through a register computed elsewhere | running game: write watch on the two bytes while using the main menu and dragging a dialog's title bar |
+| 5 | Whether the map chooser draws the frame's label `!LOBBY_SELECTMAP_DIALOG`, which has only `anchor="top"` (§3.5), and where; and whether a negative mapping width draws mirrored (§3.9) | running game: a screenshot of the map chooser and of the loading bar |
 
 ---
 

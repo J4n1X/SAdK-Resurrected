@@ -940,9 +940,15 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   41 ms on workers; normals 11 ms on a worker, upload 1.6 ms. The levelling of both start castles touches 16 blocks;
   rebuilding their 48 member blocks takes 21–36 ms (Faithful, Low) and 220–335 ms at Very High in the worst case; the
   normal patch (445 × 92 texels) 31 ms.
-- **Gaps**: pattern changes are not rebuilt in the terrain; the simulation never emits `MapChanged` for `Patterns` and
-  `GroundResources`; terrain levels are not cached, so a dirty region rebuilds all its blocks; the normal texture's
-  mipmaps are regenerated whole; a standing character is placed on the new ground only with its next motion sample.
+- **Pattern changes** [implemented, sadk-remake c16efa5]: the simulation announces a pattern change at once
+  (`MapChanged(Patterns)` over the cell; the sowing passes `defer = 0`, `../sim/map-resources.md` §3.4) and the
+  relay copies the patterns; `TerrainMesher.PatternsChanged(rect)` makes the patches of every block holding a
+  changed cell again (records and patches are replaced whole, so workers building the old ones stay consistent), and
+  a pattern new to the map gets a record drawn after all others [inferred] and its materials.
+  `MapData.Blocks.PatternIds` is not refreshed yet.
+- **Gaps**: the simulation never emits `MapChanged` for `GroundResources`; terrain levels are not cached, so a dirty
+  region rebuilds all its blocks; the normal texture's mipmaps are regenerated whole; a standing character is placed
+  on the new ground only with its next motion sample.
 
 ## 11. Water, border, sky, environment [draft]
 
@@ -1076,8 +1082,9 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   ([godot-capabilities.md](godot-capabilities.md) §6).
 - **Ground decal**: the `GROUND` mesh clipped against the terrain triangles under it and laid 0.01 above (the viewer's
   `Placement.GroundDecal`), on a worker thread; rebuilt when heights change under it.
-- **Fires**: `toInt((1 − hpRatio) × firePoints + 0.5)` emitters `BuildingFire` at the `FIRE_%02d` nodes, else at five
-  points drawn from the fallback-fire stream.
+- **Fires**: `toInt((1 − hpRatio) × firePoints + 0.5)` emitters `BuildingFire` at the fire-point nodes `FIRE_03`,
+  `FIRE_06`, ... (every third from 3; `FIRE_00` is never one, RE §3.9), else at five points drawn from the
+  fallback-fire stream.
 - **Military flags**: their own small kind (`MILFLAG` bone, mesh by soldier count and kind, texture by proximity
   zone, owner colour, wave in the vertex shader).
 - **Demolition**: dust effect, then `y = terrain − height × progress²` with `progress += dt × 0.35`, then removal;
@@ -1122,8 +1129,8 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   Godot rejects duplicates, so the second gets a `#<index>` suffix and indices stay the file's.
 - **Alpha test**: `ATEST127` is AlphaFunc Greater, AlphaRef 127 (`shared.inc:668`), so Godot's threshold is 128/255;
   this settles §24 item 6 (the map-object shaders used 127/255 and let alpha 127 through; now 128/255 as well).
-- **Not drawn yet**: fire and demolition particles (counted), the ruin decal (the ruin models have no `GROUND` mesh;
-  S 006d4e00 [inferred]), farm animals at `boneLink` bones.
+- **Not drawn yet**: the ruin decal (the ruin models have no `GROUND` mesh; S 006d4e00 [inferred]), farm animals at
+  `boneLink` bones. The fire and demolition particles came with the particle layer (§16.1).
 - **Gallery**: `core.game.buildinggallery {map, tribe, progress, upgrade, health, lod, flags, ruins, door, work,
   demolish, …}` places a tribe's types on the flattest dry ground of a map.
 
@@ -1249,8 +1256,10 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   the count formats and colours, the productivity text, the confirmation order of the settings. The reset buttons for
   `0x20022` and `0x20020` are the remake's own; the settings panel opens with **L** or `btSettings`; parents and
   layout details the layouts do not give are [inferred].
-- **Boundary**: the panels read some simulation classes directly (open requests, depot settlers, worker slots,
-  productivity) until `IBuildingView` carries them.
+- **Boundary** [implemented, sadk-remake c16efa5]: the panels read views only. `IBuildingView` carries `Requests`
+  (the depot's `NeedGoods` +0x44 in filing order: the good and the package on its way), `Workers` (the worker
+  slots) and `DepotSettlers`; the productivity comes through `IStatisticsView.TryGetProductivity`;
+  `IPlayerView.MinesNeedFood` (`Player::IsStateNotDefault` S 005be330) serves the box and the selection rule.
 - **Open**: the stock overview (the statistics' inventory tab), the store's soldiers tab, the diplomacy rows, the
   product progress fans, the worker flags, the box animations. Decisions to review:
   [sim-boundary.md](sim-boundary.md) §11 item 4.
@@ -1301,6 +1310,42 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - Faithful details: the fixed seed 0x53a0 and the reseed rule; resource hints resolve their goods by name in signed
   id order (only gemstones sparkle on the shipped maps); the particle pass draws once (the original draws it twice
   when post-processing is on).
+
+The CPU emitter writing MultiMeshes above was not built: the remake draws Godot GPU particles (§16.1). The
+original's particle state is a closed function of the time since the emitter's start (PA §3.4 to §3.7), so the
+GPU can compute every particle each frame from that time alone: no particle state is stored or integrated, there
+is no per-particle CPU work, and an emitter out of view costs nothing and is right again when it comes into view.
+The price is the original's draw sequence, which PA §8 already gives up (two original clients show different
+particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on the GPU.
+
+### 16.1 As built [implemented, sadk-remake fd8bd29]
+
+- **Layer**: `ParticleLayer` (`core.game.particles`, order 480) starts effects, plays one-shots, stops them and
+  frees them when done; one `GpuParticles3D` per emitter of an effect (`EffectEmitter`), set up once from its `.pfx`
+  by `EmitterSetup` (pool, drawn share, pass, builder switches, the box every particle stays in, a one-shot's
+  length); `EmitterBudget` keeps the caps per effect and in all.
+- **Process shader**: `pfx_process.gdshader` computes each particle from the time since the start, without
+  accumulation: the original's stagger, life time, draws per cycle, `maxLoops`, emit window and curved velocity
+  (`Restart`, `Particle::Update` and `ApplyCurves`, PA §3.4 to §3.7).
+- **Passes**: the six passes of `particle_shader.fx` as small shaders over `particle.gdshaderinc` (and
+  `sphere.gdshaderinc` for the sphere lighting of passes 1 and 2): billboard or ground quads, flip-book, half texel,
+  the distance fade.
+- **Data**: `assets/visuals/particles.xml` (the effect folders, the atlas, the sphere normal map, the shaders, the
+  caps); the effect table is built from the effect folder.
+- **Setting**: `<Particles detail="Off|Low|Faithful">`, Faithful the default; Low halves the pools (§19).
+- **Owners built**: building fires at `FIRE_03`, `FIRE_06`, ... or the five fallback points (RE §3.9), one
+  `BuildingFire` per burning point from `HitpointsChanged`; the demolition dust (`DemolitionDust`, or
+  `SmallDemolitionDust` by bit 0x4 of the size mask); the `<Particle>` events of the Working clips at their slot
+  bones (chimney smoke, sparkles, saw dust).
+- **Measured**: 158 emitters with 9,322 particles add 314 draw calls (main view and mirror) and about 37,000
+  primitives, with no per-particle CPU work.
+- **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): hash draws in the
+  shader instead of the original's sequence; the caps; `sadk_time` wraps every hour; pass 2's volume uses the
+  box fixed at the start; work-clip emitters fade out when the clip stops [inferred]; a one-shot of an endless
+  effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide).
+- **Open**: the sacrifice effect movies (`effectMovies.xml`) and the `SacrificeEffectApplied` movies, the building
+  buffs (RE §3.9), the `StoneDust` animation event, `ShipFX` and `BoatFX`, `SettlerSpeed`, the soldier buffs,
+  `HitDamage`, projectiles, resource hints, buoy and gate fires, Lua `createParticel`.
 
 ## 17. Interpolation and time [draft]
 
@@ -1366,6 +1411,7 @@ object. Every change applies at once, including the region size and blended foli
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
 | `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |
 | `AmbientOcclusion`, `DepthOfField` | `enabled`, `intensity`, `radius`, `lightAffect`; `enabled`, `strength` (follows the eye distance, easing at the original's focus speed 3, S 00696d20) |
+| `Particles` | `detail` (Off, Low, Faithful — the default; §16.1) |
 
 SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the Compatibility renderer.
 

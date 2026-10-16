@@ -66,7 +66,7 @@ without a sea link (§5).
 1. The attacker owns a cell on the hex ring at distance `R + 1` around the target, where `R` is the target's
    territory range: `NVillage::Military::GetTerritoryRange` `0055fca0`, i.e. `bp_setTerritoryRange`
    (`BuildingProperty+0x94`) summed over the owner's slot table. Put plainly: the attacker's land touches the edge of
-   the target's land.
+   the target's land. Only that ring is walked; cells inside it are not tested [known].
 2. Or a landing harbour is in range: `HarborList::FindNearestWithPlayerShipRoute(target cell, attacker, owner of the target)`
    finds a harbour **owned by the target's owner** on the target's landmass with a ready route to the attacker
    (§5.1), and it lies closer than `R + 1` to the target.
@@ -226,7 +226,8 @@ sea street home disappears, and its soldiers wander until they die [live].
 
 - `HarborList::FindNearestWithPlayerShipRoute(pos, shipPlayer, harbourOwner, militaryActive, *status)` `005b6090`:
   among the harbours **owned by `harbourOwner`** on `pos`'s landmass, the nearest one that is ready for
-  `shipPlayer` [known]. Every sea check of §2–§4 uses it with `harbourOwner` = the target's owner.
+  `shipPlayer` [known]. Every sea check of §2–§4 uses it with `harbourOwner` = the target's owner. `*status` is
+  the readiness of the **last** harbour evaluated, not of the one returned [known].
 - Readiness: `Harbor::EvaluateRouteToPlayer(h, player, player, militaryActive)` `005b48c0` looks at each exit route
   of `h` whose far end belongs to `player`. It returns 0 (ready) if the player has no ship on that route but an idle
   ship of the player can be found for its exit (`NNavy::System::FindNearestIdleShipAtHarborExit` `005b3450`: same

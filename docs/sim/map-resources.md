@@ -547,8 +547,10 @@ refreshed (§3.3).
 `blocked` flags of old and new pattern differ, bit 0x1 is set to the new flag; the pattern is stored; bits 0x10,
 0x200, 0x20000 are refreshed if the respective pattern flag differs (resetting the ground resource on a change,
 §3.3); then either the cell joins the cell dirty rectangle (`defer`) or `CellRectChanged` is raised and the
-construction flags around the cell are invalidated. In play the caller is `NMovie::Working::Update` (sowing, §3.9);
-Lua has `map.exchangePatternType` -> `ExchangePatternInRect` S 00674470.
+construction flags around the cell are invalidated. The callers are the editor, Lua `map.exchangePatternType` ->
+`ExchangePatternInRect` S 00674470, and in play only `NMovie::Working::Update` (sowing, §3.9), which passes
+`defer = 0` (`PUSH 0` at S 0077ec6c and S 0077ecd3), so a sown cell's new pattern is announced at once
+(`CellRectChanged`). The territory never changes patterns [known: call edges of S 00674360].
 
 `MapModifier_FlushDirtyRects` S 006730e0 (editor, `NLogic::Edit`, `ExchangePatternInRect`) [known]: elevation
 rectangle inflated by 16 vertices -> `ElevationRectChanged`, cliff bits re-resolved for the covered cells,

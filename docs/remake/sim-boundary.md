@@ -12,7 +12,7 @@ of the cited document. Short names: LC = `../sim/logic-core.md`, RE = `../sim/re
 `../sim/lua-runtime.md`, CI = `../sim/camera-input-cutscenes.md`, MR = `../sim/map-resources.md`, SF =
 `../sim/save-format.md`, NS = `../sim/network-session.md`, ST = `../sim/streets-transport.md`, VB =
 `../sim/village-buildings.md`, PV = `../sim/players-victory.md`, MI = `../sim/military.md`, QS =
-`../sim/quests-sacrifices-stats.md`.
+`../sim/quests-sacrifices-stats.md`, FS = `../sim/frontend-screens.md`, PA = `../sim/particles.md`.
 
 ## 1. How the original couples them
 
@@ -385,9 +385,9 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   117th of the 4th unit).
 - **Statistics** are in the remake's state hash only; the original's checksum has no statistics section
   (`ComputeChecksum` S 00784080).
-- **Open**: the catapult job (§6.9); the AI hooks; save and load (the checksum is written in `StoreForChecksum`
-  order, without section tags); `ConstructionChanged` is raised per stroke. The military, the barracks, the
-  sacrifices, the upgrades, the gatherer and specialist jobs and the navy followed (§6.9 to §6.14).
+- **Open**: the AI hooks; save and load (the checksum is written in `StoreForChecksum` order, without section
+  tags); `ConstructionChanged` is raised per stroke. The military, the barracks, the sacrifices, the upgrades, the
+  gatherer and specialist jobs, the navy and the catapult followed (§6.9 to §6.15).
 
 ### 6.9 The military as built [implemented, sadk-remake 848852d]
 
@@ -403,9 +403,9 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   list or no path in the gathering and origin steps; an undefined level in `ConquerBuilding`. Kill credit goes only to
   valid slots.
 - **Removal reasons**: a captured building leaves with `Transferred`, one destroyed by a catapult with `Destroyed`.
-- **Open**: catapult targeting, `Fire` and working mode 5; capture (built, not yet exercised in a run);
-  `FindOrderForSoldier`; the sea branches; the AI hooks; the ship states; order category 6; the hook of the heal
-  sacrifice 1003.
+- **Open**: capture (built, not yet exercised in a run); `FindOrderForSoldier`; the AI hooks; the hook of the heal
+  sacrifice 1003. The catapult is in §6.15; the sea branches, the soldiers' ship states and order category 6 are
+  in §6.14.
 
 ### 6.10 Barracks, statistics and victory as built [implemented, sadk-remake 6860305]
 
@@ -414,8 +414,8 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   (PV §3.11). The two live victory cases of PV §3.7 replay with the original's `stateTime` (246, 146, 246, 0 and 277,
   277, 177, 0). `0x2002B` eliminates and declares the winner in the same tick.
 - **Not saved yet**: the victory state.
-- **Open**: `Player::Update` (the 22-tick recount, `!low soldiers`, `!low resources`, PV §3.9); the lock maps
-  (PV §3.10); victory mode 5 (Lua); the quest-0 slot (QS §3.1.4); `FinishGame` and the profile write.
+- **Open**: the lock maps (PV §3.10); victory mode 5 (Lua); the quest-0 slot (QS §3.1.4); `FinishGame` and the
+  profile write. `Player::Update` is in §6.15.
 
 ### 6.11 Sacrifices as built [implemented, sadk-remake 322de69]
 
@@ -452,8 +452,8 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   `!Found Resource` (SJ, MR §3.8).
 - **Data**: the good flag `FoundOnBuildableGround` names the good a sign on buildable ground reports, in place of the
   water good's literal id 0xa9676263 (`PlaceResourceSignAndNotify` S 0077b2f0, MR §3.8).
-- **Open**: `Worker::GetWorkProgress` S 0065ce80; `StreetLink_UnlinkFlagSpecialist`. A known bug: a carried
-  package's `EntityAdded` names cell (0, 0) (the event is raised before the cell is set).
+- **Open**: `Worker::GetWorkProgress` S 0065ce80; `StreetLink_UnlinkFlagSpecialist`. A new package's
+  `EntityAdded` carries its cell (§6.15).
 
 ### 6.14 The navy as built [implemented, sadk-remake 71c3954]
 
@@ -474,8 +474,75 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   only by `WriteState` (the save), as the original leaves it out of the state hash (navy §7); the net-tick
   checksums therefore differ from those of earlier remake builds.
 - **Cargo**: a package's cell is the ship's cell at loading and is not updated while the ship sails.
-- **Stubs**: the `Update` of the expedition and of the sea-attack mission.
-- **Open**: why player 5's harbour on `MP_6P_ship_ahoi` does not link; the expedition and the sea-attack mission.
+- **Part 2** [implemented, sadk-remake 0a8d5b6]: the flag queue (`FlagQueue`, handed out by the street net:
+  settlers wait for the ship at a harbour flag, park, are called out, board with the original's `EnterShip`,
+  cross and walk on; ST §3.13, SJ §3.8.6, navy §3.9); expeditions (the route commands `0x2001A` / `B` / `C` as
+  `core.game.assignship` / `abortexpedition` / `foundcolony`, the soldier order of category 6, the materials as
+  need-category-1 requests of the ship, sailing, waiting for orders, founding; navy §3.10); sea attacks (the
+  harbour finders, the ship of `SendSoldiersBySea`, the mission, the soldiers' ship states 0x21, 0x28, 0x31 to
+  0x34 and 0x37; navy §3.11); `TransferShipsOfPlayer` (navy §3.2; nothing calls it yet, the remake has no
+  `TransferPlayerAssets`); goods crossing a sea street to a site behind the far harbour; the ship feed and the
+  swell in the character layer (AM §3.17).
+- **Measured** (`MP_6P_ship_ahoi`, the expedition script, the same in every run): site at tick 1, ship 162,
+  `!Ship constructed` 4398, ship assigned 4500, soldier 4571, `!Ship waiting for Orders` 5929; at 5951 the guard
+  house is placed and completed at (46, 55) with the harbours linked, a street and a sea street; garrison 6031. A
+  sea-attack mission passes its states 0 to 7 at +1, +2, +69, +71, +72, +480, +502 and +503 ticks after the
+  linking.
+- **Crash guards** (both modes), where the original reads unchecked or never ends: `ChooseStartHarbor` null → no
+  move, the state advances; `FindBuildingPosition` with a range ≤ 0 → no position; `TransferShipsOfPlayer` with
+  `from == to` does nothing (the original's loop never ends, navy §3.2); mission state 0 without an own route end
+  → state 1; state 3 without a fight or a defender end → 7; `SendSoldiersBySea` without a landing harbour sends
+  nobody; an attack origin with a harbour and no building → the soldier's cell (MI §3.5).
+- **Open**: why player 5's harbour on `MP_6P_ship_ahoi` does not link; the soldiers' ship states are not tested
+  end to end; `TryCompleteOrderAtCurrentPos` is a stub; the unfinished ship's look, the cargo and expedition
+  overlays, `ShipFX`.
+
+### 6.15 The catapult, the player update and loose ends as built [implemented, sadk-remake c16efa5]
+
+- **Catapult** (MI §3.10): the target search, the attack movie (rotation, shot, rotation back), `Fire` (the
+  ammunition is the first cost of the product slot's good, the tribe's stone, taken out and requested again unless
+  a cinematic runs; the stamp is `GameSystem+0x78`; flight `trunc(distance × 5)`), the worker's mode 5 and states
+  0x1d / 0x1e, the projectiles of a removed building, the `CatapultAttack` step written at its place in
+  `WriteMovies`.
+- **Measured** (`MP_2P_steinfjord`): player 0's catapult destroys player 1's guard house in 9 shots; per shot
+  a rotation of 15 ticks, a flight of 55 ticks over 11 cells, the shot 25 and a rest of exactly 55 in state 0x1e;
+  the first hit takes 10 hit points. Player 1's catapult with production switched off never selects a target; its
+  candidates list player 0's catapult twice and the seed cycles through them.
+- **`Player::Update`** (PV §3.9) in step 3 of the tick (after the street planners, before the village): the 22-tick
+  recount with `CollectPlayerUnitCounts`, the building counts in phase 1, `!low resources` and `!low soldiers` in
+  phase 10 after tick 50, posted or refreshed. The strength and population statistics read the stock cache and
+  follow it. **Measured**: the warnings come at ticks 53 and 75, for player 0 only.
+- **Views**: the building panels read views only ([renderer.md](renderer.md) §15.3).
+- **A new package's cell**: `CreatePackage` takes the cell and fine position the package will have (the settler's
+  hands, the flag) and sets them before `EntityAdded`, which keeps its place in the order; the original raises
+  "created" inside the constructor and its observer reads the position later (ST §2.5).
+- **Pattern changes** rebuild the terrain blocks that hold the changed cells ([renderer.md](renderer.md) §10.5).
+- **Open**: `Worker::GetWorkProgress` S 0065ce80; a projectile lands at launch + flight − 1, so
+  `ProjectileAdded.ImpactTick` is one tick late (presentation only); a catapult site whose production was switched
+  off at placement never finished (not investigated); `MapData.Blocks.PatternIds` is not refreshed on pattern
+  changes.
+
+### 6.16 The free game as built [implemented, sadk-remake 636da4c]
+
+- **Menu**: `core.game` adds "Free game" to the main menu ([mods.md](mods.md) §11a.1) and opens the overlay
+  `core.game.freegame {map?, back?}`; the handlers `.map`, `.row`, `.options`, `.choosemap` and `.start` drive it
+  unattended, `core.game.gameend` the end dialog.
+- **Panel** (FS §3.4): built from `menufreegame.xml` with the original's rules in `FreeGameSetup`: `SetMap`
+  S 005e8410 (every tribe from its combo, Bavarian at first; every team its row number; colours, computer levels
+  and closed or computer rows from the map), the row controls S 005e8050 / S 005e8200, the start rule S 005e77c0,
+  the start's copy of each row into the slot of its chosen start position S 005e7350, the start markers
+  S 005e7cc0.
+- **Maps** (FS §3.5): the converted packages whose manifest has `type="free"` (20: 15 `MP_*` and 5 `sp*`), titled
+  from each package's `locale/<lang>/map.txt`, with its `preview.png`, in `MapListEntry::Less` order S 00612ec0
+  and the row colours of S 00614ec0.
+- **Start**: emits `core.game.match` with the slots, start resources, win condition, reveal and `loading=true`;
+  the match shows the loading panel of `menuLoading.xml` for a frame before the build and fades it out over 2 s
+  (FS §3.9).
+- **End**: `GameEndDialog` from `menuGameEnd.xml` (FS §3.10): `!Continue Game` goes on, `!Quit` leaves through
+  the statistics to the main menu, as the back button does.
+- **UI**: `UiBuilder.Kinds` lets a screen own widget kinds (`UiCombo` for `comboboxnew`, `UiList` for
+  `listbox2`); shapes take borders per side.
+- **Not built**: the row portraits, the player previews, the picture slider, a stepped loading progress.
 
 ## 7. The way back: commands [draft]
 
@@ -611,13 +678,14 @@ These matter more in the remake than in the original, because Harmony patches ca
      would crash).
    - **The living map** (§6.6): guards against division by zero (move distance 0, idle quotient 0, spawn interval 0,
      empty spawn list); the roam search refuses a start cell outside the map (the original reads past its grids,
-     MR §3.10); the removal reasons `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once
-     [inferred]; growth visuals step per tick instead of the original's 0.1 s fade [presentation]; the good flag
-     `GroundResourceOnWater` replaces the hard-coded fish id.
+     MR §3.10); the removal reasons `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once,
+     as the original's (`defer = 0`, MR §3.4); growth visuals step per tick instead of the original's 0.1 s fade
+     [presentation]; the good flag `GroundResourceOnWater` replaces the hard-coded fish id.
    - **The map changes in the presentation** ([renderer.md](renderer.md) §10.5, §12, §15.2): the border posts are
      laid again on a height change (the original keeps their old height until the next territory change, so its posts
      float or sink, RE §3.8; presentation only); the border posts cast shadows (the original's `RenderWithEffect`
-     S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag model.
+     S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag model; a pattern new
+     to the map is drawn after all others [inferred].
    - **Transport** (§6.7): the original's good rules attached by their literal ids in the data stage
      (`GoodRulesDef.AttachOriginalRules`; registry fingerprint 22926df0 → 142868c8); the checksum layout of
      `CarrierMovies` and the three subsystem bytes is the remake's own; a claimed package that is not carried is
@@ -626,12 +694,10 @@ These matter more in the remake than in the original, because Harmony patches ca
    - **The transport settings commands** (§7): refused only where the original does not survive (a sender outside
      the player table, an unknown good, no group, an entry out of range, an empty priority list, GC §3.4); 64-bit list
      elements get no `EventData` mapping.
-   - **Construction and production** (§6.8): working modes without a job rest (the catapult's 5; the gatherers' 0, 1,
-     2, 3, 7 and the scholar's 11 got theirs with §6.13; the ship site's job came with §6.14); an order's category is
-     fixed when it is linked (the original recomputes it on removal); commands for a missing building are refused (the
-     original ignores them); `IsOccupied` skips empty slots among the first `workerCount` (in the original a hole can
-     hide a later worker, VB §3.18); `RebalanceInputRequests` is approximate; remains that name a doodad only warn
-     (none in the shipped data).
+   - **Construction and production** (§6.8): an order's category is fixed when it is linked (the original recomputes
+     it on removal); commands for a missing building are refused (the original ignores them); `IsOccupied` skips
+     empty slots among the first `workerCount` (in the original a hole can hide a later worker, VB §3.18);
+     `RebalanceInputRequests` is approximate; remains that name a doodad only warn (none in the shipped data).
    - **Selection and street placement** ([renderer.md](renderer.md) §15.3): **Esc** cancels the street placement
      (the original's Esc reaches only a visible box's close button); the action panel closes only after the cursor
      has been over it and left; the street preview is extended click by click and replaced by the simulation's path
@@ -647,13 +713,16 @@ These matter more in the remake than in the original, because Harmony patches ca
    - **Military** (§6.9): crash guards in both modes (an allocation index of −1, an empty attacker list or no path in
      the gathering and origin steps, an undefined level in `ConquerBuilding`); the faithful quirks kept (the
      always-false paired-type comparison, attacks on own and allied buildings, the overkill's double kill credit); kill
-     credit only for valid slots; the removal reasons `Transferred` (capture) and `Destroyed` (catapult).
+     credit only for valid slots; the removal reasons `Transferred` (capture) and `Destroyed` (catapult); the
+     catapult's fire stamp is the start clock plus one f32 tick interval per tick (the first tick [inferred],
+     §6.15).
    - **Barracks, statistics and victory** (§6.10): `!DEFEAT` goes to every other active, not eliminated human slot,
      and only when a `RemoteHuman` slot exists (the stand-in for network mode) [inferred]; `PlayerDefeated` is raised
      for unused slots too, on tick 0 (`WasActive` false); `VictoryProgress` per active player, on change only;
      `0x2002B` accepts any sender; index guards on `0x20018` and `0x20017`; crash guards (a good with no history, a
      level gap in the promotion, a slot with no level-0 soldier, a kind with no levels, an owner out of range); the
-     victory state is not saved.
+     victory state is not saved; `Player::Update` runs in the player table's step without a system of its own
+     (§6.15).
    - **Sacrifices** (§6.11): tests place the flame with `PlaceBuilding` (no placement test); the effect event is
      named `SacrificeEffectApplied`; an enemy-aimed start with a target that is not a player is refused (the original
      reads out of bounds); the original's silent ignores are refusals with the check's code; the lock maps live in the
@@ -666,15 +735,19 @@ These matter more in the remake than in the original, because Harmony patches ca
      crashes); `!Found Resource` refreshes its message in radius 7 through `MessagePosted.Refresh`; the good flag
      `FoundOnBuildableGround` replaces the hard-coded water good id.
    - **Building panels** ([renderer.md](renderer.md) §15.3): the reset buttons for `0x20022` and `0x20020` are the
-     remake's own; the panels read some simulation classes directly (open requests, depot settlers, worker slots,
-     productivity) until `IBuildingView` carries them (a breach of §6.1 for now); parents and layout details are
-     [inferred]; the settings panel opens with **L** or `btSettings`.
+     remake's own; the panels read views only, the productivity through `IStatisticsView.TryGetProductivity`
+     (§6.15); parents and layout details are [inferred]; the settings panel opens with **L** or `btSettings`.
    - **The navy** (§6.14): one street planner per player (the original shares one); `Ship.Shipyard` in place of
      the village construction record (+0x50); no docking position and a search toward the dummy (−1, −1) dock
-     reserve nothing and are refused (the original writes through them); the expedition and sea-attack `Update`
-     are stubs; routes and harbours hashed in the remake's own form; the `initialized` byte only in `WriteState`,
-     as in the original, so the net-tick checksums changed; a cargo package keeps the ship's cell at loading
-     while it sails.
+     reserve nothing and are refused (the original writes through them); routes and harbours hashed in the
+     remake's own form; the `initialized` byte only in `WriteState`, as in the original, so the net-tick checksums
+     changed; a cargo package keeps the ship's cell at loading while it sails. Part 2: the crash guards of §6.14
+     (`ChooseStartHarbor` null, a range ≤ 0, `TransferShipsOfPlayer(from == to)`, mission states 0 and 3,
+     `SendSoldiersBySea` without a landing harbour, an attack origin without a building); `GetSupplyStatus` at a
+     position mirrors the building form [inferred]; one `NeedGoods` object (the original has two); the attack
+     availability codes mapped with "0 or 8" approximated (`Military_CountAttackersByKind` S 00575fd0 not read);
+     the ships share one swell phase (the original's per-ship start value at `+0x74` not read), sample their height
+     at the water plane and add the original's +π/2 to the heading (AM §3.17).
    - **Fog of war** ([renderer.md](renderer.md) §4.5): no left-over-texel quirk; no separate black `Unexplored`
      pass; the overlay clamped in every shader (the original wraps it, except in `water_shader.fx`); a character
      uses the cell of the sample vertex nearest its interpolated position (the original its logic cell); a border
@@ -690,6 +763,18 @@ These matter more in the remake than in the original, because Harmony patches ca
      transparent as documented, not seen in the original; the message list at the top left, where the layout puts
      it; the statistics curve colours from `menu.cfg` (the original's table S 0087f8c8 not compared); `debug=true`
      shows the developer panel.
+   - **The free game** (§6.16): six rows, as the original's; the panel lives in `core.game`; the map's stored player
+     names (row 0 shows `!Player`, the human keeps the map's name); plain text at the size of `Body_Arial.fnt`
+     (13); the start's copy of rows into slots keeps the original's quirk with closed rows, the cleaner
+     `Slots(activeOnly)` is a switch; the layout readings of FS §3.5, §3.9 and §3.10: the map list takes the
+     container's width and the list's height [inferred], the chooser frame's label is hidden (whether the original
+     draws it is not established), the loading bar's negative-width pictures are drawn mirrored [inferred], the end
+     dialog's title and text sit inside the centred 480 × 244 frame [inferred].
+   - **Particles** ([renderer.md](renderer.md) §16.1): GPU particles with hash draws, not the original's sequence
+     (PA §8 allows it); caps of 192 emitters per effect and 24,000 particles in all at Faithful, 64 and 8,000 at
+     Low, a refused start retried at the next state change; `sadk_time` wraps every hour; pass 2's volume uses the
+     box fixed at the start; work-clip emitters fade out when the clip stops [inferred]; a one-shot of an endless
+     effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide).
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

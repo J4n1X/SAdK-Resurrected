@@ -1218,10 +1218,24 @@ sinking states is **[inferred]** (`navy.md`).
 
 `Ship::UpdateVisuals(frame)` S 006a5cc0, per frame **[known]**: status mesh kind (-1 none; 1 when the logic flag at
 `ship +0x30 → +8` is set; else 0 when the cargo is not empty; else 2 when the flag at `+0x40 → +8` is set) shown
-through the plain mesh renderer; position and yaw interpolated between tick samples; roll and pitch from sines
-(amplitudes 0.01 / 0.02 at rest, 0.04 / 0.08 under way), height = water level + `(sin + 1) * 0.06`;
-`phase += dt * 0.25 * const` (`dt` = the fifth float of the frame record, the constant at S 00882840); then
-`CAnimatedObject::Update(now)` with the second float of the frame record, and `SetWorldTransform`.
+through the plain mesh renderer; position and yaw interpolated between tick samples, the yaw plus π/2; the
+swell from one `phase` per ship (`+0x74`) **[known, disassembly and constants]**:
+
+```
+pitch  = (sin(f1 * phase + 0.2) + 1) * a1        f1 = 0.66 at rest, 2.5 under way;  a1 = 0.01 / 0.04
+roll   = (sin(f2 * phase + 0.4) + 1) * a2        f2 = 0.4  at rest, 1.7 under way;  a2 = 0.02 / 0.08
+height = water level + (sin(phase) + 1) * 0.06
+phase += dt * 0.25 * const                       dt = the fifth float of the frame record, const at S 00882840
+```
+
+(frequencies at S 007fa3a4, S 007e77f0, S 007e349c, S 007fa3a8; offsets 0.2 and 0.4 as doubles at S 007e6d70,
+S 007e7820; "under way" = the movement's `progress >= 0`, `navy.md` §2.6). While the byte `+0xd4` is set (an
+unfinished ship [inferred]) there is no status mesh, pitch and roll stay 0, the phase does not advance and the
+alpha comes from the clip fade (`+0xc4..+0xd0`); otherwise alpha is 1. Then `CAnimatedObject::Update(now)` with
+the second float of the frame record, and `SetWorldTransform`. While the ship is enabled and visible (`+0x9`,
+`+0x8`) it keeps a `ShipFX` emitter under way, and a `ShipSpeedUp` or `ShipSpeedDown` emitter while the ship's
+speed bytes (`+0xfc`, `+0xfd`) are set (`Ship_SpawnParticleEffect` S 006a5bf0, `UpdateFxEmitter` S 006a4a20;
+`particles.md` §3.13); otherwise `ShipFX` is released.
 
 ### 3.18 Animals
 

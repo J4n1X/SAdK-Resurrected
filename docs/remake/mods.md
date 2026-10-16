@@ -556,6 +556,11 @@ the checksum comparison, a dedicated host).
 The development tools are a mod as well: `tools.assetbrowser` (on by default, requires `core.mainmenu`) adds "Asset
 browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented].
 
+`core.game` adds "Free game" (`!FREE GAME`) to the main menu the same way: a listener in its `intents.xml` on
+`engine.start` emits `core.mainmenu.addmenuitem`. Its `mod.xml` names `core.mainmenu` as an `Optional`
+dependency, so `core.game` still loads without it (headless); the load order is `core.mainmenu` → `core.game` →
+`tools.assetbrowser` [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
+
 ### 11a.2 Modes, overlays, handlers, events, listeners, routes [implemented]
 
 An **intent** is a request as plain data: a key and named parameters of type `string`, `int`, `float` or `bool`

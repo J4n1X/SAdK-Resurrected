@@ -607,20 +607,30 @@ summarised from the functions named and were not all re-read line by line, so th
 
 | Owner | Effect | Start | Position, rotation | Stop |
 |---|---|---|---|---|
-| building fire points `Building::UpdateFireEffects` S 006abbb0 | `BuildingFire` | each frame: the first `round(points × (1 - hp ratio))` fire points burn | fire point position, identity | `Stop(true)` on the others |
-| building buffs `Building::Update` S 006abcf0 | `ShipSpeedUp`, `BuildingArmor`, `WorkerPause` | while the sacrifice modifier differs from the base value | building position, identity | `Stop(true)` |
-| demolition `Building::StartDemolition` (S 006ab87c) | `DemolitionDust`, `SmallDemolitionDust` | once | building | `Stop(false)` |
-| animation events `ParticleEvent::Start` S 006b05e0 | `<Particle start duration name slot>` of `buildings.xml`, `settler_animations.xml` | at the event time | bone or slot transform + rotated `offset` | at `start + duration` `emitting = 0`; `duration = 0`: `Stop(false)` at once |
+| building fire points `Building::UpdateFireEffects` S 006abbb0 | `BuildingFire` | each frame: the first `round(points × (1 - hp ratio))` fire points burn (`StartByName(..., active 1, emitting 1, time, fire point, identity)`); the points are `FIRE_03`, `FIRE_06`, ... or five fallback points (below) | fire point position, identity | `Stop(true)` on the others |
+| building buffs `Building::Update` S 006abcf0 | `ShipSpeedUp` (four slots), `BuildingArmor`, `WorkerPause` | while the condition of its slot holds (`rendering.md` §3.9: mines without food need, armour, territory range, modified goods, production time, rest time); only without scaffold and with `showEffects` | building position, identity | `Stop(true)` |
+| demolition `Building::StartDemolition` S 006ab840 | `DemolitionDust`, or `SmallDemolitionDust` when bit 0x4 of the size mask (`+0x3c`) is clear: mines (8) and ship sites (16) | once | building | `Stop(false)` |
+| animation events `ParticleEvent::Start` S 006b05e0 | `<Particle start duration name slot>` of `buildings.xml`, `settler_animations.xml` | at the event time; the effect's start time is `desc.start / animScale + startTime` | bone or slot transform + rotated `offset`, followed every tick (`ParticleEvent::Update` S 006b0710) | at `start + duration` `emitting = 0` and the event ends; `duration = 0`: `Stop(false)` at once |
 | effect movies `EffectMovieElement::Start` S 006c6bc0 | `effectMovies.xml` `particles=` | at the keyframe | link transform | movie end |
 | soldiers `CharacterSoldier::Update` S 006c7f80 | `SoldierDamage`, `SoldierDefense`, `ArcherSpeed`, `BlindSoldier` | while the buff applies | right-hand bone (`SoldierDamage`), head (`SoldierDefense`, `BlindSoldier`), `animation-models.md` §3.10 | `Stop` |
 | settlers `CharacterMovement::Update` S 006c57b0 | `SettlerSpeed` | `emitting` while the settler moves | settler | |
 | carriers `CharacterCarrier::Update` S 006c9250 | `BoatFX` | `emitting` while moving on a boat | | |
-| ships `Ship::UpdateFxEmitter` S 006a4a20, `Ship_SpawnParticleEffect` S 006a5bf0 | `ShipFX` and a second named effect (caller S 006a5cc0) | created with `emitting = 0`, `active = 1`, `Restart(time)`, no reseed; `emitting` while the owner says active | ship x, z at the water height; rotation about up by `angle - π/2` | |
+| ships `Ship::UpdateFxEmitter` S 006a4a20, `Ship_SpawnParticleEffect` S 006a5bf0 | `ShipFX` under way; `ShipSpeedUp` or `ShipSpeedDown` while the ship's speed byte `+0xfc` or `+0xfd` is set (caller `Ship::UpdateVisuals` S 006a5cc0, `animation-models.md` §3.17) | created with `emitting = 0`, `active = 1`, `Restart(time)`, no reseed; `emitting` while the owner says active | ship x, z at the water height; rotation about up by `angle - π/2` | |
 | projectiles `Projectile::SpawnNamedEffect` S 006a3980, `OnImpact` S 006a3af0 | `projectiles.xml` `flightPFX`, `impactPFX` | launch, impact | projectile | `ReleaseEffect` |
 | fights `Scene::OnFightStrike` (string reference S 006835e8) | `HitDamage` | per strike | | `Stop(false)` |
 | scene callbacks `Scene::OnSacrificeAppliedToCell` S 00681fd0, `OnSpawnTriggered` (S 0068216a) | sacrifice on a cell, spawn trigger | callback | cell | `Stop(false)` |
 | Lua `gfx.createParticel(name, x, y [, dx, dy, dz])` S 005aca40 | any (`Spawning`, `AnimalSpawned`, `BuildingFireShort`, `WhiteSmokeShort`, ...) | script call | cell centre + offset, identity; `active = emitting = 1`, `autoDelete = 0` | self (one-shots with `maxLoops > 0`) |
 | lobby minigames (S 00512c28, S 0051836b) | `MGChess_Capture`, `MGDice_*` | game events | | |
+
+**Building fire points** (`Building::InitFirePoints` S 006ac510, called only from the building constructor
+S 006acc23) [known]: the model nodes `FIRE_03`, `FIRE_06`, ... (the counter starts at 0 and adds 3 before each
+lookup: `XOR EDI,EDI` at S 006ac54f, `ADD EDI,3` at S 006ac551, loop back from S 006ac6c1) up to the first one
+the model lacks; `FIRE_00` is never a fire point. Only the military models have such nodes [known, files]; every
+other building gets five fallback points from the process-wide generator S 0088da38 (seed 0x5432ace0), two
+draws each: `x = cx + (2r − 1) · 0.4 · sx`, `z = cz + (2r − 1) · 0.4 · sz` over the world bounds, `y` = the
+centre's height. The generator advances in building creation order across the process. While a building sinks
+after its demolition `Building::Update` returns at once, so its fires keep burning unchanged (`rendering.md`
+§3.9).
 
 The direct children `<PFX name link>` and `<Particle name position [timer]>` of `<Building>` in `buildings.xml`
 (`BlackSmoke`, `Fire`, `WhiteSmoke` at `Dummy0..2`; `GoldMineSpark`, `StarSpark`, `SteamPuff`, `Fire`,
@@ -870,7 +880,8 @@ one-shot events (impacts, demolitions, animation events in progress) are not res
   the life cycle of §3.5, the curves of §3.6 and §3.7, all evaluated from `elapsed = now - startTime` (no
   integration). Use the scene's interpolated time (`realTime`) as `now` and the tick time as start time for
   effects started by ticks. Run the update only for active emitters in the view (or for all; the result is the same
-  apart from the random re-draws).
+  apart from the random re-draws). Because the forms are closed, they also run per particle in a GPU particle
+  shader, which is what the remake does (`../remake/renderer.md` §16.1).
 - **Random numbers.** Implement the generator of §2.9 with the seeds of §2.3 and §3.4 to get the same
   distributions and the same first cycle; do not try to match later draws (§8).
 - **Drawing.** One `ArrayMesh` (or `ImmediateMesh`) per emitter per frame, built from the six-vertex quads of
@@ -950,6 +961,8 @@ one-shot events (impacts, demolitions, animation events in progress) are not res
 | 006dbb90, 006dbd10, 006dbc30, 006dba70 | `S2CG::RouteBuoy::ctor` / `Tick` / `StartFireEffect` / `UpdateAnimation` | buoy fire |
 | 006dc410, 006dc310 | `S2CG::Stargate::UpdateAnimation` / `CreateFireEffect` | gate fire |
 | 006abbb0 | `S2CG::Building::UpdateFireEffects` | fire points |
+| 006ac510 / 006acc23 | `S2CG::Building::InitFirePoints` / its call in the building constructor | `FIRE_03`, `FIRE_06`, ... or five fallback points |
+| 006abcf0 / 006ab840 | `S2CG::Building::Update` / `StartDemolition` | buff effects; demolition dust |
 | 006b05e0, 006b0710 | `S2CG::ParticleEvent::Start` / `Update` | animation events |
 | 005aca40 | `LuaGame_createParticel` | Lua effects |
 | 0051cfe0, 0051ce20 | `Lobby::ParticleSystem::CreateEmitter` / `Render` | lobby emitters |

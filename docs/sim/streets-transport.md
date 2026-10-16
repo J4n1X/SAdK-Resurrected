@@ -165,9 +165,13 @@ stride 0x20 [known] S 0066b640.
 | +0x78 (+0x98) | `shipRef` | ship whose cargo holds the package [known] S 0064f1d0 |
 
 `TransportTarget`: +0x08 building reference (id hi at package+0xd4), +0x28 ship reference (id hi at package+0xf4).
-Exactly one is valid when the package has a target [known] S 0064edb0. The **target flag** is the building's
-entrance flag (`Building+0xa0`), or for a ship target the flag of the harbour the ship belongs to [known for the
-building; inferred for the ship chain] S 0064ef20.
+Exactly one is valid when the package has a target [known] S 0064edb0. The **target flag**
+(`TransportTarget::GetTargetFlag` S 0064ef20) is the building's entrance flag (`Building+0xa0`), or for a ship
+target the flag of the harbour the ship is docked at or heading for: ship `+0x24` movement → `+0x60`
+`targetHarbor` → harbour `+0x38` `flagRef` ([navy.md](navy.md) §2.2, §2.4, §2.6) [known]. A carrier counts as at
+the package's destination only for a **building** target (`IsCarrierAtPackageDestinationFlag` S 0064d280 tests
+the building reference, id hi at package +0xd4), so a package for a ship is put down on the harbour flag (§3.8,
+state 0x12) and loaded from there (`navy.md` §3.10, `GatherCargo`) [known].
 
 A package is in exactly one of these states [inferred from the functions that move it]:
 
@@ -180,7 +184,10 @@ A package is in exactly one of these states [inferred from the functions that mo
 
 **Life cycle** [known]. `PackageSystem::CreatePackage` S 0064fb10 constructs the package (S 00651670: owner,
 good, empty movement and target, `ticket = blockedCount = 0`, then one `Unique` drawn, then "package created",
-slot 0x60) and appends it to `packages` and `packagesByPlayer`. `PackageSystem::RemovePackage(id)` S 0064f780
+slot 0x60) and appends it to `packages` and `packagesByPlayer`. The "created" notice is raised inside the
+constructor, while the package lies nowhere: `CreateCarriedPackage` S 0064cce0 links it to the settler's hand
+(S 0053c880) only after `CreatePackage` returns, and the other callers attach it to a flag afterwards; the
+observer reads the position later from the package's movement. `PackageSystem::RemovePackage(id)` S 0064f780
 finds it in `packages`, stable-erases it from `packagesByPlayer`, destroys it and stable-erases it from
 `packages`. The destructor S 006514b0 raises "package destroyed" (slot 0x64) **first**; then
 `TransportMovement::Destruct` S 0064f270 detaches it from its flag when `flagRef` is valid (stacks, "detached"
@@ -700,7 +707,7 @@ state of that moment (same tick as the search). The cell list is target first, s
 | Caller | kind | penalty | preferred street | Result used |
 |---|---|---|---|---|
 | `GetFlagPathCost(from, to, kind)` S 00667f30 | given: 0 from the supplier and free-package searches (S 00557da0, S 00652170, S 006506a0); 1 from the carrier give-up search (§3.9, S 0065b200 → S 00557fe0 → S 00557ef0). The penalty flag is always passed but only has an effect for kind 0 (S 0066b9e0). Further direct callers: the village supplier queries S 00558330 and S 00558510, the settler order supplier search S 00562280 and the computer player (S 00599540, S 005a4cc0, S 005a4f30) [known, caller list; the kind they pass was not read] | yes | none | summed cost, −2 = not connected |
-| `GetNextHopFlagCell(start, target, kind, penalty)` S 006666d0 | 0 | yes | none | cell of the flag after `start` on the route; (−1,−1) if none; if the route has a single cell, that cell |
+| `GetNextHopFlagCell(start, target, kind, penalty)` S 006666d0 | 0 | yes | none | cell of the flag after `start` on the route; (−1,−1) if none; if the route has a single cell, that cell: with `start == target` the path is the one flag, so a package on its target flag gets that flag's own cell as next hop [known] |
 | `StreetRoutePlan::Plan` S 007735b0 (walking settlers) | 1 | no | the street the settler is on | next flag cell |
 
 **Cost cache** (`GetFlagPathCost`) [known]: look up `pathCostCache[player*2 + kind][from][to]`, then `[to][from]`;
@@ -792,7 +799,7 @@ idle-like state do nothing; if `notYetOnStreet` → `UpdateDropOffAfterSpawn`; e
 | 0x16 | WaitForPackage | done with no claimed package → stop. Claimed package's next waypoint not on my street's path → release the claim. Standing on the package's flag → *Pickup* → 0x18. Else, if my cell is on my street's path → walk to the package's flag (*MoveToStreetPosition*) → 0x17 |
 | 0x17 | MoveToStreetPosition | arrived and the claimed package still lies on a flag: on its flag → *Pickup* → 0x18; else release the claim. → 0x16 |
 | 0x18 | Pickup | no package any more → 0x16. Package's next waypoint not on my street → *PutDownPackage* → 0x19. Else *GoToPackageTarget* → 0x12 (if that cannot start → 0x16) |
-| 0x12 | GoToPackageTarget | done: package has a target and I stand on its destination flag (next waypoint = target flag = my cell) → *EnterBuilding* → 0x13; else *PutDownPackage* → 0x19. Not done but waiting at the flag with `blockedCount > 360`: **give up** (§3.9) → 0x16 |
+| 0x12 | GoToPackageTarget | done: package has a **building** target and I stand on its destination flag (next waypoint = target flag = my cell; `IsCarrierAtPackageDestinationFlag` S 0064d280, so a package for a ship is put down at the harbour flag) → *EnterBuilding* → 0x13; else *PutDownPackage* → 0x19. Not done but waiting at the flag with `blockedCount > 360`: **give up** (§3.9) → 0x16 |
 | 0x13 | EnterBuilding | → 0x14 |
 | 0x14 | (instant) | if the package has a target: `street.trafficCount += 1`, `NTransport::System::DeliverPackage`. Start *LeaveBuilding* → 0x15 |
 | 0x15 | LeaveBuilding | carrying a package → *PutDownPackage* → 0x19; else → 0x16 |
@@ -1274,23 +1281,27 @@ fromCell, toCell, currentStreet)` S 007735b0 [known]:
   whose street has the strictly smallest `length`, so among equal lengths the first in link order wins; the
   exception for the current street is made by its caller [known].
 
-`ai::settlers::SettlerMovement::AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next flag of the
-route also has a harbour link and the shortest street between them is a sea street with a valid ship route, the
-settler is linked into the flag's `waitingSettlers` and waits for the ship (the test on the street is that its
-`shipRouteRef` is valid). The same link is made when a settler arrives on the cell that is his route target, a
-flag stands there and his vtable slot 1 answers true (`settlers-jobs.md` §2.3) [known]. He takes a waiting
-spot from
-`FlagParking::FindFreeSpot` S 0066d390 (flood fill over walkable cells within hex distance 10 of the flag, fine
-grid positions on rings 0..2 around a free cell, not already occupied; the n-th candidate is taken with
-`n = (random % 4) × 3 + (tickCounter & 7)` with the C signed remainder of the generator's int result,
-S 00671730) [known]. In detail (`FloodFillSearch::Run_FreeSpot` S 0066d190, `FreeSpotSearch::IsInRange`
-S 006716e0, `VisitCell` S 00671790) [known]: breadth-first from the flag's cell, neighbours in direction order
-0..5; a cell is entered when it is walkable (§3.2) and within hex distance 10 of the flag; only cells that pass
-`GameQuery::IsCellFreeOfObjectsAndStreets` yield candidates (the cell's centre vertex, then vertex rings 1 and
-2, each position not in the flag's occupied list); candidates are counted from 0 over the whole search and the
-search ends as soon as more than `n` have been counted, returning candidate `n`. If the flood fill ends with
-`n` or fewer candidates, **no** spot is returned (invalid position), although candidates existed. Sea
-transport itself: `navy-and-military.md`.
+`ai::settlers::SettlerMovement::AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next
+flag of the route also has a harbour link and the shortest street between them is a sea street with a valid ship
+route, the settler is linked into the flag's `waitingSettlers` and waits for the ship (the test on the street is
+that its `shipRouteRef` is valid). The same link is made when a settler arrives on the cell that is his route
+target, a flag stands there and his vtable slot 1 answers true (`settlers-jobs.md` §2.3) [known]. He takes a waiting
+spot from `FlagParking::FindFreeSpot` S 0066d390 (flood fill over walkable cells within hex distance 10 of the flag,
+fine grid positions on rings 0..2 around a free cell, not already occupied; the n-th candidate is taken with
+`n = (random % 4) × 3 + (tickCounter & 7)` with the C signed remainder of the generator's int result, S 00671730)
+[known]. In detail (`FloodFillSearch::Run_FreeSpot` S 0066d190, `FreeSpotSearch::IsInRange` S 006716e0, `VisitCell`
+S 00671790) [known]: breadth-first from the flag's cell, neighbours in direction order 0..5; a cell is entered when
+it is walkable (§3.2) and within hex distance 10 of the flag; only cells that pass
+`GameQuery::IsCellFreeOfObjectsAndStreets` S 0052e090 (nothing in object layer 0, and none of the grid bits 0x1,
+0x2, 0x4, 0x40, 0x80, 0x100, 0x400, 0x20000) yield candidates. `VisitCell` walks a spiral of 19 fine-grid positions
+around the cell: the centre vertex; ring 1 = one step in direction 4, then one step in each of the directions 0..5;
+ring 2 = one more step in direction 4, then two steps in each of the directions 0..5. The position is tested after
+each of the steps in directions 0..5 (each ring ends on its first position, which the direction-4 step reached
+untested); it counts when it lies inside the fine grid and is not in the flag's occupied list. Candidates are
+counted from 0 over the whole search and the search ends as soon as more than `n` have been counted, returning
+candidate `n`. If the flood fill ends with `n` or fewer candidates, **no** spot is returned, although candidates
+existed: the fine position becomes the invalid (−1, −1), the parking cell out-parameter is not written, and
+`OccupySpot` still pushes (−1, −1) onto the flag's occupied list. Sea transport itself: `navy-and-military.md`.
 
 `NNet::System::FindNearestFlagWithLink` S 00663f50 (used by `MoveToHome`) returns the player's flag nearest by hex
 distance whose net continent of the given kind equals a given id [known for the code; inferred for the purpose].
@@ -1641,7 +1652,8 @@ disappears without being booked when there is no such building.
 | 0064d120 / 0064d2f0 / 0064d750 | `CanSwapPackagesAtFlag` / `FindBestSwapPackageOnFlag` / `FindSwapPackageAtStreetEnd` | exchange |
 | 0053c980 / 0053c9d0 | `TransportLink_AttachPackageToFlag` / `DetachPackageFromFlag` | package–flag link |
 | 0064f3a0 / 0064f470 / 0064f510 / 0064f4c0 | `TransportMovement::ComputeNextHop` / set next hop / `RevalidateNextHop` / `OnPlacedOnFlag` | package routing |
-| 0064ef20 / 0064ef90 | `ai::transport::TransportTarget::GetTargetFlag` / `ai::transport::TransportMovement::GetNextWaypoint` | target flag, waypoint |
+| 0064ef20 / 0064ef90 | `ai::transport::TransportTarget::GetTargetFlag` / `ai::transport::TransportMovement::GetNextWaypoint` | target flag (a ship's: its `targetHarbor`'s flag), waypoint |
+| 0064d280 | `NTransport::System::IsCarrierAtPackageDestinationFlag` | carrier at the destination flag of a building target |
 | 00652170 | `NTransport::NeedSystem::Update` | need dispatcher |
 | 00651f10 | `NeedSystem::SettleIdlePackages` | release / deliver idle serving packages |
 | 00652420 / 00651bc0 / 00651cb0 | `NeedSystem::CreateNeed` / `DeliverPackage` / `DiscardAssignedPackage` | need life cycle |
@@ -1662,6 +1674,7 @@ disappears without being booked when there is no such building.
 | 00664fb0 | `StreetNet_AssignCarrierToSplitStreet` | carrier after a split |
 | 007735b0 / 007741e0 / 00657b80 | `StreetRoutePlan::Plan` / `StreetPath::ComputeRoute` / `ai::settlers::SettlerMovement::AdvanceStreetRoute` | settlers walking by street |
 | 0066d390 / 00671730 | `FlagParking::FindFreeSpot` / `FreeSpotSearch::Init` | waiting spots, random draw |
+| 00671790 / 0052e090 | `FreeSpotSearch::VisitCell` / `GameQuery::IsCellFreeOfObjectsAndStreets` | the 19-position spiral, the free-cell test |
 | 005c2620 | `NPlayer::GoodPriorities::GetRankOfGood` | rank of a good |
 | 005c2bf0 | `NPlayer::GoodPriorities::InitFromGoodTable` | default priority list |
 | 00656740 / 006567f0 / 00656ec0 / 00776d00 | `Settler::StopAndSetState3` / `IsStateNotIdleLike` / `Settler::Update` / `LeaveMap::Start` | a carrier losing his job |
@@ -1698,6 +1711,7 @@ disappears without being booked when there is no such building.
 | 00652740 / 006527a0 / 006533c0 / 00568770 | `GoodOrderStore::AddNeed` / `RemoveNeed` / `GoodOrderPlayerBlock::FindBucketForGood` / `OrderBucketEntry::RemoveFirstValue` | open-need index |
 | 00650990 / 006505d0 / 00650430 | `PackageNeedSystem::UnregisterPackage` / `RemovePackage` / `EraseTarget` | free package taken or removed |
 | 0064fb10 / 00651670 / 0064f780 / 006514b0 / 0064f270 | `PackageSystem::CreatePackage` / `Package::ctor` / `PackageSystem::RemovePackage` / `Package::dtor` / `TransportMovement::Destruct` | package life cycle |
+| 0064cce0 / 0053c880 | `CreateCarriedPackage` / hand link | a carried package is linked to the hand after the "created" notice |
 | 0053c8c0 | `TransportLink_LinkPackageToOrder` | target set for a need |
 | 005644f0 / 00564360 | `SettlerSpawn::SpawnCarrier` / `ConsumeSettlerGood` | carrier spawned with a package |
 | 0066b640 / 005289b0 | `FlagPackageStacks::Init` / `NLogic::System::BuildPlannedStreet` | flag stacks / finishing a planned street |

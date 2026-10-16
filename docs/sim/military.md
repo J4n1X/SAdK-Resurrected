@@ -1188,51 +1188,66 @@ The `Catapult` component object is allocated for every building (`Building::ctor
 it is driven only by the worker of a building type with `bp_setCatapult` and working mode 5
 (`BuildingWorkingMode_Catapult`).
 
-1. **Trigger** (`Worker::TryStartCatapultAttack` S 0065d410) [known]: select a target; if the input stock holds
-   the ammunition good (the first good of the type's `bp_setGoods` list, e.g. `catapultStone`) and a target was
-   found, start the attack movie (state 0x1d; first `ReturnFromIdle`, state 0x13, when the worker stands at
-   the idle position). How often the worker tries [known]: the only caller is the worker's `ChooseNextWork`
-   S 0065d660, working mode 5 (`settlers-jobs.md` §3.5.3), so a try follows the worker's arrival, every
-   finished attack and every rest. After an attack the worker stamps its work tick and rests
-   `trunc(bp_setRestTime * effective[13])` ticks (55 for the catapult types; state 0x1e, then `ChooseNextWork`
-   again); a try without a target or without ammunition fails into `RestOrIdleOutside` (`Rest`, or
-   `IdleOutside` after 600 ticks without work). With production switched off (command 0x2000A) the worker
-   never tries (`ChooseNextWork` step 2). `bp_setProductionTime` (25) is the length of the shot, step 3.
-2. **Target selection** (`Catapult::SelectTarget` S 00567d20, `CatapultTargetSearch` S 00567ac0..S 00567c60)
-   [known]. A building is a valid target (`Military::IsValidCatapultTarget` S 0055fff0) when its cell is
-   **explored** by the catapult's owner, its owner is an enemy, it is finished, any fight on it is led by an
-   enemy of the catapult's owner (so not by the owner or an ally), and it is an **active military installation**:
-   headquarters type, a catapult, or an occupied building with a soldier limit. Candidates are appended in this
-   order: the village's catapult list, the territory-building list, the catapult list **again**, each filtered to
-   non-headquarters types, then the territory-building list filtered to headquarters types; each must be within
-   `bp_setWorkingRadius` (12) cells (`<=`). The landmass filter is off for the catapult. Enemy catapults thus
-   appear twice in the candidate list. The choice is `candidates[targetSeed mod count]`; `targetSeed` grows by
-   1 per attack, so a catapult cycles through its targets deterministically, with no random number.
+1. **Trigger** (`Worker::TryStartCatapultAttack` S 0065d410) [known]: select a target; if the input stock holds the
+   ammunition good and a target was found, start the attack movie. The ammunition is the **first cost** of the
+   type's `bp_setGoods` good, not that good itself: `Catapult::HasAmmo` S 00567a30 reads `costs[0]`
+   (`GoodProperty+0x04`) of the product slot's good, so the Scots catapult's `catapultStoneScots`, which costs
+   `stoneScots`, makes the stock hold stone; the slot good is never created (`tribes-content.md`). Then the movie
+   starts (state 0x1d; first `ReturnFromIdle`, state 0x13, when the worker stands at the idle position). How often
+   the worker tries [known]: the only caller is the worker's `ChooseNextWork` S 0065d660, working mode 5
+   (`settlers-jobs.md` §3.5.3), so a try follows the worker's arrival, every finished attack and every rest. After
+   an attack the worker stamps its work tick and rests `trunc(bp_setRestTime * effective[13])` ticks (55 for the
+   catapult types; state 0x1e, then `ChooseNextWork` again); a try without a target or without ammunition fails into
+   `RestOrIdleOutside` (`Rest`, or `IdleOutside` after 600 ticks without work). With production switched off
+   (command 0x2000A) the worker never tries (`ChooseNextWork` step 2). `bp_setProductionTime` (25) is the length of
+   the shot, step 3.
+2. **Target selection** (`Catapult::SelectTarget` S 00567d20, `CatapultTargetSearch` S 00567c60 / S 00567be0 /
+   S 00567ac0) [known]. A building is a valid target (`Military::IsValidCatapultTarget` S 0055fff0) when its cell is
+   **explored** by the catapult's owner, its owner is an enemy, it is finished, any fight on it is led by an enemy
+   of the catapult's owner (so not by the owner or an ally), and it is an **active military installation**
+   (`Military::IsActiveMilitaryBuilding` S 0055fea0): headquarters type, a catapult, or an occupied building with a
+   soldier limit. Candidates are appended in this order: the village's catapult list, the territory-building list,
+   the catapult list **again**, each filtered to non-headquarters types, then the territory-building list filtered
+   to headquarters types; each must be within `bp_setWorkingRadius` (12) cells (`<=`). The landmass filter is off
+   for the catapult. Enemy catapults thus appear twice in the candidate list. The choice is
+   `candidates[targetSeed mod count]`; `targetSeed` grows by 1 per attack, so a catapult cycles through its targets
+   deterministically, with no random number.
 3. **Attack movie** (`NMovie::CatapultAttack` S 0077b940, S 0077b880) [known]: `targetSeed += 1`, aim = target.
    Rotate: `turns` = shortest way round the 6 directions from the current direction to the direction of the aim
-   cell; animation for `(turns + 1) * cfg_setCatapultRotationTimeFactor` (5) ticks; then the direction is
-   committed. If the ammunition is still there: shoot (animation kind 5 for `BuildingProperty+0xd8` ticks,
-   f32 = `bp_setProductionTime`, 25 for the catapult types; `properties-data.md`); `Fire` runs when the shoot
-   animation **starts** (`NMovie::ShootCatapult::Start` S 0077eb30), so the projectile is in the air during the
-   animation. Then the aim is cleared and the catapult
-   rotates back with the same rule; with no valid aim cell the rotation target is direction 1
-   (`NMovie::RotateCatapult::Start` S 0077e980). Without ammunition after the first rotation it rotates back at
-   once.
+   cell; animation for `(turns + 1) * cfg_setCatapultRotationTimeFactor` (5) ticks; then the direction is committed.
+   If the ammunition is still there: shoot (animation kind 5 for `BuildingProperty+0xd8` ticks, f32 =
+   `bp_setProductionTime`, 25 for the catapult types; `properties-data.md`); `Fire` runs when the shoot animation
+   **starts** (`NMovie::ShootCatapult::Start` S 0077eb30), so the projectile is in the air during the animation.
+   Then the aim is cleared and the catapult rotates back with the same rule; with no valid aim cell the rotation
+   target is direction 1 (`NMovie::RotateCatapult::Start` S 0077e980, `Update` S 0077e950). Without ammunition after
+   the first rotation the same `CatapultAttack::Update` starts the rotation back (step 0x1e) and returns false, so
+   the movie does not end in that tick; this branch does not clear the aim, so the rotation back turns toward the
+   same aim cell: 0 turns, `(0 + 1) × 5` = 5 ticks [known] S 0077b880, S 0077e980. The shoot step is
+   `NMovie::ShootCatapult` S 0077eb30 / S 0077eb00 (`Start` / `Update`).
 4. **Fire** (`Catapult::Fire` S 005678b0) [known]: unless `GameSystem+0xec` is set, remove one ammunition good
    from the input stock and request a new one. Create a projectile of type 1 with `flightTicks =
    trunc(hexDistance(building anchor, aim) * cfg_setCatapultFlightTimeFactor)` (5 per cell; the int distance is
    loaded with `FILD`, multiplied by the f32 factor and stored with the control word's rounding bits forced to
    truncation, `OR 0xc00` at S 005679b5, the same conversion as in `ai::settlers::Bow::Shoot` S 0065f2cd
-   [known]). The f32 at `GameSystem+0x78` is copied into the last fire stamp before the projectile is created,
-   also while `GameSystem+0xec` is set. If aim
-   equals target and a
-   building is found at or nearest to the target cell (`FindBuildingAtOrNearest`), the projectile targets that
-   building, else the position. Projectile damage = `bp_setCatapultDamage` of the catapult's type (10).
+   [known]). The f32 at `GameSystem+0x78` (`nextTickTime`) is copied into the last fire stamp before the
+   projectile is created, also while `GameSystem+0xec` is set. If aim equals target and a building is found at
+   or nearest to the target cell (`FindBuildingAtOrNearest`), the projectile targets that building, else the
+   position. Projectile damage = `bp_setCatapultDamage` of the catapult's type (10).
 5. **Impact** (`Building::OnCatapultHit` S 0055e080) [known]: `damage' = trunc(damage / buildingArmorFactor)`
    of the **hit building's owner**; messages as in `village-buildings.md` §3.15; `Hitpoints::ApplyDamage`. A
    building at 0 hit points is removed; a damaged military building has a smaller capacity (§2.4), and the
    allocation then releases surplus soldiers (§3.2). The catapult never hits soldiers [inferred: no settler
    target is ever set for type 1].
+6. **A building removed while projectiles fly** [known]: the projectiles flying at it
+   (`Building::dtor` S 0055ce70 → `MilitaryLink_UnlinkProjectileFromTargetBuilding` S 0053ce30) and the catapult's
+   own projectile, whose source it is (`Catapult::dtor` S 005676d0 → `MilitaryLink_UnlinkProjectileFromCatapult`
+   S 0053cdd0), become position projectiles at the building's anchor: `ProjectileOwner::ClearBuilding` S 005704c0
+   clears the building reference, stores the anchor cell and sets the kind to 2 (position); the player index
+   (+0x50) stays.
+
+The attack movie saves only its step: `CatapultAttack::Store` S 0077b7e0 calls the `Store` of `RotateCatapult`
+and `ShootCatapult`, which is the empty function S 0064b9c0, then `Package::Store` (`settlers-jobs.md` §7)
+[known].
 
 There are no other special units: the projectile types are arrow, catapult stone, bolt and sling stone, and the
 only soldier kinds are sword and bow [known: `Jobs.lua`, S 0065f270, S 005678b0].
@@ -1642,6 +1657,12 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | S 005719b0 | `Fight::RemoveSoldier` | "attack failed" |
 | S 00570900 / 00571720 | `Military_RequestCancel` / `Fight::ReleaseTargetBuilding` | retreat, target lost |
 | S 0065d410 / 00567d20 / 005678b0 | `Worker::TryStartCatapultAttack` / `Catapult::SelectTarget` / `Catapult::Fire` | catapult |
+| S 00567c60 / 00567be0 / 00567ac0 | `CatapultTargetSearch` steps | candidate lists and the choice |
+| S 0055fff0 / 0055fea0 / 00567a30 | `Military::IsValidCatapultTarget` / `IsActiveMilitaryBuilding` / `Catapult::HasAmmo` | target filter, ammunition = `costs[0]` of the slot good |
+| S 0077b940 / 0077b880 / 0077b7e0 | `NMovie::CatapultAttack::Start` / `Update` / `Store` | attack movie; the store writes only the step |
+| S 0077e980 / 0077e950 | `NMovie::RotateCatapult::Start` / `Update` | rotation, `(turns + 1) × 5` ticks |
+| S 0077eb30 / 0077eb00 | `NMovie::ShootCatapult::Start` / `Update` | shot; `Fire` at the start |
+| S 005676d0 / 0053ce30 / 0053cdd0 / 005704c0 | `Catapult::dtor` / `MilitaryLink_UnlinkProjectileFromTargetBuilding` / `MilitaryLink_UnlinkProjectileFromCatapult` / `ProjectileOwner::ClearBuilding` | projectiles of a removed building become position projectiles |
 | S 0055e080 | `NVillage::Building::OnCatapultHit` | catapult damage |
 | S 00660500 / 00660270 | `Sacrifice::ApplyEffect` / `ApplyHealOwnUnits` | function effects |
 | S 00782b60 / 00782bb0 | cinematic start / `nGame::System::EndCinematic` | flag `GameSystem+0xec` |
