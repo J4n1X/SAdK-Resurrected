@@ -225,7 +225,7 @@ S 00558f80) [known].
 | off | field | type | meaning |
 |---|---|---|---|
 | +0x04 | `pBuilding` | ptr | |
-| +0x0c | `pBuildingDef` | ptr | type being built (the upgrade target for an upgrade) |
+| +0x0c | `pBuildingDef` | ptr | type being built: the constructor (S 0055e460) stores the building's current type, `StartWithType(type)` (S 0055efa0) replaces it before requesting materials, so an upgrade's construction holds the target type from `Bulldozing::Begin` on |
 | +0x10 | `stock` | `NLogic::Stock` | materials delivered to the site and not yet used |
 | +0x30 | `builderRef` | settler reference | the bound builder; invalid = none |
 | +0x50 | `shipRef` | reference | for ship-building sites the progress lives in the ship (+0x48/+0x4c) |
@@ -522,8 +522,9 @@ S 0077fe70) [known]:
    first good of `cost` (list order) that the stock holds.
 3. `Construct::Update`, 4 positions `i = 0..3`: walk to fine position
    `(anchorNE.x × 4 + (anchorNE.y odd ? 2 : 0) + trunc(cx_i), anchorNE.y × 4 + trunc(cy_i))` where `anchorNE`
-   is the anchor stepped in direction 1 and `(cx_i, cy_i)` = `constructionPosition[variantKey][i]`; then
-   `strokes = trunc(constructTime)` = 30.
+   is the anchor stepped in direction 1 and `(cx_i, cy_i)` = `constructionPosition[variantKey][i]` of the
+   building's **current** type (`Building+0x0c`), so during an upgrade the builder works at the positions of
+   the type being upgraded, not of the target [known: S 0077fb50]; then `strokes = trunc(constructTime)` = 30.
 4. While strokes remain, on every update in which the builder is not walking: (re)start the hammer animation
    (kind 4, duration `constructTime`) when it has ended, `strokes -= 1`, `AdvanceWork(workPerStroke)`; if both
    remaining values are `<= 0`, strokes = 0. The positions not yet visited are still walked afterwards, each
@@ -543,8 +544,8 @@ from the main phase at the frame phase's rate [inferred].
 **`AdvanceWork(amount)`** S 0055eff0 [known]: if `remainingB > 0`: subtract, clamp at 0. Else if
 `remainingA > 0`: subtract; when it drops below 0 set 0 and call `OnBuildWorkDone` (S 0055eec0: raise
 "building completed" to the observers; for a `territoryBuilding` whose territory is not active yet, set
-`military.soldierKind` (+0x68) to 1 when `Player_CountStockedSoldiersOfClass(owner, 0)` is 0, else to 0,
-S 0055fce0). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`. In float32
+`military.soldierKind` (+0x68) to 1 when `Player_CountStockedSoldiersOfClass(owner, 0)` (S 005324d0) is 0,
+else to 0: `Military::SelectInitialSoldierKind` S 0055fce0, the same call `Complete` makes). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`. In float32
 stepping no main-phase total from 1 to 12 lands exactly on 0.0, so for such totals that branch never fires and
 completion comes with the drop below 0 [inferred: float32 arithmetic of the constants above, §8].
 
@@ -642,9 +643,12 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
    goods (below).
 6. Remove from indexes, map and vector; destroy the object (its components cancel orders, requests and links).
    The spill of step 5 therefore happens before the destructor. `Building::dtor` S 0055ce70 runs in this order
-   [known]: raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; unlink the deposit or
-   animal (an animal is erased); unlink the entrance flag; clear the map mark and the blocking; cancel the orders;
-   unlink the projectiles; notify the AI; destroy the components, the depot first.
+   [known]: raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; when the sacrifice
+   research reference (`Building+0x12c`) is valid, unlink the research (`Building_UnlinkSacrificeResearch`);
+   unlink the deposit or animal (an animal is erased); unlink the entrance flag; clear the map mark and the
+   blocking; cancel the orders; unlink the projectiles; notify the AI; destroy the components in the order depot,
+   construction, workers, production, settler spawn, territory updater, bulldozing, military, good flags,
+   catapult, upgrade, ordering, hit points, soldier training and, last, the sacrifice component.
 7. If `leaveRemains && spill`: create `Remains` at the position (blocks the same footprint; burn time from
    the remains property; its tribe key is the building's `variantKey`).
 8. Remove the flag at anchor + direction 1 when all three hold: `Flag::GetRemoveBlockReason()` is 0
@@ -682,7 +686,7 @@ building, in this order:
 1. `Upgrade::Update` (§3.13).
 2. `TerritoryUpdater::ActivateIfOccupied` (§3.14).
 3. If `initialInputsRequested` is false, `workerLimit > 0` and the building is occupied: if production is
-   enabled `Production::RequestAllInputs()`; set the latch.
+   enabled (`Production::IsEnabled`, §3.7) `Production::RequestAllInputs()`; set the latch.
 4. **Worker request**: when the ticker fires (every 101st call, §2.3), `workers.workerCount != workerLimit` and the
    building has **no** open settler order at all: create an order for the `worker` good linked to the building
    (S 0055ccd0).
@@ -693,8 +697,8 @@ building, in this order:
 9. `workingMode == 9`: the sacrifice component.
 10. `Hitpoints::Update` (§3.15).
 
-**Occupied** (`IsOccupied` S 0055c400) [known]: if `soldierLimit != 0`, at least one present soldier or an
-already active territory updater is required; then, if `workerLimit == 0` the answer is true; otherwise it
+**Occupied** (`IsOccupied` S 0055c400) [known]: if `soldierLimit != 0`, a non-empty garrison vector with
+`Soldiers::CountPresentSoldiers > 0` or an already active territory updater is required; then, if `workerLimit == 0` the answer is true; otherwise it
 needs `workerCount > 0` and at least one worker slot whose settler answers false to its virtual test at
 vtable +0x24 (S 0055b4d0). For `Worker` and `Constructor` that test is "state (+0x54) is 0, 1, 3 or 4"
 (S 0065c7b0), so a worker counts as present in every other state [known: the slot +0x24 of the `Worker`
@@ -802,6 +806,18 @@ storage building supplies to a request leave it differently, with a carrier spaw
 requests and move the whole input stock to the output stock (so the wares are carried away). On → for both
 product slots move any units of the recipe goods from the output stock back to the input stock
 (`ReclaimSurplusInputs`), then `RequestAllInputs`.
+
+**"Enabled"** is `Production::IsEnabled` S 00565580 [known]: for a `casern` type (`BuildingProperty+0xf1`) it is
+`SoldierTraining::IsAnyEnabled` S 005668b0 (a training slot or the promotion switched on) and `bEnabled` is not
+read; for every other type it is `bEnabled`. Its readers: the worker's `ChooseNextWork`, the 0x2000a executor,
+the initial-input latch of `Building::Update` (§3.6 step 3), `Hitpoints::OnChanged` (§3.15) and
+`UpdateResourceSearch` (§3.9). The executor (`HandleToggleProduction` S 00780f80) calls
+`SetEnabled(!IsEnabled())`, so on a barracks with any training part switched on every 0x2000a calls
+`SetEnabled(false)`: requests cleared, input stock moved to the output stock, and the training stays on; the
+command never switches such a barracks back on [known]. Nothing files the training inputs again until a
+training part is toggled (0x20018 / 0x20019, whose re-synchronisation moves the units back,
+[military.md](military.md) §3.4), so in effect the barracks starves rather than pauses [inferred from the
+callers of `RequestAllInputs` and `VillageSoldierTraining_UpdateInputRequests`].
 
 ### 3.8 Mines (`size == 8 && workingMode == 6`) [known] S 00565bd0, S 005657c0, S 00565a70
 
@@ -917,9 +933,18 @@ not give it away.
 - Healing: `regenTimer += 2` per tick; when it exceeds `mi_setRegenerationRate` (100) every remembered value
   is incremented and values that reach the kind's maximum (`gp_setHealth`, `GoodProperty+0x88`) are forgotten;
   the timer resets to 0 (S 00564780), i.e. one step every 51 ticks [inferred from the two constants]. A
-  leaving soldier (S 00564c90) takes the **highest** remembered value of its
+  leaving soldier (`TakeSettlerValue` S 00564c90) takes the **highest** remembered value of its
   good, which is then forgotten, when the output stock holds fewer units of that good than there are
-  remembered values; otherwise it keeps its own value (settler +0x1ec). The heal sacrifice (effect 1003,
+  remembered values; otherwise it keeps its own value (settler +0x1ec). The count is read after the soldier's
+  own unit has left the stock (`SpawnSoldierForOrder` below calls `ConsumeSettlerGood` first), so of two units
+  with one remembered value the first to leave is the healthy one [known: S 00565020, S 00564c90].
+- **Which soldier a supplier sends** (`SettlerSpawn::SpawnSoldierForOrder(kind)` S 00565020) [known]: it walks
+  the levels of the kind from the highest down to 0 (`SoldierLevelRange(tribe, kind, 0)` of the owner's tribe)
+  and takes the first soldier good the output stock holds, whatever level the order named (good −1 when none,
+  which the supplier tests of §3.12 exclude); `ConsumeSettlerGood`, create the soldier at the entrance cell,
+  then `Livepoints::Damage(own value − TakeSettlerValue)` (the new soldier's own value, +0x1ec, is the full
+  one), so it leaves with the remembered value.
+  [military.md](military.md) §3.2–§3.3 for what this means for garrison, promotion and replacement orders. The heal sacrifice (effect 1003,
   S 00660270) empties the whole memory of every occupied building of its owner in the casern list, so the
   soldiers stocked there leave with full life points afterwards [known].
 - Who may enter (`CanAcceptSettler` S 00564520): barracks accept soldiers; a barracks that is not also
@@ -960,9 +985,11 @@ list element (strict `<`).
   nearest connected `depot` building at all. If both exist and differ, the one with the
   smaller **hex distance** to the target position wins; on a tie candidate 1.
 - Soldier goods, category other than 3: nearest `casern` building holding any acceptable soldier good
-  (S 00558330; acceptable goods per category from S 005619d0: categories 1/2 same kind from the requested
-  level upwards, 5 exactly the requested good, 6 any soldier of kinds 0 and 1, others the tribe's list for
-  that kind). For category 5 a building only counts when `SettlerSpawn::HasHealthySettler(good)` holds
+  (`FindNearestSupplierWithAnyGood` S 00558330; acceptable goods per category from S 005619d0: categories 1/2
+  same kind from the requested level upwards, 5 exactly the requested good, 6 any soldier of kinds 0 and 1,
+  others the tribe's list for that kind). It is called with `ignoreGoodFlags = (category != 3)`, which is
+  always true on this path, so the casern's good flags are not read, and `ignoreSettlerCheck =
+  (category != 5)` [known: S 00562280]. For category 5 a building only counts when `SettlerSpawn::HasHealthySettler(good)` holds
   (S 005648d0: no remembered values for the good, or more units in the output stock than remembered values,
   §3.11), and the supplier found is rejected when the path cost is not below `mi_setHealthExchangeDistance`
   (200).
@@ -971,7 +998,10 @@ list element (strict `<`).
 
 **Can supply** (`OrderSystem_CanBuildingSupply` S 00562440) [known]: cooldown 0, and: soldier good → output
 stock has any acceptable soldier good; category 3 with a good other than the tribe's second carrier good →
-output stock has the good; else `SettlerSpawn::CanSupplyGood` (stock has the good or can afford its cost).
+output stock has the good; else `SettlerSpawn::CanSupplyGood` (S 005643c0: stock has the good or can afford
+its cost; for a soldier good, the stock holds any soldier good of the owner's tribe of that kind, with no cost
+exchange). The soldier then spawned is the highest stocked level of the kind (§3.11), not necessarily the
+ordered good [known].
 
 **Order selection within an entry** (S 00569430) [known]:
 
@@ -1014,10 +1044,10 @@ building's garrison; specialist → the flag.
 
 ### 3.13 Upgrade [known]
 
-- Allowed when `Upgrade::GetBlockReason() == 0` (S 005670c0): 4 = building's `variantKey` differs from the
-  owner's tribe (a conquered building of another tribe); 3 = under construction, builder still bound, or
-  already upgrading; 1 = type has no `upgrade`; 2 = target `size` differs and the target type cannot be placed
-  on the anchor ignoring the centre cell; 0 = allowed.
+- Allowed when `Upgrade::GetBlockReason() == 0` (S 005670c0), tested in this order, the first hit returned:
+  4 = building's `variantKey` differs from the owner's tribe (a conquered building of another tribe); 3 =
+  under construction, builder still bound, or already upgrading; 1 = type has no `upgrade`; 2 = target `size`
+  differs and the target type cannot be placed on the anchor ignoring the centre cell; 0 = allowed.
 - `Start` (command 0x2000f, S 005671a0): `bActive = true`, `targetTypeId = property.upgrade`; create a second
   `Construction` and `Bulldozing` for the building and run `Bulldozing::Begin(target)` (levels ground, requests
   the **full** cost of the target type, §3.4); re-block the footprint with the target's size; raise "upgrade
@@ -1026,16 +1056,37 @@ building's garrison; specialist → the flag.
 - `Update` (S 00567590): while work remains, run the builder request; when none remains and no builder is
   bound → `Complete`.
 - `Complete` (S 005672c0): delete the upgrade construction, `bActive = false`, `Building::SetType(target)`
-  (replace the property, raise "building removed" then "building added", re-add the territory source if
-  active, S 0055c110), rescale hit points: `hitpoints = trunc(hitpoints / oldMax × newHealth)`,
-  `maxHitpoints = newHealth` (S 0055b990).
-- `Cancel` (command 0x20010, S 00567320): if not yet aborted, abort (§3.4); spill the refund computed by
-  `CollectReturnedGoods` for the upgrade construction onto the entrance flag (**no halving** here); delete the
-  upgrade construction; raise "upgrade cancelled". Units of the upgrade's site stock that did not fit on the
-  flag during the abort are deleted with the construction [inferred]. `Cancel` does not touch the `Blocking`:
-  the footprint stays blocked with the target type's size mask that `Start` set [known: no call in the body].
+  (S 0055c110: replace the property **first**, then raise "building removed" and "building added", so the
+  "removed" observers already see the new type; re-add the territory source if active), rescale hit points:
+  `hitpoints = trunc(float32(hitpoints / oldMax) × newHealth)`, `maxHitpoints = newHealth` (S 0055b990, §3.15).
+- `Cancel` (command 0x20010, S 00567320): if the upgrade construction is not paused, abort it (§3.4,
+  `AbortAndReturnGoods`; unlike the pause command, `Cancel` does not first test that work is left); spill the
+  refund computed by `CollectReturnedGoods` for the upgrade construction onto the entrance flag (**no halving**
+  here; what does not fit is deleted with the temporary stock); delete the upgrade construction and its
+  bulldozing; `bActive = false`, `targetTypeId = −1`; raise "upgrade cancelled". Units of the upgrade's site
+  stock that did not fit on the flag during the abort are deleted with the construction [known:
+  `Construction::dtor` S 0055e8c0 runs `Stock::Reset` on the site stock first, then `ReleaseBuilder`
+  S 0055e850]. `Cancel` does not touch the `Blocking`: the footprint stays blocked with the target type's size
+  mask that `Start` set [known: no call in the body].
+- Between the builder's last stroke (`Construction::Complete`, both remaining values 0) and the next
+  `Upgrade::Update`, which then completes the upgrade, lies one tick in which the upgrade is still active. A
+  cancel in that tick aborts the finished site and refunds `CollectReturnedGoods` of fractions 1, i.e. the
+  target type's full first `frameCost` entry and full `cost`, unhalved [inferred from S 00567320, S 0055e510,
+  S 00567590].
+- Readers of the **effective** construction (`Building::GetConstruction` S 0055bf90; an upgrading building
+  looks like a site): the builder and delivery paths of this section and §3.19; the transport's goods
+  distribution by arrangement (`GoodOrderBucket_SelectByArrangement` S 00652b70: an upgrading building counts as
+  a site and takes the tribe's default type, [streets-transport.md](streets-transport.md) §3.11); the AI's
+  `MilitaryMap::UpdateCell` S 00586790 and `StreetRouteOptimizer::ProcessEntry` S 005a52c0; the missing-goods
+  overlay (S 00640418, S 0063ff9f) and the menu's `RefreshAvailability` (S 006240e6). Readers of the building's
+  **own** construction (`Building+0x44`, finished during an upgrade): `GoodOrder_GetCategory` S 006541e0 and
+  `BuildingList_FindNearestConnected` S 00557ef0, besides the spill refund of §3.5 and the "finished" tests of
+  §3.6 and §3.10 [known].
 
-Data: `guardHouse → tower → fortress` per tribe (6 `bp_setUpgrade` lines) [known].
+Data: `guardHouse → tower → fortress` per tribe (6 `bp_setUpgrade` lines) [known]. Their sizes are `0x47`
+(`SizeSmall + SizeMilitary`), `0x46` (`SizeMedium + SizeMilitary`) and `0x44` (`SizeLarge + SizeMilitary`)
+[known: `buildings.lua`], so every shipped upgrade differs in size and runs the reason-2 placement test: the
+tower adds the medium slope rule (§3.1 rule 9), the fortress the large rules 8 and 9 [inferred from §3.1].
 
 ### 3.14 Territory and sight [known]
 
@@ -1088,13 +1139,15 @@ and removes a **source**.
   input stock and requested again, projectile flight time, damage divided by the hit owner's
   `Effect_BuildingArmor` factor) are owned by [military.md](military.md) §3.10; the functions are
   `Catapult::SelectTarget` S 00567d20, `HasAmmo` S 00567a30, `Fire` S 005678b0, `OnCatapultHit` S 0055e080.
-- Every change (S 0055b8b0): rebalance input requests (if production enabled), clamp stock (non-depot types),
+- Every change (S 0055b8b0): rebalance input requests (if production enabled, `IsEnabled` of §3.7), clamp stock (non-depot types),
   and remove the building when `hitpoints < 1`.
 - Capacity scaling: garrison capacity = `max(1, trunc(ratio × soldierLimit))` (S 0055c1a0), stock limit
   as in §3.7. How many soldiers a building then asks for (zone fractions, allocation every 21 ticks) is in
   [military.md](military.md) §3.2.
 - Upgrade rescale (S 0055b990) [known: disassembly]: `hitpoints = trunc(float32(hitpoints / maxHitpoints) ×
-  newHealth)`, `maxHitpoints = newHealth`, then the change handler above.
+  newHealth)`, `maxHitpoints = newHealth`, then the change handler above. The instructions are `FILD hp`,
+  `FIDIV max`, `FSTP` to a float32, `FLD`, `FIMUL health`, `__ftol2_sse`: the ratio is rounded once to float32,
+  the product is not, and the conversion truncates.
 - Data: only 14 types have `health` (castle 200, fortress 100, tower 80, guard house 60, catapult 40, …)
   [known].
 
@@ -1561,6 +1614,11 @@ references go through untagged variants, the other components through their norm
   the end of the update order and starts from defaults except for what §3.16 lists.
 - The tick-counter quirk of §3.9 (51-tick search period shared by two functions) only matters for exact
   replay.
+- Quirks that change simulation state and that a compatible remake keeps: production off (0x2000a) on a
+  barracks with training on only empties its requests and inputs (§3.7); a soldier supplier sends its highest
+  stocked level whatever the order names (§3.11); during an upgrade the builder works at the old type's
+  positions (§3.4) and the arrangement treats the building as a site (§3.13); a cancel in the tick between an
+  upgrade's last stroke and its completion refunds the target's full cost (§3.13).
 
 ---
 
@@ -1598,7 +1656,7 @@ references go through untagged variants, the other components through their norm
 | S 00559940 / 00558f80 | `IndexBuilding` / `UnindexBuilding` | category lists |
 | S 0055a210 / 0055a890 / 0055aac0 | `TransferBuildingOwnership` / `ConquerBuilding` / `TransferAllBuildingsOfPlayer` | ownership change |
 | S 00558170 | `MarkBuildingsOutsideTerritoryNear` | territory loss marking |
-| S 00558330 / 00558510 / 00557da0 | supplier searches | any good / one unit of every cost good / nearest connected (no owner test) |
+| S 00558330 / 00558510 / 00557da0 | supplier searches | any good (`FindNearestSupplierWithAnyGood`: good-flag and healthy-settler tests switched by arguments) / one unit of every cost good / nearest connected (no owner test) |
 | S 00557cc0 / 00559c80 / 00559cd0 | `System::Store` / `Load` / `PostLoad` | savegame |
 | S 0055d980 | `NVillage::Building::ctor_Place` | construction of a placed building |
 | S 0055e2f0 | `NVillage::Building::Update` | per-tick building logic |
@@ -1669,3 +1727,10 @@ references go through untagged variants, the other components through their norm
 | S 007767c0 / 00776690 / 00776630 / 00776780 | `PropertyGroupIter::Init` / `Next` / `Current` / `HasCurrent` | `EitherGroup` alternatives (§3.7) |
 | S 00582430 / 005424c0 | `LowResResourcePosition::ctor_FromFinePos` / `AnimalAreas::AddAnimal` | animal count of the breeding test (§3.7) |
 | S 005399b0 / 00546c70 / 00562dd0 | `Stock::GetCount` / tree find of the stock map / tree find of the good-flag map | signed key order (§2.5) |
+| S 00565580 / 005668b0 | `Production::IsEnabled` / `SoldierTraining::IsAnyEnabled` | enabled test; a casern reads its training parts (§3.7) |
+| S 00565020 / 00564c90 / 005643c0 | `SettlerSpawn::SpawnSoldierForOrder` / `TakeSettlerValue` / `CanSupplyGood` | which soldier a supplier sends, with which value (§3.11, §3.12) |
+| S 0055e460 / 0055e8c0 / 0055e850 | `Construction::ctor` / `dtor` / `ReleaseBuilder` | site type at creation; site stock deleted before the builder is released (§2.4, §3.13) |
+| S 0055fce0 / 005324d0 | `Military::SelectInitialSoldierKind` / `Player_CountStockedSoldiersOfClass` | soldier kind at completion (§3.4) |
+| S 0055bf90 | `Building::GetConstruction` | effective construction: the upgrade's while one is active (§3.13) |
+| S 00652b70 / 00586790 / 005a52c0 / 00640418 / 0063ff9f / 006240e6 | arrangement selection / AI `MilitaryMap::UpdateCell` / `StreetRouteOptimizer::ProcessEntry` / missing-goods overlay / overlay / `RefreshAvailability` | other readers of the effective construction (§3.13) |
+| S 006541e0 / 00557ef0 | `GoodOrder_GetCategory` / `BuildingList_FindNearestConnected` | readers of the building's own construction (§3.13) |

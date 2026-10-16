@@ -143,7 +143,7 @@ is in the production functions, §3.4).
 | Offset | Content |
 |---|---|
 | +0x00 | building |
-| +0x04, +0x08 | two `SoldierTrainingSlot*` (0x10 each): +4 `enabled` (bool), +8 `goodId` = level-0 soldier of kind 0 / 1 of the owner's tribe, +0xc `running` |
+| +0x04, +0x08 | two `SoldierTrainingSlot*` (0x10 each): +4 `enabled` (bool), +8 `goodId` = level-0 soldier of kind 0 / 1 of the owner's tribe, fixed by the constructor (S 00566740) and saved (§7), +0xc `running` |
 | +0x0c | `currentSlotIndex`, initial 1 |
 | +0x10 | `SoldierUpgrade` (embedded): +4 `enabled` (1), +8 round-robin `soldierType` (1), +0xc `active`, +0x10 cost list = { tribe's `tp_setSoldierUpgradeGoodId`, 1 } |
 | +0x30, +0x4c | two stocks used as good lists, rebuilt by S 00566840: cost goods of the enabled slots and of the enabled upgrade / cost goods of the disabled ones |
@@ -167,6 +167,20 @@ is in the production functions, §3.4).
 | +0x338 | paired soldier (the one this soldier replaces, or its replacement) |
 | +0x358 | order building (the building whose exchange slot this soldier serves) |
 | +0x378 | village order reference |
+
+Soldier vtable S 007f842c, the slots this document uses [known]: +0x20 `OnEnterBuilding` S 00659300 (§3.3);
++0x28 (slot 10) `IsInWorkCycle` S 00658860, true in states 7, 0xd, 0xe, 0xf, 0x21 and 0x28..0x34; +0x2c
+(slot 11) `GetWorkBuildingFlagPos` S 00658e50, the entrance flag cell of the home building or, without a home,
+of the order building (that reference is not tested for validity), the "working place" a non-worker settler is
+walked to (`NMovie::MoveOnMapToWorkingPlace::Start` S 00780090); +0x30 / +0x34 the stretched hit times (§3.7).
+
+The two walking movies of the fight [known]: `MoveToAttackBuilding` (vtable S 008347f4, `Start` S 00779d10,
+`Update` S 00779cb0) walks to the entrance flag cell of the attacked building (`SoldierFightState+0x68`),
+first back onto the cell grid (`ReturnToLogicGrid`, step 0xe) when the soldier is off-centre, then
+`MoveToPosition` (step 0x16); without a valid target it does not start. `ReturnToMilitaryBuilding` (vtable
+S 00834794, `Start` S 00779820, `Update` S 007797c0) walks with `MoveToPosition` to the entrance flag cell of
+the home building and then plays `EnterBuilding` (step 0xc); it does not start without a home, and ends without
+entering when the home link is gone at arrival.
 
 `ai::military::SoldierFightState` (0x104) [known] layout from the type database, use in S 006594a0:
 
@@ -344,7 +358,10 @@ deficit = size - present - pending
 A released soldier has no home and walks to a storehouse (`../navy-and-military.md` §4, "Soldiers without a
 home"). Which barracks or castle supplies an order and in which order orders are served:
 `village-buildings.md` §3.12. Orders of the plain garrison are category 0; orders of the three exchange slots
-are categories 1/2 (slot 0), 4 (slot 1) and 5 (slot 2) [known, `village-buildings.md` §2.6].
+are categories 1/2 (slot 0), 4 (slot 1) and 5 (slot 2) [known, `village-buildings.md` §2.6]. Whatever level an
+order names, the supplier hands out the **highest** level of the kind it holds
+(`SettlerSpawn::SpawnSoldierForOrder` S 00565020, `village-buildings.md` §3.11), so a level-0 garrison order
+of this pass can receive a level-2 soldier [known].
 
 **Load weight** of an exchange slot (`VillageMilitaryOrderSlot_AccumulateLoad` S 00568910) [known]: when
 `enemyDistanceA != -1`, `weight += (1 / enemyDistanceA²) / openOrdersOfSlot` (f32; the square is an integer
@@ -386,9 +403,11 @@ else. Otherwise [known]:
 1. Demolition countdown (§3.8), for every building type.
 2. Only when **not under attack** and the type is `territoryBuilding`:
    1. If not all garrison soldiers are of `soldierKind`: `ExchangeWrongKindSoldiers` and stop.
-   2. If `(tick + building id) mod 20 == 0` and zone A is not 0 (zones 1, 2 and the unoccupied -1 pass):
-      `UpgradeLowestSoldier`, then `ReplaceSoldiers`.
-   3. If the garrison list is empty and the building has open orders: `unconnectedTicks += 1`; whenever the
+   2. If `(tick + building unique id) mod 20 == 0` and zone A is not 0 (zones 1, 2 and the unoccupied -1
+      pass): `UpgradeLowestSoldier`, then `ReplaceSoldiers`. The sum is 64-bit (the id's high word with the
+      carry) and the remainder the signed 64-bit `__allrem` [known: S 005609b0].
+   3. If the garrison list is empty and the building has open orders (the vector at `Building+0xd0` of the
+      order container `Building+0xcc`, the orders §3.2 counts as `pending`): `unconnectedTicks += 1`; whenever the
       counter is a multiple of 600 (it starts at 500 and is never reset, so first after 100 such ticks, then
       every 600), if `OrderSystem::GetSupplyStatus` for the first open order says 1 ("nothing reachable",
       S 00562820, `village-buildings.md` §3.12 [known]), post or refresh the message `!Building is not connected` to the owner.
@@ -422,7 +441,8 @@ building, and the allocation pass (§3.2) then orders level-0 soldiers of the ne
 `minLevel < GetMaxSoldierLevel(tribe, soldierKind)`: for the **first** idle soldier of that level, order a
 soldier of `level + 1` of the soldier's own kind through slot 0. Nothing new is trained by this: the order is
 served only from soldiers of that level or higher already stocked in a barracks or castle
-(`village-buildings.md` §3.12: categories 1/2, "same kind from the requested level upwards") [inferred].
+(`village-buildings.md` §3.12: categories 1/2, "same kind from the requested level upwards") [inferred], and the
+soldier sent is the highest level of the kind that supplier holds (S 00565020, §3.2) [known].
 
 **Replacement of the wounded** (S 00560110) [known]: for each garrison soldier, in list order, whose life points
 are `<= maxHealth / 2` (integer division, S 0065da50) and for which `IsPairedSettlerTypeEqualSoldierType`
@@ -432,7 +452,12 @@ are `<= maxHealth / 2` (integer division, S 0065da50) and for which `IsPairedSet
    is valid (`HasUnpairedUpgradeOrder` S 00659390: `Order+0xb4` is the id high word of the building reference
    of soldier slot 0, `Order+0xa0`, so this is a pending promotion order [known]), that order
    and pairing are dissolved first: replacing a wounded soldier takes precedence over promoting it;
-2. if the soldier is then idle in the building, order a soldier of the **same good** through slot 2.
+2. if the soldier is then idle in the building, order a soldier of the **same good** through slot 2. The
+   supplier must hold that exact good, but it sends the highest level of the kind it holds (S 00565020, §3.2),
+   so the replacement can be of a higher level than the wounded soldier [known]. The supplier's
+   `HasHealthySettler` test is made for the ordered good only, so a higher-level replacement can leave with a
+   remembered wounded value of its own good (`village-buildings.md` §3.11) [inferred from S 00558330 and
+   S 00565020].
 
 The supplier's flag path cost must be **below** `healthExchangeDistance` (200) (`OrderSystem_FindSupplierBuilding`
 S 00562280, order category 5 only; `village-buildings.md` §3.12) [known].
@@ -493,27 +518,38 @@ A `casern` building runs the production cycle of `village-buildings.md` (`bp_set
     soldier good, and the good is not locked for the player (lock kind 3).
   - Upgrade ready (S 00569b60): upgrade enabled, the input stock holds 1 coin, and for kind 0 or 1 some level
     `0 .. max - 1` has a soldier in the **output** stock whose good is not locked (lock kind 3; S 00569940,
-    S 005698a0).
+    S 005698a0). `FindUpgradableSoldier` S 005698a0 returns −1 at once for a kind whose maximum level is 0, so
+    a kind with a single level never makes the upgrade ready [known].
 - **Start** (S 00566920): advance `currentSlotIndex` (0 ↔ 1) up to two times until a ready slot is found; that
   slot removes its cost from the input stock, re-requests the same goods and is `running` (S 00569d50).
   Independently, if the upgrade is ready it becomes `active`. Then `running = true`. So one cycle can train one
   soldier **and** promote one.
 - **Finish** (S 00566990): each running slot adds one soldier good to the output stock, +1 to the player's
   statistics, and stops `running` (S 00569d10).
-  The upgrade (S 00569970): move 1 coin from the input stock to the output stock; flip the round-robin kind;
-  for levels 0 upwards of that kind try `Stock::ExchangeCostForGood` for the soldier good of that level (it
-  succeeds when the stock holds the good's whole cost, i.e. the lower soldier and a coin); on the first success
-  re-request the coin, +1 statistics, done. If the first kind fails, flip and try the other kind once. If both
-  fail and the upgrade is enabled, the coin goes back to the input stock.
-  [inferred: the loop starts at level 0, whose cost is weapon and drink, so with those goods in the *output*
-  stock a level-0 soldier could be made here; normally they are in the input stock.]
+  The upgrade (S 00569970) [known]: move the upgrade's cost list (1 coin) from the input stock to the output
+  stock; then up to two tries, each of which first flips the round-robin kind: for levels `0 .. max` of that
+  kind in the current owner's tribe (looked up at this call, unlike the training slots of §2.5), the first
+  level whose soldier good the output stock can pay for (`SettlerSpawn::CanAffordGoodCost`, then
+  `ExchangeCostForGood`: remove the whole cost, i.e. the lower soldier and a coin, add one soldier) is made;
+  re-request the coin, +1 statistics, done. If both tries fail and the upgrade is still enabled, the coin goes
+  back to the input stock; with the upgrade switched off it stays in the output stock. The loop starts at
+  level 0, whose cost is weapon and drink: with those goods in the **output** stock a level-0 soldier is made
+  here and the coin stays in the output stock. Normally weapon and drink are in the input stock.
 - Input requests are re-synchronised by `VillageSoldierTraining_UpdateInputRequests` S 00566ba0, which runs
   only when a slot or the upgrade is switched (`SetSlotEnabled` S 00566db0, `SetUpgradeEnabled` S 00566dd0:
   commands 0x20018 / 0x20019, the computer player, and `Building::ctor_Place`) [known]. It rebuilds the two
-  good lists (§2.5); for each required good it first moves every unit of that good lying in the **output** stock
-  to the input stock, then requests it up to `stockLimit(HP-scaled) * amount in the list`; goods that are only
-  in the list of the disabled parts get their requests cancelled and are moved from the input to the output
-  stock.
+  good lists (§2.5); for each required good, in ascending good id, it first moves every unit of that good lying
+  in the **output** stock to the input stock, then requests it up to `stockLimit(HP-scaled) * amount in the
+  list`; then, for each good that is only in the list of the disabled parts, it cancels **every** request for
+  it, served and unserved, in vector order (`NeedGoods::CancelAllRequestsOfGood` S 0064e6d0), and moves its
+  units from the input to the output stock [known].
+- The executors of 0x20018 and 0x20019 (S 007823f0, S 00782480) test neither the building type nor the
+  sender, and every building has the training component (§2.5), so the commands also act on a building that is
+  not a barracks: they switch its training parts and file requests for the soldier inputs into it [known].
+- Production on/off (0x2000A) does not pause a barracks whose training is switched on: for a `casern` type
+  `Production::IsEnabled` S 00565580 is `SoldierTraining::IsAnyEnabled` S 005668b0 (a training slot or the
+  upgrade on), so the toggle always calls `SetEnabled(false)`, which clears the requests and moves the input
+  stock to the output stock, and never turns anything back on (`village-buildings.md` §3.7) [known].
 - A cost check with an empty cost list passes (`Stock::CanAffordGoodCost` S 00539b90), so in the upgrade loop a
   soldier good without `gp_addCost` would be created for the coin alone [inferred].
 
@@ -603,7 +639,10 @@ test and the H2 lookup above succeed and H2 is closer than **24** cells to the b
 `cachedPathLength(from, to, persistent)` S 00575b70 [known]: one of two static maps (`persistent` selects the
 saved one) keyed `(index(from) - 1) * 0x10000 + (index(to) - 1)`, `index = y * mapWidth + x`; a map is emptied
 when `tick > stamp + 111` and the stamp set to the tick; a miss runs the map A* (`NMap::AStar::FindPath`, mode
-0) and stores its step count, or 0x7fffffff when it finds no path.
+0) and stores its step count, or 0x7fffffff when it finds no path. The step count (`AStar::GetPathStepCount`
+S 00676a90) is 1 when the two cells are neighbours; otherwise it walks from the start cell, at each cell taking
+the lowest-numbered descent direction of the search result (the previous direction where none descends), and
+counts the steps to the goal; it draws no random number [known].
 
 `ShouldAttackBySea(building, target)` S 00576250 [known]: with `D` as above, false (overland) when
 `cachedPathLength(E(target), E(building), persistent) < 2 * D` and `reach(building, target) <=
@@ -681,11 +720,21 @@ building and no fight (outside states 1, 7, 0x11) becomes a homeless settler (st
 | 0x2e | fighting | §3.7 |
 | 0x30 | striking | strike movie done → 0x2e and pause `attackWaitTime + random(0..9)` ticks |
 | 0x2f | returning to the cell grid | done: should leave → 0x2d; else walk to `cellB` (0x2a); cannot → 0x2d |
-| 0xd | walking to the target's flag | arrived on the flag cell and allowed to enter → **capture** (§3.8); in every case → 0x2d |
-| 0x2d | leaving the fight | wait until not moving; `LeaveFight`; back on the grid (0x2f) → 0x21 |
+| 0xd | walking to the target's flag (`MoveToAttackBuilding`, §2.6) | arrived on the flag cell and allowed to enter → **capture** (§3.8); in every case → 0x2d |
+| 0x2d | leaving the fight | stop the walk with `holdStep` (finish the current step) and wait until not moving; `LeaveFight`; back on the grid (0x2f) → 0x21 |
 | 0x21 | going home | ship link → walk to the ship's target harbour (0x31); home → ReturnToMilitaryBuilding (0xe); neither → homeless |
-| 0xe | walking home | arrived and present in the building → 0xc; else unbind → homeless |
+| 0xe | walking home (`ReturnToMilitaryBuilding`, §2.6) | arrived and present in the building → 0xc; else unbind → homeless |
 | 0x31..0x37, 0x26 | sea transport | `../navy-and-military.md` §4 |
+
+**Orders taken on the way home** (`Soldier::TryCompleteOrderAtCurrentPos` S 0065a340) [known]: when a soldier
+without a home starts its walk home (`NMovie::MoveToHome::Start` S 007776f0, the only caller), it first looks
+for a building of its own player on its cell (`FindBuildingAtOrNearest`, radius 0) or, failing that, one cell
+in direction 1 when that building's type has an entrance direction, and takes that building's entrance flag;
+otherwise an own flag on its cell. At that flag `OrderSystem::FindOrderForSoldier` S 00561cb0 picks an open
+order (§10 #9) and `AssignOrderToSettler` S 00562580 links the soldier to it as if a supplier had sent it; the
+walk home is then not started. A soldier that afterwards still has no home, no order building and no ship
+stops (state 3); one that stood at a building leaves it (LeaveBuilding, 0x11); otherwise it starts towards its
+working place (slot 11 of §2.6).
 
 `LeaveFight` (S 0065be90) [known]: unlink from the target's attacker / defender list, from the opponent and the
 group, delete every group that targets this soldier, reset the three cells to -1, `leftFight = true`,
@@ -764,9 +813,9 @@ the slot of each side (`GetSlotForSide` S 00576b10) [known]:
 | 0 | centre | centre |
 | 1 | centre | far |
 | 2 | near | centre |
-| 3 | keep both if valid and different, else near | else centre |
+| 3 | its current slot when both sides' slots are valid and differ; else mode 2's: near | the same test; else mode 2's: centre |
 
-Recomputed whenever a soldier is removed from the fight. A soldier or new group looks for a free cell around
+Any other mode gives −1 (S 00576b10). Recomputed whenever a soldier is removed from the fight. A soldier or new group looks for a free cell around
 `slot'`, where (`MilitaryFight_PickGatheringSide` S 00576b80) [known]: sword → the side's slot; bow, attacker
 side → slot 1 if the side's slot is 0, else slot 0; bow, defender side → slot 2 if the side's slot is 0, else
 slot 0.
@@ -913,7 +962,8 @@ Groups whose target reference is invalid or whose member list is empty are delet
 
 State 0x2a: arrived → if the walk was a stop-short walk → 0x2b, else request reassignment → 0x2e. While
 walking: if the enemy side has no engageable soldier, or the soldier has no opponent but its group has a target,
-the walk is aborted (and the decision repeats).
+the walk is aborted by setting `holdStep` (the current step is finished, then the soldier stops;
+`settlers-jobs.md` §3.8.2) and the decision repeats [known].
 
 State 0x2b: no opponent → 0x29. Sword group not outnumbered → pick the **fine slot** (`PickSoldierFightSlot`
 S 00572130, S 00578400) [known]: take the soldier's own `cellB` (for a sword soldier normally the opponent's
@@ -922,8 +972,8 @@ direction order 0..5; skip
 a neighbour that is the `cellC` of a member of the soldier's group, unless it equals the soldier's own current
 `cellC`; of the rest take the one with the smallest hex distance to the soldier's fine position (the first on
 a tie). Store it in `cellC`, step there (0x2c). Otherwise walk to `cellB` (0x2a), first back to the grid
-(0x2f) when off-centre; when the walk cannot start, the movement byte `+0x70` is set and the walk is started
-again [known; the meaning of that byte is not established].
+(0x2f) when off-centre; when the walk cannot start, it is started once more with `astarMode = 1` (movement
+`+0x70`, the free path's byte: the A* step cost ignores blocking, `settlers-jobs.md` §3.8.3) [known].
 
 **Not outnumbered** (`IsMeleeGroupNotOutnumbered` S 00572060) [known]: false for a bow soldier or a soldier
 without a group. Let `own` = number of members of the soldier's group, `T` = that group's target and `G` as
@@ -1239,8 +1289,9 @@ Per frame only: flags, stripes, soldier figures, projectile arcs and catapult ar
 
 **Commands** (`game-commands.md`): 0x2000D attack (target id, fraction), 0x2000E retreat, 0x20011 defence
 fraction, 0x20013..15 garrison fractions near / medium / far, 0x20016 reset, 0x20017 toggle an ignore flag,
-0x20012 toggle soldier kind, 0x20003 destroy (delayed under attack), 0x2000A production on/off (also pauses a
-catapult or a barracks) [known].
+0x20012 toggle soldier kind, 0x20003 destroy (delayed under attack), 0x2000A production on/off (pauses a
+catapult; a barracks with a training part on is not paused, only emptied of requests and inputs, §3.4),
+0x20018 / 0x20019 toggle a training slot / the promotion (on any building, §3.4) [known].
 
 **Script functions** (`../lua-surface.md`): `logic.pl_isUnderAttack`, `pl_getPositionUnderAttack`,
 `pl_isAttacking` (backed by `FightList::IsPlayerUnderAttack` S 00573930, `GetPositionUnderAttack` S 005739a0,
@@ -1497,6 +1548,11 @@ of §2.3 are hashed with the player (`players-victory.md`).
   gets no garrison orders and no exchanges until the fight object is gone (§3.8); the defence fraction a
   computer player computes for its attacked building is overwritten at once (§3.5); a cell search that finds
   nothing returns the last cell it tested (§3.6.1).
+- Simulation-state quirks of the barracks side: a supplier always sends the highest level of the kind it
+  holds, whatever level the order names (§3.2, §3.3); production off (0x2000A) never pauses a barracks whose
+  training is on, it only empties its requests and inputs (§3.4); a promotion can turn weapon and drink lying
+  in the output stock into a level-0 soldier and leave the coin there (§3.4); the training toggles work on any
+  building (§3.4). A compatible remake reproduces all four.
 - The paired-soldier test of §3.3 (`IsPairedSettlerTypeEqualSoldierType`) is always false with the shipped data.
   It decides simulation state (which wounded soldiers are replaced, which exchange orders are dissolved): a
   remake that must stay in step with original clients keeps the comparison as it is, settler type against
@@ -1520,6 +1576,7 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | 6 | Answered (§3.5, after Start): `GetAvailableAttackers` S 00575dc0, the reach factor S 00575320, the falloff S 00574fe0, `Military_IsTargetReachable` S 00575cb0, the path cache S 00575b70, `Military_ShouldAttackBySea` S 00576250 and the harbour lookups S 00574f70 / S 005b65d0 / S 005b5f50 re-read; they agree with `../navy-and-military.md` §3, with two precisions: the H2 limit is 25 cells in the reach factor and 24 in the reachability test, and a cache is emptied when the tick exceeds its stamp + 111 | — |
 | 7 | Answered: specified in `ai-player.md` (`MilitaryBuildingRanking` §3.8 step 5, the fight history in the attack fraction §3.12, attack watches §3.13). The military side only creates and deletes the watch: `Fight::SetTargetBuilding` S 00570760 is the only caller of the add S 0053be90, `Fight::dtor` S 00571790 the only caller of the remove S 0053bed0, and the watch's defence fraction is overwritten by `StartAttack` (§3.5 step 2) [known] | — |
 | 8 | Answered (§3.5.1 state 0xf, §3.6.2 rule 2): yes. A waiting soldier unbinds in the first tick in which the opposing list has no soldier with `leftFight == 0` and the defender list has had a member; the building is captured by an attacker already in the fight (0x29 → 0xd). With no attacker outside nobody captures [inferred]. In play the attack dialog does not let the player send more soldiers than can fight at once, so the case does not arise from the dialog [live, maintainer, 2026-10-12] | static: S 006594a0 case 0xf, S 005711c0, S 00571140, S 00570980 |
+| 9 | Open: how `OrderSystem::FindOrderForSoldier` S 00561cb0 chooses the order a homeless soldier takes at a flag on its way home (§3.5.1): which categories, which order of iteration, and whether the soldier's good or level must match. Known so far: it runs the order iterator from `NextPlayer` (clearing the served bytes) and ends with `Reset` (`village-buildings.md` §8) [TODO] | static: S 00561cb0 and the iterator functions S 00569170..S 00569840 |
 
 ## 11. Function reference
 
@@ -1594,3 +1651,14 @@ of §2.3 are hashed with the player (`players-victory.md`).
 | S 00570120 / 00570fb0 / 0065ba40 | `StoreUntagged` of system, fight, fight state | checksum variant |
 | S 00775170 / 00676d10 | `NMovement::FreePath::FindPath` / `NMap::AStar::BuildPath` | random draws of off-road walks |
 | S 0056ffe0 / 00570d20 / 005603f0 / 00658960 / 0065b8b0 | `Store` of system, fight, building part, soldier, fight state | save format |
+| S 00565020 / 00564c90 | `SettlerSpawn::SpawnSoldierForOrder` / `TakeSettlerValue` | the supplier sends its highest stocked level of the kind |
+| S 00565580 / 005668b0 | `Production::IsEnabled` / `SoldierTraining::IsAnyEnabled` | a barracks counts as enabled while a training part is on |
+| S 00566740 | `ai::village::SoldierTraining::ctor` | training slot goods fixed from the owner's tribe |
+| S 00566ba0 / 0064e6d0 | `VillageSoldierTraining_UpdateInputRequests` / `NeedGoods::CancelAllRequestsOfGood` | barracks input requests |
+| S 007823f0 / 00782480 | executors of 0x20018 / 0x20019 | training toggles, any building |
+| S 00676a90 | `NMap::AStar::GetPathStepCount` | path length stored in the path cache |
+| S 00576b10 | `GatheringPositions::GetSlotForSide` | gathering slot per side and mode |
+| S 00658860 / 00658e50 | `Soldier::IsInWorkCycle` / `GetWorkBuildingFlagPos` | soldier vtable S 007f842c slots 10 / 11 |
+| S 00779d10 / 00779cb0 | `NMovie::MoveToAttackBuilding::Start` / `Update` (vtable S 008347f4) | walk to the target's flag |
+| S 00779820 / 007797c0 | `NMovie::ReturnToMilitaryBuilding::Start` / `Update` (vtable S 00834794) | walk home and enter |
+| S 0065a340 / 007776f0 / 00561cb0 | `Soldier::TryCompleteOrderAtCurrentPos` / `NMovie::MoveToHome::Start` / `OrderSystem::FindOrderForSoldier` | order taken on the way home |
