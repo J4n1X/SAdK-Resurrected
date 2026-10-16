@@ -389,7 +389,10 @@ follows its pile at the moment it is added [known] S 006cece0.
 **Drop animation** `Item::Update` S 006d0720 [known], run for every active item each frame after the instancing
 update (`ItemMgr::Update` S 0069c520), for an item that is not frozen, not attached and not on a ship, while
 `landed` is false: if the terrain height under it is below its y,
-`fallVelocity -= dt * 0.981; y += fallVelocity * dt` (`dt` = the float at `+0x10` of the frame context);
+`fallVelocity -= dt * 0.981; y += fallVelocity * dt` (`dt` = the float at `+0x10` of the frame context: the
+scene's frame delta in seconds, which `Scene::UpdateDetailFlagsAndTime` S 0067f6b0 copies from the game system,
+so an item falls at 0.981 world units per second squared [inferred: that the frame context carries that
+delta]);
 otherwise `fallVelocity = 0`, `landed = true` and the item takes its slot matrix (`ApplySlotTransform`
 S 006ce970). An item created for a package that already lies (`logicItem +0x70` set) is placed in its slot at
 once [known] S 006d0480.
@@ -403,10 +406,12 @@ functions; the visible drop and pop is read from them]. Presentation only.
 **Carrier hand-over.** Scene callbacks `OnLogicItemAddedToPile` S 0069c920 and `OnLogicItemRemovedFromPile`
 S 0069c960 find the item of the package and the pile of the package's flag (`logicItem +0x48`) and call
 `Item::OnAddedToPile` S 006d0bd0 / `OnRemovedFromPile` S 006d0c20 [known]. Both store the stack direction
-returned by the pile in `Item +0x70` and, when the item has a carrying character, write it to the character
-(`CCharacter +0x98`, with the flag `+0x94` = true); an item added without a carrier takes its slot matrix at
-once [known]. So the carrier turns to the stack it picks from or puts on [inferred] for the use made of the two
-fields.
+returned by the pile in `Item +0x70` and, when the item has a carrying character (`GetCarrierCharacter`
+S 006d0950), write it to the character (`CCharacter +0x98`, with the flag `+0x94` = true); an item added
+without a carrier takes its slot matrix at once; `UpdateCarrierAttachment` S 006d09b0 hands the direction over
+the same way when a carrier claims a lying item (§3.3) [known]. `CCharacter::UpdateLogic` S 006909f0 copies
+that direction into the character's yaw only while the character plays a clip of type 7 or 8 [known]: so the
+carrier faces the stack it picks from or puts on during those clips. Presentation only.
 
 ### 3.3 Goods in hands, on ships, on building sites
 
@@ -570,7 +575,8 @@ modes [known] `street_shader.fx`). The vertex attribute called tangent holds the
 position, normal up, uv (0.5, 0.5). Vertices 1..6 = the node's corners `k` = 0..5:
 `corner[k] = position + crossingRadius * (sin a, 0, cos a)`, `a` = 60, 120, 180, 240, 300, 360 degrees
 [known] S 006d1670, initialiser S 007cafc0 with its constants; each corner is snapped to the terrain height
-with the terrain normal, except in a direction that holds a water street [known] S 006d1310;
+with the terrain normal, except in a direction that holds a water street, where the corner keeps the centre's
+height [known] S 006d1310 (`StreetFlagNode::GetCornerPoint`);
 `uv = ((corner.x - centre.x) / radius * 0.5 + 0.5, (corner.z - centre.z) / radius * 0.5 + 0.5)`. All tangents are
 unit X, all colours white. Triangles: (0,2,1) (0,3,2) (0,4,3) (0,5,4) (0,6,5) (0,1,6). The crossing is a flat
 hexagon fan, not clipped to the terrain triangles. It is rebuilt when a street is attached or detached and when
@@ -578,11 +584,30 @@ the terrain under it changes [known] S 006d1d90, S 006d19d0. The six corner dire
 `(sin 60°, 0, cos 60°)` .. `(sin 360°, 0, cos 360°)` in steps of 60 degrees [known] initialiser S 007cafc0
 (multipliers 60, 120, 180, 240, 300, 360 times pi / 180).
 
+**Where a crossing exists** [known]: `StreetSet::CreateFlagNode` S 0069ecc0 has one caller, `AttachFlagNodes`
+S 0069eeb0, run on "street added". So a flag circle exists only where a land, upgraded or water street ends. Sea
+streets (type 3) never raise "street added" (S 00668c70, S 006695a0, S 00668d60), and `Scene::OnFlagCreated`
+S 00682ca0 draws only the flag model: a lone flag and a harbour flag with only sea streets have no circle. Water
+streets themselves are drawn as buoy chains (§3.7).
+
+**Door path** [known]: every building has a short street from its door to its middle: a two-point `CStreet`
+(S 006ccc70) from the cell of the entrance flag (flag +0x28) to the building's anchor cell (+0x20), stored at
+`S2CG::Building +0x100`. It is made in `S2CG::Building::ctor` S 006ac810 and `Building::Update` S 006abcf0 through
+`CreateEntranceStreet` S 006aa7b0; building sites have one too. Its mesh is `StreetDecal::BuildStraight`
+S 006e0e30: one slice, side = normal × d (d = the path's direction, not normalised), v from 0 to
+`texStretch` × length, the kind-0 texture. It has no flag node, so no crossing and no trimming. It is drawn
+while the building is not hidden (`Building::SetHidden` S 006aa320; `CStreet::IsVisibleOrFlag4C` S 006ccdf0)
+without a frustum test, with the streets (map layer 2, before the buildings' ground decals of layer 4,
+[rendering.md](rendering.md) §3.1), and removed only by `Building::dtor` S 006ab040, so it stays through the
+demolition sink.
+
 **Kinds** [known] S 006c3ab0, S 006c39f0, S 006d1290: a street of type 0 is drawn with `texture0` / `normal0`,
 a street of type 1 with `texture1` / `normal1`; the switch 0 → 1 moves the street to the kind-1 list and
 promotes both of its flag nodes. A crossing is kind 1 (`crossingTexture1` / `crossingNormal1`) when any street
 attached to it is of type 1 at the time it is registered (`RegisterCrossing` S 006c3160) or once one of its
-streets is promoted, else kind 0. The diffuse texture is bound to stage 0 and the normal map to stage 1.
+streets is promoted, else kind 0. The diffuse texture is bound to stage 0 and the normal map to stage 1. The
+upgrade has no animation: `StreetRenderer::PromoteStreetToKind1` S 006c39f0 moves the street and its two
+crossings to the kind-1 lists at once [known].
 
 **Build preview** [known] S 006c3250, S 006c3ab0, S 006cd560: a `CStreet` made from a bare cell path (no logic
 street) carries `previewDrawMode` 0, 1 or 2. While the byte S 00881f70 is set, streets of the kind-0 list with
@@ -718,9 +743,11 @@ the decal pass with cull mode 1 (`docs/sim/rendering.md` §3.1).
   texture of `decals.xml`; a marker whose style changes gets a new projector. Target, in this priority: a valid
   ship id: centre = the ship position, `r` = the marker's radius field; else a cell inside the vertex grid:
   centre = the vertex position of the cell, `r` = the radius field; else a valid object id: centre and `r` from
-  the building's bounds (`Bounds_GetCenterAndMaxXZExtent`; the larger x / z extent [inferred] from the name);
-  `r` defaults to 1. Projection straight down; rotation `angle = timeInfo[1] * 0.025132744` radians (one turn
-  per 250 time units), 0 without a time argument.
+  the building's bounds (`Bounds_GetCenterAndMaxXZExtent` S 006b0bc0: `r` = the larger of the x and z sizes of
+  its box); `r` defaults to 1. `r` is the full side of the square (`BuildVertices` S 004efe20); a flag, a street
+  cell and a clicked cell get 4 (`PushSelectionToScene` S 00615bb0). Styles: 1 `buildingselect.dds`, 2
+  `catapultTarget.dds` (an enemy building) ([rendering.md](rendering.md) §3.14). Projection straight down;
+  rotation `angle = timeInfo[1] * 0.025132744` radians (one turn per 250 time units), 0 without a time argument.
 - Settler blob [known] S 00690bd0: exists only while the global S 0088d6bc is set (shadow level 1 to 3,
   `docs/sim/rendering.md` §3.13), the character is visible and its movement is active; centre = the character
   position, or the centre of the animation bounds in animation states 4..6 [inferred], projected along the terrain normal,
@@ -818,7 +845,7 @@ cached values before a technique is used, only those the technique uses unless t
 | 4 | `TEXTURE_TRANSFORM` | matrix[8] | per stage, the matrix passed when the texture was bound (identity when none) [known] S 004e7520 |
 | 5 | `ALIGNVIEW` | matrix | camera-facing rotation (billboards) [inferred from the name] |
 | 6 | `CAMERA_FOCUS` | float2 | depth-of-field focus `(distance, 1 / range)` [inferred from `shared.inc`] |
-| 7 | `TIMER` | float4 | `.y` = time in seconds used by every animated shader [inferred from the shaders] |
+| 7 | `TIMER` | float4 | `CGraphicDevice +0x300`, written by `BeginRendering` S 004d78a0: `.x` = the scene's frame delta, `.y` = its accumulated game time in seconds (scaled by the game speed, standing in a pause), the time of every animated shader [known] ([rendering.md](rendering.md) §3.13) |
 | 8 | `CAMERA_POSITION` | float4 | eye position |
 | 9 | `FOG_SETTINGS` | float4 | fog start, end, `end - start`, `1 / (end - start)` (0 when the range is not positive) [inferred from the four device fields written together, S 004d3ae0] |
 | 10 | `MAIN_LIGHT` | float4 | light direction (pointing from the light) |
@@ -832,8 +859,8 @@ handles are resolved with the others, known S 004e9600]: `WORLD`, `INSTANCEMATRI
 `MATERIAL`. Array sizes [known] `shared.inc`: `MAX_BONES` = 50 matrices, `MAX_VECTORS` = 100 vectors each,
 unless an effect defines them before the include.
 
-[TODO] not established: the exact content of `TIMER.x`, `.z`, `.w` and of `CAMERA_FOCUS`; read the writers of
-the cached values at S 00887460..S 00887490.
+[TODO] not established: the exact content of `TIMER.z`, `.w` and of `CAMERA_FOCUS`; read the writers of the
+cached values at S 00887460..S 00887490.
 
 **Loading an effect** [known] S 004ec060, S 004ebad0, S 004eb8f0, S 004ecba0: effects are cached by file name in
 a registry; the source is `<fx directory>\<name>` read through the decrypting file reader and compiled with the
@@ -1186,7 +1213,7 @@ A remake may therefore change any rule of this document without affecting synchr
   to 3; as read statically its vertices are all raised to the height 3.4e38 and it never shows on the ground
   (§3.9), so leaving it out is the faithful choice until a screenshot shows otherwise.
 - **Sky**: a `Sky` resource or a large dome mesh with the map's skydome texture tiled 7 x 7, drifting by
-  `(0.015, 0.005)` uv per unit of `TIMER.y` (seconds [inferred], §3.11). The original's `Default` technique
+  `(0.015, 0.005)` uv per unit of `TIMER.y` (game seconds, §3.11). The original's `Default` technique
   shows the texture alone; day-time blending, rim fade, sun and moon are not visible in it (§3.10), so adding
   them is a design choice, not a port.
 - **Culling**: Godot's own frustum culling of per-block meshes replaces the quad tree; nothing depends on its
@@ -1210,7 +1237,7 @@ A remake may therefore change any rule of this document without affecting synchr
 | 4 | Whether the settler blob is visible in the running game (statically every vertex is raised to 3.4e38, §3.9) | a screenshot at shadow level 1 to 3 |
 | 5 | Layout of `decals.dds` (the blob uses the whole texture: uv offset (0, 0), scale (1, 1)) | look at the texture |
 | 6 | Answered (§3.10): sun and moon are not drawn. The pass handle `Sun` is stored at `SkyRenderer.hSunPass` (+0x2c) by S 006af300 and the two quads are built, but no function of the decompiled program reads the handle: none of the functions that hold the `SkyRenderer` pointer (`CEnviromentMgr` constructor, destructor, `Update` S 00683d50, `RenderSkydome` S 00683e50) nor a `SkyRenderer` method begins that pass [inferred]. Not observed in the running game | static: S 006af300, S 006af490, S 00683e50 |
-| 7 | Contents of `TIMER.x`, `.z`, `.w` and of `CAMERA_FOCUS`; where the `POSTFX` define is supplied (§3.11) | writers of S 00887460..S 00887490; callers of `CShaderProgram::Reload` S 004ec260 |
+| 7 | Contents of `TIMER.z`, `.w` and of `CAMERA_FOCUS`; where the `POSTFX` define is supplied (§3.11). Answered for `.x` and `.y`: the scene's frame delta and its accumulated game time, written by `BeginRendering` S 004d78a0 ([rendering.md](rendering.md) §3.13) | writers of S 00887460..S 00887490; callers of `CShaderProgram::Reload` S 004ec260 |
 | 8 | The class behind `CGraphicDevice +0x1b4` that fills the dome position (§3.10) | writer of that field |
 | 9 | Animated items (`AnimatedItem`, `ItemEvent`) are unused by the install's data; their play rules | static read of S 006c9660, S 006b0800 if a mod needs them |
 | 10 | How a carrier on a water street shows its good (the carrier's own attachment, besides the boat item of §3.3) | static read of `CharacterCarrier::UpdateAttachedItem` S 006c8ee0 |
@@ -1267,6 +1294,10 @@ A remake may therefore change any rule of this document without affecting synchr
 | S 006c4290 / 006c3ab0 | `ai::gfx::StreetRenderer::ctor` / `Render` | resources, draw order |
 | S 006c3250 / 006c29a0 / 006c3030 / 006c3570 | `StreetRenderer::DrawStreetList` / `DrawRoutes` / `DrawCrossings` / `DrawBuoyList` | batches |
 | S 006c39f0 / 0069e930 | `StreetRenderer::PromoteStreetToKind1` / `StreetSet::PromoteStreetToKind1` | street upgrade |
+| S 0069ecc0 | `StreetSet::CreateFlagNode` | crossing node, only from `AttachFlagNodes` |
+| S 006aa7b0 / 006ccc70 / 006e0e30 | `S2CG::Building::CreateEntranceStreet` / two-point `CStreet` / `StreetDecal::BuildStraight` | the door path |
+| S 006aa320 / 006ab040 | `S2CG::Building::SetHidden` / `dtor` | door path shown / removed |
+| S 006d0950 | `Item::GetCarrierCharacter` | the carrier that gets the stack direction |
 | S 004df850 / 004df400 / 004df1d0 | `ai::render::DecalRenderer::CreateResources` / `Render` / `CreateDecal` | projected decals |
 | S 004efaa0 / 004efb60 / 004f0390 / 004efe20 | `ai::render::DecalProjector::ctor` / `SetOrientation` / `GetClipPlanes` / `BuildVertices` | projector |
 | S 0068aad0 | `S2CG::CLandscape::ProjectDecal` | terrain triangles under a decal |

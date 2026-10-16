@@ -146,6 +146,9 @@ Sizes are in [ingame-ui.md](ingame-ui.md) §2.3. Member offsets are given where 
 `lowercase` with the C runtime `toupper` / `tolower` under the system locale (`setlocale(LC_ALL, "")`, restored
 afterwards). Strings are single-byte (Windows-1252 in the German install).
 
+**Default font** [known]: `Body_Arial`, centred, for every widget's text (S 004a56d0, S 004b3eee); a label
+made by the factory gets `Subline_Garamond`, white, left (S 004b2040) ([ingame-ui.md](ingame-ui.md) §3.10).
+
 **Draw position** [known] S 004b43c0: pixel x = round(owner absolute x × screen width) + round((pos.x + offset.x)
 × screen width), y likewise with the height (round = +0.5, truncate). The font gets `align | 1`, i.e. the text is
 always **vertically centred on that y**. Colour = text colour, alpha × owner opacity (+0x140). The owner's world
@@ -254,6 +257,10 @@ The lobby's chat bubbles use the same layout in plain mode (tags not interpreted
   −value ÷ 65536 × 2π radians (S 00882840 = 6.2831855), so 65536 is a full turn.
 - Sampling is unfiltered when the owner's `pointfiltering` is set (Object +0x180).
 - With a mask texture the quad goes through the masked path with `maskUV0`, `maskUV1`.
+- The mapping is divided by the size of the texture as created, and UI textures are created with
+  `D3DX_DEFAULT` sizes (`CTexture::CreateD3DTexture`, S 004e7a9e): a picture whose sides are not powers of two
+  is stretched to the next powers of two, so its mapping covers the stretched image ([ingame-ui.md](ingame-ui.md)
+  §3.1.6) [known].
 
 ### 3.4 Button, ButtonEx, check box, PictureButton
 

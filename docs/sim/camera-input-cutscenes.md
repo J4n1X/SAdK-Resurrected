@@ -195,7 +195,7 @@ Offsets from the object start. Four interface faces: +0x00 `nMenu::Overlapped`, 
 | +0x28 | u8 | 0 | S 00786e70 | inverts the middle-button drag direction ("invertScrolling") |
 | +0x2c | f32 | 0.25 | S 00786e70, S 00787310 | scroll speed `s`; enters squared (§3.2) |
 | +0x30 | u8 | 1 | S 00786e70 | screen-edge scrolling on ("borderScrolling") |
-| +0x31 | u8 | 1 | S 00492850 | warp the mouse to the centre of a widget when a message box opens (only caller: `nMenu::MessageBox2::Show` S 0062c0d0; "smartCursor") |
+| +0x31 | u8 | 1 (S 00579c00) | `nMenu::MessageBox2::Show` S 0062c0d0 (warp to its first button, S 00492850); `ActionButtonPanel::PositionAtCursor` S 005f0880; its mirror S 0087b808 by `CenterCursor` S 004a0f30 (Lua `centerCursor`, the splash screen) | "smart cursor" (`menuoptions.xml` `cSmartCursor`, `!SMART CURSOR`): warp the mouse to the centre of a message box's first button, and of the focused action button when the action panel opens ([ingame-ui.md](ingame-ui.md) §3.7) |
 | +0x33 | u8 | 0 | S 00787310 | inverts the vertical mouse axis of the look-around mode |
 
 ### 2.8 Screenshot state [known: S 0067ea50, S 006833a0, S 004ddc50]
@@ -746,8 +746,10 @@ street, [world-objects-rendering.md](world-objects-rendering.md) §3.6). `MenuSe
 cancels mode 3 as soon as the street mode is gone, has no waypoints, is invalid, flagged cancelled, or its
 planned street can already be completed (S 0078b180).
 
-**Cell marker** (`Cursor::UpdateCellMarker` S 007885e0) [known]: only with `bActive` and an active human player,
-and only when the cursor cell projects onto the screen.
+**Cell marker** (`Cursor::UpdateCellMarker` S 007885e0, called by `Cursor::Update` S 0078a2b0 from
+`nGame::System::Render` S 007835d0) [known]: every frame, whether info-map mode is on or off, only with
+`bActive` and an active human player, and only when the cursor cell projects onto the screen. It is what fills
+the hovered cell, which the build-placement overlay leaves out ([rendering.md](rendering.md) §3.14).
 - Placement mode: a sprite of atlas `ui_ingame5`, rectangle `(u, 600, 82, 85)` with `u = 179` when a street
   cannot pass the cell (`GameQuery::CanStreetPassCell`), `u = 92` when a flag can be placed there
   (`GameQuery::CanPlaceFlagAt`), `u = 4` otherwise.
@@ -756,12 +758,14 @@ and only when the cursor cell projects onto the screen.
   offset when none is set); then +5 when only 0x40 is set, +8 when 0x20 and 0x40 are set, +11 when neither is
   set, +0 when only 0x20 is set. The icon is an 88 × 88 pixel cell of `ui_ingame3.dds` (1024 wide), taken from
   a 17-entry table with a step of 0.0859375 (= 88 / 1024): entries 0..10 are `i × 0.0859375`, entries 11..16
-  are `1.0 + (i − 11) × 0.0859375`; with `x = entry + 0.015625`, the whole part of `x` selects the row and its
-  fraction the column, so icon `i` is at pixel `(16 + 88 × (i mod 11), 640 + 88 × (i div 11))` [inferred for
-  the split into row and column: the two float-to-int arguments were not read in the disassembly].
-- The marker quad is 3.5 world units wide and 3.5 high with its bottom centre on the cell's world position
-  (corners `(∓1.75, 0)` and `(±1.75, 3.5)` in a camera-facing basis taken from the device matrix at
-  `CGraphicDevice + 0x1f8`), projected to the screen and drawn as a UI sprite.
+  are `1.0 + (i − 11) × 0.0859375`; with `x = entry + 0.015625` (S 008352e0), row = `int(x)`, u = `frac(x)`,
+  v = 0.625 (S 008352d8) + row × 0.0859375 (S 00835328), so icon `i` is at pixel
+  `(16 + 88 × (i mod 11), 640 + 88 × (i div 11))`: the glowing rows of the atlas, 168 px above the rows at 808
+  that the build-placement overlay uses.
+- The marker quad is 3.5 world units wide and 3.5 high (constants 0.5 S 007d877c and 3.5 S 007e6954) with its
+  bottom centre on the cell's world position (corners `(∓1.75, 0)` and `(±1.75, 3.5)`), camera-facing about the
+  world axis (0, 1, 0) in a basis taken from the device matrix at `CGraphicDevice + 0x1f8`, projected to the
+  screen and drawn as a UI sprite.
 
 **Street slope overlay** (`Cursor::DrawStreetSlopeMarkers` S 00788f90) [inferred from its summary, not re-read]:
 a marker on the anchor cell and, on each of its 6 neighbours, either "already on the path" or a slope-class
@@ -810,10 +814,10 @@ and closes the input:
 | Line | Effect |
 |---|---|
 | `WhatTheHell` | local game speed (`UserProfile + 0x24`) = 20.0 |
-| `WhatCanEyeSee` | `MapModifier::ExploreArea(map centre, radius = map height, local player)` |
+| `WhatCanEyeSee` | `MapModifier::ExploreArea((g_MapWidth / 2, g_MapHeight / 2), radius = g_MapHeight, local player)` |
 | `DontWantToLose` | records the current map as completed in the user profile and saves the map states |
 | `ThatsANiceView` | camera mode 0 → `ResetView(2)` (free fly), mode 2 → `ResetView(0)`; other modes unchanged |
-| `ItsLikeAJackpot` | `Cheat_FillStoreWithGoods` S 005eba50: adds 10 of every good of the local player's tribe (both good lists of the tribe property) whose good type is neither 2 nor 3 to the stock of the local player's first completed building of village list +0x20 |
+| `ItsLikeAJackpot` | `Cheat_FillStoreWithGoods` S 005eba50: the target is the building S 00558730 returns, the first building of the village's depot list (`depotBuildings`, +0x20) owned by the local player whose two remaining construction fractions are both ≤ 0; into its `stockB` (`Depot +0x28`) it adds 10 of each entry of the tribe property's goods list (+0x24..+0x28), then of its jobs list (+0x34..+0x38), skipping good types 2 and 3; the soldiers are in the jobs list too |
 
 Two of these change simulation state directly, outside the command path, which is why they are limited to
 offline play ([game-commands.md](game-commands.md) §8).
@@ -1070,7 +1074,7 @@ Scroll and cursor options live in `settings.cfg`; screenshots are write-only.
 |---|---|---|
 | 1 | Answered (§3.13): the five debug icons of `SetupHud` are hidden right after their creation (`Icon::Hide` S 004cf210 in slot 10) and nothing shows them again | static: vftable S 007e26ec; writers of the visible byte S 004a3cc0, S 004a56d0, S 004a1090, S 004a1130 |
 | 2 | The frame rate the per-frame smoothing factors were tuned for (vsync default is on). Measured: the zoom easing is time based (0.96 s to 5 %), the yaw easing frame based (11 frames to 5 %), 21 units per zoom step (§3.1, §3.2; live 2026-10-12). Open: the intended frame rate itself | not recoverable from the binary |
-| 3 | Range of the scroll-speed option and the option labels of `UserProfile` +0x28, +0x30, +0x31, +0x33 | Static read of the options panel's sliders and check boxes |
+| 3 | Range of the scroll-speed option and the option labels of `UserProfile` +0x28, +0x30, +0x33. Answered for +0x31: `cSmartCursor`, `!SMART CURSOR` (§2.7) | Static read of the options panel's sliders and check boxes |
 | 4 | Writes through untyped pointers that a search of the decompiled code cannot show: `nMenu::System.uiSuppressed` (+0xa4; the command-line parser S 00403ac0 does not write it), `Cursor` +0x05, `Camera.mode` values 3 and 4 | Ghidra data-flow references to the three fields |
 | 5 | Can a campaign map (the only maps whose scripts start a cinematic, §8) be played as a network match? The save half is narrowed (§7): the panel cannot be opened by key and its parent is faded out; open is a mouse click on the HUD during the 1.0 s fade | [logic-core.md](logic-core.md) question 9; for the click: confirm an open save panel in the first second of a cinematic |
 | 6 | The narrow phase of the terrain pick (triangle order, which hit wins, the cell of a hit point) | Static read of S 006bf520 and S 006bfca0 |

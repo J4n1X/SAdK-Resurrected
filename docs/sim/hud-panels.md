@@ -455,8 +455,12 @@ means nearest to the map origin.
 - Four entries; entry `i` shows good `i` of the current set. On entering a match the set with index
   `currentSetIndex` of the local tribe is applied (`RefreshGoodSet`, called by `Game::OnEnter`).
 - `selector` click: `currentSetIndex += 1`, wrapping to 0 at `CountSetsForTribe(tribe)`; apply.
-- Per frame, for an entry with a good: the icon from `IconConfig` (the picture is hidden when the icon map has
-  no entry for the good); the text `"<amount> / <delta>"` with `+` before a positive delta; the colour
+- The sets come from `goodinfosets.xml` (`GoodSet::LoadFromXml` S 00629ce0); `GetNthSetForTribe` S 00628590
+  returns the tribe's set with that index and falls back to the first set.
+- Per frame (`GoodInfo::Refresh` S 006460d0), for an entry with a good: the icon from the `IconConfig` group
+  `SmallGoods` of `iconconfig.xml` (the map at `IconConfig +0x28`, filled by `IconConfig::LoadFromXml`
+  S 00611320; the picture is hidden when the map has no entry for the good); the text
+  `"<amount> / <delta>"` with `+` before a positive delta; the colour
   `textColRed` when `amount < -delta`, else `textColGreen` (`textColOrange` is loaded but not used); the
   tooltip is kind 2 with the good's `name` as description and the good id as source (§3.4, S 00645e90). An
   entry whose `goodId` is −1 is not refreshed.
@@ -476,14 +480,14 @@ for each entry of the transport system's list (+0x448 .. +0x44c) owned by the pl
         delta -= 1
 for each building of the player:
     if property.HasGoods(0) and property.GetGoods(0)[0] == good and building.workers.count > 0
-       and worker 0's virtual slot +0x28 returns true:
+       and worker 0's IsInWorkCycle() (virtual slot +0x28, S 0065c7d0):
         delta += 1
 ```
 
-So `delta` = (producing buildings whose first worker reports "busy") − (open requests for the good that do not
-lead into a depot) − (for the tool good: queued jobs whose recipe needs a tool) [inferred for the three
-readings; the list owners and the tested fields are known]. It is a count of buildings and orders, not a rate.
-[TODO] not established: the exact meaning of the worker's slot +0x28 and of the two lists; a read of the list
+So `delta` = (producing buildings whose first worker is in its work cycle) − (open requests for the good that do
+not lead into a depot) − (for the tool good: queued jobs whose recipe needs a tool) [known for the worker test;
+inferred for the readings of the two lists, whose owners and tested fields are known]. It is a count of
+buildings and orders, not a rate. [TODO] not established: the exact meaning of the two lists; a read of the list
 element classes in [streets-transport.md](streets-transport.md) / [settlers-jobs.md](settlers-jobs.md) terms
 settles it.
 
@@ -642,7 +646,9 @@ S 005f86a0, S 005f73e0, S 005f85b0 unless tagged:
    timeRemaining / 600` (`timeRemaining` = the record's float at +0x18).
 8. **Pulse**: the listener's "added" callback refreshes and restarts a scale animation `scaleMax → 1.0` over
    `scaleTime` on the row's button and label (S 005f8c30); the "updated" callback does the same only when
-   `scaleOnRefresh` is set (S 005f8dd0; shipped false).
+   `scaleOnRefresh` is set (S 005f8dd0; shipped false). Only the icon button visibly pulses, about its centre
+   (shipped 6 → 1 over 0.5 s): the label has no size (`Label::CreateWithText` S 004b2040), so scaling it changes
+   nothing.
 9. **The store behind the list**: `Messages::AddWithPosition` S 005c2360 appends a record with no limit on the
    count, so the list grows until the expiry removes records; `PlayerMessages_SendOrRefreshToPlayer` S 005c0270
    looks for `FindMatchingWithArg(type, text, arg, cell, 1)` and, on a match, sets its `timeRemaining` back to
@@ -659,32 +665,78 @@ S 005eb120 → `PlayerMessages_SendLetterToPlayer` [known for the call; inferred
 
 #### 3.6.1 HUD overlay widgets (`overlayPanel`)
 
-Creation, categories, positioning and the colour thresholds: [ingame-ui.md](ingame-ui.md) §3.8.6.
-`OverlayBuilding::UpdateFromBuilding` S 006403c0 decides the warning icons as follows [known], with
-"under construction" = one of the two remaining-work floats of the construction object > 0:
-
-| Child | Visible when |
-|---|---|
-| `hammers` | under construction |
-| `notShooting` | property `catapult` (+0xb0) is set and the building's production is not enabled (paused catapult) |
-| `noWorker` | under construction: the construction is not paused (construction +0x78 = 0) and the id at construction +0x40 / +0x44 is negative ([inferred] no builder assigned). Finished: `workerLimit` ≥ 1 and the building has no worker |
-| `productionStopped` | only when `noWorker` is not shown. Under construction: the construction is paused (+0x78 ≠ 0). Finished: property `productivity` is true, the type has goods in slot 0 or a `plantingDeposit`, and production is not enabled |
-| `noCoins` | property `casern` is set, the type is not both `depot` and `territoryBuilding` (i.e. a barracks, not a headquarters), and the byte at +0x14 of the object at building +0x124 is 0: the `enabled` flag of the `SoldierUpgrade` embedded at +0x10 of the building's `SoldierTraining` ([military.md](military.md) §2.5), i.e. promotion with coins is switched off in that barracks [known for the test; the field identity rests on military.md] |
-| `ship` (+0x1280; name string at S 007f6f0c) | hidden at the start of every update of this function; [TODO] not established: who shows it |
+Creation, categories, layers and positioning: [ingame-ui.md](ingame-ui.md) §3.8.6.
+`OverlayBuilding::UpdateFromBuilding` S 006403c0 [known, read from the disassembly unless tagged] runs when
+the overlay is created and then every frame while the overlay is visible. The building's construction comes
+from S 0055bf90: `remainingA` +0x70, `remainingB` +0x74, `paused` +0x78, builder reference id +0x40 / +0x44.
+"Under construction" = `remainingA > 0` or `remainingB > 0`.
 
 The widgets are, in object order, `hammers` (+0x440), the name `label` (text at +0x860), `progressBar`
 (+0x8f0), `textProductivity` (text at +0x11f0), `ship` (+0x1280), `notShooting` (+0x1508), `noWorker`
-(+0x1790), `productionStopped` (+0x1a18), `noCoins` (+0x1ca0), `swordsMen` (+0x1f28), `bowMen` (+0x23d8)
-[known: S 0063ef50 loads them in this order; the offsets are those the update writes to].
-[TODO] not established: the exact conditions of the soldier counts and of the hit-point bar on military
-buildings, and of `exclamation0..2` (the same function, second half; the decompiled text there is not
-reliable enough to quote; a disassembly read of S 006403c0 from 0x00640533 on settles it).
+(+0x1790), `productionStopped` (+0x1a18), `noCoins` (+0x1ca0), `swordsMen` (+0x1f28), `bowMen` (+0x23d8),
+`goodIcon` 0..9 (+0x3118 + i × 0x288) [known: S 0063ef50 loads them in this order; the offsets are those the
+update writes to].
 
-Under construction the bar shows `((1 − remainingA) + (1 − remainingB)) × 0.5` [known] and
-`textProductivity` an integer followed by `%` ([inferred] that value × 100; the operand of the conversion is
-not visible in the decompiled text). `swordsMen` and `bowMen` are hidden. The 10 missing-material icons
-come from `UpdateMissingGoodIcons` S 0063fd10, or are all hidden when a byte flag is set that the decompiled
-text does not resolve ([TODO] not established: that flag; the disassembly of S 006403c0 settles it).
+**Fixed parts.** `ship` is hidden on every update; [TODO] not established: whether any other code shows it.
+`label` gets the localised property `name` (`Text::SetText(…, localize = true)` → `Localization::GetText`,
+S 004b3fe0). `hammers` is shown exactly while under construction.
+
+**Warning icons**:
+
+| Child | Visible when |
+|---|---|
+| `notShooting` | property `catapult` (+0xb0) is set and `Production::IsEnabled` (building +0x48, S 00565580) is false (paused catapult) |
+| `noWorker` | under construction: not `paused` and the builder reference is invalid (id < 0) ([inferred] no builder assigned). Finished: `workerLimit` (+0x7c) > 0 and the occupant count (building +0x40 → +8) < 1 |
+| `productionStopped` | only when `noWorker` is not shown. Under construction: `paused`. Finished: `hasProductivity` (+0xf4), the type has a `plantingDeposit` (+0xd4 ≠ −1) or produces a good (`HasGoods(0)` S 00552f40, i.e. `goodId0` +0x44 ≠ −1), and production is not enabled; for a casern "enabled" is `SoldierTraining::IsAnyEnabled` S 005668b0 |
+| `noCoins` | property `casern` is set, the type is not both `depot` (+0x54) and `territoryBuilding` (+0xf5) (a barracks, not a headquarters), and the byte at +0x14 of the `SoldierTraining` at building +0x124 is 0: the `enabled` flag of the `SoldierUpgrade` embedded at +0x10 ([military.md](military.md) §2.5) [known for the test]; [inferred] promotion with coins is switched off in that barracks |
+
+**Under construction**: progress `p = ((1 − remainingA) + (1 − remainingB)) × 0.5`; `textProductivity` =
+`int(p × 100)` + `%` (truncated); `progressBar` value p with the green bar and tip mappings (taken from the
+`progressbarGreen` template in S 0063f550), shown; `swordsMen` and `bowMen` hidden; the missing-goods icons
+are updated when `noWorker` is not shown, else all hidden. The function then returns, so the label colour is
+not touched while under construction: it keeps the XML or the previous colour.
+
+**Finished**: all ten `goodIcon`s are hidden first. Then:
+
+- neither `casern` nor `territoryBuilding`: `progressBar` (and its child `textProductivity`), `swordsMen` and
+  `bowMen` hidden; label colour `textColGreen` (RGBA);
+- `casern` or `territoryBuilding`: per soldier type t ∈ {0, 1} the count = the soldiers of the garrison
+  (building +0xe0 → +8) whose `SettlerProperty` (+0x58) +0x80 equals t, plus, for each level of
+  `SoldierLevelRange` S 005703d0, `Stock::GetCount(building +0x3c → +0x28, MilitaryConfig::GetSoldierId(
+  culture = building +0x34, t, level))` ([inferred] soldiers held as goods; the index is not bounds-checked).
+  `textSwordsMen` / `textBowMen` get the plain integers (not localised), `swordsMen` and `bowMen` are shown.
+  Label colour (RGBA): `textColRed` when the fight reference of the building's `Military` (building +0xe0,
+  +0x80 / +0x84) is valid ([inferred] the building fights or is attacked), else `textColGreen`. A territory
+  building that is not a casern shows the hit-point bar: `r = Hitpoints::GetRatio(building +0x10c)` S 0055b850,
+  `textProductivity` = `int(r × 100)%`, `progressBar` value r with the red mappings, shown. A casern hides the
+  bar. `swordsMen` and `bowMen` stand at their XML positions (cached in S 0063ef50); with the bar hidden their
+  y is reduced by the bar's deployment height.
+- tail of both branches, only for a type that produces a good (`HasGoods(0)`): without `hasProductivity` the
+  label is green; otherwise `v = NLogic::Statistics::GetProductivity(stats, building's Unique) × 100`
+  S 005373b0 (−1 without an entry, which shows red) and the colour is green for `v > 66`, orange for `v > 33`,
+  else red (strict comparisons, thresholds S 007f6f7c / S 007f6f78; only RGB is set, alpha kept). This
+  overrides the military red / green. The same value feeds `InfoBoxProduction::Update` S 00635c50,
+  `UpdateWorldHoverTooltip` S 005ef740 and `NeedsConstruction::GetAverageProductivity` S 00592fa0. Then the
+  missing-goods icons are updated when `noWorker` is not shown.
+
+**Missing goods** `UpdateMissingGoodIcons` S 0063fd10: the entries of `GetDepotPendingGoods` whose reference id
+is negative ([inferred] no delivery assigned) and whose good is not in the input stock (building +0x3c → +0xc,
+`Stock::HasGood`), deduplicated in a `std::map` (ascending good id), at most 10. Icon: the `IconConfig`
+`SmallRedGoods` icon (map at +0x34), fallback the empty-good icon. Placement: `SetRelativePosition(StartPos)`,
+`SetOffset(StartPos + i × Offset)`, `SetAlignX(AlignX)`, with the construction layout while under
+construction, else the production layout (not a casern) or the casern layout; `Offset` and `StartPos` are XML
+pixels converted to fractions at load.
+
+**Pulse** (S 0063f550, `AnimationAlphaPulse::Update` S 00763510): each `goodIcon` owns an alpha pulse with
+min 0.8 and max 1.0, not recursive, frequency `1 + ((rand() & 63) − 32) × 0.03125 × 0.1` (0.9 to about
+1.097), `alpha = min + (max − min) × (0.5 + 0.5 × sin(2π × elapsed × frequency))`; [inferred] it runs
+continuously.
+
+**Unused children** [known]: `exclamation0..2` are only created, loaded from the XML, detached and destroyed,
+never shown or hidden by code, so their visibility is the XML default; their atlas cells in
+`ui_buildings2008.dds` are empty. `labelBG` is never touched. The template's `swords` and `clocksymbol`
+children are not referenced by the building overlay's code; `clockSymbol` is driven only by the fight overlay
+([ingame-ui.md](ingame-ui.md) §3.8.6), so [inferred] the clock of `overlayBuilding` stays static.
 
 #### 3.6.2 Overlays drawn by the renderer (pointers)
 
@@ -701,29 +753,31 @@ Military flags, as far as the HUD meaning goes [known] S 0055fd00, S 006d2820, S
 flag when its property has `territoryRange` (+0x94) > 0 and `soldierLimit` (+0x98) ≠ 0
 ([properties-data.md](properties-data.md) §2 for the two fields), or is a headquarters (`depot`, `casern` and
 `territoryBuilding` all set). It is drawn only for finished buildings (both construction floats ≤ 0), in the
-owner's colour (`ai::player::Player::GetColorEntry`). Mesh 0 (`[data]\buildings\MilitaryFlagInactive.KEX`) when
-`Building::IsOccupied` is false or the byte at +8 of the object at building +0xc4 is 0 ([inferred] the flag
-component's "active" byte); else mesh `1 + count` (`MilitaryFlagSword00..10.KEX`) or `12 + count`
+owner's colour (`ai::player::Player::GetColorEntry`). Mesh 0 (`[data]\buildings\MilitaryFlagInactive.KEX`, the bare
+pole) when `Building::IsOccupied` S 0055c400 is false or the byte +8 (`bActive`) of the building's
+`TerritoryUpdater` (building +0xc4) is 0; else mesh `1 + count` (`MilitaryFlagSword00..10.KEX`) or `12 + count`
 (`MilitaryFlagBow00..10.KEX`), `count` = `Military::GetFlagSoldierCount()`: the flag shows the garrison size
 to every player. The bow set (+11) is taken when the i32 at +0x68 of the building's `Military` object is not 0
 [known: disassembly of S 006d2820 at 0x006d2a17]; that field is the wanted soldier kind, 0 sword / 1 bow
 ([military.md](military.md) §2). The flag texture is one of three, `MilitaryFlag1.dds`..`MilitaryFlag3.dds`
 (index 0..2, loaded by S 006d2ec0): for a building for which `Military::IsMilitaryBuilding` S 0055fb80 is
-true the index is `Military::GetProximityZoneA` S 0055fbb0 when that is ≥ 1, else 0; the zone is −1 when the
-byte at +8 of the object at building +0xc4 is 0, else 2 for a distance value (`Military` +0x5c) < 19, 1 for
+true the index is the zone when it is ≥ 1, else 0 (`S2CG::Building::GetMilitaryProximityZone` S 006aa2f0 over
+`Military::GetProximityZoneA` S 0055fbb0); the zone is −1 when the `TerritoryUpdater`'s `bActive` is 0, else 2 for a distance value (`Military` +0x5c) < 19, 1 for
 19..24, 0 for > 24 [known] S 0055fbb0, S 00553f20. So the texture shows how close the nearest enemy is
 [inferred: the reading of +0x5c as enemy distance rests on [military.md](military.md)]. Colour and texture
-are not set in the shadow pass.
+are not set in the shadow pass. The mesh is chosen anew every frame: the flag has no raise animation
+[known] S 006d2820.
 [TODO] not established: whether a separate marker exists for "attackable" buildings beyond the
 selection kinds 6 / 7 and the attack slider ([ingame-ui.md](ingame-ui.md) §3.6); an observation in the game
 settles it.
 
-`btInfoMap1` (space) toggles info-map mode with a 0.2 s colour fade; `btInfoMap2` / `btInfoMap3` toggle overlay
-categories 0 / 1 ([ingame-ui.md](ingame-ui.md) §3.4, §3.8.6).
+`btInfoMap1` (space) toggles info-map mode with a 0.2 s colour fade; `btInfoMap2` / `btInfoMap3` toggle the
+overlay panel's layers 0 / 1; fight overlays (category 4) are always shown ([ingame-ui.md](ingame-ui.md) §3.4,
+§3.8.6).
 
 The build-placement icons have no switch of their own [known]: the renderer draws them only while the alpha of
 its overlay tint is > 0 (S 00688c40). The tint is 0 from the `CMapRenderer` constructor S 006890f0 and is changed
-only by `nMenu::Game::StartOverlayColorFade` S 005eac30, called by `btInfoMap1` (`OnButtonClick` S 005eb850) and by
+only by `nMenu::Game::StartOverlayColorFade` S 005eabd0, called by `btInfoMap1` (`OnButtonClick` S 005eb850) and by
 the cinematic screen (S 005fb3e0, S 005faee0). The fade is linear over 0.2 s from the last drawn colour to
 `(1, 1, 1, on ? 1 : 0)`, and `nMenu::Game::Update` S 005efea0 does not advance it while the game is paused.
 Opening the build menu on a cell (placement, [ingame-ui.md](ingame-ui.md) §3.5) does not show them.
@@ -734,7 +788,12 @@ Opening the build menu on a cell (placement, [ingame-ui.md](ingame-ui.md) §3.5)
 the refresh countdown reaches 0 the widget copies it into a temporary texture, applies the exploration mask
 (every pixel whose map cell is unexplored for the local player becomes 0 = transparent black, every other
 pixel gets alpha 0xff), copies the result into its persistent texture `minimap_captureCopy<id>` and sets
-`textureWidth / Height` from the current source rectangle. The countdown is 0 after construction and after
+`textureWidth / Height` from the current source rectangle. The persistent texture has no alpha:
+`MiniMap::Create` S 005f3be0 makes it with `UiResourceManager::CreateTexture(name, 512, 512, hasAlpha = 0, 1)`
+S 00494660, format 22 `D3DFMT_X8R8G8B8`, so the mask's zero alpha is lost and unexplored land shows as opaque
+black, cut to the circle only by the round mask (`RenderUIElementMaskedTex2`). The two overlay textures are
+`A8R8G8B8`, so their zero alpha stays transparent. `CaptureMapTexture` binds the capture to the widget's shape,
+which the layout gives as `ui_ingame` with the mapping `0 0 1 1`. The countdown is 0 after construction and after
 the XML load, so the first capture happens in the first update; each update then decrements it down to −1.
 The countdown path (virtual slot 34, S 005f1070) first has the scene render the image at 512 × 512; the copy
 and mask step alone (slot 35) is repeated by `Render` whenever `dirty` is set (§4), [inferred] which is how
@@ -900,9 +959,10 @@ visible [inferred: the tree only updates children of visible widgets]:
   and exploration mask, without a new scene render), `UpdateTerritoryOverlay` and `UpdateObjectOverlay` over
   all rows, `dirty` cleared. Symbols are drawn by the `SymbolRenderer` child (S 005f5ed0 → `RenderSymbols`),
   [inferred] after the two overlay pictures (child order).
-- Overlays (S 0063d790, shared by the building, fight and settler overlays) [known]: the overlay's virtual
-  slot +0x84, then the base update; [inferred] slot +0x84 is the repositioning. `OverlayBuilding::Update`
-  S 00641030 first calls `UpdateFromBuilding`, only while the overlay and the widget at +0x150 are visible.
+- Overlays [known]: the overlay's `IUpdateable` update first refreshes the content, only while the overlay and
+  its parent (+0x150) are visible (buildings S 00641030 → `UpdateFromBuilding`, soldiers S 0063de50, fights
+  S 0063e2d0); then `ProcessPendingAndNotify_thunk` S 0063d790 calls the position slot (vftable +0x84,
+  [ingame-ui.md](ingame-ui.md) §3.8.6), then the base update.
 - Tooltip popups: `Tooltip::Update_adjC` S 006463c0.
 
 Per logic tick the HUD does nothing by itself; it is called back (statistics listener, message listener,
@@ -1104,8 +1164,8 @@ survives from one match to the next inside one program run depends on the object
 
 | # | Question | What settles it |
 |---|---|---|
-| 1 | Exact meaning of the three lists / flags in the trend query (§3.2.2): the order list at `village.orderSystem`, the transport list at +0x448, worker slot +0x28 | static read of the element classes and of the worker vftable |
-| 2 | Second half of `OverlayBuilding::UpdateFromBuilding`: soldier counts, hit-point bar, name colour of military buildings, `exclamation0..2`, the flag that hides the missing-material icons (§3.6.1) | disassembly read of S 006403c0 from 0x00640533 on |
+| 1 | Exact meaning of the two lists in the trend query (§3.2.2): the order list at `village.orderSystem`, the transport list at +0x448. Answered: worker slot +0x28 is `IsInWorkCycle` S 0065c7d0 | static read of the element classes |
+| 2 | Answered (§3.6.1): the whole of `OverlayBuilding::UpdateFromBuilding`, read from the disassembly; `exclamation0..2` are never touched by code | — |
 | 3 | Answered (§3.1): the tech tree tab opens like the other three and shows a text-only tree [live, 2026-10-12] | — |
 | 4 | What a defeated player can still do while the `Defeat` dialog is open: the camera moves [live, 2026-10-12]; open: selection. Answered (§9, Defeat): the defeat does not change the exploration mask (no exploration writer on the defeat path; writers S 00677570, S 00677930, S 00677af0) | observation in the game (selection) |
 | 5 | Whether attackable enemy buildings get a marker of their own (§3.6.2) | observation in the game |
@@ -1113,7 +1173,7 @@ survives from one match to the next inside one program run depends on the object
 | 7 | State that survives from one match to the next in one program run: the message filter bytes, the minimap zoom and pan, the chat log (§7) | read of the combo box mark function and `OnFilterButtonToggled` S 005f8e80; of `Picture::LoadFromXml` and where the HUD layout is reloaded; of the `ChatSystem` attach / detach functions |
 | 8 | Whether the shipped scripts add their minimap quest symbols again after a load (§7) | read of the campaign scripts' load hooks |
 | 9 | Whether the scene call of `MiniMap::RefreshMapTexture` S 005f1070 (scene slot +0x78 with 512, 512) renders terrain only or also objects (§4) | read of the scene's vftable slot +0x78 |
-| 10 | What the virtual slot +0x84 of the overlay classes does per frame (§4; read as repositioning) | read of the three overlay vftables |
+| 10 | Answered (§4, [ingame-ui.md](ingame-ui.md) §3.8.6): slot +0x84 is the position slot (building S 0063e770, soldier S 0064ba40, fight S 0063e310) | — |
 
 ---
 
@@ -1135,6 +1195,9 @@ survives from one match to the next inside one program run depends on the object
 | 00643f60 / 00643a90 / 006437a0 | `StatsBuilding::Refresh` / `OnButtonClick` / `LoadFromXml` | building row |
 | 00533160 / 00533e60 | `GameQueryHelper::GetAverageBuildingProductivity` / `GetAverageBuildingHealth` | building row bars |
 | 00533c40 | `GameQuery_GetPlayerGoodStockAndPending` | stock and trend of a good |
+| 0065c7d0 | worker `IsInWorkCycle` (virtual slot +0x28) | the "producing" test of the trend |
+| 00629ce0 / 00628590 | `GoodSet::LoadFromXml` / `GetNthSetForTribe` | good sets; fallback to the first set |
+| 00494660 | `ai::ui::UiResourceManager::CreateTexture` | the minimap's capture texture, `X8R8G8B8` without alpha |
 | 005be7a0 | `ai::player::Player::IsShownInPlayerLists` | campaign rule for unnamed players |
 | 004c9940 / 004c7f90 / 004c9410 / 004c8fd0 / 006424e0 | `nUi::Graph::LoadFromXml` / `Draw` / `SmoothPoints` / `BuildLineMesh` / `SetPoints` | curve widget |
 | 006460d0 / 00645e90 / 006287b0 / 00628720 / 00628780 | `GoodInfo::Refresh` / `SetupGoodTooltip` / `GoodInfoPanel::OnChildClicked` / `ApplyGoodSet` / `RefreshGoodSet` | goods bar |
@@ -1150,8 +1213,10 @@ survives from one match to the next inside one program run depends on the object
 | 005be2c0 | `ai::player::Player::GetColorEntry` | player colour of the minimap's territory overlay and of the military flags |
 | 005eb120 | `nMenu::Game::ShowCommMessageAsLetter` | session notices as letters |
 | 006403c0 / 0063fd10 / 00641030 | `OverlayBuilding::UpdateFromBuilding` / `UpdateMissingGoodIcons` / `Update` | building overlay |
+| 0063f550 / 0063ef50 / 00763510 | `OverlayBuilding::InitAndAttachToParent` / `LoadFromXml` / `AnimationAlphaPulse::Update` | widget binding, bar mappings, icon pulse |
+| 0063dd30 / 0063e190 / 0063d790 | `OverlaySoldier::UpdateHealthAndColor` / `OverlayFight::UpdateDisplay` / `ProcessPendingAndNotify_thunk` | soldier bars and colour; fight clock; per-frame position slot |
 | 0055fd00 / 006d2820 / 006d2d80 | `NVillage::Military::HasMilitaryFlag` / `CMilitaryFlagRenderer::DrawFlags` / `GetFlagMeshPath` | military flags |
-| 005eac30 / 00688c40 | `nMenu::Game::StartOverlayColorFade` / construction overlay draw test | info-map tint fade; the build icons draw only while its alpha > 0 |
+| 005eabd0 / 00688c40 | `nMenu::Game::StartOverlayColorFade` / construction overlay draw test | info-map tint fade; the build icons draw only while its alpha > 0 |
 | 005f39b0 / 005f10a0 / 005f1980 / 005f49e0 | `nMenu::MiniMap::ctor` / `LoadFromXml` / `Update_Face4` / `Render` | minimap life cycle |
 | 005f1070 / 005f3dd0 / 005f16d0 | `MiniMap::RefreshMapTexture` (slot 34) / `CaptureMapTexture` (slot 35) / `MiniMap_ApplyExplorationMask` | scene render of the map image; copy into the minimap texture; fog mask |
 | 005f3be0 / 005f1170 / 005f1190 | `MiniMap::Create` / `OnDeviceReset` / `MarkDirty` | 512 × 512 capture texture; new capture after a device reset; overlay rebuild request |

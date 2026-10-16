@@ -958,7 +958,9 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
 - **Border skirt**: the original's 200-unit black ground with water over it, not drawn in the mirror (RE §3.5,
   RR §3).
 - **Sky**: the remake's cloud layer to the horizon by default, the original's 633-unit dome as a switch; both driven
-  by globals only (a sky shader reading `TIME` or `POSITION` re-renders the radiance every frame).
+  by globals only (a sky shader reading `TIME` or `POSITION` re-renders the radiance every frame). The cloud layer
+  is the main camera's in every view: the mirror view casts its rays from the mirrored eye into the main camera's
+  layer, as the original draws the main camera's dome in its mirror (RE §3.13).
 - **Environment**: `EnvironmentService` reads the map's environment (the `.bin` contents in the map package) and
   blends its spheres per frame by the camera's ground focus point (RE §3.13: weight 1 inside the inner radius,
   linear to 0 at the outer, divided by the count of influencing spheres, the rest from the map's default); sets the
@@ -1226,8 +1228,8 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   it); `core.game.infomap` toggles info-map mode (space); `core.game.buildmenu {x?, y?}` with a cell acts as a left
   click there, without one opens the menu type first. **B** opens the type-first menu, the original's unreachable
   "choose a type, then click cells" mode (ingame-ui §3.8.10), as the remake's own addition.
-- **Cell marker**: a translucent hexagon; the original lays a decal (`SelectionMarker::UpdateDecal` S 006b0d00) whose
-  picture is not known. The info box has its fade-in only.
+- **Cell marker**: a translucent hexagon; the original lays a decal (`SelectionMarker::UpdateDecal` S 006b0d00) of
+  style 1, `buildingselect.dds` [inferred], 4 units wide and turning (RE §3.14). The info box has its fade-in only.
 - **Open**: the construction lock (`Player::IsLocked`, `menu.lockBuilding`) is not exposed to the menu yet; the
   create-flag box and `0x20004`; the help text keys come from ingame-ui §3.8.10, which is [inferred].
 

@@ -606,6 +606,22 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   the NPC functions `se_*`; the waits ([lua.md](lua.md) §2.8); the cinematic camera paths; the book and tutorial
   screens; the minimap's quest symbols.
 
+### 6.19 God mode, a debug aid, as built [implemented, sadk-remake a5258b9]
+
+Remake-only (no original id): a debug feature put together from three paths of the original.
+
+- **Placement**: the batch-editing branch of `Building::ctor_Place` S 0055d980 / `Construction::StartWithType`
+  S 0055efa0 ([village-buildings.md](../sim/village-buildings.md) §3.2), taken per owner through the village's
+  seam `IVillageBatchEditing`: a god's buildings are complete at once, their territory active, the worker inside
+  or a territory building's first soldier.
+- **Stock**: `ItsLikeAJackpot` (`Cheat_FillStoreWithGoods` S 005eba50,
+  [camera-input-cutscenes.md](../sim/camera-input-cutscenes.md) §3.12) made continuous: every tick, before the
+  village, the system `core.game.godmode` tops every completed depot of a god up to 100 of each good of the
+  tribe's goods and jobs lists.
+- **Sight**: `WhatCanEyeSee` (S 005ec340) once at the start.
+- **Setup**: the gods are a field of the match setup, ignored in a network match; the debug command
+  `core.game.debug.godmode` is refused in network matches; the system has its own save section.
+
 ## 7. The way back: commands [draft]
 
 **As built** [implemented, sadk-remake a7a220c]: a command is a record with
@@ -757,8 +773,9 @@ These matter more in the remake than in the original, because Harmony patches ca
      refused in a session with a game seed.
    - **The build mode** ([renderer.md](renderer.md) §15.3): **B** opens the build menu without a cell, the
      original's "choose a type, then click cells" mode, which the original has but never reaches (ingame-ui §3.8.10),
-     as the remake's own addition; the cell marker is a translucent hexagon, since the picture of the original's decal
-     (S 006b0d00) is not known; the info box has its fade-in only.
+     as the remake's own addition; the cell marker is a translucent hexagon where the original lays the decal
+     `buildingselect.dds` (style 1 [inferred], S 006b0d00, [rendering.md](../sim/rendering.md) §3.14); the info box
+     has its fade-in only.
    - **The street net** (§6.5): `StreetType` is an engine type; `0x2000B` is always refused (result "no-effect"; the
      original's executor does nothing, GC); no owner check on `0x20005` and `0x20009`, as in the original, until a
      mode switch exists; the hook defaults (nobody carries, nothing is ordered, no building blocks); `Initialised`

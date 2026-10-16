@@ -256,13 +256,22 @@ All nine derive from `nMenu::Overlapped` (a draggable framed dialog: frame +0x1c
 | +0x14 | preview picture (`selectionPicture`) | |
 | +0x18 | `NLogic::Unique` of the target (id at +0x20 / +0x24, −1 = none) | |
 | +0x28 | resolved render instance of the target | |
+| +0x2c | preview "update every frame" (u8) | |
+| +0x30 | preview render size | 256 (constructor S 00617c70) |
 | +0x34 | map selection kind → `InfoBox*` | §3.6 |
 | +0x40 | current selection kind | −1 = none |
 | +0x44 | active info box | |
 | +0x48 | renderMarker (XML) | |
-| +0x4c | noSelectionTexture (XML), +0x68 noSelectionMapping (XML, 4 floats) | |
+| +0x49 | preview dirty (u8) | |
+| +0x4c | noSelectionTexture (XML), +0x68 noSelectionMapping (XML, 4 floats) | shipped `ui_ingame3`, `464 433 184 184` [known: data] |
 | +0x88 | mode | 1 normal, 2 build placement, 3 street placement, 4 reset pending |
 | +0x8c / +0x90 | cell of the last click (−1 = none) | |
+
+**Preview picture** [known] `UpdatePreviewImage` S 00615990, `RenderObjectPreview` S 0068cae0,
+`RenderPreviewTexture` S 00681300: the selected object is rendered into a 256 px texture by a `MapCamera`
+(`MapCamera::ctor` S 00680ef0): look-at = the centre of the object's box, distance = max(box size) × 1.725 (double
+S 007f9030) ÷ tan(fov), fov = 50° (the full horizontal angle), near 0.1, far 200. `Shape::BindTexture` S 004a86d0
+maps the 256 px picture into the 244 × 244 `selectionPicture` through the mask `ui_mask.tga`.
 
 The object that is selected lives in `nGame::System` (`Selection`, [game-commands.md](game-commands.md) §2.4:
 kind 0 None, 1 Building, 2 Flag, 3 Settler, 4 Street, 5 Ship, 6 ShipRoute). `MenuSelection` derives the
@@ -430,12 +439,19 @@ Drawing [inferred] S 004a8f70, S 004a88a0: with all borders 0 one quad; otherwis
 corners, edges and centre tiled or stretched). Positions are rounded to whole pixels (+0.5, truncate). Vertex
 colour = colour × widget opacity.
 
+`mapping` is in pixels of the texture **as created** [known]: `CTexture::CreateD3DTexture` (S 004e7a9e) creates
+UI textures with `D3DX_DEFAULT` sizes, so an image whose sides are not powers of two is rounded up and
+stretched, and `Shape::DrawQuad` S 004a88a0 divides the mapping by the created size. So `ui_loadingscreen`
+(1024 × 768) with the mapping `0 0 1024 1024` fills the screen (`menuLoading.xml`, `menusplash_dev.xml`).
+
 #### 3.1.7 `<text>` [known] S 004b46d0
 
 `uppercase`, `lowercase` (bool; applied with the system locale), `pos` and `offset` (two integer pixels),
 `align` (`left` 4, `center` 8, `right` 0x10), `contenthidden` (bool: every character except `|` is drawn as
 `*`), `content` (the text; localised if its first character is `!`, §3.10), `font` (font name, §3.10), `color`
-(4 floats), `wrapSize` (two integer pixels: wrap box). The shipped `visible` on `<text>` is not read.
+(4 floats), `wrapSize` (two integer pixels: wrap box; the text wraps inside it, the first line centred
+vertically on the text's point, and lines past the box height are cut, `BuildTextInBox` S 004e3270,
+[ui-toolkit.md](ui-toolkit.md) §3.1). The shipped `visible` on `<text>` is not read.
 
 #### 3.1.8 `<tip>` and `<focus>` [inferred] S 004b5d80; [known] S 004c1be0
 
@@ -500,7 +516,11 @@ settles each.
   ([lua-runtime.md](lua-runtime.md) §4.4). Independently the click latch (+0x119) is set; several panels poll
   it instead of overriding `OnChildClicked`.
 - A double click on a button counts as a press and notifies a separate observer list [inferred] S 004b1270.
-- Caption colour with style 12: `font_cursorover` while hovered, else `font` (fallback `Body_Arial`).
+- Caption font with style 12: `font_cursorover` while hovered or pressed, else `font` (fallback `Body_Arial`);
+  the attribute `font` sets both the caption font and the hover font, `font_cursorover` only the hover font
+  [known] S 004b01a1 (in `Button::LoadFromXml`). The fonts, shifts and colours of the other styles (1–3 and
+  7–11 `Subline_Garamond`, 4 and 5 `Subline_Garamond` left at x = 32, 0 `Body_Arial`, 6 no caption):
+  [ui-toolkit.md](ui-toolkit.md) §3.4 (`LayoutCaption` S 004afa10, `Draw` S 004afd10).
 
 #### 3.2.2 Tooltips [inferred] S 004b5a70, S 004c5e30; constants [known] S 004b5a70
 
@@ -637,7 +657,7 @@ listed in the code's string references; shipped values in §6]:
 | `btStatistics` | round button | | | toggles `StatisticPanel` (§3.8.1) |
 | `miniMap`, `miniMapBorder` | `MiniMap` | bottom right, 188 × 188, round mask | §3.8.5 | |
 | `btQuests` (in `miniMapBorder`) | round button | | | toggles the quest log |
-| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene; in that mode the ground shows what can be built where (flag, small, medium, large building, harbour, nothing) and no overlay is hidden [live, 2026-10-12, maintainer]. The fade is the tint of the build-placement icons, which draw only while its alpha is > 0, so this button is the player's only switch for them [known] S 005eac30, S 00688c40 ([rendering.md](rendering.md) §3.14) |
+| `btInfoMap1` | round button | | | toggles info-map mode (Game +0xfff0) with a 0.2 s colour fade of the scene; in that mode the ground shows what can be built where (flag, small, medium, large building, harbour, nothing) and no overlay is hidden [live, 2026-10-12, maintainer]. The fade is the tint of the build-placement icons, which draw only while its alpha is > 0, so this button is the player's only switch for them [known] S 005eabd0, S 00688c40 ([rendering.md](rendering.md) §3.14) |
 | `btInfoMap2`, `btInfoMap3` | round buttons | | | toggle overlay layers 0 and 1 of the `OverlayPanel` (§3.8.6) |
 | `btSpeed` with pictures `x2`, `x3` | round button | | `x2` visible at speed 2, `x3` at speed 3 | **`0x20023` GE_Logic_SpeedUp** via `SendCycleGameSpeedCommand` |
 | `btOptions` | round button | | | shows `OptionsPanel` |
@@ -878,12 +898,12 @@ What each box shows, and which commands its own controls send:
 |---|---|---|
 | ShipRoute S 0063cb70 | ship name; state `!LOADING` / `!UNLOADING` (standing, by ship state 2 / 3), `!EXPEDITION` / `!TRANSPORT` (moving); 128 × 128 ship preview; tab "transport": cargo goods and settlers aboard; expedition part: required goods and settlers; military part: soldiers (`militarySoldiers`, 6 slots) | good buttons focus the camera on the unit; commands only through action buttons 1..3 |
 | Ship S 0063c100 | ship name; tabs goods / settlers aboard | none |
-| Casern S 0063b590, S 0063abc0 | 2 × 3 soldier buttons (`compStd0..2`, `compBow0..2`): stock, queued, lock state, accept flag; recruit costs per class (`costStd`, `costBow`, shared `costBoth0/1` as `have/need`); upgrade cost | click on a soldier button → **`0x2001E` GE_Depot_ToggleFlags_UID** (building, that soldier good) |
-| TerritoryBuilding S 0063a4b0 | soldier slots (capacity scaled by health, at most 12) with the garrison; border-distance icon (3 classes); health bar and `N%`; soldier count text | none (action buttons) |
+| Casern S 0063b590, S 0063abc0 (ctor S 0063aec0, vtable S 007f63bc; `BindChildControls` S 0063a8c0) | for the tribe of the local player (`FindLocalPlayer`): 2 × 3 soldier buttons (`compStd0..2`, `compBow0..2`, levels from `SoldierLevelRange` S 005703d0 ascending, 0..max): stock, queued, accept flag; `Player::IsLocked(3)` is called but its result is dropped, so no lock state is shown; recruit costs per class (`costStd`, `costBow`, shared `costBoth0/1` as `have/need`, need = the raw `stockLimit` (+0x84) × the cost amount; `costBoth1` hidden unless there are two shared goods); upgrade cost with the text input count / (`stockLimit` × amount) | the button poll S 0063abc0: click on a soldier button → **`0x2001E` GE_Depot_ToggleFlags_UID** (building, that soldier good) |
+| TerritoryBuilding S 0063a4b0 (ctor S 0063a050, binding S 00639d30) | soldier slots: `settlerList`, 12 buttons under `contSoldiers` (`GoodList::InitWithItemCount` S 0064ab20, vtable +0x84), capacity scaled by health, filled with the garrison (`SetFromSoldiers` S 00649c00, `InitFromSettler` S 0062fed0; an empty slot shows `iconconfig.xml` `<Goods><EmptyGood>`); border-distance icon (3 classes, `<BorderDist><dist0..2>`); health bar and `"%.0f%%"` (100.0 at S 007d8ff0). The soldier count line `!IS BEING ATTACKED BY %u SOLDIERS` never shows: its format (`soldierCountFormat`, +0x271c) is written only by the constructor (empty) and the destructor [known]; [inferred] it was meant to count the attackers (the list `Military +0x30`, read by S 006312d0). Presentation bug | none (action buttons) |
 | Construction S 006397e0 (ctor S 00639210) | progress = ((1 − a) + (1 − b)) ÷ 2 of the two remaining-work fractions (+0x70, +0x74) as bar and `N%` (text `"%.0f%%"`, rounded); building icon; missing and delivered material, one button per unit (list below); the builder | none |
-| Flag S 00638b10 | goods lying at the flag; help text `!Infobox_Flag_Help` or `!Infobox_Harbor_Help` (flag with a harbour) | none |
+| Flag S 00638b10 (ctor S 00638850) | goods lying at the flag: the constructor makes 12 buttons (`GoodList::InitWithItemCount` S 0064ab20) and switches `aggregate` off; one button per package lying on the flag (package +0x70 `placedOnFlag`), stack by stack (`SetFromFlagGoods` S 0064a9b0; layout `GoodList::LayoutItems` S 00649370); an empty slot shows `iconconfig.xml` `<Goods><EmptyGood>` (`536 712 40 40`; `GoodButton::Clear` S 006309b0, name string S 007f13bc); help text `!Infobox_Flag_Help` or `!Infobox_Harbor_Help` (flag with a harbour) | none |
 | Fight S 006382e0 | local player's name `VS` opponent's name; two soldier counts per side (unknown side: `?`); a changed counter pulses (scale 1.4 → 1.0 in 0.5 s) | none (action 12) |
-| SacrificeSelect S 00637340 | up to 2 × 8 `sacrificebutton`s (`sacrifice_<row>_<col>`): the player's available sacrifices; row 1 = those whose static-access property is positive, row 0 the others | click → **`0x20024` GE_Sacrifice_Order** if the sacrifice can be ordered, else **`0x20027` GE_Sacrifice_StartResearch** if research is possible, else nothing (S 0062f390) |
+| SacrificeSelect S 00637340 | up to 2 × 8 `sacrificebutton`s (`sacrifice_<row>_<col>`): the player's available sacrifices; row 1 = those whose `researchDuration` is > 0, row 0 the others | click → **`0x20024` GE_Sacrifice_Order** if the sacrifice can be ordered, else **`0x20027` GE_Sacrifice_StartResearch** if research is possible, else nothing (S 0062f390) |
 | SacrificeRunning S 00636d80 | the sacrifice, its cost goods, title `!SACRIFICE READY` / `!SACRIFICE` / `!PREPARING SACRIFICE`, remaining time `m:ss`, progress bar, description | none (action buttons) |
 | Production / Mine S 00635c50 (ctor S 00635710) | input goods incl. those in the production slots, one button per unit (list below); the worker; up to two products with tooltips; productivity bar and percent: the building's entry of `Statistics::GetProductivity` S 005373b0, which returns −1.0 for a building without an entry, the percent text truncated (`__ftol2`); buildings without inputs hide the input column, use the `noEntryPercentPos` / `noEntryPercentOffset` layout and the box width `width − contWorker.x + contEntry.x` (computed in `LoadFromXml` S 006350f0 at S 00635312) | none (action buttons) |
 | CreateBuilding | §3.8.10 | **`0x20002`** |
@@ -891,6 +911,12 @@ What each box shows, and which commands its own controls send:
 | Catapult S 006329f0 | preview of the target and its owner; stones in stock and on the way; the worker; health bar and `N%` | none (action buttons) |
 | BuildingDefault S 00631d80 | headline and the worker | none |
 | Street, CreateFlag, SacrificePanelSelect | frame only | none |
+
+**Sacrifice buttons** (`SacrificeButton::SetSacrifice` S 0062f4e0) [known]: the button's enabled state, its
+question mark and the rules of its fans; icon and tooltip are keyed by the sacrifice's `sf_setName`. The fan
+(`AlphaFanPicture`) takes a value 0..1024 in 5 segments. The running time is shown as
+`trunc(remaining ÷ 10.0)` seconds while `remaining` ≤ 100000. `MenuSelection::ResetAndRefresh` S 00617db0
+recomputes the selection kind.
 
 Good buttons everywhere: a click on one that carries a unit id closes the action panel (unless confirming) and
 focuses the camera on that unit [inferred] S 0062fe50.
@@ -962,8 +988,18 @@ The panel (`actionbuttonpanel`) holds `btAction1..4` (templates `bt_action1..4`,
   `ExecuteAction` repeats two tests for itself [known] S 00623730: action 4 sends `0x20003` only for a building
   of the local player whose `Building::CanDestroy` S 0055cdc0 holds (`GetDestroyBlockReason` S 0055cd40 is 0),
   and otherwise does nothing; actions 28 and 29 in street placement behave as in §3.5.
-- **Placement** (`PositionAtCursor`): the panel is centred on the cursor, clamped to the screen; with the
-  "smart cursor" option (user profile byte +0x31) the cursor is warped onto the focused button.
+- **Panel picture** [known] `LayoutVisibleButtons` S 005f0df0: the panel's shape (`actionbuttonpanel`, mapping
+  `0 496 96 131` in `ui_ingame3`) is one of four strips side by side in the atlas with 4, 3, 2 and 1 circles; a
+  jump table (S 005f0ef0) sets its x to 0x120, 0xc0, 0x60 or 0 for 1, 2, 3 or 4 visible buttons. With no button
+  visible the panel is hidden. The visible buttons fill the circles from `btAction1` on, without gaps.
+- **Placement** (`PositionAtCursor` S 005f0880): the panel is centred on the cursor, clamped to the screen; with
+  the "smart cursor" option (user profile byte +0x31, [camera-input-cutscenes.md](camera-input-cutscenes.md)
+  §2.7) the mouse is warped to the centre of the focused button (`WarpToWidgetCenter` S 004927b0), enabled or
+  not [known]. The focused button is the active info box's `focusedActionButton`, which comes from the layout
+  only: the `InfoBox` constructor sets −1 (S 00631a15), only `InfoBox::LoadFromXml` (S 0063136e) writes it, it is
+  read only at S 006175ec and S 0061763d, and `SetSelectionKind` S 00616f40 passes it on [known]. In the shipped
+  `menuingame.xml` (common frame `<infoboxes>`: −1) [known: data]: the flag box 1 (build street), the street
+  box 1 (create flag), `infoboxCreateBuilding` 0 (create flag), the create-flag box 0; the other boxes none.
 - **Closing**: any key, a middle click, the cursor entering the world, a click on a good button: fade out in
   0.2 s, but never while the confirmation is open and unanswered.
 - **Attack slider** (kind 6): a `Slider2` (`value` 0.5 initially) with labels `textL` / `textR` showing the
@@ -1044,9 +1080,15 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   order. A line shows the localised title and, for a quest with progress, ` (<progress>)` with the parts before
   and after `/` coloured `finishedColor` / `unfinishedColor`. After `inactiveDelay` without hovering the line
   fades to `inactiveOpacity` over 1 s.
-- **Quest log** (`questlog`): list of all visible quests, main quests first then by order key, with header rows
-  `!MAIN QUESTS` / `!SUB QUESTS`; icons `iconFinished` / `iconFailed`; selecting a row shows the text of the
-  key `<title key>_desc`. The child `Difficulty<N>` matching the player's difficulty (0..3) is shown.
+- **Quest log** (`questlog`): list of all visible quests, main quests first, then by the tick at which the quest
+  was filled in (+0x54) (`QuestLog::RebuildList` S 005ea100 [known]), with header rows `!MAIN QUESTS` /
+  `!SUB QUESTS`. A row (`QuestLog_FillQuestItem` S 005e9c90 [known]): red text for a failed quest, green for a
+  finished one, with the icon `iconFailed` (template `t_x`) or `iconFinished` (template `t_v`) [known: data];
+  selecting a row shows the text of the key `<title key>_desc`. The child `Difficulty<N>` matching the player's
+  difficulty (0..3) is shown.
+- **Quest log button** `btQuests` (template `bt_bag`, its background the `!` icon at `912 624 44 45`, hotkey `q`
+  [known: data]): `Game::OnButtonClick` S 005eb850 hides the quest log (Game +0xb328) when it is visible, else
+  shows it [known]. No code that changes the button's look on a quest event was found [inferred].
 
 #### 3.8.5 Messages and minimap
 
@@ -1073,13 +1115,17 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   sound `uiRemove`. Tooltip `!Left Click for go to, right click for delete.`
 - `up` / `down`: scroll with 0.05 s auto-repeat; `last`: jump to the newest and stick to it. A new message while
   the list is visible plays the sound of §2.10 and, if it has a cell, adds the minimap symbol of §2.10.
-- A listener callback from the player's message store pulses the row of a new message (scale `scaleMax` → 1 in
-  `scaleTime`).
+- A listener callback from the player's message store pulses the row of a new message: only the type icon
+  scales from `scaleMax` to 1 in `scaleTime` (shipped 6 → 1 over 0.5 s) about its centre
+  (`PulseSlotForMessage` S 005f8c30); the label has no size (made by `Label::CreateWithText` S 004b2040), so the
+  same animation leaves it unchanged and its text appears at once [known].
 
 **Minimap** (`nMenu::MiniMap`) [inferred] S 005f3dd0, S 005f3fc0, S 005f4390, S 005f5bb0, S 005f2130
 
 - Base image: the scene renders the map into a 512 × 512 target; a copy masked by the local player's explored
-  cells is the widget's texture. Refreshed after a device reset and on a delayed request.
+  cells is the widget's texture. That texture has no alpha channel, so unexplored land is opaque black inside
+  the round mask [known] ([hud-panels.md](hud-panels.md) §3.7). Refreshed after a device reset and on a delayed
+  request.
 - Overlay 0 (256 × 256, half resolution): territory. Each cell in the owner's colour (`Player::GetColorEntry`,
   the table the military flags use, [hud-panels.md](hud-panels.md) §3.7); interior cells alpha
   0x99, border cells (grid-state bit 0x20) opaque; unexplored cells transparent.
@@ -1094,33 +1140,109 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   view inside the texture; the wheel zooms (§3.3.3).
 - Symbol definitions: `mapSymbols.xml` (§6).
 
-#### 3.8.6 World overlays (`overlayPanel`) [inferred] S 006403c0, S 0063dd30, S 0063d870, S 0061fa40
+#### 3.8.6 World overlays (`overlayPanel`) [known] S 0061fc60, S 0061f980, S 0061f770, S 0061f830, S 0063d870, S 006403c0, S 0063dd30
 
-One overlay widget per soldier and fight, and per building **whose owner has `kind` (+0x08) = 2, the local
-human player** (other players' buildings get none [known] S 0061f980), created and destroyed from the
-simulation's callbacks (building created / removed, soldier added / removed, fight added / removed),
-positioned every frame at the projected world position (widget centred on the projected point plus an offset
-[known] S 0063d870).
+**Which overlays exist** [known], created and destroyed from the simulation's callbacks to the game screen:
 
-- **Building** (template `overlayBuilding`): name coloured by productivity (> 66 green, > 33 orange, else red:
-  `textColGreen` / `textColOrange` / `textColRed`); under construction `N%` and a bar; military buildings:
-  swordsmen and bowmen counts and a hit-point bar; warning icons `notShooting`, `noWorker`,
-  `productionStopped`, `noCoins`, `exclamation0..2`; up to 10 pulsing icons of the goods the building lacks.
-  Screen lift by the property's `size` mask, first match of bit 0 / bit 1 / bit 2: the overlay's
-  `offsetSmall` / `offsetMedium` / `offsetLarge`, subtracted from y as a fraction of the screen height; a mask
-  with none of these bits (mine, ship) gets no lift [known] S 0063e770. [inferred, from the mapped description
-  of the constructor and of the loader S 0063ef50] the three are XML attributes of those names with the
-  defaults 0.04 / 0.06 / 0.09.
-- **Soldier** (template `overlaySoldier`): health bar, green above 0.6, yellow above 0.3, else red; a player
-  colour icon.
-- **Fight** (template `overlayFight`), **Settler** (template `overlaySettler`).
-- An overlay carries five category flags (bytes at +0x1b0) and is shown while it is on screen and the panel
-  has one of its categories switched on [known] S 0063d870. `btInfoMap2` toggles category 0, `btInfoMap3`
-  category 1 (§3.4). A building overlay gets category 1 if its property is a `casern` (+0xf1) or has `health`
-  (+0x8c) > 0, else category 0 [known] S 0061f980; a soldier overlay gets category 1 [inferred] S 0061f770
-  (the constant is read from the mapped disassembly note). While at least one category is on, the
-  `alphaPlane` is faded in [inferred] S 0061fa40. [TODO] not established: the category of fight and settler
-  overlays (a read of `OverlayPanel::CreateFightOverlay` S 0061f830 settles the first).
+| Overlay (template) | Created by | Destroyed by | Category | Owner filter |
+|---|---|---|---|---|
+| Building (`overlayBuilding`) | `CreateBuildingOverlay` S 0061f980 from `Game::OnBuildingCreated` S 005ead80 (callback slot 2) | building removed: S 005eadb0 → `DestroyByKey` S 0063d840 | 1 if the property is a `casern` (+0xf1) or has `health` (+0x8c) > 0, else 0 | only buildings whose owner has `kind` (+0x08) = 2, the local human (`PlayerTable::FindLocalPlayer` S 005bdda0); AI and remote players' buildings get none |
+| Soldier (`overlaySoldier`) | `CreateSoldierOverlay` S 0061f770 from `Game::OnSoldierEnteredFight` S 005eae00 (slot 10), fired by `SoldierFightState::EnterFight` S 0065b840 and its `PostLoad` S 0065b9c0 | the soldier leaves the fight (`LeaveFight` S 0065be90 → slot 11 → `DestroyByKey`) | 1 (the disassembly stores 1 into the argument slot before the `EnableCategory` call S 0063d7b0) | none: every player's soldiers in a fight get one |
+| Fight (`overlayFight`) | `CreateFightOverlay` S 0061f830 from `OnFightAdded` S 005eade0 (slot 13) | slot 14 | 4 | none |
+
+A soldier overlay therefore exists only while its soldier fights. **Settler overlays never exist on their
+own**: the only caller of `OverlaySettler::ctor` S 0064b960 (kind 2) is `OverlaySoldier::ctor` S 0063de90,
+which overrides the kind to 3, so the `overlaySettler` template is dead [known]. The owner test of a building
+overlay happens only at creation; [TODO] not established: what happens to it when the building changes hands
+or a save is loaded (a read of the ownership-change and load paths settles it).
+
+**Layers and the `alphaPlane`** [known]. An overlay carries five category flags (bytes at +0x1b0); the panel
+has five layer switches. The panel constructor S 0061fb10 zeroes `activeLayerCount` (+0x510) and
+`layerEnabled[0..4]` (+0x514). `OverlayPanel::LoadFromXml` S 0061fc60 loads the child `alphaPlane`, re-applies
+the template `overlayBuilding`, `overlaySettler` or `overlaySoldier` to every live overlay by its kind 1, 2 or
+3 (fight overlays are skipped), resets the count to 0 and switches layers 2, 3 and 4 on: that fades the
+`alphaPlane` in once and leaves the count at 3. So **fight overlays are always shown** while on screen,
+independent of the two buttons. `ToggleLayer` S 0061faf0 is `SetLayerEnabled(idx, layerEnabled[idx] == 0)`
+S 0061fa40; it is the only caller of `SetLayerEnabled`, and only with index 0 or 1. The count therefore moves
+between 3 and 5 and never reaches 0: **the `alphaPlane` never fades out**, and toggling never fades it in
+again. Quirk (presentation only): a reload of the XML resets the count but not `layerEnabled[0..1]`.
+
+- The fade is `FadeIn` or `FadeOut` over 0.5 s, after which the caller sets the animation's byte +0x30 to 1;
+  `AnimationAlphaFade::Update` S 004d2220 then applies smootherstep `((6a − 15)a + 10)a³` to the interpolated
+  alpha, from the current opacity to 1 (or 0), recursively.
+- The `alphaPlane` is a plain `nUi::Picture` (kind 0xe) created at (0, 0) under the panel (S 0061f920). Code
+  sets no texture, colour or size: everything visible comes from the XML. The overlays are children of the
+  panel, not of the `alphaPlane` (every `Create…` passes the panel as parent), so its opacity does not reach
+  them. [inferred] Without a shape in the XML it draws nothing.
+- `FadeIn` returns null when the `alphaPlane` is not attached yet. [TODO] not established: whether the panel's
+  creation in `SetupHud` (S 005ee0c4) runs before the game screen's XML load (S 005ed034 in `LoadFromXml`);
+  a read of the order of the two settles whether the one fade-in at load takes effect.
+
+**Buttons** [known] `Game::OnButtonClick` S 005eb850: `btInfoMap2` (Game +0x3650) calls `ToggleLayer(0)`,
+`btInfoMap3` (Game +0x4068) `ToggleLayer(1)` (§3.4). Each click latch is read and cleared
+(`Widget_ReadClearClickLatch`); there is no return between the two tests, and `btBack`, `btForward` and
+`btQuests` are tested afterwards. Both are `nMenu::RoundIngameButton`s (ctor S 005ebbc0) whose only behaviour
+of their own is the hover highlight (green or red at +0x508 / +0x790, faded in over 0.1 s by S 00622bc0,
+hidden again on a click by S 00622d10); no game code writes a toggled state to them. `nUi::Button::OnClicked`
+S 004b12d0 toggles `marked` (+0x2ec) only for a `checkbutton` (+0x2ed), so a latched look could come from the
+XML alone and would never follow the panel's state. Every click plays `uiClick0` and fires `<name>_isClicked`.
+The hotkeys are `e` and `m` (`menuingame.xml`) [known: data]; [inferred] they take the same click path (the
+hotkey dispatch is not traced). `btInfoMap1` is independent: it flips Game +0xfff0 and calls
+`StartOverlayColorFade` S 005eabd0 (the terrain info-map tint, §3.4), then the handler returns early; it never
+touches the `OverlayPanel`.
+
+**Positioning** [known]. Per frame the overlay's `IUpdateable` update first refreshes the content, only if
+the overlay and its parent are visible (buildings S 00641030, soldiers S 0063de50, fights S 0063e2d0); then
+`ProcessPendingAndNotify_thunk` S 0063d790 calls the position slot (vftable +0x84), then
+`nUi::Object::Update`.
+
+- **Building point**: `SetWorldCellWithSizeOffset` S 0063e770 → `SetWorldCell` S 0063da50 →
+  `TerrainGrid::CellToWorldPos` S 00687790 of the building's cell (+0x20): x = cell.x × 4 (+2 on odd rows),
+  z = cell.y × 4, y = the terrain elevation at that vertex × `g_MapHeightScale`; no further 3D height.
+- **Lift**: screen y gets `−offset`, chosen by the property's `size` mask (+0x3c), first match: bit 0 →
+  `offsetSmall`, bit 1 → `offsetMedium`, bit 2 → `offsetLarge`, else 0 (mine, ship). The unit is a fraction of
+  the screen height (pixels are divided by the device height, S 004aab10). Constructor defaults (S 0063ed74
+  onwards): large 0.09, medium 0.06, small 0.04; the XML attributes of those names override them (loader
+  S 0063ef50). x has no offset.
+- **Soldier point**: `UpdatePositionFromSettler` S 0064ba40 takes the character's movement position (+0x58 ..
+  +0x60) plus (0, AABB size.y, 0), the top of the character; screen offset 0; the overlay's visibility test is
+  the character's `visible`; without a character the overlay is hidden.
+- **Fight point**: S 0063e310 takes the fight cell (fight +0x48), lifted by the attacked building's size with
+  the same three offsets; hidden when the cell is −1 or the target reference is invalid.
+- **Projection and centring** (`SetWorldPosition` S 0063d870): `ProjectToScreen` S 004d45b0
+  (`D3DXVec3Project`) counts as on screen only when `0 < x ≤ viewport width`, `0 < y ≤ viewport height` and
+  `0 < z ≤ 1`; only the anchor point is tested. The pixels are converted to fractions and
+  `pos = projected − 0.5 × own deployment size + offset` is set as the relative position every frame. When the
+  anchor is on screen, the visibility test passes and one of the overlay's categories has its panel layer on,
+  a hidden overlay with no running animation fades in (0.2 s, linear); otherwise a visible idle one fades out
+  (0.2 s).
+- No distance, zoom or LOD culling and no scaling: only the position changes; sizes are those of the
+  templates (`overlayBuilding`, `overlaySoldier` 100 × 100 px [known: data, `templates.xml`]).
+- Draw order [inferred]: the child order under the panel, i.e. creation order; no z-order or depth sort was
+  found. [TODO] not established: the panel's place among the HUD widgets.
+- Visibility at creation: `Overlay::InitAndAttachToParent` S 0063d770 hides building and fight overlays.
+  `OverlaySoldier::InitAndAttachToParent` S 0063e030 calls `nUi::Object::InitAndAttachToParent` directly, so a
+  new soldier overlay is kept hidden only by the template's `visible="false"` until `SetWorldPosition` fades it
+  in.
+
+**Content.**
+
+- **Building**: name, construction progress, garrison counts and hit-point bar, warning icons, up to 10
+  pulsing icons of missing goods, the name coloured by productivity (> 66 green, > 33 orange, else red:
+  `textColGreen` / `textColOrange` / `textColRed`); the full rule of `OverlayBuilding::UpdateFromBuilding`
+  S 006403c0 is in [hud-panels.md](hud-panels.md) §3.6.1.
+- **Soldier** (`UpdateHealthAndColor` S 0063dd30): `r = soldier +0x1ec ÷ SettlerProperty(soldier +0x58)
+  +0x88`, nothing updated when the maximum is 0 ([inferred] r is the fraction of hit points left). All three
+  bars get the value r (`healthBars[0..2]` = `progressRed`, `progressYellow`, `progressGreen`, bound in
+  S 0063dcb0); exactly one is shown: green if r > 0.6, yellow if r > 0.3, else red. `colorIcon` gets the RGBA
+  of the soldier's owner (soldier +0x28) from the 16-byte-stride table S 0087f8c8 (S 0060ed40), filled from the
+  `iconconfig.xml` node `PlayerColors` (S 00611320; attributes `blue`, `red`, `green`, `yellow`, `white`,
+  `black`, `magenta`, `grey` for indices 0..7); built-in defaults (0, 0, 1), (1, 0, 0), (0, 1, 0), (1, 0.9, 0),
+  (1, 1, 1), (0.4, 0.4, 0.4), (1, 0, 1), (0.1, 0.7, 0.7).
+- **Fight**: the child `clockSymbol` is bound by name in S 0063e450 and driven by `UpdateDisplay` S 0063e190:
+  ticks from fight +0xb4 when the local player is the attacker and `Military_GetFlagB8` is set, else from the
+  target building's `Military` +0x90 when the target is local; it shows `(ticks + 9) ÷ 10` and is hidden for
+  −1.
 
 #### 3.8.7 Message boxes
 
@@ -1167,7 +1289,7 @@ Load and save panel (`menuLoadSave.xml`, `nMenu::LoadSavePanel`, mode 0 load / 1
 field; save over an existing name asks `!Overwrite file?`; delete asks `!Remove this file?`; a chosen file is
 handed to `nMenu::System` (+0x68) and started on the next update.
 
-#### 3.8.9 Sacrifice bar and target chooser [inferred] S 006264d0, S 00625300, S 00625d90, S 00627210, S 00626c20
+#### 3.8.9 Sacrifice bar and target chooser [inferred] S 006264d0, S 00625300, S 00625d90, S 00627210, S 00626ea0, S 00626c20
 
 - **Bar** (`sacrificePanel`, 15 + 15 buttons): row 1, left to right: source buildings of running own
   sacrifices, own sacrifice buildings that are ready or have an order pending, the running research. Each with
@@ -1190,12 +1312,17 @@ handed to `nMenu::System` (+0x68) and started on the next update.
   (size 7), 1 `!MEDIUM` (6), 2 `!BIG` (4), 3 `!MINE` (8), 4 `!SHIP_SIZE` (16) [known] S 00634db0; captions [known:
   `menuingame.xml` `tabButton0..4`]. `IconConfig` keys a building's icon per tribe by the building's name in lower
   case with spaces replaced by underscores [known] S 0061236d (inside `IconConfig::LoadFromXml` S 00611320). A
-  button is enabled unless the filter stored at +0x1638 is not 0 and
+  button is enabled (button vtable slot 8, `SetEnabled`) unless the filter stored at +0x1638 is not 0 and
   `Building_TypeFitsConstructionFlags(filter, type)` (S 0052e510) fails, or the type is locked for the player
-  (`ai::player::Player::IsLocked`, `menu.lockBuilding`). Tabs without an enabled button are disabled. The tab of
-  the filter's highest bit among bits 0..4 is selected; then `EnsureEnabledTabSelected` S 00634160 keeps the
-  selected tab if it is enabled and otherwise selects the first enabled one, so with a filter of none of those bits
-  the previously selected tab stays when it is still enabled [known] S 00634db0, S 00634160. Every rebuild starts
+  (`ai::player::Player::IsLocked`, `menu.lockBuilding`); a disabled button draws its shape in `disabledColor`
+  (0.4667 grey, alpha 1, §2.4). **A tab without an enabled button is hidden**, not disabled: S 00634db0 calls
+  vtable slot 9, `nUi::Object::SetVisible` S 004a1090 (read at 0x00634fce–0x00634fe5 against the `nUi::Button`
+  vtable S 007dff14). The tab of the filter's highest bit among bits 0..4 is selected; then
+  `EnsureEnabledTabSelected` S 00634160 keeps the selected tab if it is visible (slot 11, `IsVisible`
+  S 004a0100) and otherwise selects the first visible one, so with a filter of none of those bits the previously
+  selected tab stays when it is still visible [known] S 00634db0, S 00634160.
+  `TabControl::LayoutTabButtonsHorizontally` S 004ba3f0 packs the visible tab buttons from the first tab's x,
+  each advanced by its width (82 px): x = 5, 87, 169, … [known]. Every rebuild starts
   with `ClearBuildingButtons` S 00634210, which also resets the chosen type (+0x1630) to −1 [known].
 - **Layout**: grid from `itemsOffset`, `itemsSize`, `itemsSpread`, `numItemsPerLine` (shipped `6 6`, `56 56`,
   `71 64`, 7; constructor defaults 0 0, 80 80, 85 85). The row wrap happens once per tab, at index =
@@ -1272,6 +1399,12 @@ pages=1 / char id=…`), not encrypted. Shipped: `Body_Arial` (default of every 
 `light_system`, `dark_system`, `light_system_outlined`, `font_big_white`, `small_no_alias_white`, `editor`.
 Fonts are bitmap fonts drawn at their native size; there is no scaling attribute.
 
+**Default fonts** [known]: a widget's text without a `font` is `Body_Arial`
+(`Object::InitAndAttachToParent` S 004a56d0), centred on its point (`Text::ctor`, alignment 8 at S 004b3eee).
+The exception is `controltype="label"`: the factory's kind 9 (`Factory::CreateObject` S 004c28a0, name table
+S 007bf5f0) runs `Label::Create` S 004b2170 → `CreateWithText` S 004b2040, which gives the label
+`Subline_Garamond`, white, left-aligned. Button captions follow the button's style (§3.2.1).
+
 **Localised textures**: `[data]\language\<lang>\<name>.dds` (e.g. `ui_s2logo.dds`) [inferred] S 00494470.
 
 ---
@@ -1323,7 +1456,7 @@ Per frame (`CApplicationEx::FrameTick_InGame` S 004018e0; the calls below are in
 4. Delete closed panels: the loading panel (+0xcc70, hidden first), then +0xcc7c, +0xcc80, +0xcc84, +0xcc78,
    each when it is no longer visible.
 5. Scene colour fade (0.2 s linear interpolation of four floats, started by `btInfoMap1` and the cinematic
-   screen through `StartOverlayColorFade` S 005eac30): the tint of the build-placement icons, which draw only
+   screen through `StartOverlayColorFade` S 005eabd0): the tint of the build-placement icons, which draw only
    while its alpha is > 0 ([rendering.md](rendering.md) §3.14).
 6. `btBack` / `btForward` enabled when `Selection_IsKind1` of the game selection is true; the children
    `x2` / `x3` of `btSpeed` are shown when the profile's speed scale truncates to 2 / 3.
@@ -1501,8 +1634,10 @@ The UI is presentation and command entry. Evidence that it does not touch simula
 - The per-frame updates only read the simulation [inferred]. UI time is wall-clock time
   (`Timer_GetTotalSeconds`, frame delta); the UI does not call the simulation's random generator [inferred].
   The one random use found is the C runtime `rand()` in `OverlayBuilding::InitAndAttachToParent` S 0063f550:
-  each of the ten good icons of a building overlay gets an alpha pulse animation whose float at +0x2c is
-  `1 + ((rand() & 0x3f) − 32) ÷ 320` (0.9 .. 1.097; taken to be the pulse rate) [known]. It runs when an
+  each of the ten good icons of a building overlay gets an alpha pulse animation (min 0.8, max 1.0, not
+  recursive) whose frequency is `1 + ((rand() & 0x3f) − 32) × 0.03125 × 0.1` (0.9 .. 1.097), and
+  `AnimationAlphaPulse::Update` S 00763510 sets `alpha = min + (max − min) × (0.5 + 0.5 × sin(2π × elapsed ×
+  frequency))` [known]; [inferred] it runs continuously. It runs when an
   overlay is created, so the number of `rand()` calls differs between machines; a remake must not let the
   simulation share that generator.
 
@@ -1511,7 +1646,7 @@ Exceptions, all local-only or offline-only:
 | What | Effect | Guard |
 |---|---|---|
 | Pause (`p`) | `TogglePause` S 005da400: saves the profile's speed scale and sets it to 0 (unpause restores it, at least 1.0), pauses all sounds, fades in the pause panel; the HUD logic of `Game::Update` stops (§4) | no effect in network roles 1..4, when the game screen is not open or while the cinematic dialog is open; the key works while the session hangs [known] |
-| Chat cheats on Enter: `WhatTheHell` (speed scale 20), `WhatCanEyeSee` (explore the whole map for the local player), `DontWantToLose` (records the current map as completed in the user profile and saves it; `Game::Update` then opens the end screen, §4), `ThatsANiceView` (camera state 0 ↔ 2), `ItsLikeAJackpot` (adds 10 of every good of the tribe's two good lists whose good type is neither 2 nor 3 to the stock of the completed building of the local player that `NVillage::System` returns first) | the first, second and last change simulation state directly | offline role (role 0) only; the line is still sent as chat afterwards [known] S 005ec340, S 005eba50 |
+| Chat cheats on Enter: `WhatTheHell` (speed scale 20), `WhatCanEyeSee` (explore the whole map for the local player), `DontWantToLose` (records the current map as completed in the user profile and saves it; `Game::Update` then opens the end screen, §4), `ThatsANiceView` (camera state 0 ↔ 2), `ItsLikeAJackpot` (adds 10 of every entry of the tribe's goods and jobs lists, soldiers included, whose good type is neither 2 nor 3 to `stockB` of the local player's first completed depot, S 00558730; [camera-input-cutscenes.md](camera-input-cutscenes.md) §3.12) | the first, second and last change simulation state directly | offline role (role 0) only; the line is still sent as chat afterwards [known] S 005ec340, S 005eba50 |
 | `ComputeSelectionKind` on a soldier in a fight, `MakeUniqueFromState` on a ship | change the **local selection** (not simulation state) | – |
 | Lua `menu.*` world edits | [lua-runtime.md](lua-runtime.md) §3.7 | map scripts run identically on all peers |
 | Emergency save, autosave notice | file output | – |
@@ -1580,7 +1715,7 @@ reads the icon grid parameters from `actionbuttons`.
 | 2 | Exact attribute semantics of Slider, Slider2, SliderEx, StackedSlider, ListBox2, Graph, TextScroller, EditEx | static read of each `LoadFromXml` and `Update` (§3.1.9) |
 | 3 | Text markup grammar of `TextBlock` (`<r g b a>`, `<right>`, `<c>`, others) | static read of `nUi::TextBlock` layout / draw |
 | 4 | Meaning of building property +0x3c = 8 and of the owner test behind selection kinds 0xb / 0xf; of property +0xb0 (taken as "catapult" from the box it selects) and +0xf5 / +0x54 (minimap colours, depot soldier tab) | static read of the `BuildingProperty` loader ([properties-data.md](properties-data.md)) |
-| 5 | Which overlay layer (0 / 1) holds which overlay classes, and what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12]. Partly answered: the colour fade is itself what shows the build-placement icons, which draw only while its alpha is > 0 (§3.4, [rendering.md](rendering.md) §3.14) [known] S 00688c40, S 005eac30 | static read of `OverlayPanel::CreateBuildingOverlay` and of the readers of Game +0xfff0 |
+| 5 | Answered for the layers (§3.8.6): building overlays are category 0 or 1, soldier overlays 1, fight overlays 4 (always on); `btInfoMap1` never touches the overlay panel. Open: what `btInfoMap1`'s mode changes besides the colour fade (it also enables a per-cell debug text when the local player entry flag +0x50 is set, S 005ef060). Seen in the game: the mode shows the building sites and hides no overlay [live, 2026-10-12]; the colour fade is itself what shows the build-placement icons, which draw only while its alpha is > 0 (§3.4, [rendering.md](rendering.md) §3.14) [known] S 00688c40, S 005eabd0 | static read of the readers of Game +0xfff0 |
 | 6 | Answered (§3.5): a right click never steps back. The test S 0078b180 is `planner0.IsConstructionActive() && CanComplete()`; when it holds, the right click keeps mode 3 and `MenuSelection::Update` S 006163f0, which needs the test to be false, ends the mode; otherwise the right click cancels | — |
 | 7 | Answered (§3.3.1): the letter hotkeys fail with Caps Lock or Shift (character-code comparison) [live, 2026-10-12] | — |
 | 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
@@ -1669,14 +1804,23 @@ reads the icon grid parameters from `actionbuttons`.
 | 00624470 | `nMenu::ActionButton::LoadFromXml` | icon grid parameters, failure texts |
 | 00622f40 | `ActionButton_BuildIconRectTable` | icon cell per action (§6) |
 | 005f0880 / 005f0c80 | `nMenu::ActionButtonPanel::PositionAtCursor` / `ShowExecuteConfirmation` | panel placement, confirmation |
+| 005f0df0 / 005f0ef0 | `nMenu::ActionButtonPanel::LayoutVisibleButtons` / its jump table | panel strip by the number of visible buttons |
+| 00638850 / 0064a9b0 / 006309b0 | `nMenu::InfoBoxFlag::ctor` / `GoodList::SetFromFlagGoods` / `GoodButton::Clear` | flag box goods |
+| 00615990 / 0068cae0 / 00681300 / 00680ef0 | `MenuSelection::UpdatePreviewImage` / `RenderObjectPreview` / `RenderPreviewTexture` / `MapCamera::ctor` | selection preview picture |
 | 006247a0 / 00624700 | `nMenu::AttackSlider::UpdateLabels` / `ExecuteAttack` | attack |
 | 00631820 / 00631310 | `nMenu::InfoBox::ctor` / `LoadFromXml` | info box frame |
 | 00634db0 / 006340b0 | `nMenu::InfoBoxCreateBuilding::RebuildBuildingButtons` / `OnChildClicked` | build menu |
-| 00634160 / 00634210 | `InfoBoxCreateBuilding::EnsureEnabledTabSelected` / `ClearBuildingButtons` | tab kept or first enabled; chosen type reset to −1 |
+| 00634160 / 00634210 | `InfoBoxCreateBuilding::EnsureEnabledTabSelected` / `ClearBuildingButtons` | tab kept or first visible; chosen type reset to −1 |
+| 004ba3f0 / 004a1090 / 004a0100 | `nUi::TabControl::LayoutTabButtonsHorizontally` / `nUi::Object::SetVisible` / `IsVisible` | visible tabs packed by width; tabs without an enabled button hidden |
 | 0064b610 / 0052e510 | `nMenu::BuildingButton::CreateForBuilding` / `Building_TypeFitsConstructionFlags` | button icon and name tooltip; filter test |
-| 005eac30 | `nMenu::Game::StartOverlayColorFade` | info-map tint fade, the build icons' only switch |
+| 005eabd0 | `nMenu::Game::StartOverlayColorFade` | info-map tint fade, the build icons' only switch |
 | 00632e40 / 0063abc0 | `nMenu::InfoBoxDepot::OnChildClicked` / `nMenu::InfoBoxCasern::IUpdateable_Update` | `0x2001E` senders |
 | 0062f390 | `nMenu::SacrificeButton::OnClicked` | `0x20024` / `0x20027` |
+| 0062f4e0 / 00617db0 | `nMenu::SacrificeButton::SetSacrifice` / `nMenu::MenuSelection::ResetAndRefresh` | sacrifice button state and fans; selection kind recomputed |
+| 0063aec0 / 0063a8c0 | `nMenu::InfoBoxCasern::ctor` / `BindChildControls` | casern box |
+| 0063a050 / 00639d30 / 0063a4b0 | `nMenu::InfoBoxTerritoryBuilding::ctor` / binding / fill | territory building box; the dead attacker line |
+| 0064ab20 / 00649c00 / 0062fed0 | `nMenu::GoodList::InitWithItemCount` / `SetFromSoldiers` / `GoodButton::InitFromSettler` | soldier slots |
+| 0055fe50 | `NVillage::Military::GetToggleSoldierKindBlockReason` | failure codes 1..3 of actions 13 / 14 |
 | 00626c20 / 00627210 | `nMenu::SacrificeTargetPanel::OnChildClicked` / `ShowTargetChoice` | `0x20026` |
 | 00620970 / 00621480 | `nMenu::IngameSettingsPanel::OnButtonClick` / `OnXmlLoaded` | settings confirm |
 | 006412f0 | `nMenu::GoodArrangementPanel::OnSliderValueChanged` | `0x2001F` |
@@ -1686,6 +1830,11 @@ reads the icon grid parameters from `actionbuttons`.
 | 005f8fa0 / 005f7000 / 005f8b90 | `nMenu::Messages::InitAndAttachToParent` / `Detach` / `Refresh` | message rows and buttons; filters and the 7-row window |
 | 005f49e0 / 005f3fc0 / 005f4390 / 005f5bb0 | `nMenu::MiniMap::Render` / `UpdateTerritoryOverlay` / `UpdateObjectOverlay` / `RenderSymbols` | minimap |
 | 006403c0 / 0063dd30 | `nMenu::OverlayBuilding::UpdateFromBuilding` / `nMenu::OverlaySoldier::UpdateHealthAndColor` | world overlays |
+| 0061fb10 / 0061fc60 / 0061faf0 / 0061fa40 / 0061f920 | `nMenu::OverlayPanel::ctor` / `LoadFromXml` / `ToggleLayer` / `SetLayerEnabled` / `alphaPlane` creation | overlay layers; layers 2..4 on at load |
+| 0061f980 / 0061f770 / 0061f830 | `OverlayPanel::CreateBuildingOverlay` / `CreateSoldierOverlay` / `CreateFightOverlay` | categories 0 / 1, 1, 4 |
+| 005ead80 / 005eae00 / 005eade0 | `nMenu::Game::OnBuildingCreated` / `OnSoldierEnteredFight` / `OnFightAdded` | overlay creation callbacks (slots 2, 10, 13) |
+| 0063d870 / 0063e770 / 0064ba40 / 0063e310 | `nMenu::Overlay::SetWorldPosition` / `SetWorldCellWithSizeOffset` / `UpdatePositionFromSettler` / fight overlay position | projection, lift, fade in and out |
+| 0064b960 / 0063de90 | `nMenu::OverlaySettler::ctor` / `nMenu::OverlaySoldier::ctor` | the settler overlay only as a base of the soldier overlay |
 | 00627650 / 005ea100 | `nMenu::QuestInfoPanel::Update` / `nMenu::QuestLog::RebuildList` | quests |
 | 0062c610 / 0062c150 | `nMenu::MessageBox2::SetupButtons` / `GetClickedResult` | message box modes |
 | 00600300 / 006009b0 / 006008b0 | `nMenu::Requester::Open` / `Update` / `ExecuteConfirmed` | leave / quit |

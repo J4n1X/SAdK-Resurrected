@@ -223,7 +223,7 @@ vector [known] S 006c0410.
 
 | Structure | Size | Content | Evidence |
 |---|---|---|---|
-| `S2CG::Building` | 0x218 | logic building (+0x18), gfx desc (+0x34), world position (+0x9c), hidden (+0xc0), fog visible (+0xc4), construction progress previous / current / fade end time / rate (+0xc8..+0xd4), under construction (+0xd8), the same four for the upgrade (+0xdc..+0xe8), upgrading (+0xec), upgrade gfx desc (+0xf0), demolish progress (+0xfc, negative = none), shadow caster (+0x100), ground decal (+0x104), scaffold (+0x1fc), fire point count (+0x200), fire points (+0x208, 0x5c each) | [known] S 006aa1b0, S 006aabe0, S 006abbb0, S 006ab840; [inferred] S 006ac810 |
+| `S2CG::Building` | 0x218 | logic building (+0x18), gfx desc (+0x34), world position (+0x9c), hidden (+0xc0), fog visible (+0xc4), construction progress previous / current / fade end time / rate (+0xc8..+0xd4), under construction (+0xd8), the same four for the upgrade (+0xdc..+0xe8), upgrading (+0xec), upgrade gfx desc (+0xf0), demolish progress (+0xfc, negative = none), entrance street `pEntranceStreet` (+0x100, the door path, [world-objects-rendering.md](world-objects-rendering.md) §3.6), ground decal (+0x104), scaffold (+0x1fc), fire point count (+0x200), fire points (+0x208, 0x5c each) | [known] S 006aa1b0, S 006aabe0, S 006abbb0, S 006ab840; [inferred] S 006ac810 |
 | `S2CG::BuildingDesc` | 0xc0 | name, mesh path, frame path; LOD mesh parts (+0x54), animated visual (+0x5c), bounds (+0x68 min.y, +0x74 max.y), door and work animations (+0x80..+0x88), production sub-desc (+0x8c), stage count (+0xa4), stage subset table (+0xa8), frame render object (+0xac) | [known] S 006aabe0 for bounds, [inferred] S 006d3880, S 006a15a0 |
 | `S2CG::CCharacter` | 0xbc [inferred, mapped struct] | animation (+0x80), movement (+0x84), per-type logic face (+0x88), queued animation (+0xa4), effects (+0xb0) | [known] S 006909f0 |
 | `S2CG::CharacterAnimation` | 0x6c [inferred, mapped struct] | model cache (+8), current track (+0xc), instance handle (+0x30), selection keys (+0x38, +0x3c, +0x40, +0x44), requested slot (+0x54), loop mode (+0x58), owner face (+0x60), one-shot playing (+0x64), idle sequencer (+0x68) | [known] S 006c64c0, S 006c6590 |
@@ -1133,7 +1133,8 @@ fires keep burning unchanged while the building sinks. The buffs run only when t
 Then the work-cycle and one-shot clips, and `UpdateFireEffects` (above).
 
 **Military flags** `CMilitaryFlagRenderer::DrawFlags` S 006d2820 (disassembly), S 006d2d80, S 006d2ec0 [known]:
-every building is registered on creation (S 006a2bf0); a flag is drawn for one that is not hidden, whose own
+every building is registered on creation (S 006a2bf0); a flag is drawn for one whose renderer building is not
+hidden (its vtable +4 test), whose own
 construction remainders are both <= 0 and for which `Military::HasMilitaryFlag` S 0055fd00 holds (property
 +0x94 > 0 and +0x98 != 0, or the three headquarters flags +0x54, +0xf1, +0xf5). World matrix = the node matrix
 of the bone `MILFLAG` (`BuildingDesc +0xbc`) of the building's animated model, or without that bone a rotation
@@ -1142,15 +1143,18 @@ bounds; then times the building's world matrix. 23 meshes in `[data]\buildings\`
 1..11 `MilitaryFlagSword00..10.KEX`, 12..22 `MilitaryFlagBow00..10.KEX`, packed into one vertex and index buffer
 (each draw starts after the summed counts of the meshes before it).
 
-- Mesh: 0 unless the building is occupied and its territory component is active; else
+- Mesh, chosen anew every frame (there is no raise animation): 0, the bare pole, unless
+  `Building::IsOccupied` S 0055c400 holds and the building's `TerritoryUpdater` (+0xc4) has its byte +8
+  (`bActive`) set; else
   `1 + n + (soldierKind != 0 ? 11 : 0)` with `soldierKind` = `Military +0x68` (0 sword, 1 bow; `military.md`
   §2.4) [known, disassembly S 006d2a13..S 006d2a2b] and `n` = `NVillage::Military::GetFlagSoldierCount`
   S 0055fd40: the number of soldiers present in the building, or for a building whose property has the three
   flags at +0x54, +0xf1 and +0xf5 set (the headquarters-type depot [inferred]) the number of soldiers in its
   depot stock, capped at 10.
 - Texture: `[data]\buildings\MilitaryFlag<i>.dds`, i = 1..3 (built as text in S 006d2ec0); index 0 unless the
-  building is a military building, else `max(0, zone)` with `zone` = `NVillage::Military::GetProximityZoneA`
-  S 0055fbb0 (a 0 / 1 / 2 class of the value at `Military +0x5c`, -1 while the territory component is inactive;
+  building is a military building (`Military::IsMilitaryBuilding` S 0055fb80), else the zone when it is > 0 and 0
+  otherwise, through `S2CG::Building::GetMilitaryProximityZone` S 006aa2f0, with `zone` =
+  `NVillage::Military::GetProximityZoneA` S 0055fbb0 (a 0 / 1 / 2 class of the value at `Military +0x5c`, -1 while the territory component is inactive;
   `docs/sim/military.md`). The meshes' own material name (`MilitaryFlag1.dds`) is not used.
 - Colour: `FLAG_COLOR` = the owner's player colour entry (`Player::GetColorEntry`).
 - Shader `house_soldierflag.fx` (z test and write, no blending, no alpha test) [known, file]:
@@ -1443,7 +1447,9 @@ up to 40.
 **Ships** [inferred] S 006a54c0, S 006a5cc0: position = lerp between the logic ship's two
 cells by its progress; animation state 0 idle, 1 moving, 2 when the logic state is 6 or 7 (sinking set of
 `ships.xml`: `idle`, `move`, `sink`); yaw steers toward the hex heading; sine bobbing; a status overlay mesh
-(`<Freight>`, `<Expedition>`, `<Soldiers>` meshes) by cargo kind; construction `frame` mesh per tribe.
+(`<Freight>`, `<Expedition>`, `<Soldiers>` meshes) by cargo kind; construction `frame` mesh per tribe, drawn
+triangle by triangle with the frame's progress before the hulls, and a hull that rises through a user clip plane
+with its fade ([animation-models.md](animation-models.md) §3.17) [known].
 
 **Animals** [inferred] S 006ce2c0: logic states 5, 7, 8, 9 play the death animation once, after which the model
 sinks at `0.4 * dt`; standing animals play one of two idles chosen with a private generator (static seed
@@ -1571,10 +1577,18 @@ on it; the remake may continue the dome's surface past the square in both modes.
 `DrawSkydome` S 006af150 draws only the grid: the sun and moon quads are built and never drawn
 [known]. `RenderSkydome` S 00683e50 binds the skydome texture of the map's `.bin` index (`<Enviroment><Skydome>`
 in `graphics.xml`: Clouds, Stars, Egypt, Bavaria, Scot) with a rotation texture matrix, and a second one only when a
-secondary index is set [known]. Pixel (`enviroment_shader.fx`, technique `Default`) [known, file]:
-`uv = rotation(uv) + (t * 0.015, t * 0.005)`, colour = the texture alone (the vertex colour, and with it the alpha
-above, and the day-time blend of two textures are used only by the `combineTextures` variant, which the `Default`
-technique does not compile), alpha-blended over the background colour, depth test on, no depth write.
+secondary index is set [known]. Shader (`enviroment_shader.fx`, technique `Default`) [known, file]: the vertex
+shader `Main_VertexShader` sets texcoord 0 = `rotation(uv) + g_Timer.y × (0.015, 0.005)`; the pixel colour = the
+texture alone (the vertex colour, and with it the alpha above, and the day-time blend of two textures are used
+only by the `combineTextures` variant, which the `Default` technique does not compile), alpha-blended over the
+background colour, depth test on, no depth write.
+
+**Shader time** [known] S 004d78a0, S 0067f6b0: `g_Timer` (`TIMER`, handle S 008874dc in the table S 0088746c)
+is `CGraphicDevice +0x300`, written by `BeginRendering` S 004d78a0 with `.x` = Scene +0x58 (the frame delta)
+and `.y` = Scene +0x4c. `Scene::UpdateDetailFlagsAndTime` S 0067f6b0 copies `NLogic::System.accumulatedTime`
+(+0x7c) into Scene +0x4c (and the system's frame delta +0x74 into +0x58): game seconds, scaled by the game speed
+and standing still in a pause. (With its real-time argument set the function accumulates a high-resolution timer
+instead.) So the clouds drift with game time; the main view and `RenderReflectionPass` S 00680ab0 share the value.
 
 **Environment particle layer** (`ai::render::EnvParticleLayer`, 0x258 bytes) [inferred] S 006adc90: a grid of
 falling streak billboards (spacing 0.1) around the camera with a per-point pseudo-random phase;
@@ -1609,15 +1623,37 @@ size is [TODO] (the arguments of `CreateRenderTarget` in S 00697290 are not reso
 selection kind: a map cell with a radius, a building, a unit, a ship (radius fixed to 11). Enemy targets use
 style 2; linked buildings and destinations get the extra markers; a marker whose target is gone clears the
 selection. The decal is projected onto the terrain triangles under it (`CLandscape::ProjectDecal` S 0068aad0);
-textures from `decals.xml` (3 `<Texture>` entries; the first is `[data]\gfx\decals.dds`) [known, file].
-[TODO] not established: the UV rectangle per style inside those textures (`SelectionMarker::UpdateDecal` S 006b0d00).
+textures from `decals.xml` (3 `<Texture>` entries: `decals.dds`, `buildingselect.dds`, `catapultTarget.dds`, all
+in `[data]\gfx\`) [known, file]. The marker [known unless tagged]:
+
+- takes the whole texture, UV (0, 0)–(1, 1), in white; the style is the index into the `<Texture>` list
+  (`SelectionMarker` `CreateDecal` S 006b0b50 → `DecalRenderer::CreateDecal` S 004df1d0) [inferred: that the
+  style indexes the list]: 1 `buildingselect.dds` (style 1 is set in S 00689500), 2 `catapultTarget.dds` (an
+  enemy building);
+- is a square whose full side is the size (`DecalProjector::BuildVertices` S 004efe20, `SetSize` S 004efd10,
+  `GetClipPlanes` S 004f0390): 4 world units for a flag, a street cell and a clicked cell
+  (`PushSelectionToScene` S 00615bb0; also the cell ring of build placement, `BeginBuildPlacement` S 006176d0 /
+  `SelectCell` S 00617770, [ingame-ui.md](ingame-ui.md) §3.5), and for a building the larger of the x and z
+  sizes of its box (S 006b0bc0);
+- turns by `time × 0.025132744` radians, i.e. 2π / 250 per time unit (`SelectionMarker::UpdateDecal`
+  S 006b0d00); [TODO] not established: the unit of that time (a read of where its time argument is filled
+  settles it);
+- lies 0.3 above the ground (the normal offset of the projection,
+  [world-objects-rendering.md](world-objects-rendering.md) §3.9).
 
 **Build-placement overlay** `ConstructionMapRenderer::AddCellsInRect` S 006b36d0: for every cell of every visible
 block, except the cell the cursor hovers, the construction flags of the cell for the local player
 (`docs/sim/map-resources.md` §3.5) choose an icon. Cells whose flags are 0 get none, and nothing is drawn when
 the player's byte +0x50 is clear [known]. The cell left out is the cursor's: `Begin` is handed
 `nGame::System + 0x10`, the game cursor, and `AddCellsInRect` skips the cell at its +0x14 / +0x18 [known]. The
-icon index is:
+hovered cell is not empty, though: `nGame::Cursor::UpdateCellMarker` S 007885e0 (from `Cursor::Update`
+S 0078a2b0, from `nGame::System::Render` S 007835d0) draws that cell's icon every frame, info-map mode on or off,
+by the same index rule but from the glowing rows of `ui_ingame3.dds`: `x = entry + 0.015625` (S 008352e0),
+row = `int(x)`, u = `frac(x)`, v = 0.625 (S 008352d8) + row × 0.0859375 (S 00835328), i.e. the 88 × 88 cell at
+pixel `(16 + 88 × col, 640 + 88 × row)`, 168 px above the overlay's row at 808. Its quad is 3.5 world units
+(constants 0.5 S 007d877c, 3.5 S 007e6954), camera-facing about (0, 1, 0), and drawn as a UI sprite; nothing
+is drawn when the cell's flags are 0 or a building is under the mouse [known]
+([camera-input-cutscenes.md](camera-input-cutscenes.md) §3.10). The overlay's icon index is:
 
 ```
 base  = 0 if flags & 0x04, else 1 if 0x02, else 2 if 0x01, else 3 if 0x08, else 4 if 0x10
@@ -1651,7 +1687,7 @@ attributes `iconSize 3.0` and `iconOffset "0 0 -1.0"` [known, file]; without the
 (S 008814ec) and 0 (S 0088cf68). The quads are batched 50 at a time and tinted by the renderer's overlay colour.
 
 **When it is drawn** [known]: only while the tint alpha is > 0 (S 00688c40). The alpha is 0 from the
-`CMapRenderer` constructor S 006890f0 and is changed only by `nMenu::Game::StartOverlayColorFade` S 005eac30.
+`CMapRenderer` constructor S 006890f0 and is changed only by `nMenu::Game::StartOverlayColorFade` S 005eabd0.
 Its callers are `btInfoMap1` (`OnButtonClick` S 005eb850) and the cinematic screen (`nMenu::Cinematic::Update`
 S 005fb3e0, and `OnHide` S 005faee0, which restores the fade state the cinematic saved). The fade runs linearly
 over 0.2 s from the last drawn colour to `(1, 1, 1, fadeIn ? 1 : 0)`; `nMenu::Game::Update` S 005efea0 does not
@@ -2078,7 +2114,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
 | 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
 | 12 | Answered (§3.8): a water post's height is `seaLevelHeight + 0.05 * sin(t * 2π * 0.3 + x + z)` (disassembly of S 006b2ae0; constants S 00882840, S 007e6af0, S 007e6d80) | - |
-| 13 | Selection marker styles (UV rectangles, colours). The build icon atlas layout is answered (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`) | static: `SelectionMarker::UpdateDecal` |
+| 13 | Answered (§3.14): a marker takes a whole `decals.xml` texture in white (style 1 `buildingselect.dds`, 2 `catapultTarget.dds`; that the style indexes the list is [inferred]), 4 units for a cell, the larger box side for a building, 0.3 above the ground. Open: the unit of the rotation time. The build icon atlas layout is answered too (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`; the cursor cell's glowing icons from (16, 640)) | static: where the time argument of `SelectionMarker::UpdateDecal` S 006b0d00 is filled |
 | 14 | Answered (§6.1): rotations and phase speeds build the normal-map texture matrices, `tex0Scale`/`tex1Scale` reach only the fixed-function texture coordinates, `color` is read by nothing | - |
 | 15 | Answered (§3.5): the terrain vertices are world positions, so the caustics pass adds nothing | - |
 | 16 | Meaning of shadow level 1 (global S 0088d6bc) and of the shadow flags 0x18 / 0x1a / 0x5a | static: readers of S 0088d6bc and of `Scene +0x34` |
@@ -2119,7 +2155,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006b36d0 / 006b3870 | `ai::render::ConstructionMapRenderer::AddCellsInRect` / `CreateResources` | build icon per cell; quads, shader, atlas |
 | 007cad30 / 007cacc0, 007cacf0, 007cad10 | build icon table filler / atlas origin and icon size initialisers | `g_ConstructionMapIconTable` S 0088da78 |
 | 00688c40 | (construction overlay draw test) | draws only while the tint alpha > 0 |
-| 005eac30 | `nMenu::Game::StartOverlayColorFade` | the only writer of the overlay tint (info map, cinematic) |
+| 005eabd0 | `nMenu::Game::StartOverlayColorFade` | the only writer of the overlay tint (info map, cinematic) |
 | 00689f10 | `S2CG::CLandscape::Render` | base, unexplored, transition, ground cover |
 | 0068a4a0 | `S2CG::CLandscape::UpdateVisibleCells` | terrain culling |
 | 0068a120 | `S2CG::CLandscape::SetFogOfWarOverlay` | exploration overlay switch |

@@ -404,7 +404,10 @@ S 005321c0); there is no "building changed" message:
    4. `Bulldozing::Begin(type)` (§3.3), which levels the ground and ends with `Construction::StartWithType`
       (§3.4): the material requests, or at once a finished building when `constructionTime <= 0`;
    5. if the game is in **batch editing** mode (the query is vtable +4 of `NLogic::Edit`, `NLogic::System+0x38`):
-      activate the territory source, complete the construction at once, then: `workerLimit > 0` → spawn the
+      `TerritoryUpdater::Activate` S 00565350 first, then `Construction::Complete`; the construction is already
+      complete by then, because `StartWithType` S 0055efa0 completed it in step 4 (it does not request materials
+      while batch editing), so the "completed" notification and `Military::SelectInitialSoldierKind` fire inside
+      `Bulldozing` [known]. Then: `workerLimit > 0` → spawn the
       worker inside; else if `territoryBuilding`: `depot` → fill the initial stock (`Depot::AddInitialStock`
       S 0055b020: the map's initial goods for the tribe, plus the tribe's `tp_addBonusResources` list,
       `TribeProperty+0x90`, when `ai::player::Player::IsStateDefault(owner)`; the table of who qualifies is in
@@ -421,7 +424,9 @@ S 005321c0); there is no "building changed" message:
       the training upgrade (`SetSlotEnabled(0..1, false)`, `SetUpgradeEnabled(false)`);
    7. mark the building on its map cell (`MapModifier::SetBuildingAtCell`, layer 1), raise "building added"
       (callback slot +0x08) and tell the AI players (`AIPlayers_NotifyBuildingAdded`; the destructor calls the
-      matching "removed" hook, [ai-player.md](ai-player.md)).
+      matching "removed" hook, [ai-player.md](ai-player.md)). By this order, the first soldier spawned in step 5
+      raises its "entity added" and "garrison changed" notifications before the building's "building added"
+      [known].
 2. Insert into the unique map and append to the building vector.
 3. Attach the entrance flag (`Building_AttachEntranceFlag` S 00557660): the player's flag at anchor +
    direction 1 if there is one, else a new flag placed there by `Logic_PlaceFlag` (flag id, its two

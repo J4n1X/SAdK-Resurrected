@@ -333,6 +333,11 @@ Globals read from `<Characters>` (S 00695130) **[known]**: `scale` S 008816e0, `
 `evadeStart` S 008816e8, `goodRotation` S 008816ec (degrees), `lod0Range` / `lod1Range` / `lod2Range` S 008816f0 /
 f4 / f8, `boatOffset` S 00881704 (2 floats), `goodOffset` S 0088170c (2 floats).
 
+**The transport ox** **[known]** `CCharacterMgr::CreateCharacter` S 00695490: a `Carrier` whose settler id is
+`0xd4157c5f` (`good_oxen`, the Bavarians' second carrier) is drawn with the `<Donkey>` model, the transport ox
+(§3.14), not with a character definition; its bounding radius is scaled by 0.66 (S 00690760). No other id is
+tested, so the Egyptians' second carrier stays the `Egyptian_Helper` character.
+
 ---
 
 ## 3. Rules and algorithms
@@ -1229,13 +1234,32 @@ phase += dt * 0.25 * const                       dt = the fifth float of the fra
 ```
 
 (frequencies at S 007fa3a4, S 007e77f0, S 007e349c, S 007fa3a8; offsets 0.2 and 0.4 as doubles at S 007e6d70,
-S 007e7820; "under way" = the movement's `progress >= 0`, `navy.md` §2.6). While the byte `+0xd4` is set (an
-unfinished ship [inferred]) there is no status mesh, pitch and roll stay 0, the phase does not advance and the
+S 007e7820; "under way" = the movement's `progress >= 0`, `navy.md` §2.6). The starting `phase` of a ship is
+the global S 0088d9b0 (0 at start), which grows by 0.89759797 (2π / 7) for every ship created, so neighbouring
+ships swell out of step **[known]** (constructor, S 006a5222). While the byte `+0xd4` is set (an unfinished
+ship, below) there is no status mesh, pitch and roll stay 0, the phase does not advance and the
 alpha comes from the clip fade (`+0xc4..+0xd0`); otherwise alpha is 1. Then `CAnimatedObject::Update(now)` with
 the second float of the frame record, and `SetWorldTransform`. While the ship is enabled and visible (`+0x9`,
 `+0x8`) it keeps a `ShipFX` emitter under way, and a `ShipSpeedUp` or `ShipSpeedDown` emitter while the ship's
 speed bytes (`+0xfc`, `+0xfd`) are set (`Ship_SpawnParticleEffect` S 006a5bf0, `UpdateFxEmitter` S 006a4a20;
 `particles.md` §3.13); otherwise `ShipFX` is released.
+
+**A ship under construction** **[known]**. `S2CG::Ship +0xd4` is "unfinished": `remainingMain` (+0x48) > 0 or
+`remainingFrame` (+0x4c) > 0. `Ship::Update` S 006a54c0 writes it every tick, the constructor first
+(S 006a5222). The hull fade (+0xc0) is `1 − remainingMain`, eased over one tick (its rate is 1 / tick length,
+set by the constructor).
+
+- `ShipMgr::UpdateVisibility` S 00698100 lists the ships that are enabled, visible and unfinished;
+  `RenderVisibleShips` S 00697e70 draws their frame mesh (technique pass `RenderFrame`) before the hulls, with the
+  ship's world matrix.
+- The frame grows by triangles: `Ship::GetFrameSubsetStart` S 006a4c20 returns
+  `frameSubsetStart[toInt((float)(1 − remainingFrame) × N + 0.5)]` triangles, from a table of cumulative
+  triangle counts (descriptor +0x70, count +0x6c) built in `ShipMgr::LoadFromXml` S 00698cb0. The frame file is
+  loaded with merging, so its meshes `"0"` .. `"46"` become the subsets in order; the frame's texture is the
+  first texture of subset 0.
+- The hull rises out of a clip plane: `Ship::BeginRender` S 006a4ae0 (vftable S 007fa354 slot 0) sets user clip
+  plane 1 through the height `pos.y + aabb.min.y + (aabb.size.y − 0.1) × fade / 0.9` with the normal
+  (0, −1, 0) (constants S 007db630, S 007ea340, S 00882864); `EndRender` S 006a4960 switches it off.
 
 ### 3.18 Animals
 
@@ -1720,6 +1744,8 @@ palettes' random source.
 | S 006d3880 | `S2CG::BuildingDesc::LoadFromXml` | building meshes, animations, production animals |
 | S 006aa640 / S 006aa3b0 / S 006aa6f0 | `S2CG::Building::TriggerWorkCycle` / `PlayStateAnimation` / `PlayOneShotAnimation` | building animations |
 | S 006a54c0 / S 006a5cc0 | `S2CG::Ship::Update` / `UpdateVisuals` | ship animation state, bobbing |
+| S 00698100 / S 00697e70 / S 006a4c20 | `ShipMgr::UpdateVisibility` / `RenderVisibleShips` / `Ship::GetFrameSubsetStart` | the construction frame of unfinished ships |
+| S 006a4ae0 / S 006a4960 | `S2CG::Ship::BeginRender` / `EndRender` | the hull's rising clip plane |
 | S 006ce2c0 | `S2CG::Animal::UpdateLogic` | animal animation choice and death sink |
 | S 0076e8a0 | `ai::render::SkinnedMeshRenderer::RenderInstances` | CPU or GPU skinning of instances |
 | S 00680550 / S 006805e0 | `S2CG::Scene::SyncLogicTick` / `Update` | per-tick and per-frame order |

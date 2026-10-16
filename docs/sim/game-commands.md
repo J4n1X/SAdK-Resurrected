@@ -861,6 +861,8 @@ names actions by these strings is [inferred]:
 | 30 | Action_Upgrade_Cancel | `0x20010` |
 
 Enable/disable pairs send the same toggle command; which of the two buttons is shown is a UI decision.
+`ExecuteAction` S 00623730 sends 13 / 14 → `0x20012`, 15 / 16 → `0x20018` slot 0, 17 / 18 → slot 1,
+19 / 20 → `0x20019` without any test of its own [known].
 
 Availability (`ActionButton::RefreshAvailability` S 00623da0) [known]. "Local player" is the game screen's
 player; the target is the current selection (§2.4). An unavailable button shows the tooltip text indexed by the
@@ -878,7 +880,7 @@ failure code (per-action text tables, `SetAvailability` S 00623470); the codes a
 | 10 | never: the test is a function that returns false | 2 |
 | 11 | `NMilitary::Attack::GetAttackAvailability(target, local player)` = 0 (S 005759f0, through the wrapper S 00575b50) | that value |
 | 12 | the building's fight reference is valid, the fight is active and its phase is 0 | the fight's phase |
-| 13, 14 | `Military::CanToggleSoldierKind` | `GetToggleSoldierKindBlockReason` |
+| 13, 14 | `Military::CanToggleSoldierKind` | `GetToggleSoldierKindBlockReason` S 0055fe50: 2 when the fight reference is valid, 1 when not every soldier is of the current kind, 3 when a soldier is in a fight; texts `Action_Military_SetToSwordsMen_0..3` / `Action_Military_SetToBowMen_0..3` |
 | 21 | the owner's sacrifice research is running (S 005611b0) | 1 when it is not |
 | 22 | `VillageSacrifice::CheckCanStart` = 0 | that code (1..8, §3.4 `0x20026`) |
 | 23 | `VillageSacrifice::CanAbortOrCancel` | `GetAbortOrCancelBlockReason` |
@@ -893,6 +895,9 @@ Buttons that swap their action instead of being enabled or disabled (same functi
 | 15 / 16, 17 / 18 | per training slot (sword: component +4, bow: +8): enabled byte clear → 15 / 17 (enable), set → 16 / 18 |
 | 19 / 20 | training component +0x14 clear → 19 (enable), set → 20 |
 | 24 / 25, 26 / 27 | production enabled → 24 / 26 (pause), else 25 / 27 (resume) |
+
+13 / 14 do not swap: S 00623da0 has no swap for them, so after a toggle the button keeps the action
+`SetSelectionKind` gave it ([ingame-ui.md](ingame-ui.md) §3.6) [known]. A faithful quirk, presentation only.
 
 After the per-action test, for every action except 4, 6 and 7 (the 6 / 7 swap returns before it): when a
 building is selected and the action panel holds an override for the key read through building +0x0c

@@ -266,8 +266,9 @@ IntelliSense. A theme does not pass a `CanvasLayer`, so the game's layers (modes
 language tab). `Vector`, the default, is Instrument Serif (SIL Open Font License, shipped with its license in the
 engine's `fonts/instrument-serif/`), the maintainer's choice of a free look-alike of the original's Garamond; `Original`
 is the original's bitmap fonts from the language folder. The original's roles are type variations, `GaramondHead`,
-`GaramondChapter`, `GaramondSubline` (31, 19 and 15 px as in the original's layouts), with one shared `FontVariation`
-(widened 1.1×) and the shader `ui/text/garamond.gdshader`, which draws the original's look from the distance field:
+`GaramondChapter`, `GaramondSubline` at 27, 17 and 15 px, with the stroke weights 0.95, 0.80 and 0.85 px and the
+glyph spacing 2, 2 and 1 px (matched against the original's bitmap fonts in the same screens). They share one
+`FontVariation` (widened 1.1×) and the shader `ui/text/garamond.gdshader`, which draws the original's look from the distance field:
 a heavier stroke; from the outside in a brown outline, a rim (orange facing the light from the upper left, deep brown
 facing away), a band (yellowish facing the light, warm gold facing away) and the body; the soft shadow. Its colours,
 weight, widths and shadow are the theme's `garamond_*` items (`garamond_body`, `_highlight`, `_shade`, `_rim`, `_edge`,
