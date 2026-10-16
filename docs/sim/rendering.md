@@ -352,7 +352,7 @@ named in the handler's mapped comment. Slots +0x28, +0x2c, +0x34 and +0x38 point
 | +0x08 | building created | `BuildingRenderer::AddBuilding`; add to the pickable list | S 00681520 |
 | +0x0c | building removed | detach from characters and the pickable list; then start the demolition (§3.9) if the building leaves remains (`Building::LeavesRemains` S 006aa2b0: the property has a remains id, both construction remainders are <= 0 and the logic building is not flagged destroyed), else delete the instance at once | S 00681560 |
 | +0x10, +0x14 | upgrade started / cancelled | load the upgrade mesh / `EndUpgrade` | S 00681f10, S 00681f40 |
-| +0x18, +0x1c | flag created / removed | map object `z_flag_00`, or `z_harbor_flag_00` when the flag has a harbor reference, tinted with the owner's colour; register with the item manager (goods stacks at the flag) | S 00682ca0, S 00682de0 |
+| +0x18, +0x1c | flag created / removed | map object `z_flag_00`, or `z_harbor_flag_00` when the flag has a harbor reference (the id of the reference object at flag +0x168, read at +0x17c, is valid), tinted with the owner's colour; register with the item manager (goods stacks at the flag) | S 00682ca0, S 00682de0 |
 | +0x20 | settler created | `CCharacterMgr::CreateCharacter` | S 0067f0f0 |
 | +0x24 | settler removed | destroy the character, if one exists | S 0067f120 |
 | +0x30 | fight strike | one-shot particle effect `HitDamage` at the attacker, facing the target | S 00683530 |
@@ -389,7 +389,7 @@ names [inferred]):
 
 | Slot | Event | Reaction | Handler |
 |---|---|---|---|
-| 0 | height rectangle changed | update mesh positions, normals, height texels, block bounds, objects' ground height, streets; recompute the water's map edge extents | S 0067ef80, S 006882e0 |
+| 0 | height rectangle changed | update mesh positions, normals, height texels, block bounds, objects' ground height, streets; recompute the water's map edge extents; the territory border points are not rebuilt (§3.8) | S 0067ef80, S 006882e0 |
 | 1 | pattern rectangle changed | rebuild the patches of the affected terrain blocks; recompute the water's map edge extents | S 0067efa0, S 00688360 |
 | 2 | map re-initialised | re-initialise the terrain grid (S 00688050) and the map renderer | S 0067efe0 |
 | 3 | territory changed | clear and rebuild the border point lists of all eight players (§3.8) | S 0067f010, S 006883c0 |
@@ -397,6 +397,10 @@ names [inferred]):
 
 Both rectangle handlers contain a test whether the rectangle touches the map edge, but the edge extents are
 recomputed on either outcome [known] S 006882e0, S 00688360.
+
+A flag's model is chosen only when the flag is created. When a harbour is linked to an existing flag,
+`NNet::Flag::LinkNavyObject` S 00669e60 announces the flag again (flag removed, then flag added), so the scene
+replaces `z_flag_00` by `z_harbor_flag_00` [known] S 00669e60, S 00682ca0.
 
 World position of a cell-anchored object in the handlers (flag, harbor place, route buoy, chest, spawn point):
 `vx = cx*4 (+2 if cy odd)`, `vy = cy*4` in vertex coordinates, then the vertex-to-world rule of §2.1
@@ -774,27 +778,40 @@ exist in this build); an xref read of the texture's bind calls settles it.
 ### 3.8 Territory borders
 
 `BorderMgr::BuildPlayerBorders` S 006b29c0 builds, for each player index 0..7, a `PlayerBorderPoints` list:
-every cell whose territory owner is that player and whose grid flag 0x20 (territory border) is set; the world
-position of the cell is appended to list A when the grid flag 0x4 (water) is clear, to list B when set
-[known] S 006d8f50 (the flag names are those of `docs/sim/map-resources.md`). The points are appended in a
-greedy nearest-neighbour order starting from the last cell of the scan; the order has no visible effect
-[inferred]. The lists of all eight players are cleared and rebuilt whenever the map fires slot 3 of
-`NMap::CallbackReceiver` (§3.2) [known] S 0067f010, S 006883c0; there is no other caller of S 006b29c0.
+every cell whose territory owner is that player and whose grid flag 0x20 (territory border) is set; the cell is
+appended to list A (land) when the grid flag 0x4 (water) is clear, to list B (water) when set [known] S 006d8f50
+(the flag names are those of `docs/sim/map-resources.md`). A land point is the world position of the cell's sample
+vertex at its stored height (`TerrainGrid::CellToWorldPos` S 00687790) [known] S 006d8f50, S 00687790. The points
+are appended in a greedy nearest-neighbour order starting from the last cell of the scan; the order has no visible
+effect [inferred]. The lists of all eight players are cleared and rebuilt whenever the map fires slot 3 of
+`NMap::CallbackReceiver` (§3.2) [known] S 0067f010, S 006883c0; there is no other caller of S 006b29c0. A height
+change (slot 0) therefore leaves the stored land points as they are: after levelling under a border the land posts
+keep their old height, floating above or sunk into the new ground, until the next territory change rebuilds the
+lists [inferred from the caller list]. Presentation only.
 
-Drawing [inferred] S 006b2ae0, [known] S 006b3290 for the file names: list A with the mesh
-`[data]\map\objects\limes.GR2`, list B with `[data]\map\objects\buoy.GR2` (a `.GR2` name is loaded as the `.KEX`
-file of the same base name), one instance per point (a float4 position per instance, no rotation), tinted with
-the player's colour, a player's set skipped when its bounding box is outside the frustum; A posts sit at the
-cell's terrain height, B posts at the water height plus `0.05 * sin(..)` [known] S 006b2ae0. Shader
-`border_shader.fx` [known, file]:
+Drawing (`ai::render::BorderMgr::RenderSet` S 006b2ae0) [inferred, except where tagged]; the file names are
+constants of `BorderMgr::ctor` S 006b3290 [known]. List A is drawn with the mesh `[data]\map\objects\limes.GR2`, list B with
+`[data]\map\objects\buoy.GR2` (a `.GR2` name is loaded as the `.KEX` file of the same base name), one instance per
+point (a float4 position per instance, no rotation); a player's set is skipped when its bounding box is outside the
+frustum. The tint is the player's colour, white when the set has no player (`Render_GetPlayerColorOrWhite`
+S 006d8d00) [known]. A land post stands at its stored point. A water post's height is computed at the sea level
+(`TerrainGrid::GetSeaLevelHeight` S 00687050) every frame, with a bob [known: disassembly of S 006b2ae0]:
+
+```
+y = seaLevelHeight + 0.05 * sin(t * 2π * 0.3 + x + z)
+```
+
+`x`, `z` are the point's world position in the original's axes; 2π is the constant at S 00882840, 0.3 the one at
+S 007e6af0, 0.05 the double at S 007e6d80; `t` is the time the render call receives [inferred: as for the route
+buoy, §3.11]. `BorderMgr::RenderWithEffect` S 006b2d80 draws the same sets with an effect passed in by the caller,
+[inferred] the shadow-map pass, so the posts cast shadows. Shader `border_shader.fx` [known, file]:
 
 ```
 rgb = (ambient + lightColor * saturate(dot(N, -L)) * shadow) * lerp(playerColor * 1.8, tex.rgb, tex.a)
 ```
 
 then `CalcFOWWithAlpha`; alpha test `> 127` and alpha blend. `CalcPlayerColor` (this formula) is shared by all
-player-tinted objects [known, `shared.inc`]. [TODO] not established: the argument of the bobbing sine (lost in
-the decompile); read the disassembly of S 006b2ae0.
+player-tinted objects [known, `shared.inc`].
 
 ### 3.9 Buildings
 
@@ -1123,7 +1140,10 @@ in S 006d65c0]; yaw interpolated toward the logic direction, arm angular speed 3
 **Model definition** (`settler_config.xml`) [known, file]: `<Character name mesh mesh1 mesh2 mesh3 color slotMap>`
 = LOD meshes 0..3 (the shipped entries read here carry `mesh`, `mesh1`, `mesh2`), the index texture and the
 colour slot map; one shared skeleton model (`<Models><Model>`).
-Lookup key `"<tribe resource name><sep><character name>"`, fallback entry 0 S 00695490 [inferred].
+Lookup key `"<tribe resource name><sep><character name>"` (`CCharacterMgr::FindCharacterDefIndex` S 00692c60, −1
+when no definition has the name); `CreateCharacter` S 00695490 turns −1 into definition 0 [known]. Definition 0 is
+`Bavarian_Carrier` (the first `<Character>` of `settler_config.xml`), so a Scots or Egyptian NPC profession, whose
+definitions exist only as `Bavarian_Garibald` and `Bavarian_TreeMerchant`, draws as a Bavarian carrier [known: data].
 
 **LOD** [inferred] S 00690460: squared camera distance against three ranges; `<Characters lod0Range="30.0"
 lod1Range="40.0" lod2Range="60.0">` in `settler_config.xml` [known, file]. Global scale `scale="1.2"`.
@@ -1331,7 +1351,9 @@ of step. Its fire emitter follows. **Flags** wave in the vertex
 shader (`flag_shader.fx`; `harborflag_shader.fx` computes the same strength and never applies it, so the harbor flag
 hangs still [known, file]): `CalcFlagVertexPos` [known, `shared.inc`]:
 `s = 0.33 * saturate(dot(p.xz, p.xz) - 0.02)`, `c = 0.5 + 0.5 * cos(4 * (m41 + m43 + p.x + p.y + t))`,
-`p.z += s * c`, `p.x += s * (1 - c)`.
+`p.z += s * c`, `p.x += s * (1 - c)`. Their colour is the owner's colour by the `CalcPlayerColor` rule
+`lerp(playerColor * 1.8, tex.rgb, tex.a)` (§3.8), and the flag passes have no alpha test, so flags are drawn
+opaque [known, file].
 
 **What is drawn at all** (2026-10-15):
 - **Priority gate** (`MapObjLayer::RenderEntries` S 0068d360): an element is drawn when its
@@ -1999,7 +2021,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 9 | Per-LOD vertex counts of the terrain draw batch (§3.3) | static: the builder of the tables at `TerrainDrawBatch +0x74`, `+0x80` |
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
 | 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
-| 12 | Argument of the buoy bobbing sine of the territory border (§3.8) | static: disassembly of S 006b2ae0 |
+| 12 | Answered (§3.8): a water post's height is `seaLevelHeight + 0.05 * sin(t * 2π * 0.3 + x + z)` (disassembly of S 006b2ae0; constants S 00882840, S 007e6af0, S 007e6d80) | - |
 | 13 | Selection marker styles (UV rectangles, colours). The build icon atlas layout is answered (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`) | static: `SelectionMarker::UpdateDecal` |
 | 14 | Answered (§6.1): rotations and phase speeds build the normal-map texture matrices, `tex0Scale`/`tex1Scale` reach only the fixed-function texture coordinates, `color` is read by nothing | - |
 | 15 | Answered (§3.5): the terrain vertices are world positions, so the caustics pass adds nothing | - |
@@ -2060,7 +2082,11 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006a7fa0, 006a7400 | `WorldRenderer::BuildMapBorderSegments` / `RenderMapBorder` | map border skirt |
 | 006a93c0 | `Gfx_Water_LoadFromXml` | `<Water>` |
 | 006b29c0, 006d8f50 | `BorderMgr::BuildPlayerBorders` / `PlayerBorderPoints::BuildFromMap` | territory border points |
-| 006b2ae0 | `ai::render::BorderMgr::RenderSet` | border posts and buoys |
+| 006b2ae0 | `ai::render::BorderMgr::RenderSet` | border posts and buoys, the water posts' bob |
+| 006b3290, 006b2d80 | `BorderMgr::ctor` / `RenderWithEffect` | border mesh names; the sets drawn with a passed effect (shadow pass [inferred]) |
+| 006d8d00 | `Render_GetPlayerColorOrWhite` | border tint, white without a player |
+| 00687790, 00687050 | `TerrainGrid::CellToWorldPos` / `GetSeaLevelHeight` | land border point; water post height |
+| 00682ca0, 00669e60 | `S2CG::Scene::OnFlagCreated` / `NNet::Flag::LinkNavyObject` | flag model choice; flag announced again when a harbour is linked |
 | 006821b0, 006a0e60 | `Scene_LoadBuildingsXml` / `BuildingRenderer::InitGraphicsResources` | root attributes, colour map, `COLORMAP_OFFSET`, variation step |
 | 006a2bf0, 006a17a0 | `S2CG::BuildingRenderer::AddBuilding` / `RemoveBuildingInstance` | building instance creation, instance slot (colour variation) |
 | 006a0ad0, 006a0cc0 | `S2CG::BuildingRenderer::Render` / `RenderWithExternalEffect` | building passes; shadow map pass |
@@ -2083,6 +2109,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 004d3df0 | `S2CE::CGraphicDevice::DetermineDeviceCaps` | `MaxUserClipPlanes` (S 0088d998) |
 | 00695130, 00694c00 | `CCharacterMgr::LoadFromXml` / `LoadCharacterDefs` | character data |
 | 00695490 | `S2CG::CCharacterMgr::CreateCharacter` | settler visual creation |
+| 00692c60 | `CCharacterMgr::FindCharacterDefIndex` | character definition by name, −1 when missing |
 | 006909f0 | `S2CG::CCharacter::UpdateLogic` | animation slot choice |
 | 006c64c0, 006c63a0, 006c6590 | `CharacterAnimation::SetAnimationType` / `PlayAnimation` / `UpdateLogic` | playback, idle variations |
 | 006ca8d0, 006cc350 | `ai::anim::AnimationSet::GetAnimIdForSlot` / `ctor` | override lookup, table construction |

@@ -273,7 +273,8 @@ keys with signed jumps (`JGE` / `JL`), so a good whose hash id has the top bit s
 | +0xa0 | 3 soldier slots × 0x40 | each: military building reference + soldier reference (slots 0..2) |
 
 Exactly one target is linked; `OrderLink_Link*` adds the order to the target's `OrderContainer` and to the
-index [known] S 0053cbe0.
+index [known] S 0053cbe0. The constructor `Order::ctor` S 00568b80 draws the order's unique id from the global
+counter (§8) [known].
 
 `ai::village::OrderIndex` (`OrderSystem+0x18`): 8 player blocks; each block has 7 **category** buckets; each
 bucket is a vector of entries `{goodId, category, vector<Order*>}` in order of first use [known] S 0055fa90,
@@ -319,7 +320,8 @@ Order life cycle [known]:
 ### 2.7 Other components
 
 - `NVillage::Remains` (0x48): remains property, building property, unique, position, `burnTicks` (+0x28,
-  counts down), a `Blocking` with the dead building's size mask, tribe key (+0x40) [known] S 00564210.
+  counts down), a `Blocking` with the dead building's size mask, tribe key (+0x40) [known] S 00564210. The
+  constructor (`Remains::ctor` S 00564210) draws the unique id from the global counter (§8) [known].
 - `NVillage::GoodFlags`: `map<goodId, bool enabled>`. Before every lookup a good id that appears with a
   positive amount in the cost list of the tribe's **second carrier** good is replaced by that carrier good
   (`TribeProperty+0xb0`, `tp_setSecondCarrierId`, S 0054ad40; test S 00556020) [known] S 00562e40. Data:
@@ -502,6 +504,9 @@ no builder is bound, the site is not aborted, and the building has no open order
 good (tribe property +0xc0, `tp_setConstructor`) → create one settler order for that good linked to the
 building (§3.12).
 
+The builder first walks to the site with `NMovie::GoToConstructionPlace` (ctor S 0077dcb0, `Start` S 0077dd70,
+`Update` S 0077dd80), a movie package whose only step, 2, is `MoveToWorkingPlace` [known].
+
 **The builder's work** (actions `NMovie::ConstructBuilding` S 0077daf0 and `NMovie::Construct` S 0077fb50,
 S 0077fe70) [known]:
 
@@ -539,7 +544,9 @@ from the main phase at the frame phase's rate [inferred].
 `remainingA > 0`: subtract; when it drops below 0 set 0 and call `OnBuildWorkDone` (S 0055eec0: raise
 "building completed" to the observers; for a `territoryBuilding` whose territory is not active yet, set
 `military.soldierKind` (+0x68) to 1 when `Player_CountStockedSoldiersOfClass(owner, 0)` is 0, else to 0,
-S 0055fce0). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`.
+S 0055fce0). Both tests are strict: a value that lands exactly on 0 does not call `OnBuildWorkDone`. In float32
+stepping no main-phase total from 1 to 12 lands exactly on 0.0, so for such totals that branch never fires and
+completion comes with the drop below 0 [inferred: float32 arithmetic of the constants above, §8].
 
 **`Complete`** S 0055ef00 [known]: clear all ware requests of the building's depot (`NeedGoods::ClearAll`; for
 an upgrade this is the same list as the building's own production requests); zero both remaining values (for a
@@ -634,6 +641,10 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
 5. If `spill`, and (type has `remains` or it is a ship site), and the type is not a headquarters type: spill
    goods (below).
 6. Remove from indexes, map and vector; destroy the object (its components cancel orders, requests and links).
+   The spill of step 5 therefore happens before the destructor. `Building::dtor` S 0055ce70 runs in this order
+   [known]: raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; unlink the deposit or
+   animal (an animal is erased); unlink the entrance flag; clear the map mark and the blocking; cancel the orders;
+   unlink the projectiles; notify the AI; destroy the components, the depot first.
 7. If `leaveRemains && spill`: create `Remains` at the position (blocks the same footprint; burn time from
    the remains property; its tribe key is the building's `variantKey`).
 8. Remove the flag at anchor + direction 1 when all three hold: `Flag::GetRemoveBlockReason()` is 0
@@ -942,9 +953,11 @@ list element (strict `<`).
 - Non-soldier goods: candidate 1 = nearest `depot` building holding the good in its output stock. For
   category 3 a building whose good flag for that good is enabled is skipped; for every other category the
   good flags are ignored (the search's last argument is `category != 3`, and S 00557da0 tests the flag only
-  when that argument is 0). Candidate 2 (not for category 3 unless the good is the tribe's second carrier
-  good, §2.7): if the good has a cost list, the nearest `depot` building holding **all** cost goods
-  (S 00558510), else the nearest connected `depot` building at all. If both exist and differ, the one with the
+  when that argument is 0). S 00557da0 does not test the building's owner, and takes a candidate when
+  `cost < best || best == −1` [known]. Candidate 2 (not for category 3 unless the good is the tribe's second
+  carrier good, §2.7): if the good has a cost list, the nearest `depot` building holding **all** cost goods
+  (S 00558510: one unit of each, `HasGood`; the amounts of the cost list are not compared [known]), else the
+  nearest connected `depot` building at all. If both exist and differ, the one with the
   smaller **hex distance** to the target position wins; on a tie candidate 1.
 - Soldier goods, category other than 3: nearest `casern` building holding any acceptable soldier good
   (S 00558330; acceptable goods per category from S 005619d0: categories 1/2 same kind from the requested
@@ -1136,7 +1149,8 @@ property whose field +0x40 is not −1 leaves a doodad of that id on the cell (`
 S 0054fd70; all three calls are commented out in `remains.lua`, so the shipped data leaves nothing). The
 remains expire when `burnTicks < 1` after a decrement, i.e. with the 50th decrement; remains are updated after
 the buildings, so those created by a removal inside `System::Update` get their first decrement in the same
-tick.
+tick. Creating (`System::CreateRemains` S 005598a0) and deleting (`System::RemoveRemains` S 00558ec0) each
+invalidate the construction flags in hex radius 4 around the cell (§5.2) [known].
 
 ### 3.18 Workers (`NVillage::Workers`) [known]
 
@@ -1162,8 +1176,9 @@ Ten settler references of 0x20 bytes at +0x10 and `workerCount` at +8 (S 0055b5b
   §3.4 [inferred]); in batch editing mode the settler is deleted instead.
 - **`SpawnWorker`** (S 0055b6a0; batch-editing placement §3.2, conquest §3.16, Lua
   `CreateBuildingWithSettler`): create a worker of the type's `worker` good at the entrance cell
-  (`Building+0xf8`) for the owner, link it, and set its state directly to 0x1d when `workingMode == 8`, else
-  0x23 (S 0065c710). Neither is one of the four "not present" states, so the building is occupied at once.
+  (`Building+0xf8`) for the owner, with `leaveBuilding = 1`, link it, and set its state directly to 0x1d when
+  `workingMode == 8`, else 0x23 (S 0065c710). Neither is one of the four "not present" states, so the building is
+  occupied at once. Builders (constructors) and carriers are not made here; they have their own creators [known].
 
 ### 3.19 Delivered wares (`Depot::CollectGoods` S 0055aca0) [known: disassembly]
 
@@ -1332,7 +1347,10 @@ count over the 104 types and examples:
 
 **`Goods.lua` / `Jobs.lua`** — `gp_addCost(good, input, amount)` (recipes and settler costs), `gp_setType`,
 `gp_enableDeposits`, `gp_setMiningGood`, `gp_setSettlerType` (0 Worker, 1 Constructor, 2 Carrier, 3 Soldier,
-4 Specialist, 5 NPC), `gp_setHealth` [known].
+4 Specialist, 5 NPC), `gp_setHealth` [known]. Despite its name, `good_buildingHelperBav` ("Building Helper",
+`Jobs.lua` lines 387–390) is a Worker settler costing `toolBav` 1, the worker of `sauerey` and `oxenBreeding`
+(`bp_setWorker`); the builders are the `tp_setConstructor` goods (`good_constructorBav`, `good_constructor`,
+`good_constructorScots`) [known: data].
 
 **`config.lua`** — `cfg_setConstructTime(30)` (GameConfig+0x18, strokes per builder position and hammer
 animation length), `cfg_setBulldozeTime(55)` (GameConfig+0x14, not read by this subsystem) [known].
@@ -1453,8 +1471,9 @@ references go through untagged variants, the other components through their norm
 - The construction strokes run in float32 (one unit = 4 walks + 121 strokes of `1 / (total · 120)`), so where a phase
   ends depends on the total: for the woodcutter (frame total 1) 6.17e-7 is left after 120 strokes, so the frame phase
   uses all 121 strokes and nothing carries over; a total of 2 ends on stroke 241; totals 4, 6 and 7 end after exactly
-  120·T strokes; the bakery completes on the 119th stroke of its 4th unit. "The last unit overshoots" holds only for
-  some totals.
+  120·T strokes (main total 4: stroke 480, the 117th of the 4th unit, on the drop below 0); the bakery completes on
+  the 119th stroke of its 4th unit. No main-phase total from 1 to 12 lands exactly on 0.0 (§3.4). "The last unit
+  overshoots" holds only for some totals.
 - The skip count of `RequestMaterials` after a pause: a pause after exactly 120·k strokes skips one unit fewer in
   float32 for totals 1, 2, 3, 5, 8 and 9 (bakery: `remainingB` = 0.5000005, skip 0, so 4 requests instead of 3). A
   unit the builder has taken but not finished is no longer in the site stock and is not skipped, so it is requested
@@ -1511,7 +1530,10 @@ references go through untagged variants, the other components through their norm
   entrance cell, `destroyed` [known] S 0055c690.
 - Unique ids are allocated in creation order from one global 64-bit counter shared by all object kinds
   (`Unique::AssignNew`, counter at S 00889ad0); the stock-keeping phase `(tick + id) mod 30` (64-bit sum)
-  depends on it [known] S 00563f40.
+  depends on it [known] S 00563f40. Besides buildings, every settler order (`Order::ctor` S 00568b80) and every
+  remains object (`Remains::ctor` S 00564210) draws one [known].
+- The productivity statistics are outside the lockstep checksum: `ComputeChecksum` S 00784080 has no statistics
+  section ([game-commands.md](game-commands.md) §8) [known].
 
 ---
 
@@ -1576,7 +1598,7 @@ references go through untagged variants, the other components through their norm
 | S 00559940 / 00558f80 | `IndexBuilding` / `UnindexBuilding` | category lists |
 | S 0055a210 / 0055a890 / 0055aac0 | `TransferBuildingOwnership` / `ConquerBuilding` / `TransferAllBuildingsOfPlayer` | ownership change |
 | S 00558170 | `MarkBuildingsOutsideTerritoryNear` | territory loss marking |
-| S 00558330 / 00558510 / 00557da0 | supplier searches | any good / all goods / nearest connected |
+| S 00558330 / 00558510 / 00557da0 | supplier searches | any good / one unit of every cost good / nearest connected (no owner test) |
 | S 00557cc0 / 00559c80 / 00559cd0 | `System::Store` / `Load` / `PostLoad` | savegame |
 | S 0055d980 | `NVillage::Building::ctor_Place` | construction of a placed building |
 | S 0055e2f0 | `NVillage::Building::Update` | per-tick building logic |
@@ -1610,7 +1632,10 @@ references go through untagged variants, the other components through their norm
 | S 005686a0 | `VillageOrder_GetCategory` | order category |
 | S 00569840 / 00569760 / 00569430 | iterator advance / per-player step / per-category selection | `ai::village::OrderIterator` |
 | S 00561e20 | `VillageOrder_LinkSettlerToDestination` | order completion |
-| S 00562940 / 00562140 / 00568c40 | `OrderSystem::CreateOrder` / `RemoveOrder` / `Order::dtor` | order life cycle |
+| S 00562940 / 00562140 / 00568b80 / 00568c40 | `OrderSystem::CreateOrder` / `RemoveOrder` / `Order::ctor` / `Order::dtor` | order life cycle; the ctor draws a unique id |
+| S 0055ce70 | `NVillage::Building::dtor` | teardown order of a building (§3.5) |
+| S 005598a0 / 00558ec0 / 00564210 | `System::CreateRemains` / `RemoveRemains` / `Remains::ctor` | remains; radius-4 invalidation; unique id |
+| S 0077dcb0 / 0077dd70 / 0077dd80 | `NMovie::GoToConstructionPlace::ctor` / `Start` / `Update` | the builder's walk to the site |
 | S 0055bc10 / 0055bcd0 | `OrderContainer::CancelAllOrders` / `CancelOrdersForGood` | orders of a dying target |
 | S 00568f00 / 00568f90 / 00569070 / 005629c0 | `Order::Store` / `Load` / `PostLoad` / `OrderSystem::Load` | order savegame |
 | S 005695b0 / 00663d90 | `OrderIterator::AddUniqueNode` / `NLogic_UniqueArray40_IsEqualAt` | one node per network |

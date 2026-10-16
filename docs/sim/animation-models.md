@@ -1345,7 +1345,7 @@ one has `name`, `color`, `slotMap`, `mesh`, `mesh1`, `mesh2`; 69 also `mesh3`):
 
 | Attribute | Meaning | Example |
 |---|---|---|
-| `name` | `<tribe resource name>_<settler name>`; looked up as tribe name + `_` + character name, fallback: definition 0 | `Bavarian_Woodcutter` |
+| `name` | `<tribe resource name>_<settler name>`; looked up as tribe name + `_` + character name (`FindCharacterDefIndex` S 00692c60, −1 when missing), fallback: definition 0, since `CreateCharacter` S 00695490 turns −1 into 0 **[known]**. Definition 0 is `Bavarian_Carrier`, so the Scots' and Egyptians' NPC professions, which have only `Bavarian_Garibald` and `Bavarian_TreeMerchant` definitions, draw as Bavarian carriers **[known]** (data) | `Bavarian_Woodcutter` |
 | `mesh`, `mesh1`, `mesh2`, `mesh3` | LOD meshes; the list stops at the first missing one | `…\meshes\bavarian_carrier_mesh_LoD1.KEX` |
 | `color` | colour-index texture (required; a definition without `name` or `color` is skipped) | `…\bavarian_colorindices_luminance.dds` |
 | `slotMap` | colour map name, default `default` | `bavarian_carrier` |
@@ -1673,7 +1673,8 @@ palettes' random source.
 | S 006ad4f0 / S 006ad2e0 / S 006ad380 | `S2CG::CModelCache::Acquire` / `Release` / `Update` | shared pose pool |
 | S 00695130 | `S2CG::CCharacterMgr::LoadFromXml` | character definitions and tunables |
 | S 00692390 | `CCharacterMgr::LoadAnimationSet` | settler animation set and pools |
-| S 00695490 | `CCharacterMgr::CreateCharacter` | definition lookup, palette, character |
+| S 00695490 | `CCharacterMgr::CreateCharacter` | definition lookup (−1 → definition 0), palette, character |
+| S 00692c60 | `CCharacterMgr::FindCharacterDefIndex` | definition index by name, −1 when missing |
 | S 006909f0 | `S2CG::CCharacter::UpdateLogic` | per tick: choose the animation type |
 | S 00690bd0 | `CCharacter::Update` | per frame: apply it, transform |
 | S 006910e0 | `CCharacter::SetShaderConstants` | palette offset, colour scale, player colour |

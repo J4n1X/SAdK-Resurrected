@@ -901,6 +901,26 @@ view's quick switches; changing it rebuilds the terrain, the objects' placement 
 **GPU cost**: per vertex the refined vertex shader does one distance, two mixes and a normalize; per pixel one RG8 texture read
 and two cross products for the baked normal. Faithful: no blend, no texture read.
 
+### 10.5 Map changes as built [implemented, sadk-remake 67b91c4]
+
+- **Relay**: `MapChangeRelay` copies the changed grid parts into the shown map at once; the layers hear of them once
+  per frame (`SimDriver.Advanced`, rectangles merged).
+- **Heights**: the rectangle passed on is the samples that really changed plus 4 vertices; the simulation's rectangle
+  carries a 16-vertex margin (castle placement: 40 dirty blocks with it, 16 without). `TerrainSurface.UpdateHeights`
+  recomputes the normals only around the changed samples, in parallel.
+- **Rebuild**: a dirty block keeps its level (no pop); a version check per block discards meshes that went stale while
+  they were built. The baked normal texture (§10.4) is patched on a worker and uploaded whole (8.6 MB on Steinfjord).
+- **What follows a height change**: the water (shore fade, regions, mirror request, the skirt at the map's edges); map
+  objects are placed on the ground again; a building's base and ground decal are laid again; streets follow through
+  their raw event, after the relay; border posts are laid again (§15.2).
+- **Measured** (Steinfjord): a guard-house site at Low costs 1.5 ms on the main thread; 4 blocks and 2 region meshes in
+  41 ms on workers; normals 11 ms on a worker, upload 1.6 ms. The levelling of both start castles touches 16 blocks;
+  rebuilding their 48 member blocks takes 21–36 ms (Faithful, Low) and 220–335 ms at Very High in the worst case; the
+  normal patch (445 × 92 texels) 31 ms.
+- **Gaps**: pattern changes are not rebuilt in the terrain; the simulation never emits `MapChanged` for `Patterns` and
+  `GroundResources`; terrain levels are not cached, so a dirty region rebuilds all its blocks; the normal texture's
+  mipmaps are regenerated whole; a standing character is placed on the new ground only with its next motion sample.
+
 ## 11. Water, border, sky, environment [draft]
 
 - **Water**: one quad per block at or below the water level, at `sadk_water_level`, batched per region (the viewer
@@ -994,6 +1014,11 @@ instead of 0.25), and the final pixel colour is known only after Godot's light p
   cutout copies of §7.1.
 - Growth and fades are written into the instance data per tick and interpolated in the shader with `sadk_tick_alpha`
   where the original fades within a tick.
+- **Flags as built** [implemented, sadk-remake 67b91c4]: the owner's colour by the rule `lerp(colour × 1.8, texture,
+  alpha)`, drawn opaque (the original's flag passes have no alpha test); `z_harbor_flag_00` when the flag view's
+  `IFlagView.Harbour` is set (added for this; the original tests the harbour reference id at flag +0x17c, RE §3.2).
+  Gap: the original announces a flag again (removed, then added) when a harbour is linked to it (`LinkNavyObject`
+  S 00669e60), which swaps the model; the remake emits nothing then, so such a flag keeps the plain model.
 
 ## 13. Buildings [draft]
 
@@ -1117,6 +1142,21 @@ changes under it. Street previews of the placement mode come from `IQueries` and
 
 Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt for the changed rectangle of
 `MapChanged(Territory, rect)` (the original rebuilds all eight players' lists on every change).
+
+**As built** [implemented, sadk-remake 67b91c4]:
+
+- **Rule** as the original's (RE §3.8): every owned cell with grid bit 0x20, a land post where bit 0x4 is clear, a
+  water post where it is set; land posts at the cell's sample vertex, water posts at the sea level with the bob
+  `0.05 · sin(t · 2π · 0.3 + x + z)`; the order of the points has no visible effect. Models and the
+  shader's colour rule `lerp(colour × 1.8, texture, texture alpha) × light` as the original's; the colour is the
+  owner's, white without a player.
+- **Layer**: map layer order 460; one `MultiMesh` per region and set (land, water); the colour goes in
+  `INSTANCE_CUSTOM`, since the buoy's vertex colours are black. The models are named by `<Border land water/>` in
+  `visuals/map-objects.xml`.
+- **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the posts are laid
+  again on a height change (the original keeps the old height until the next territory change, so its posts float or
+  sink; presentation only); the posts cast shadows (the original's `RenderWithEffect` S 006b2d80 is [inferred] its
+  shadow pass).
 
 ### 15.3 Build overlay and selection
 
@@ -1295,7 +1335,7 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 3. Which height sampler the original uses to place objects (§10).
 4. The building and settler descriptor keys ([assets.md](assets.md) §9 item 1).
 5. The remaining picture-affecting reverse engineering: selection marker styles and the build icon atlas (RE §10
-   Q13), the border bobbing (Q12), ship player-colour values, the loader of building-level particle elements (PA
+   Q13), ship player-colour values, the loader of building-level particle elements (PA
    §10 Q3), the texture particle passes 1 and 2 sample (Q1), what drives the tree sway and fall states.
 6. Settled 2026-10-16: `ATEST127` is AlphaFunc Greater with AlphaRef 127, so alpha 127 is rejected; the house and
    map-object shaders keep alpha ≥ 128/255 (sadk-remake 328c30c).

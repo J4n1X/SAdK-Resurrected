@@ -496,9 +496,10 @@ creates a new street. So a street built by the player costs one id per start or 
   it has no street link; `TransferBuildingOwnership` S 0055a210 and `TransferPlayerAssets` S 00529040; the
   computer player (`NAI::DestructionSystem::Update` S 0058de80).
 - **`Flag` destructor** S 0066a8d0 [known], in this order: `bDying = 1`; raise `NetObjectRemoving`; clear layer 0
-  of the cell; unlink the building; unlink every street link (§3.5); for every package on the flag: discard it if
-  `placedOnFlag` is set, else only detach it; remove all pending settler orders of the flag; unlink all queued
-  settlers; unlink the harbour.
+  of the cell; unlink the building; unlink every street link (§3.5); for every package on the flag's stacks: discard
+  it if `placedOnFlag` is set, else only detach it (a package registered on the flag but still in a settler's hand:
+  a drop in progress, §3.9); remove all pending settler orders of the flag; unlink all queued settlers; unlink the
+  harbour.
 - **Block reasons** for the player command: `Flag::GetRemoveBlockReason` S 00669f70, listed in
   `game-commands.md` (`0x20005`).
 - **Lost territory, per tick.** `NNet::System::Update` removes every flag whose cell fails
@@ -869,7 +870,9 @@ other end; if that gives a package, take it. Otherwise `A = best(start→end)`, 
 there is no candidate; choose B if `scoreB <= scoreA`, else A [known].
 
 **GoToPackageTarget** S 0077a260, S 0077a2f0 [known]: the walk target is the package's next waypoint and must be on
-the carrier's street path, else the movie fails to start.
+the carrier's street path, else the movie fails to start. `Start` S 0077a260 starts the walk and, when the street
+path of his movement is active (`SettlerMovement+0x80`) and he stands on his street, calls `CancelRoute` right after
+[known].
 
 - *Walking* (step 0x16): each tick, if his cell is on the street and a flag of his player stands on the cell at
   `SettlerMovement+0x38` (`rough.finalTarget`, the target cell of his current rough move, written by
@@ -911,7 +914,8 @@ nothing → stop, else the *Drop* movie is started again. "Stop" is `Settler::St
 home, is booked into a building and deleted ("Losing the job" above).
 
 **Destruction** (`Carrier::ReleasePackages` S 0065aec0) [known]: a carried package is discarded, a merely claimed
-one is released, the exchange reservation is dropped; the street slot is cleared (§3.5).
+one is only unlinked from him (released, not discarded), the exchange reservation is unlinked; the street slot is
+cleared (§3.5).
 
 ### 3.9 Hand-over at a flag, flag capacity, congestion
 
@@ -1030,7 +1034,8 @@ S 00557fe0. In mode 0 the constant 100 is **not used**: the function takes the p
 cell (none → no building) and returns `BuildingList_FindNearestConnected(list, flag, 1)` S 00557ef0, i.e. the
 finished building of the list whose entrance flag is in the same kind-**1** (walking) continent with the lowest
 `GetFlagPathCost(flag, entranceFlag, 1)`, first in list order on a tie. If one is found, one unit of the good is
-added to that building's stock; the package is discarded either way; the carrier returns to waiting (0x16).
+added to that building's output stock (`Depot+0x28`) [known] S 0065b200; the package is discarded either way; the
+carrier returns to waiting (0x16).
 `blockedCount` grows by one per failed admission test: once per 10 ticks in the waiting step, once per tick while
 he is held during the walk (§3.8), so 360 is reached after at most 3600 ticks of waiting [inferred].
 `PutDownPackage::Update` S 0077a8e0 simply ends when no flag stands on the settler's cell or the flag refuses.
@@ -1157,8 +1162,8 @@ if B and B.settlerSpawn.cooldown == 0 and not B.entranceFlag.IsFullForGood(good)
   the buildings were indexed; `NVillage::System::IndexBuilding` S 00559940 [known]): finished buildings whose
   entrance flag is in the same kind-0 continent as the flag at
   the given cell, whose stock has the good, and (unless `ignoreGoodFlags`) whose good flag for the good is **not**
-  enabled; minimum `GetFlagPathCost(fromFlag, building.entranceFlag, 0)`; ties keep the earlier list element
-  [known].
+  enabled; minimum `GetFlagPathCost(fromFlag, building.entranceFlag, 0)`, taken when `cost < best || best == −1`,
+  so ties keep the earlier list element; the building's owner is not tested [known].
 - `FindSupplierBuilding(..., requireReady)` S 006517d0: the same search, then the building's settler spawn must be
   ready and its entrance flag not full for the good [known].
 - `HasFreePackageInNetwork` S 006501d0: any free package of the good registered on a flag in the node's kind-0
@@ -1190,9 +1195,9 @@ needs whose target flag is in the node's kind-0 continent are candidates:
 
 | Category | Rule |
 |---|---|
-| 2 (finished `depot` building) | maximum of `(now − need.stamp) − 10 × (target building's stock of the good)`; first found on a tie (S 00651330) |
+| 2 (finished `depot` building) | maximum of `(now − need.stamp) − 10 × (units of the good in the target building's output stock)`, the stock read through the depot (`Building+0x3c` → `Depot+0x28`); the best score starts at `INT_MIN` and a later need replaces the pick only when strictly greater, so the first found wins a tie (`GoodOrderStockAgeScorer::ConsiderNeed` S 00651330) |
 | 1 (ship) | smallest `stamp`; first found on a tie (S 005691f0) |
-| 0 | if the player's `NPlayer::GoodArrangement` has a group for the good (`FindGroupForGood` S 005c10f0): distribution by the arrangement (`GoodOrderBucket_SelectByArrangement` S 00652b70, below). Without a group: smallest `stamp` |
+| 0 | if the player's `NPlayer::GoodArrangement` has a group for the good (`FindGroupForGood` S 005c10f0: the group whose id equals the good's `GoodProperty+0x78`): distribution by the arrangement (`GoodOrderBucket_SelectByArrangement` S 00652b70, below). Without a group: smallest `stamp` |
 
 The chosen need's `stamp` is set to the current tick.
 
@@ -1200,8 +1205,8 @@ The chosen need's `stamp` is set to the current tick.
 is a list of entries `{float weight, float accumulator, int buildingTypeId, byte used}` (layout and defaults:
 `players-victory.md` §2.6). `defaultType` = the first building type in the tribe's building list whose product
 slot 0 is the good `TribeProperty+0xb4` (`constructionGoodId`; `Player_FindBuildingTypeProducingTribeGoodB4`
-S 00533b20; −1 if none). A target building is a *site* when a construction `remaining` value is > 0 and its
-size is not the ship site (`size != 0x10`).
+S 00533b20, called with the owner of the node's flag; −1 if none). A target building is a *site* when a
+construction `remaining` value is > 0 and its size is not the ship site (`size != 0x10`) [known] S 00652b70.
 
 1. `MarkAllUsed`: every entry `used = 1`.
 2. For every need of the bucket entry whose target flag is in the node's kind-0 continent: `ReleaseId(id)`
@@ -1308,7 +1313,7 @@ the numbering is that of `logic-core.md` §4.2 [known]:
 | 6 | `NVillage::System::Update` | buildings add / cancel needs; then the settler order system serves carrier orders |
 | 7 | `NNet::System::Update` S 00665ef0 | (a) players 0..7, flags in vector order: remove flags on lost territory (§3.3), inside a map-update batch that encloses (a) only; after a removal the scan goes on with the flag that moved into the freed slot (`RemoveFlag` returns the erase position); (b) players 0..7, streets in vector order: `Street::Update` for attached streets (§3.7), outside the batch [known] |
 | 9 | `NSettlers::System::Update` | every carrier: `Carrier::Update` (§3.8); iteration order is the settler system's |
-| 10 | `NTransport::System::Update` S 0064cbe0 | `if tick % 11 == 0` `NeedSystem::Update` (§3.11); `if tick % 3 == 0` `PackageSystem::Update` (route revalidation, §3.6, packages in creation order); `if tick % 5 == 0` `PackageNeedSystem::Update` (§3.12); in this order |
+| 10 | `NTransport::System::Update` S 0064cbe0 | with `tick` unsigned: `if tick % 11 == 0` `NeedSystem::Update` (§3.11); `if tick % 3 == 0` `PackageSystem::Update` (route revalidation, §3.6, packages in creation order); `if tick % 5 == 0` `PackageNeedSystem::Update` (§3.12); in this order |
 | 14 | navy (`NNavy::System::Update` S 005b39d0) | every ship in vector order (`Ship::Update`: loads and unloads packages at harbour flags, `docs/sim/navy.md`); then the harbour list places harbour flags through `Logic_PlaceFlag` (S 005b5670) [known]. Sea streets are built and removed by `NavyShipRoute::UpdateSeaStreet` S 005b71d0, whose callers are the attaching of a flag to a harbour (S 005b49f0) and the adding / removing of a ship movement on a ship route (S 005b73a0, S 005b73d0) [known, caller list]: it runs in whichever step such an event happens (`docs/sim/navy.md` §3.12) |
 
 Staggered work inside the carrier movies uses `(tickCounter + settler +0x10) % N` (unsigned) with N = 20 (idle
@@ -1640,13 +1645,16 @@ disappears without being booked when there is no such building.
 | 00652170 | `NTransport::NeedSystem::Update` | need dispatcher |
 | 00651f10 | `NeedSystem::SettleIdlePackages` | release / deliver idle serving packages |
 | 00652420 / 00651bc0 / 00651cb0 | `NeedSystem::CreateNeed` / `DeliverPackage` / `DiscardAssignedPackage` | need life cycle |
-| 006541e0 / 00652e00 / 00651330 / 00652b70 | `GoodOrder_GetCategory` / select order / stock-and-age score / arrangement | need selection |
+| 006541e0 / 00652e00 / 00651330 / 00652b70 | `GoodOrder_GetCategory` / select order / `GoodOrderStockAgeScorer::ConsiderNeed` (stock-and-age score) / arrangement | need selection |
+| 005c10f0 | `NPlayer::GoodArrangement::FindGroupForGood` | group whose id equals `GoodProperty+0x78` |
 | 006538f0 / 00653250 / 00653180 | sorted entries / `ai::logistics::GoodOrderIterator::NextNode` / `NextNodeInPlayer` | need iteration |
 | 006506a0 | `NTransport::PackageNeedSystem::Update` | free packages to storehouses |
 | 006501d0 / 006502d0 | `HasFreePackageInNetwork` / `FindNearestFreePackage` | free package lookup |
 | 00557da0 / 00557ef0 / 006517d0 | nearest connected supplier (with good / any) / `Transport_FindSupplierBuilding` | supplier search |
 | 0065b710 / 0065b200 / 0065ad70 | `Carrier::Update` / `UpdateStreetTransport` / `UpdateDropOffAfterSpawn` | carrier state machines |
 | 0077ac50 / 0077a2f0 / 0077a8e0 | `WaitForPackage::Update` / `GoToPackageTarget::Update` / `PutDownPackage::Update` | carrier movies |
+| 0077a260 | `GoToPackageTarget::Start` | walk start, `CancelRoute` on his own street |
+| 0065aec0 | `Carrier::ReleasePackages` | carried package discarded, claim and reservation unlinked |
 | 0077a0f0 / 0077a150 | free / loaded partner tests | street swap |
 | 0064d1a0 | `NTransport::System::ShouldKeepWalkingToFlag` | walk-on test of a loaded carrier |
 | 0077a0c0 / 00557fe0 / 00557ef0 | give-up test / `BuildingList_FindNearestReachable` / `FindNearestConnected` | giving up a blocked package |

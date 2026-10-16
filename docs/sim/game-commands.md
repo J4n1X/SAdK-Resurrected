@@ -152,12 +152,15 @@ distance drives (proximity zones, garrison size from the three allocation factor
 
 `NPlayer::GoodPriorities`: +0x08 initialized flag, +0x0c vector of 8-byte entries `{i32 goodId, i32 rank}`
 [known, S 005c2700]. Default list: every good of the player's tribe good table whose property field +0x14 is not 1,
-in table order, with rank = the good's transport priority for the tribe (S 005c2bf0) [known].
+in table order, with rank = the good's transport priority for the tribe (S 005c2bf0) [known]. `InitFromGoodTable`
+appends (`push_back`) to the list without clearing it and sets the initialised flag to 1, also when the player has
+no tribe; of its callers, the `0x20022` executor S 007828d0 clears the list first and `Player::Init` S 005bea90
+does not [known].
 
 `NPlayer::GoodArrangement`: a vector of groups (`GoodArrangementGroup`, +0x1c good group id, entries of 0x14 bytes:
 +0x04 f32 weight, +0x0c building type id). A good maps to a group by its property field +0x78 (S 005c10f0). The
-default weight of an entry is the building type's property field +0xe4, never below 0.001 (S 005c0d40, S 005c2df0)
-[known]. How the weights choose the receiver of a good is the transport subsystem's matter
+default weight of an entry is the building type's property field +0xe4, never below 0.001 except that a NaN is
+kept (S 005c0d40, S 005c2df0; §3.4 `0x2001F`) [known]. How the weights choose the receiver of a good is the transport subsystem's matter
 (`docs/sim/streets-transport.md`).
 
 All three settings objects are part of the desync checksum: `ai::player::Player::StoreChecksum` S 005be6e0 writes,
@@ -620,23 +623,37 @@ command when a peer's command stream contains it.
 
 **`0x2001F` GE_Good_SetModifier** — `Event3Integer`: good id, entry index, weight (f32 bits). Sender
 `SendCommand_2001F` S 00781f60 from the six sliders of the goods distribution panel (on every slider change).
-Executor S 00782000: the sender's arrangement group for the good's good group; entry `index`; weight =
-max(value, 0.001). A missing group or an index beyond the entries is not handled (null use / container assert)
-[known]. The panel (`GoodArrangementPanel::OnSliderValueChanged` S 006412f0) sends its selected id only after
+Executor S 00782000: the sender's arrangement group for the good (`GoodArrangement::FindGroupForGood` S 005c10f0,
+the group whose id equals the good's property field +0x78); `GoodArrangementGroup::SetEntryWeight` S 005c0fb0
+takes entry `index` through `vector::at` S 005c0f40 (unsigned index) and calls `ArrangementObject::SetWeight`
+S 005c2df0: `weight = (0.001f > w) ? 0.001f : w`, compared with x87 `FCOMP` and `TEST AH, 0x41`, so a NaN weight
+is **kept** (the decompile's and a `max(value, 0.001)` reading are wrong for NaN); 0.001 is the float at S 007e3c20.
+The accumulators are not touched. A missing group is a null use; an index beyond the entries throws
+`std::out_of_range` from `vector::at` [known]. The panel (`GoodArrangementPanel::OnSliderValueChanged` S 006412f0) sends its selected id only after
 finding a group of the local player whose group id (+0x1c) equals it, and the slider's own index (+0x28); the
 executor reads the same value as a good id and maps it to a group through the good's property field +0x78
 [known].
 
-**`0x20020` GE_Good_ResetModifier** — payload +0x10: good id. Executor S 00781f20: every entry of the sender's
-group for that good gets its default weight. No sender exists in this build.
+**`0x20020` GE_Good_ResetModifier** — payload +0x10: good id (class `Event1Integer` [inferred]: no sender exists in
+this build to show it). Executor S 00781f20: `FindGroupForGood` S 005c10f0, then
+`GoodArrangementGroup::ResetToDefaults` S 005c0d40: every entry of the sender's group for that good gets its
+default weight; the accumulators are left as they are [known].
 
 **`0x20021` GE_Good_MoveTransportPriority** — `EventData`: `count × {i32 goodId, i32 rank}` (byte count =
-`count × 8`). Sender `SendSetGoodPrioritiesCommand` S 00783070 (settings panel confirm; the whole edited list).
-Executor `HandleSetGoodPriorities` S 007844b0: the sender's priority list is **replaced** by the payload
-(`count = bytes >> 3`). No validation of ids, ranks, duplicates or length [known].
+`count × 8`; there is no separate count field). Sender `SendSetGoodPrioritiesCommand` S 00783070 (settings panel
+confirm; the whole edited list). Executor `HandleSetGoodPriorities` S 007844b0: `count = bytes >> 3`; the payload is
+copied into a vector and the sender's priority list is **replaced** by it (`GoodPriorities::SetPriorities`
+S 005c2b50, a vector assignment S 005c2940 that leaves the list's initialised flag as it is). No validation of ids,
+ranks or duplicates [known]. Two lengths break the original [known]:
+- An empty list (byte count 0) ends the process: the executor takes `&v[0]` of the empty vector, which reaches
+  `_invalid_parameter_noinfo` S 006f2702 → `_invalid_parameter` S 006f26de; the handler pointer at S 0088f5c0 is
+  only ever set, to none, by `__init_pointers` S 006f9cbd, so the call goes on to `__invoke_watson`.
+- A byte count that is not a multiple of 8 overflows the heap by `bytes & 7` bytes: the vector is sized to the
+  whole elements, but `memcpy_s` copies all the bytes.
 
-**`0x20022` GE_Good_TransportPriorityReset** — `EventBase`. Executor S 007828d0: clears the sender's list and
-rebuilds the default list (§2.5). No sender exists in this build.
+**`0x20022` GE_Good_TransportPriorityReset** — `EventBase`. Executor S 007828d0: `GoodPriorities::Clear`
+S 005c28f0, then `InitFromGoodTable` S 005c2bf0, which rebuilds the default list (§2.5). No sender exists in this
+build.
 
 #### Ship routes (details in `docs/navy-and-military.md` §5)
 
@@ -1054,7 +1071,8 @@ net ticks; 6 session slots; 8 street planners.
 - The original command set is small enough to keep one-to-one. Ids, classes and field order only matter for
   network compatibility with the original client; saves do not contain commands.
 - Worth changing: add sender-owns-target checks; replace toggles by explicit set commands; validate indices
-  (`0x20018`, `0x20017`, `0x2001F`), list contents (`0x20021`) and ranges (factors, speed); drop the dead ids
+  (`0x20018`, `0x20017`, `0x2001F`), list contents and length (`0x20021`: an empty list ends the original, a byte
+  count that is not a multiple of 8 overflows its heap) and ranges (factors, speed; a NaN weight passes `0x2001F`); drop the dead ids
   (`0x2000B`, `0x2000C`, `0x2001D`, `0x20001`); give `0x20016`, `0x20020`, `0x20022` a UI or drop them.
 - Must be kept exactly for identical play: the validation order and block reasons of §3.4, the two-step street
   protocol (the unfinished street exists in the net between commands and is cancelled when its path becomes
@@ -1125,6 +1143,9 @@ net ticks; 6 session slots; 8 street planners.
 | 00781f20 | `HandleCommand_20020` | `0x20020` |
 | 007844b0 / 00783070 | `HandleSetGoodPriorities` / `SendSetGoodPrioritiesCommand` | `0x20021` |
 | 007828d0 | `HandleResetGoodPriorities` | `0x20022` |
+| 005c10f0, 005c0fb0, 005c0f40, 005c2df0 | `GoodArrangement::FindGroupForGood`, `GoodArrangementGroup::SetEntryWeight`, `vector::at` of the entries, `ArrangementObject::SetWeight` | `0x2001F` chain; the 0.001 floor that keeps NaN |
+| 005c2b50, 005c2940, 005c28f0 | `GoodPriorities::SetPriorities`, its vector assignment, `GoodPriorities::Clear` | `0x20021` replacement; `0x20022` clear |
+| 006f2702, 006f26de, 006f9cbd | `_invalid_parameter_noinfo`, `_invalid_parameter`, `__init_pointers` | the C runtime path an empty `0x20021` ends in |
 | 00782a20 / 00782950 | `HandleSetGameSpeed` / `SendCycleGameSpeedCommand` | `0x20023` |
 | 00782510, 00782660, 007825b0, 00782700, 007827a0 | sacrifice executors | `0x20024`..`0x20028` |
 | 00782fc0, 00782840 | `HandleAbortConstruction`, `HandleCommand_2002A` | `0x20029`, `0x2002A` |

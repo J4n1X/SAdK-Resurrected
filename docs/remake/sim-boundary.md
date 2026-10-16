@@ -10,7 +10,8 @@ Tags: **[binding]** = decided by the maintainer; **[draft]** = proposed here; fa
 of the cited document. Short names: LC = `../sim/logic-core.md`, RE = `../sim/rendering.md`, AM =
 `../sim/animation-models.md`, SJ = `../sim/settlers-jobs.md`, GC = `../sim/game-commands.md`, LR =
 `../sim/lua-runtime.md`, CI = `../sim/camera-input-cutscenes.md`, MR = `../sim/map-resources.md`, SF =
-`../sim/save-format.md`, NS = `../sim/network-session.md`.
+`../sim/save-format.md`, NS = `../sim/network-session.md`, ST = `../sim/streets-transport.md`, VB =
+`../sim/village-buildings.md`, PV = `../sim/players-victory.md`.
 
 ## 1. How the original couples them
 
@@ -336,8 +337,8 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Seams**: the village, the settlers and the transport plug into the street net through `IStreetNetHooks`
   (registered with `AddHooks`). Without them nobody carries, nothing is ordered and no building blocks a flag's
   removal. `FlagQueue` is null when no navy is loaded. `StreetType` is an engine type.
-- **Not yet**: streets order no first carrier. The carrier good is `GoodRulesDef.StreetCarrier`, and the data stage
-  does not attach that rule yet.
+- **First carrier**: a street orders its first carrier of the good whose `GoodRulesDef.StreetCarrier` is set
+  (`good_helper`); the data stage attaches that rule (§6.7).
 - **Scripted sessions**: `Sadk.Headless world --commands=<file>` runs one command per line (tick, command id, the
   fields as JSON) and can log the session; the match mode replays such a log (`replay=`).
 - **Measured**: an 18-command script starting at the castle flag (46, 55) built 6 streets and 7 flags, the split at
@@ -355,6 +356,39 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Measured**: 20 maps run for 2000 ticks, twice, gave equal state hashes; about 0.4 ms per tick on average
   (noisy).
 
+### 6.7 Transport as built [implemented, sadk-remake a9f6762]
+
+- **The original's good rules**: `GoodRulesDef.AttachOriginalRules` attaches, in `core.game`'s data stage, the rules
+  to `corn`, `wood`, `stone`, `good_helper` and `fish` by the literal ids the executable compares (each with its
+  address: VB §8, MR §3.8). The registry fingerprint changed with it from 22926df0 to 142868c8.
+- **Checksum**: the layout of `CarrierMovies` and of the three subsystem bytes is the remake's own.
+- **Read as inferred** (the original's code not followed to the end): a claimed package that is not carried is
+  released, not discarded, by `ISettlerTransport.DiscardPackage`; a free package in a carrier's hands heads for the
+  flag at his `RouteTarget`. **Not yet**: the trimming in `AssignToStreet`.
+- **Measured** (`MP_2P_steinfjord`): a woodcutter site at (46, 60) with a street of 5 cells, (46, 59) to the castle
+  flag (46, 55), length 10. Tick 0 the street orders a carrier, 1 he is linked, 11 and 22 packages are created at the
+  castle, 80 the carrier stands at the street's middle, 120 the first package leaves a flag, 238 and 486 planks are
+  delivered. A blocked carrier (blocked from tick 120) got `!flag blocked` at 1791 and 3591 (1,671 ticks after his
+  first try, then every 1,800) and gave up at 3601, 3,481 ticks after it (ST §3.9: the message every 180 failed
+  tries, the give-up past 360). A free package on a site flag was assigned to the castle at tick 85 and delivered by
+  244.
+
+### 6.8 Construction and production as built [implemented, sadk-remake 3adb8f5]
+
+- **Measured, reference for a live check against the original**: from the command to `!Building constructed` takes
+  about 668 ticks for a woodcutter 4 cells from the castle. In the remake (`MP_2P_steinfjord`, placed at tick 0 at
+  (46, 60), a street of length 10 to the castle flag): builder at 2, carrier 12, helpers 22 and 33, completed 668,
+  worker 769. Test session: first package 22, first delivery 257, first stroke 277, completion 666.
+- **Measured, float32 construction** (VB §8): with transport, a pause after 120 strokes gives 4 requests on continue
+  (`remainingB` = 0.5000005); 121 strokes per unit; completion on the drop below 0 (main total 4: stroke 480, the
+  117th of the 4th unit).
+- **Statistics** are in the remake's state hash only; the original's checksum has no statistics section
+  (`ComputeChecksum` S 00784080).
+- **Open**: upgrades (0x2000F, 0x20010); the gatherer, specialist and catapult jobs with their flood fills;
+  military; `IVillageSacrifices`; the AI hooks; save and load (the checksum is written in `StoreForChecksum` order,
+  without section tags); a military building with a soldier limit never activates its territory until soldiers
+  exist; `ConstructionChanged` is raised per stroke.
+
 ## 7. The way back: commands [draft]
 
 **As built** [implemented 2026-10-15, sadk-remake a7a220c]: a command is a record with
@@ -369,6 +403,14 @@ record's constructor parameters (little endian, floats as raw bits, varint count
 nested record structs); fields may be added at the end with defaults. A command with an original id also maps to the
 original's event layout (GC §2.2; verified byte for byte for 0x20023, 0x20011, 0x20013–0x20016). The UI path: a
 button emits an intent (`core.game.cyclespeed`), its handler submits the command.
+
+**As built, the transport settings commands** [implemented, sadk-remake 0e3771f]: `core.game.transportpriorities`
+(0x20021), `core.game.transportprioritiesreset` (0x20022), `core.game.distributionweight` (0x2001F) and
+`core.game.distributionreset` (0x20020) run as the original's executors (GC §3.4, PV §2.6). A list of 32-bit elements
+maps to the original's `EventData`: link id (u32, 0), byte count (u32, count × element size), the elements as raw
+little-endian values; a ragged or overlong byte count is refused, and 64-bit elements have no mapping. The refusals
+are `no-such-player`, `no-such-good`, `no-such-group`, `no-such-entry` and `empty-priorities`, the cases in which the
+original does not survive (§11 item 4).
 
 
 - Every player action is a `GameCommand` carrying ids, cells and registry ids, executed at a tick boundary on every
@@ -480,7 +522,24 @@ These matter more in the remake than in the original, because Harmony patches ca
    refuses a start cell outside the map (the original reads past its grids, MR §3.10); the removal reasons
    `Obstructed` and `Destroyed`; the sowing's `SetCellPattern` takes effect at once [inferred]; growth visuals step
    per tick instead of the original's 0.1 s fade [presentation]; the good flag `GroundResourceOnWater` replaces the
-   hard-coded fish id.
+   hard-coded fish id. Taken while building the map changes in the presentation (to review,
+   [renderer.md](renderer.md) §10.5, §12, §15.2):
+   the border posts are laid again on a height change (the original keeps their old height until the next territory
+   change, so its posts float or sink, RE §3.8; presentation only); the border posts cast shadows (the original's
+   `RenderWithEffect` S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag
+   model. Taken while building the transport (to review, §6.7): the original's good rules attached by their literal
+   ids in the data stage (`GoodRulesDef.AttachOriginalRules`; registry fingerprint 22926df0 → 142868c8); the
+   checksum layout of `CarrierMovies` and the three subsystem bytes is the remake's own; a claimed package that is
+   not carried is released, not discarded, by `ISettlerTransport.DiscardPackage` [inferred]; a free package in a
+   carrier's hands heads for the flag at his `RouteTarget` [inferred]. Taken while building the transport settings
+   commands (to review, §7): refused only where the original does not survive (a sender outside the player table,
+   an unknown good, no group, an entry out of range, an empty priority list, GC §3.4); 64-bit list elements get no
+   `EventData` mapping. Taken while building construction and production (to review, §6.8): working modes without
+   a job yet (the gatherers' 0, 1, 2, 3 and 7, the catapult's 5, the scholar's 11) rest; ship sites send the builder
+   home; an order's category is fixed when it is linked (the original recomputes it on removal); commands for a
+   missing building are refused (the original ignores them); `IsOccupied` skips empty slots among the first
+   `workerCount` (in the original a hole can hide a later worker, VB §3.18); `RebalanceInputRequests` is
+   approximate; remains that name a doodad only warn (none in the shipped data).
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

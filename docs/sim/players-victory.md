@@ -204,8 +204,12 @@ Series index (the "category" of `AddSample`) `[known]` S 00537ba0:
   `[known]`.
 - **`NPlayer::GoodPriorities`** (0x1c) `[known]` S 005c2bf0, S 005c27c0: `vector<{goodId, rank}>`. Default: every
   good of the tribe (`TribeProperty.goods`) whose `GoodProperty.type != 1` (1 = `Settler` in `Goods.lua`), with rank
-  `GoodProperty::GetTransportPriority(tribeId)` (Lua `gp_setTransportPriority`). `MoveRank(from, to)` moves one
-  good and shifts the ranks in between by one so the ranks stay a permutation. `GetRankOfGood` returns 0 for a
+  `GoodProperty::GetTransportPriority(tribeId)` (Lua `gp_setTransportPriority`). `InitFromGoodTable` appends
+  (`push_back`) to the list without clearing it and sets the initialised flag to 1, also without a tribe; its
+  callers are the `0x20022` executor S 007828d0, which calls `GoodPriorities::Clear` S 005c28f0 first, and
+  `Player::Init` S 005bea90, which does not (§3.3). `SetPriorities` S 005c2b50 (command 0x20021) replaces the list
+  by a vector assignment (S 005c2940) and leaves the initialised flag as it is `[known]`. `MoveRank(from, to)` moves
+  one good and shifts the ranks in between by one so the ranks stay a permutation. `GetRankOfGood` returns 0 for a
   good that is not listed.
 - **`NPlayer::GoodArrangement`** (0x1c) `[known]` S 005c1370: list of `GoodArrangementGroup` (0x20). Default: for
   every building type of the tribe (in `tp_addBuilding` order) with default weight (`BuildingProperty +0xe4`,
@@ -215,8 +219,10 @@ Series index (the "category" of `AddSample`) `[known]` S 00537ba0:
   group-id order (the collecting container is a `std::map` keyed by the group id). A group holds entries
   `{+0x00 vtable (ArrangementObject), +0x04 float weight, +0x08 float accumulator, +0x0c int buildingTypeId,
   +0x10 u8 used}` (stride 0x14); a new entry has accumulator 0 and `used` 0; weights default to
-  `BuildingProperty +0xe4`, minimum 0.001 (S 005c0d40, S 005c38a0). For a player whose `tribeId` is -1 both
-  `InitFromTribe` and `GoodPriorities::InitFromGoodTable` create nothing.
+  `BuildingProperty +0xe4`, minimum 0.001 (S 005c0d40, S 005c38a0); `ArrangementObject::SetWeight` S 005c2df0
+  computes `(0.001f > w) ? 0.001f : w`, so a NaN weight is kept (`docs/sim/game-commands.md` §3.4 `0x2001F`). For a
+  player whose `tribeId` is -1 neither `InitFromTribe` nor `GoodPriorities::InitFromGoodTable` creates an entry;
+  `InitFromGoodTable` still sets the priority list's initialised flag to 1 `[known]`.
   `PickNext` (S 005c30c0): add each entry's weight to its accumulator; choose the first entry in list order with
   `used == 0` and the strictly largest accumulator (start value -1.0); set its accumulator to 0 and return its
   building type id. If all entries are `used`, the first entry is returned and its accumulator is set to 0 as
@@ -302,7 +308,9 @@ Arguments: index, name, kind, tribeId, team, state. In order `[known]`:
    `reachedPos[j] = (-1,-1)` for all j; then, if `index != -1`, `spotted[index] = reached[index] = 1`.
 6. `pMobileStock` marked initialised; `state` stored; `bActive = 1`.
 7. `tribeId` stored and `pTribeProperty` resolved.
-8. `GoodPriorities::InitFromGoodTable`, `GoodArrangement::InitFromTribe` (§2.6).
+8. `GoodPriorities::InitFromGoodTable`, `GoodArrangement::InitFromTribe` (§2.6). `InitFromGoodTable` appends
+   to the list and `Init` does not clear it first; the list is empty here when the table was emptied by `Reset`
+   (below) or the player is new `[inferred]`.
 
 `Init` does not clear `lockMaps`, `Military`, `Messages` or `ShipNames`; those are cleared by `ai::player::Player::Reset`
 S 005bea50 (priorities, arrangement, messages, both stocks, lock maps, `bActive = 0`) when the table is emptied.
@@ -896,9 +904,9 @@ constructed player table, victory conditions and statistics.
 |---|---|---|
 | Match setup (descriptor) | S 005abb60 | §3.4 |
 | Lockstep command 0x2002B (player index) | S 00782910 | removes that player's castle, §3.8 |
-| Lockstep command 0x2001F / 0x20020 (good distribution change / reset) | S 00782000 / S 00781f20, both through `GoodArrangement::FindGroupForGood(sender's arrangement, event +0x10)` S 005c10f0 | 0x2001F: `GoodArrangementGroup::SetEntryWeight(key = event +0x14, float event +0x18)` S 005c0fb0; 0x20020: `GoodArrangementGroup::ResetToDefaults` S 005c0d40 on that group `[known]`; details in the economy document |
+| Lockstep command 0x2001F / 0x20020 (good distribution change / reset) | S 00782000 / S 00781f20, both through `GoodArrangement::FindGroupForGood(sender's arrangement, event +0x10)` S 005c10f0 | 0x2001F: `GoodArrangementGroup::SetEntryWeight(key = event +0x14, float event +0x18)` S 005c0fb0 → `vector::at` S 005c0f40 (unsigned index, `std::out_of_range` beyond the entries) → `ArrangementObject::SetWeight` S 005c2df0 (floor 0.001, NaN kept); 0x20020: `GoodArrangementGroup::ResetToDefaults` S 005c0d40 on that group; both leave the accumulators as they are `[known]`; details in `docs/sim/game-commands.md` §3.4 |
 | Lockstep commands 0x20022 (reset good priorities) / 0x20016 (reset military defaults) | S 007828d0 → `GoodPriorities::Clear` + `InitFromGoodTable`; S 007823c0 → `Military::ResetDefaults` | restore the sending player's defaults `[known]` (cases of `nGame::System::HandleGameCommand` S 007845a0) |
-| Lockstep commands 0x20021 (set good priorities), 0x20013..0x20015 and 0x20017 (military values and flag) | cases of S 007845a0 (`HandleSetGoodPriorities` S 007844b0, `HandleSetMilitaryValue2/1/0`, `HandleToggleMilitaryFlag`) | change the checksummed settings objects of §2.6 `[inferred]` from the handler names; rules in `docs/sim/game-commands.md` |
+| Lockstep commands 0x20021 (set good priorities), 0x20013..0x20015 and 0x20017 (military values and flag) | cases of S 007845a0 (`HandleSetGoodPriorities` S 007844b0, `HandleSetMilitaryValue2/1/0`, `HandleToggleMilitaryFlag`) | change the checksummed settings objects of §2.6: 0x20021 replaces the priority list through `GoodPriorities::SetPriorities` S 005c2b50 `[known]`; the military ones `[inferred]` from the handler names; rules in `docs/sim/game-commands.md` |
 | Session events 0x3000A / 0x3000B (user leave / user left) | `NComm_Manager::HandleEvent` S 0040e560 | on the host: creates command 0x2002B, §3.8 |
 | NComm game seed / game id (network match) | S 005ac770 → S 00775dd0 | seeded chest placement after player creation, §3.4 |
 | Lua bindings `logic.pl_*`, `menu.lock*`, `logic.victory_setupQuests` | §3.10, §3.12 | |
@@ -1210,6 +1218,8 @@ to ticks.
 | 005c00e0 / 005c0120 / 005c0270 / 005c05b0 | `PlayerMessages_SendToPlayer` / `SendToAllExcept` / `SendOrRefreshToPlayer` / `SendLetterToPlayer` | notifications |
 | 005c1e40 / 005c1fd0 | `Messages::FindMatchingWithArg` / `FindMatching` | de-duplication |
 | 005c2bf0 / 005c27c0 | `GoodPriorities::InitFromGoodTable` / `MoveRank` | transport priorities |
+| 005c2b50 / 005c2940 / 005c28f0 | `GoodPriorities::SetPriorities` / its vector assignment / `GoodPriorities::Clear` | priority list replaced (0x20021) / emptied (0x20022) |
+| 005c10f0 / 005c0fb0 / 005c0f40 / 005c2df0 / 005c0d40 | `GoodArrangement::FindGroupForGood` / `GoodArrangementGroup::SetEntryWeight` / `vector::at` / `ArrangementObject::SetWeight` / `GoodArrangementGroup::ResetToDefaults` | distribution weights (0x2001F, 0x20020) |
 | 005c1370 / 005c30c0 | `GoodArrangement::InitFromTribe` / `ArrangementBase::PickNext` | good distribution |
 | 005c0930 | `NPlayer::Military::ResetDefaults` | military setting defaults |
 | 005c17f0 | `Counter08_IncrementWrap20` | ship name counter step (0..20) |
