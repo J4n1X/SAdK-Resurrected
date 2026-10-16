@@ -57,7 +57,7 @@ movies (`settlers-jobs.md`); fights (`military.md`); rendering of ships, buoys a
 | +0x1c..+0x24 | ships | vector of `Ship*` | **creation order**; all per-tick loops walk it front to back |
 | +0x28 | `shipRoutes` | `ai::navy::ShipRouteList` | vector of routes at list +0x10..+0x14 |
 | +0x44 | `harbors` | `ai::navy::HarborList` | vector of `Harbor*` at list +0x10..+0x14 |
-| +0x60 / +0x64 | street constructor / `StreetPlanner` | pointers | builds sea streets and the colony street |
+| +0x60 / +0x64 | street constructor / `StreetPlanner` | pointers | builds sea streets and the colony street; one planner for all players, each call names the player |
 
 [known] S 005b3d70 (ctor), S 005b3360 (`Init`), struct layout in the type database.
 
@@ -80,7 +80,9 @@ exit), `+0x38/+0x3c` the exit's water cell [known] type database, S 005bc580.
 free), `+0x28/+0x2c` water cell [known] S 005bc130, S 0053c2d0.
 
 A ship **reserves** a docking position the moment it is ordered to the harbour, not when it arrives [known]
-S 005b97f0 → S 0053c2d0.
+S 005b97f0 → S 0053c2d0. Releasing it (`NavyLink_UnlinkMovementDocking` S 0053c300) clears both the position's
+occupant and the ship's `targetHarbor` reference (movement +0x60) [known], so a ship whose docking position is
+released has no harbour until one is set again.
 
 ### 2.3 Ship route: `ai::navy::NavyShipRoute` (0xa0)
 
@@ -163,7 +165,7 @@ made by `CreateShip` (script, editor, ownership transfer) start with both at 0 [
 | +0x30 | `NNavy::Path` | cell list of the current move (`NMovement::PathBase`: cells vector +0x0c, `index` +0x18, `bValid` +0x1c, `bNewPath` +0x1d) |
 | +0x54 | `bInterrupted` | request to stop at the next cell |
 | +0x58 / +0x5c | `markedTile` | the anchorage cell this ship reserved (grid bit 0x10000); (-1,-1) = none |
-| +0x60 | `targetHarbor` (`ReferenceHarbor`) | the harbour the ship is docked at or heading for |
+| +0x60 | `targetHarbor` (`ReferenceHarbor`) | the harbour the ship is docked at or heading for; cleared with the docking reservation (S 0053c300) |
 | +0x80 | `route` (`ReferenceShipRoute`) | the route the ship is assigned to; invalid = none |
 | +0xa0 | `anchorSearchCooldown` | ticks until the next anchorage search (struct name `field_a0`) |
 | +0xa4 | `state` | `ENavyMovementState`, below |
@@ -295,10 +297,11 @@ logic object, 0x800 dock, 0x2000 harbour, 0x4000 harbour exit, 0x8000 ship route
 | ship-building site | `System::CreateShipAtPlacement(player, waterCell, shoreCell)` S 005b4260 | unfinished ship on `waterCell`, `buildCell = shoreCell` (§3.3) |
 | script `na_createShip(player, x, y)`, editor tool, ownership transfer | `System::CreateShip(player, cell)` S 005b42f0 | finished ship on `cell`; no check that the cell is water |
 
-Both append to the ship vector, assign a new unique id, set `shipNumber = player.shipNames.nameIndex` and then
-advance that index (`nameIndex += 1; if nameIndex > 20 then nameIndex = 0`) [known] S 005bad60, S 005c17f0, and
-raise the "ship added" callback. The display name key is `"!" + tribeName + "ShipName" + shipNumber` [known]
-S 005bb8b0.
+Both append the new ship to the ship vector. The constructor of a new ship works in this order [known]
+S 005bad60, S 005c17f0: the movement sub-object marks the start cell as anchorage (below); the ship gets a new
+unique id; `shipNumber = player.shipNames.nameIndex`, and that index advances (`nameIndex += 1; if nameIndex > 20
+then nameIndex = 0`, so the names wrap after number 20); the "ship added" callback is raised. The display name
+key is `"!" + tribeName + "ShipName" + shipNumber` [known] S 005bb8b0.
 
 In `Movement::ctor` the start cell is marked as the ship's anchorage (bit 0x10000, `markedTile`) if it is inside
 the map and `IsWaterCellAtPlayerCoast(cell, player, ignoreShipTile = false)` holds (§3.5) [known] S 005b9580.
@@ -354,16 +357,25 @@ S 0077d6c0, S 0077fa30, S 0077f9c0:
    same ring as the flood fill of §8 but starting one cell earlier). The origin itself is tested first.
 2. No goal: message `!No Place for Ship found!` (kind 6) to the owner and the site is removed.
 3. Else the ship is created unfinished on `waterCell` and linked to the constructor and the site.
-4. Work loop of the constructor (`NMovie::ConstructShip`), repeated while the ship is unfinished:
-   a. if the site's `aborted` flag is set → stop;
-   b. if the site stock is empty → wait (`BeNervous`) and retry;
-   c. remove **one** unit of the first good of the list `frameCost ++ cost` from the site stock, carry it to
-      `buildCell`, drop it. Here and in §3.10 `a ++ b` is `GoodAmountList_AddList` S 00552bb0: a copy of `a`
-      to which every entry of `b` is added, an entry of a good that is already in the list raising that
-      entry's amount, a new good being appended; so the first good is always the first good of `frameCost`,
-      whatever the stock holds [known];
-   d. hammer (`NMovie::ShipConstruct`): `strokes = (int)constructTime` (truncated);
-      `n` = total good count of `frameCost` if `remainingWork2 > 0`, else of `cost`;
+4. Work loop of the constructor (`NMovie::ConstructShip::Update` S 0077d6c0, movie steps in brackets), repeated
+   while the ship is unfinished:
+   a. (step 7) if the site's `construction.aborted` (building +0x44 → +0x78) is set → stop;
+   b. (step 7) if the construction's stock (`NLogic::Stock` at construction +0x10) has no entry at all (its
+      entry count, construction +0x20, is 0) → wait (`BeNervous`, step 13) and retry;
+   c. (step 7) otherwise `Stock::RemoveOne` on the first good of the list `frameCost ++ cost` and create the
+      carried package of that good (`NTransport::System::CreateCarriedPackage`), **whether or not the stock
+      holds that good**: step b only tests that the stock is not empty [known]. With the shipped data the frame
+      and the main cost are one good (planks, or wood for `shipBuildingEgypt`), so the stock holds nothing else
+      [inferred]. Then carry the package to `buildCell` (step 2) and drop it (step 19). Here and in §3.10
+      `a ++ b` is `GoodAmountList_AddList` S 00552bb0: a copy of `a` to which every entry of `b` is added, an
+      entry of a good that is already in the list raising that entry's amount, a new good being appended; so the
+      first good is always the first good of `frameCost`, whatever the stock holds [known]. Step 7 and the end
+      of step 10 (d below) both set the byte +0x70 of the object at settler +0x50 to 1 [known]; its purpose is
+      [TODO] not established (§10);
+   d. (step 10) hammer (`NMovie::ShipConstruct`): `strokes = (int)constructTime` (truncated);
+      `n` = total good count of `frameCost` if `1 − remainingWork2 < 1` (the test of `ShipConstruct::Start`
+      S 0077fa30 [known]; it differs from `remainingWork2 > 0` only for a remainder so small that
+      `1 − remainingWork2` rounds to 1 [inferred]), else of `cost`;
       `workPerStroke = 1 / (n * constructTime)`. One stroke per tick for `strokes` ticks, and **one more**
       portion on the tick the movie ends, so a visit adds `(strokes + 1) * workPerStroke`. The stroke is
       counted per call of the movie's `Update`, not per animation: the hammer animation (kind 4, length
@@ -371,7 +383,7 @@ S 0077d6c0, S 0077fa30, S 0077f9c0:
       that the movie is updated once per logic tick is stated in `settlers-jobs.md` §3.9;
    e. `Construction::AddWork(amount)` S 005ba450: subtract from `remainingWork2` while it is `> 0`, otherwise
       from `remainingWork1`; clamp at 0. Work is not carried from one phase into the other;
-   f. walk back to the entrance flag cell.
+   f. (step 24) walk back to the entrance flag cell; then step 7 again while work remains.
 5. When both values are `<= 0`: message `!Ship constructed` (kind 6, with the ship's name key and cell), the
    site is unlinked from the ship and **removed** (`NVillage::System::RemoveBuilding`). A ship-building site
    builds exactly one ship.
@@ -451,6 +463,11 @@ Step cost of entering `b`:
 | dock bit 0x800, or both exit 0x4000 and route 0x8000 | 12 |
 | any of the 6 neighbours inside the map is not water, or has 0x800, or has 0x400, or lies on the map edge | 2 |
 | else | 1 |
+
+The neighbour walk of S 005bba90 steps once in direction 4 and then, for each direction 0..5, steps first and
+tests the cell it reached (so the direction-4 neighbour is tested last); neighbours outside the map are skipped,
+and "on the map edge" is `MapPos_IsOnMapEdge` S 005bba60 (x or y is 0 or the size minus 1) [known]. The order
+does not change the cost.
 
 `ShipRouteAStar` (vftable S 007eb598; editor route drawing) additionally forbids cells with 0x8000 in its
 step cost and otherwise returns the ship cost above; its slot 0 is a thunk to the same precondition
@@ -539,7 +556,8 @@ and `player` owns, on that neighbour's continent, a **building whose territory s
 type has `territoryBuilding` (vector at `NVillage::System + 0x3c`, filled by `IndexBuilding` S 00559940 from
 property byte +0xf5) and takes one of `player` whose `territoryUpdater.bActive` (building +0xc4 → +8) is set
 and whose cell has the same continent id; nothing else of the building is tested. When that flag is set:
-`village-buildings.md`, `TerritoryUpdater`). The neighbours are tested in the ring order of §3.3 step 1.
+`village-buildings.md`, `TerritoryUpdater`). The neighbours are tested in the ring order of §3.3 step 1: the
+direction-4 neighbour first, then the cell reached after each step in directions 0..4 [known].
 
 `System::FloodSearchShipTile(origin, radius, player)` S 005b4430 [known]: breadth-first flood fill (§8) from
 the ship's cell over free water cells within `radius` of the origin; the first cell with
@@ -664,7 +682,10 @@ ship (it joins the cargo's settler list, not yet aboard).
 4. The flag's settler list (flag `settlerRefs`): every settler bound for the opposite harbour sets `worked`;
    the first one that stands still, holds a parking cell and has `flagWaitState` 2, 3 or 7 is called out of
    its parking place (parking cell released, state 2 → 7) and the scan stops. One settler boards per call.
-5. Packages on the flag's active stacks, in stack-iterator order, with `pending = 0`:
+5. Packages on the flag's active stacks, in stack-iterator order, with `pending = 0`. The iterator
+   (`NNet_FlagPackageStacks_IterNext` S 0066cdd0) keeps an index per stack: loading a package removes it from
+   its stack, the next package moves into its slot, and the iterator's next step passes over that package
+   [known]; it is seen again only on a later call.
    - stop if the cargo is full and no package aboard can be unloaded here
      (`HasPackageForCurrentHarbor` S 005bce30);
    - a package that is flagged for transport (+0x25), lies on the flag (+0x70) and has the opposite harbour's
@@ -867,9 +888,12 @@ S 005ba250, S 005b9f30, S 005ba190 [known]; additions:
 
 `NavyShipRoute::UpdateSeaStreet` S 005b71d0 runs when a ship is added to or removed from the route's list and
 when a flag is attached to an end harbour [known]:
-- a street exists and `IsStreetValidForPlayer(street owner)` is false → remove the street;
+- a street exists: if `IsStreetValidForPlayer(street owner)` is false, remove the street and end the call; a
+  valid street is left as it is. A street removed here is **not** rebuilt in the same call, even when another
+  ship's owner now owns both ends; the next call builds it;
 - no street: the first ship in the list whose owner owns both ends → build a type-3 street for that player
-  along harbour A cell → A's exit for this route → B's exit → harbour B cell.
+  with the navy's street planner (System +0x64): `BuildStreet` from harbour A's cell, `ExtendTo` A's exit for
+  this route, `ExtendTo` B's exit, `ExtendTo` harbour B's cell, then `TakePath`.
 
 How the road network treats a type-3 street (as stated there: usable for goods and settlers, no carrier, not
 registered in the map grid, not removed with lost territory) and the path search that lays it
@@ -1140,7 +1164,8 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 - **Iteration order is state.** Ships are updated in creation order; the nearest-ship, nearest-harbour and
   nearest-dock searches keep the **first** candidate on equal distance (strict `<`). Harbours and routes are
   in map order; exits in stored direction order; a route's ship list in assignment order; flag waiting lists
-  and package stacks in their own order (`settlers-jobs.md`, transport). Erasing a ship shifts the vector
+  and package stacks in their own order (`settlers-jobs.md`, transport), and loading at a harbour skips the
+  package that moves into a loaded package's slot (§3.9). Erasing a ship shifts the vector
   (order preserved).
 - **Phase offsets use the ship's unique id** (64-bit add, then modulo), so id assignment order must match the
   original for identical timing.
@@ -1182,7 +1207,9 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
   path counting as docked and the straight-line first step onto a route (§3.4); cargo exchange without a
   position test; `AssignNearestIdleShip` measuring from harbour A's exit even when the player owns end B;
   `bInterrupted` surviving a stop; the unsaved sinking timer; `sh_setSize` without effect; the hold
-  exceeding `stockLimit` (§3.9).
+  exceeding `stockLimit` (§3.9); the ship-building fetch that takes the first cost good without testing that
+  the stock holds it (§3.3, no effect with the shipped data); a sea street that is removed and not rebuilt for
+  another qualifying player until the next refresh (§3.12).
 - The sea attack rules have known gaps that the `navalcombatfix` mod addresses
   (`../navy-and-military.md` §7); decide per rule whether the remake keeps the original behaviour.
 - Rendering needs from the logic only: cell, next cell, `progress`, ship state, cargo empty or not, the
@@ -1206,6 +1233,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | 10 | Answered: a harbour's loss unlinks only the ships of that harbour's owner. A target of another player that is lost again leaves the returning ship untouched (states 7 and 8 do not read the target). If the ship's own player loses the start harbour (or a target he owned), the ship is taken off the route in the same call: expedition deactivated, ship state 0, idle rules | static: S 005b8ac0, S 005b5370, S 005b7050, S 0053c040 |
 | 11 | Answered (§3.3): 31 calls of `ShipConstruct::Update` per visit (`strokes = (int)constructTime` = 30, plus the call that ends the movie), one per logic tick; the time between two fetches adds the two walks and the drop | static: S 0077fa30 (disassembly), S 0077f9c0, S 0077d6c0, S 0065e770; settler update per tick: `settlers-jobs.md` §3.9 |
 | 12 | Answered (§3.9): the hold is not bounded across stays; 39 packages against `stockLimit` 12 were seen. Open: whether the destination flag of that ferry was full (the condition §3.9 names) | live 2026-10-12; a read of the destination flag's stacks during such a run |
+| 13 | What the byte +0x70 of the object at settler +0x50 means, which `ConstructShip` steps 7 and 10 set to 1 (§3.3) | static: the readers of that byte |
 
 ## 11. Function reference
 
@@ -1224,7 +1252,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005b3450 | `System::FindNearestIdleShipAtHarborExit` | ship choice for routes and attacks |
 | S 005b4370 / 005bbd10 | `System::FindShipPlacement` / `ShipPlacementSearch::IsGoal` | launch cell of a new ship |
 | S 005b4430 / 005bbf00 | `System::FloodSearchShipTile` / `ShipTileSearch::IsGoal` | anchorage search |
-| S 0052f0c0 | `GameQuery::IsWaterCellAtPlayerCoast` | anchorage / launch predicate |
+| S 0052f0c0 / 00534000 | `GameQuery::IsWaterCellAtPlayerCoast` / `GameQuery_IsMilitaryBuildingOnContinent` | anchorage / launch predicate |
 | S 005bb500 | `NNavy::Ship::Update` | ship state machine |
 | S 005bab60 | `Ship::ReturnToOwnHarbor` | idle ship adopts a ferry route |
 | S 005bb010 / 005bb210 / 005bb250 | `Ship::BeginSinking` / `ScheduleSinking` / `ScheduleSinkingNoDelay` | sinking |
@@ -1234,15 +1262,18 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005b92e0 / 005b9340 | `Movement::SetRoute` / `ClearRoute` | route link |
 | S 007728d0 / 00772950 / 00772b00 | `NMovement::Base::BeginStep` / `Update` / `StartMoveTo` | cell stepping |
 | S 005bdb30 | `NNavy::Path::FindPath` | route segment or A* |
-| S 005bba90 / 005bbbe0 / 005bb9d0 | `NNavy::AStar::GetStepCost` / `CanTraverse` (search precondition, slot 0), `ShipRouteAStar::GetStepCost` | water path costs |
+| S 005bba90 / 005bbbe0 / 005bb9d0 / 005bba60 | `NNavy::AStar::GetStepCost` / `CanTraverse` (search precondition, slot 0), `ShipRouteAStar::GetStepCost`, `MapPos_IsOnMapEdge` | water path costs |
 | S 00676900 / 00676e80 / 00676d10 | `NMap::AStar::FindPath` / `BuildPathReversed` / `BuildPath` | shared A* core, random path read-back (`map-resources.md`) |
 | S 005bd900 | `MapPosVector_ExtractSegment` | stored route segment |
-| S 0053c2d0 / 0053c300 | `NavyLink_LinkMovementDocking` / `UnlinkMovementDocking` | docking reservation (no null test) |
+| S 0053c2d0 / 0053c300 | `NavyLink_LinkMovementDocking` / `UnlinkMovementDocking` | docking reservation (no null test); the release also clears `targetHarbor` |
+| S 0053c3d0 / 0053c3f0 / 0053c040 / 005b7050 | `NavyLink_LinkMovementRoute` / `NavyLink_UnlinkMovementRoute` / `NavyLink_UnlinkExpeditionRoute` / `NavyShipRoute::UnlinkMovementsOfPlayer` | route links |
 | S 005baf20 / 005b96c0 / 005b3c40 | `Ship::dtor` / `Movement::dtor` / `System::DeleteAllShips` | destruction order |
 | S 0055e8c0 | `NVillage::Construction::dtor` | removing a ship-building site deletes its ship |
 | S 00538c90 / 00538a60 | `NLogic::Edit` slot 1 (byte +4) / `SetBatchEditing` | instant ship completion |
 | S 00657d90 / 006567b0 / 00657330 | `SettlerMovement::DisembarkAt`, settler slot 0 (harbour cell), parking call-out | passengers |
 | S 0066b970 | `FlagPackageStacks::CannotTakePackage` | can the harbour flag take a package |
+| S 0066cdd0 | `NNet_FlagPackageStacks_IterNext` | index-based package iterator of `LoadAtHarbor` |
+| S 0064cd60 / 0064d0b0 | `Transport_LoadPackageIntoHolder` / `NTransport::System::UnloadPackageFromCargo` | cargo load / unload |
 | S 00562580 / 00561e20 / 0053bfb0 | `OrderSystem::AssignOrderToSettler`, `VillageOrder_LinkSettlerToDestination`, `Settler_LinkShip` | the expedition soldier |
 | S 0055a820 / 00673af0 / 00565350 | `PlaceExpeditionBuilding`, `MapModifier::AddTerritorySource`, `TerritoryUpdater::Activate` | colony territory |
 | S 006632d0 / 006630b0 / 006631e0 | `SacrificeModifiers::GetShipSpeed` / `ApplyOwnEffect` / `ApplyHostileEffect` | ship speed factor |
@@ -1256,7 +1287,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 | S 005ba970 / 005ba720 / 005ba800 / 005ba8f0 | `NavyShipRouteBackRef::GetAssignShipBlockReason` / `AssignNearestIdleShip` / `AbortPlayerExpedition` / `OrderPlayerExpeditionFoundColony` | route commands |
 | S 00781ad0 / 00781b70 / 00781c10 | `nGame::System` handlers of `0x2001A` / `0x2001B` / `0x2001C` | lockstep entry |
 | S 005b6d30 / 005b6d80 / 005b71d0 | `NavyShipRoute::CanPlayerAssignShip` / `IsStreetValidForPlayer` / `UpdateSeaStreet` | one ship per player, sea street |
-| S 005b49f0 / 005b5370 / 005b5670 | `Harbor::AttachFlag` / harbour flag loss / `PlaceFlagAndRevealExitsForCellOwner` | harbour ownership |
+| S 005b49f0 / 005b5370 / 005bc1c0 / 005b5670 | `Harbor::AttachFlag` / harbour flag loss / `NavyHarborExit_UnlinkOwnerShips` / `PlaceFlagAndRevealExitsForCellOwner` | harbour ownership |
 | S 005b4a90 / 005bc060 / 005b4da0 | `Harbor::FindDockingPositionForShip`, `HarborExit::FindNearestFreeDockingPosition`, `Harbor::FindDockingPositionOf` | docking |
 | S 005b6370 / 005b4c50 | `HarborList::FindNearestHomeHarborForShip`, `Harbor::FindOwnRouteForShip` | home harbour |
 | S 0052eba0 | `Navy_AreContinentsConnectedForPlayer` | reachability over sea streets |

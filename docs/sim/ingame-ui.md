@@ -286,7 +286,8 @@ cell x / y (+0x1c / +0x20, −1 = no place), read flag (+0x78), type (+0x7c, 1..
 | 8 | none (letters, autosave notice) | 0 | `uiMessage0` | 0 |
 
 The pairing of filter entries with types follows from the numbering in S 005ecaf0 (`cbMessages` item *i* gets
-user data *i* + 1 [known]) and from the filter array indexed by type (S 005f8e80) [inferred].
+user data *i* + 1 [known]) and from the filter array indexed by type (S 005f8e80) [inferred]. A type outside the
+table gets the icon at x 80 (`SetupSlot` S 005f75a0) [known].
 
 ---
 
@@ -650,7 +651,7 @@ listed in the code's string references; shipped values in §6]:
 | `pause` | picture with `bar` | | shown while paused, pulsing | |
 | `sacrificestartedeffect` | picture | | shown at alpha 1 and faded out over 1.1 s when a sacrifice that concerns the local player starts | |
 | `sacrificetargetpanel` | `SacrificeTargetPanel` with template button `entry` | at the cursor | enemy players as targets | §3.8.9 |
-| `messages` | `Messages` with `last`, `up`, `down` | right edge | message slots (§3.8.5) | |
+| `messages` | `Messages` with `last`, `up`, `down` | top left: `pos="-26 -4"` without alignment, child of the HUD root | message slots (§3.8.5) | |
 | `questlog` | `QuestLog` | centre, 370 × 492 | quest list and description | |
 | `tutorial` | `Tutorial` | | tutorial pages (`menu.addTutorialPage`) | `btPrev` / `btNext`, slider |
 | `cutsceneDebug` | `ListBox2`, hidden | | debug list | |
@@ -666,6 +667,15 @@ attribute `zoomInTime` > 0 attaches a scale-in animation to the HUD root (shippe
 drop-downs, adds and activates the chat channel `Chat` (id 1), calls `MenuSelection::CreateInfoBoxes`, creates
 goods bar, quest lines, minimap, quest log and tutorial [inferred]. `DestroyHudWidgets` S 005ea650 undoes it
 on leaving and deletes the panels at +0xcc70..+0xcc84.
+
+The parents `SetupHud` gives the fixed members [known: disassembly of S 005ed700]: `selectionBorder` →
+`selectionPicture`; `btBack`, `btForward`, `btSettings`, `btStatistics` → `selectionBorder`; `miniMapBorder` →
+`miniMap`; `btInfoMap1`, `btInfoMap2`, `btInfoMap3`, `btSpeed`, `btOptions` → `miniMapBorder`; the pause panel
+(`pause`) → the desktop (Game +0x20); every other member → the HUD root (Game +0x968). So the `pos` values of
+these buttons in `menuingame.xml` are relative to the selection frame and the minimap frame [inferred: §3.1.5,
+positions relative to the parent]. `btQuests` is an XML child of `miniMapBorder` and stands at the same
+`pos="128 199"` as `btOptions`; [TODO] not established: whether code hides one of the two (a read of the writers
+of their visibility settles it).
 
 **World hover tooltip** [inferred] S 005ef740, S 005efd60: only when the world is not in state 3, the cursor is
 visible, the hovered cell is explored by the local player and no dialog has focus. Priority: own picked object
@@ -683,8 +693,11 @@ the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTi
 [known]: the game selection is cleared, then the first hit wins:
 
 1. a flag of the local player on the cursor cell (`FindLocalPlayerFlagAtCell` S 00787bf0) → Flag;
-2. the entity under the mouse (`PickVisibleEntityAtMouse` S 00787cc0) → Building; [TODO] not established: what
-   this ray pick hits (buildings, ships, routes); a read of S 00787cc0 settles it;
+2. the entity under the mouse (`PickVisibleEntityAtMouse` S 00787cc0) → Building: the ray tests the map-object
+   layer's objects of kinds 6 and 8 and counts a hit of kind 6 only, a building; it drops a building whose anchor
+   cell is unexplored, testing the exploration of the building's owner (`+8`), not the local player's
+   [inferred] ([camera-input-cutscenes.md](camera-input-cutscenes.md), click selection; [rendering.md](rendering.md)
+   §3.7);
 3. a building on or next to the cursor cell (`PickSelectableEntityAtCell` → `NVillage::System::
    FindBuildingAtOrAdjacentCell` S 00558990): grid bit 0x1 = a building is anchored on the cell; else grid bit
    0x100 = a neighbour in directions 0..2 has bit 0x1 and holds a large type (size mask bit 2 set, bit 1
@@ -1040,8 +1053,18 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
 **Messages** [inferred] S 005f86a0, S 005f8b90, S 005f75a0; constants [known] S 005f86a0
 
 - Eight slot rows are created, seven are filled: the filtered list (types whose filter is on) from the scroll
-  index. A row = type icon button (§2.10) + label (title, or `title (extra)`), read messages grey
-  (200, 200, 200) and pressed, unread white.
+  index (`Messages::Refresh` S 005f8b90: nine filter bytes, a window of 7 rows, stick to the newest). A row =
+  type icon button (§2.10) + label (title, or `title (extra)`), read messages grey (200, 200, 200) and pressed,
+  unread white.
+- Row geometry [known] `InitAndAttachToParent` S 005f8fa0, run by `SetupHud` on every match entry: the first row
+  at (36, 36) px, the rows 28 px apart; the icon button a 32 × 32 `ui_ingame` shape from (8, 344) until
+  `SetupSlot` sets the type icon; the label at (+32, +12) from the row's origin in `Subline_Garamond`. The row
+  text (`SetupSlot` S 005f75a0) is `GetText(text)`, followed by `" (" + GetText(arg) + ")"` when `arg` is not
+  empty [known]. The same call makes the `up`, `down` and `last` buttons in code at (10, 35), (10, 60) and
+  (10, 85) px with the tooltips `!Scroll up.`, `!Scroll down.`, `!Jump to last one.` [known]; the shipped
+  layout's children give `up` (160, 20) and `down` (160, 234), 19 × 16, and hide `last` [known: data].
+  [TODO] not established: which of the two positions the screen shows (a read of whether the layout is applied
+  to the buttons after `InitAndAttachToParent` settles it).
 - Row alpha: `alphaMin + (1 − alphaMin) × timeRemaining ÷ 600` with the record's float at +0x18, which starts
   at 600.0 for a new message (§2.10): a new row is opaque and fades towards `alphaMin` (shipped 0.4) as the
   message's time runs down [known] S 005f86a0; the rate at which `timeRemaining` falls is in
@@ -1057,7 +1080,8 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
 
 - Base image: the scene renders the map into a 512 × 512 target; a copy masked by the local player's explored
   cells is the widget's texture. Refreshed after a device reset and on a delayed request.
-- Overlay 0 (256 × 256, half resolution): territory. Each cell in the owner's colour; interior cells alpha
+- Overlay 0 (256 × 256, half resolution): territory. Each cell in the owner's colour (`Player::GetColorEntry`,
+  the table the military flags use, [hud-panels.md](hud-panels.md) §3.7); interior cells alpha
   0x99, border cells (grid-state bit 0x20) opaque; unexplored cells transparent.
 - Overlay 1: objects. Building 0xffaaaaaa; a building whose property byte +0xf5 is set 0xffffffff or 0xffff8888
   (by property +0x54); a sacrifice site (working mode 9) `sacrifices_color`; a chest `chests_color`; nothing
@@ -1431,7 +1455,8 @@ Layout values of the shipped HUD that a remake needs as defaults (all pixels) [k
 selection picture 244 × 244 at bottom left, offset 0 −6; minimap 188 × 188 at bottom right, offset −35 −38;
 `cbMessages` 124 × 32 at top right, offset −560 0; `cbMenu` 124 × 32, offset −428 0; goods bar 420 × 32 at top
 right; info box 518 × 198 at bottom centre, offset 0 −3, nine-slice border 16; action panel 96 × 131; quest log
-370 × 492 centred; messages `scaleMax="6"`, `scaleTime="0.5"`, `alphaMin="0.4"`, `scaleOnRefresh="false"`.
+370 × 492 centred; messages at `pos="-26 -4"` without alignment (top left of the HUD root), `scaleMax="6"`,
+`scaleTime="0.5"`, `alphaMin="0.4"`, `scaleOnRefresh="false"`.
 
 User profile values used by the UI: game speed scale (+0x24, f32; read and written by pause, S 005ea9b0,
 S 005da400), smart cursor (+0x31, S 005f0880), autosave choice (+0x34, written by S 006009b0) [known for
@@ -1561,9 +1586,11 @@ reads the icon grid parameters from `actionbuttons`.
 | 8 | The front-end screens (`Main`, `FreeGamePanel`, `SelectMapDialog`, `Campaigns`), `Book`, `Cinematic`, `Info`, `NetInfo`, `Tutorial` layout details | separate static pass; they use the mechanisms of §3.1–§3.3 |
 | 9 | The Root virtual slot +0x84 called after the tree update in `nMenu::System::Update` (§4) | read of the `nUi::Root` vftable |
 | 10 | Reader of `Good_NotAvailable` / `Good_MovingToConstructionSite` in `iconconfig.xml`; what names `uiTip.dds` (§6) | string search in the binary |
-| 11 | Whether `nMenu::Messages::Update` also runs through the widget tree (it is called directly by the frame function, §4) | read of the Messages vftable and of where `SetupHud` attaches the panel |
-| 12 | What the click's ray pick `nGame::Cursor::PickVisibleEntityAtMouse` hits before the cell tests (§3.5) | static read of S 00787cc0 |
+| 11 | Whether `nMenu::Messages::Update` also runs through the widget tree (it is called directly by the frame function, §4). Partly answered (§3.4): `SetupHud` attaches the panel to the HUD root (Game +0x968), S 005ed700 | read of the Messages vftable |
+| 12 | Answered (§3.5 item 2): buildings only. The ray tests the map-object layer's objects of kinds 6 and 8, counts a kind-6 hit and drops a building whose anchor cell its owner has not explored | static: S 00787cc0 ([camera-input-cutscenes.md](camera-input-cutscenes.md), click selection) |
 | 13 | What the depot box's `+N` counts: `NTransport::NeedGoods::CountRequestedByAssignment` (§3.6) | static read of that function |
+| 14 | Where the message panel's `up`, `down`, `last` buttons stand: at the code positions of S 005f8fa0 or at the layout's (§3.8.5) | read of whether the layout is applied to the buttons after `InitAndAttachToParent` |
+| 15 | Whether code hides `btOptions` or `btQuests`, which share `pos="128 199"` in `miniMapBorder` (§3.4) | read of the writers of the two buttons' visibility |
 
 ---
 
@@ -1610,7 +1637,7 @@ reads the icon grid parameters from `actionbuttons`.
 | 005d97a0 / 005d9650 | `nMenu::System::ActivateScreenById` / `CloseAllDialogs` | dialog slots |
 | 005d9fd0 | `nMenu::System::StartPendingMap` | enters a match |
 | 005ee5d0 / 005ecaf0 | `nMenu::Game::ctor` / `LoadFromXml` | game screen, HUD binding |
-| 005ed700 / 005ea650 | `nMenu::Game::SetupHud` / `DestroyHudWidgets` | HUD lifetime |
+| 005ed700 / 005ea650 | `nMenu::Game::SetupHud` / `DestroyHudWidgets` | HUD lifetime; the parents of the fixed members |
 | 005efea0 | `nMenu::Game::Update` | per-frame HUD logic, end-of-game checks |
 | 005eaae0 / 005eab40 | `nMenu::Game::OnMouseButton0Down` / `nMenu::Game::OnMouseButton1Down` | world clicks |
 | 005eb180 / 005ec340 / 005eb230 | `nMenu::Game::OnChar` / `OnKeyDown` / `OnKeyUp` | `p`, `h`, `x`, Enter, Shift, cheats |
@@ -1656,6 +1683,7 @@ reads the icon grid parameters from `actionbuttons`.
 | 00641ab0 | `nMenu::MilitaryPanel::UpdatePlayerRow` | diplomacy view |
 | 006225d0 / 00621820 | `nMenu::StatisticPanel::OnXmlLoaded` / `OnSliderChanged` | statistics |
 | 005f86a0 / 005f75a0 / 005f73e0 | `nMenu::Messages::Update` / `SetupSlot` / `PollNewMessages` | message HUD |
+| 005f8fa0 / 005f7000 / 005f8b90 | `nMenu::Messages::InitAndAttachToParent` / `Detach` / `Refresh` | message rows and buttons; filters and the 7-row window |
 | 005f49e0 / 005f3fc0 / 005f4390 / 005f5bb0 | `nMenu::MiniMap::Render` / `UpdateTerritoryOverlay` / `UpdateObjectOverlay` / `RenderSymbols` | minimap |
 | 006403c0 / 0063dd30 | `nMenu::OverlayBuilding::UpdateFromBuilding` / `nMenu::OverlaySoldier::UpdateHealthAndColor` | world overlays |
 | 00627650 / 005ea100 | `nMenu::QuestInfoPanel::Update` / `nMenu::QuestLog::RebuildList` | quests |

@@ -387,7 +387,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   (`ComputeChecksum` S 00784080).
 - **Open**: the catapult job (§6.9); the AI hooks; save and load (the checksum is written in `StoreForChecksum`
   order, without section tags); `ConstructionChanged` is raised per stroke. The military, the barracks, the
-  sacrifices, the upgrades and the gatherer and specialist jobs followed (§6.9 to §6.13).
+  sacrifices, the upgrades, the gatherer and specialist jobs and the navy followed (§6.9 to §6.14).
 
 ### 6.9 The military as built [implemented, sadk-remake 848852d]
 
@@ -454,6 +454,28 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   water good's literal id 0xa9676263 (`PlaceResourceSignAndNotify` S 0077b2f0, MR §3.8).
 - **Open**: `Worker::GetWorkProgress` S 0065ce80; `StreetLink_UnlinkFlagSpecialist`. A known bug: a carried
   package's `EntityAdded` names cell (0, 0) (the event is raised before the cell is set).
+
+### 6.14 The navy as built [implemented, sadk-remake 71c3954]
+
+- **Measured** (`MP_6P_ship_ahoi`): the harbours link to players 0 to 4 on tick 0; player 5's harbour (id 197897)
+  does not link, which is not checked against the original. A shipyard placed at tick 1 at (37, 70) gets its
+  constructor at 2 and creates the ship (id 204165) at 162 on (36, 69); a plank arrives about every 359 ticks over
+  the one carrier street, a builder's visit takes about 22 ticks of walking plus 31 strokes, and `!Ship
+  constructed` comes at 4426. The ship takes 12 visits of 31 strokes (navy §3.3); a Bavarian ship (speed 0.06)
+  needs 17 ticks per cell (navy §3.4); an idle anchored ship takes up ferry service after at least 102 still ticks
+  (navy §3.7, §3.8).
+- **Seams**: one street planner per player in the navy (the original has one for all players, each call naming
+  the player, navy §2.1); the ship links to its shipyard through `Ship.Shipyard`, not through the village
+  construction record (+0x50) as in the original (navy §3.2). The constructor's job builds the ship, so a ship
+  site no longer sends its builder home (§6.8).
+- **Crash cases**, where the original writes through a null or dummy docking position (navy §3.1 rules 3 and 4):
+  no docking position found, and a search toward the dummy position (−1, −1), reserve nothing and are refused.
+- **Checksum**: routes and harbours are hashed in the remake's own form. The navy's `initialized` byte is written
+  only by `WriteState` (the save), as the original leaves it out of the state hash (navy §7); the net-tick
+  checksums therefore differ from those of earlier remake builds.
+- **Cargo**: a package's cell is the ship's cell at loading and is not updated while the ship sails.
+- **Stubs**: the `Update` of the expedition and of the sea-attack mission.
+- **Open**: why player 5's harbour on `MP_6P_ship_ahoi` does not link; the expedition and the sea-attack mission.
 
 ## 7. The way back: commands [draft]
 
@@ -605,7 +627,7 @@ These matter more in the remake than in the original, because Harmony patches ca
      the player table, an unknown good, no group, an entry out of range, an empty priority list, GC §3.4); 64-bit list
      elements get no `EventData` mapping.
    - **Construction and production** (§6.8): working modes without a job rest (the catapult's 5; the gatherers' 0, 1,
-     2, 3, 7 and the scholar's 11 got theirs with §6.13); ship sites send the builder home; an order's category is
+     2, 3, 7 and the scholar's 11 got theirs with §6.13; the ship site's job came with §6.14); an order's category is
      fixed when it is linked (the original recomputes it on removal); commands for a missing building are refused (the
      original ignores them); `IsOccupied` skips empty slots among the first `workerCount` (in the original a hole can
      hide a later worker, VB §3.18); `RebalanceInputRequests` is approximate; remains that name a doodad only warn
@@ -647,6 +669,27 @@ These matter more in the remake than in the original, because Harmony patches ca
      remake's own; the panels read some simulation classes directly (open requests, depot settlers, worker slots,
      productivity) until `IBuildingView` carries them (a breach of §6.1 for now); parents and layout details are
      [inferred]; the settings panel opens with **L** or `btSettings`.
+   - **The navy** (§6.14): one street planner per player (the original shares one); `Ship.Shipyard` in place of
+     the village construction record (+0x50); no docking position and a search toward the dummy (−1, −1) dock
+     reserve nothing and are refused (the original writes through them); the expedition and sea-attack `Update`
+     are stubs; routes and harbours hashed in the remake's own form; the `initialized` byte only in `WriteState`,
+     as in the original, so the net-tick checksums changed; a cargo package keeps the ship's cell at loading
+     while it sails.
+   - **Fog of war** ([renderer.md](renderer.md) §4.5): no left-over-texel quirk; no separate black `Unexplored`
+     pass; the overlay clamped in every shader (the original wraps it, except in `water_shader.fx`); a character
+     uses the cell of the sample vertex nearest its interpolated position (the original its logic cell); a border
+     post is kept or hidden whole; flags and carried goods follow the block rule (the original hides carried goods
+     with their carrier, S 006919b0); hiding a building's node hides its decal and flag; the water of the border
+     skirt is opaque black; no refined variant.
+   - **HUD frame, minimap and messages** ([renderer.md](renderer.md) §15.5): a message's remaining time falls by
+     the tick's simulated time (the original subtracts the frame time once per logic tick, so its lifetime
+     depends on the frame rate); the minimap picture is each cell's pattern average colour lit by the map's light,
+     water in the map's water colour (the original renders the scene from above), one pixel per cell (the
+     original's overlays are a fixed 256 px); no statistics key (**S** moves the camera); no build or pause button
+     (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells are
+     transparent as documented, not seen in the original; the message list at the top left, where the layout puts
+     it; the statistics curve colours from `menu.cfg` (the original's table S 0087f8c8 not compared); `debug=true`
+     shows the developer panel.
 5. The unnamed `rand() % 6` caller of `StepDirection` (MR §3.1); if it is simulation code it is a C-runtime draw
    inside the simulation.
 6. The stall picture (§4.1) is inferred; one look in a two-player match with a pulled cable settles it.

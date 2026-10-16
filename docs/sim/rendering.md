@@ -227,7 +227,7 @@ vector [known] S 006c0410.
 | `S2CG::BuildingDesc` | 0xc0 | name, mesh path, frame path; LOD mesh parts (+0x54), animated visual (+0x5c), bounds (+0x68 min.y, +0x74 max.y), door and work animations (+0x80..+0x88), production sub-desc (+0x8c), stage count (+0xa4), stage subset table (+0xa8), frame render object (+0xac) | [known] S 006aabe0 for bounds, [inferred] S 006d3880, S 006a15a0 |
 | `S2CG::CCharacter` | 0xbc [inferred, mapped struct] | animation (+0x80), movement (+0x84), per-type logic face (+0x88), queued animation (+0xa4), effects (+0xb0) | [known] S 006909f0 |
 | `S2CG::CharacterAnimation` | 0x6c [inferred, mapped struct] | model cache (+8), current track (+0xc), instance handle (+0x30), selection keys (+0x38, +0x3c, +0x40, +0x44), requested slot (+0x54), loop mode (+0x58), owner face (+0x60), one-shot playing (+0x64), idle sequencer (+0x68) | [known] S 006c64c0, S 006c6590 |
-| `ai::render::CharacterMovement` | 0x160 | previous and target position (+0x2c, +0x38), inverse duration (+0x48), render position (+0x58), route spline | [inferred] S 006c57b0 |
+| `ai::render::CharacterMovement` | 0x160 | fog visibility byte (+0x04, §3.7; [known]), previous and target position (+0x2c, +0x38), inverse duration (+0x48), render position (+0x58), route spline | [inferred] S 006c57b0 |
 | `S2CG::InstanceMesh` | 0x7c | object type (+4), id (+0xc), cell (+0x10), bounds, world matrix (+0x1c), colour (+0x5c), visibility byte (+0x6c; [TODO] not established: whether 1 means hidden or shown, read the constructor and the block's hide call S 006b4f80), handle (+0x70) | [inferred] mapped struct and ctor comment |
 | `ai::render::MapObjDef` | 0xbc | one `<LandscapeElement>` (§6.4) | [inferred] S 0068f200 |
 | `S2CG::EnvData` | 0x34 | background rgb, ambient rgb, light rgb, shadow intensity (+0x28), fog start and end (+0x2c, +0x30) | [inferred] S 006ae2e0 |
@@ -729,16 +729,24 @@ The viewer is the local player.
 
 Three mechanisms:
 
-1. **Terrain blocks.** A block is *revealed* once any of its cells is explored (`TerrainCell::RevealFromExploreMap`
-   S 006b5f80, rectangle converted with a margin of one block S 006b6ea0) [known]; a block is never un-revealed
-   by exploration changes. An unrevealed visible block is drawn whole in the `Unexplored` pass: flat colour 0
-   (black), depth written [known, file and S 006b9d60]. Map objects attached to a block (except those whose
-   type virtual returns 2) and the goods piles inside its rectangle are hidden unless the block is both in view
-   and revealed [known] S 006b4f80.
+1. **Terrain blocks.** A block covers the cells `4b .. 4b + 4` on each axis, its edge cells shared with the
+   neighbouring block, so an explored edge cell reveals both [known] S 006b5f80, S 006b6ea0. A block is
+   *revealed* once any of its cells is explored (`TerrainCell::RevealFromExploreMap` S 006b5f80, rectangle
+   converted with a margin of one block by `CTerrainCellMgr::RevealCellsInRect` S 006b6ea0) [known]; a block is
+   never un-revealed by exploration changes. An unrevealed visible block is drawn whole in the `Unexplored` pass:
+   flat colour 0 (black), depth written [known, file and S 006b9d60]. **Block objects** are attached to the block
+   of their cell divided by 4 (`CTerrainCellMgr::AddObject` S 006b7070): map objects, goods piles, flags and
+   buildings. They are hidden unless the block is both in view and revealed (`TerrainCell::SetVisible`
+   S 006b4f80, which calls slot 0 of the object's vtable), except map objects whose type virtual returns 2
+   [known] S 006b4f80, S 006b7070. For a building (vftable S 007fc0d4) slot 0 is `SetHidden` S 006aa320, which
+   writes `hidden` (+0xc0), and slot 1 returns that byte [known].
 2. **Overlay texture** "WorldElevationMap" [known] S 006c0ca0, S 006bef70, S 006bed80: `(2*W + 1) x H` texels,
-   format 0x15 (A8R8G8B8), filled with 0xff at creation; cell `(x, y)` owns the texels `2x` and `2x + 1` of row
-   `y`, shifted right by one texel on odd rows (matching the half-cell shift); the one texel left over per row
-   takes the alpha of its neighbour. Alpha = 0xff for an explored cell, 0 for an unexplored one; blue =
+   format 0x15 (A8R8G8B8), one mip level (`Create(2W + 1, H, A8R8G8B8, 1)`), filled with 0xff at creation; cell
+   `(x, y)` owns the texels `2x` and `2x + 1` of row `y`, shifted right by one texel on odd rows (matching the
+   half-cell shift); the one texel left over per row takes the alpha of its neighbour. On a partial update (an
+   exploration rectangle) `ApplyVisibilityMask` S 006bef70 writes each row's left-over texel from the
+   rectangle's edge cell [known], so it can light half a cell beyond the explored area [inferred]. Alpha = 0xff
+   for an explored cell, 0 for an unexplored one; blue =
    `1 - clamp((h - hmin) / (hmax - hmin), 0, 1)` with `h` = the height at the cell's vertex and `hmin`, `hmax` =
    `g_TerrainGrid +8`, `+0xc` (§2.1). It is bound to sampler 3 with the texture matrix
    `u = x / (4*W*stepX) + 0.5 / (2*W + 1) + 0.5`, `v = z / (4*H*stepZ) + 0.5 / H + 0.5` (the `+ 0.5` undoes the
@@ -751,18 +759,37 @@ Three mechanisms:
    CalcFOWWithAlpha: as above with c *= a (the alpha fades too)
    ```
 
-   [known, `shared.inc`]. The noise texture is `[data]/map/textures/fow_noise.tga`, bound to sampler 6
-   [known] S 006c0ec0, S 006bf390. With bilinear filtering the alpha ramp gives a soft, noise-modulated edge
+   that is `c.rgb × a · lerp(noise, 1, a)` [known, `shared.inc`]. `CalcFOWWithAlpha` with an alpha test draws
+   the border posts (§3.8). The noise texture is `[data]/map/textures/fow_noise.tga` (128 × 128, 24 bits, grey
+   noise [known, file]), loaded by `TerrainMesh::Create` S 006c0ec0 and bound to sampler 6 [known] S 006c0ec0,
+   S 006bf390. Sampler 6 is point-sampled with Wrap addressing, so the noise is read unfiltered at 16 × the
+   overlay coordinate; sampler 3 (the overlay) is filtered linearly with Wrap addressing, and only
+   `water_shader.fx` overrides its addressing to Clamp [known: the `SAMPLER_n` defaults of `shared.inc`, the
+   defines at the top of `water_shader.fx`]. The linear filter gives the alpha ramp a soft, noise-modulated edge
    about one cell wide. In the low quality mode of the terrain mesh whole texels are written instead
    (0x00ffffff explored, 0xff000000 unexplored) and no height is stored [known] S 006bef70, S 006bed80; below
    shader level 2 the texture matrix is built in camera space for the fixed-function stages [known] S 006bf390.
-3. **Objects.** Characters outside the visible block rectangle are hidden S 00692a30 [inferred]; a ship is drawn
-   only while its current cell is explored by the local player; the flag is recomputed while the ship moves and
-   on every exploration change [known] S 006a4e60, S 0067f020; animals and the resource effects receive the
-   exploration grid and the player [inferred] S 006805e0, S 0068b220. Buildings have a fog-visible flag
-   (`Building +0xc4`): the model is shown only when the flag is set and the building is not hidden
-   [known] S 006aa150; the flag is written by `BuildingRenderer::ApplyVisibilityMaskToTiles` S 0069fe80 on
-   exploration changes [inferred].
+3. **Objects.**
+   - **Characters are hidden in the fog.** While the overlay is active, `CharacterMovement::Update` S 006c57b0
+     sets its visibility byte (movement +4) to `NMap::Exploration::IsExplored(logic cell, player)` for the
+     player of the update (§4.3 step 5; with no grid or player the byte keeps its value); with the overlay off it
+     sets the byte to 1. `CCharacter::IsInFrustum` S 00690f80 requires the byte, so a settler on a cell the
+     viewing player has not explored is not drawn, and a hidden settler's speed particle effect stops [known].
+     Besides, the character manager culls by the visible block rectangle S 00692a30 [inferred]. Carried goods
+     are hidden with their carrier (`CCharacter::SetVisible` S 006919b0) [known].
+   - Animals are hidden on unexplored cells (`Animal::UpdateVisibility` S 006cdfb0, the test at S 006cdfe3)
+     [known].
+   - A ship is drawn only while its current cell is explored by the local player; the flag is recomputed while
+     the ship moves and on every exploration change [known] S 006a4e60, S 0067f020.
+   - The resource effects receive the exploration grid and the player [inferred] S 006805e0, S 0068b220.
+   - Buildings are block objects (item 1) and also have a fog-visible flag (`Building +0xc4`): the model is shown
+     only when the flag is set and the building is not hidden [known] S 006aa150. `BuildingRenderer::AddBuilding`
+     S 006a2bf0 calls `SetFogVisible(true)` when the building is not hidden; afterwards the flag follows the
+     explored state of the building's anchor cell on every exploration change whose rectangle covers the anchor
+     (`BuildingRenderer::ApplyVisibilityMaskToTiles` S 0069fe80 → `SetFogVisible` S 006aa150) [known].
+   - Picking: `nGame::Cursor::PickVisibleEntityAtMouse` S 00787cc0 drops a building whose anchor cell is
+     unexplored, but it tests the exploration of the building's owner (`+8`), not the local player's [inferred]
+     ([camera-input-cutscenes.md](camera-input-cutscenes.md), click selection).
 
 The debug CVar "SceneInfo/FogOfWar" (on by default) switches the overlay off for the whole map (all alpha 0xff,
 all blocks revealed) and on again (everything hidden, then the viewing player's exploration applied)
@@ -1977,7 +2004,8 @@ the terrain shader from depth, caustics as an additive pass.
 
 **Exploration.** One `(2W+1) x H` (or simply `W x H` with the half-cell shift in the shader) RG8 texture: explored
 flag and normalised inverse height; sample it in every world shader through a global shader uniform and apply
-`CalcFOW`. Hide objects on unexplored cells (block granularity in the original).
+`CalcFOW`. Hide objects on unexplored cells: per terrain block for map objects, goods piles, flags and
+buildings (the buildings also by their anchor cell), per cell for characters, animals and ships (§3.7).
 
 **Instancing.** `MultiMeshInstance3D` per landscape element; per-instance colour for flags; growth and felling
 as per-instance transforms (§3.11); wind and flag waving in the vertex shader.
@@ -2074,8 +2102,14 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006bbb60 | `S2CG::CTerrainPatternManager::ApplyPatternMaterial` | textures, scales, mask, pass per record |
 | 006bbde0, 006bbeb0 | `RenderBaseLayers` / `RenderTransitionLayers` | the two terrain passes |
 | 006b9d60 | `S2CG::CTerrainPatternManager::RenderUnexploredCells` | black unexplored blocks |
-| 006c0ec0, 006c0ca0 | `ai::render::TerrainMesh::Create` / `CreateOverlayTexture` | mesh and overlay texture |
+| 006c0ec0, 006c0ca0 | `ai::render::TerrainMesh::Create` / `CreateOverlayTexture` | mesh, overlay texture, `fow_noise.tga` |
 | 006bef70, 006bed80 | `TerrainMesh::ApplyVisibilityMask` / `UpdateHeightTexels` | overlay alpha and blue channels |
+| 006b5f80, 006b6ea0 | `TerrainCell::RevealFromExploreMap` / `CTerrainCellMgr::RevealCellsInRect` | block reveal |
+| 006b7070, 006b4f80 | `CTerrainCellMgr::AddObject` / `TerrainCell::SetVisible` | block objects and their hiding |
+| 006aa320, 006aa150, 0069fe80 | `S2CG::Building::SetHidden` / `SetFogVisible` / `BuildingRenderer::ApplyVisibilityMaskToTiles` | building hiding and fog flag |
+| 006c57b0, 00690f80, 006919b0 | `ai::render::CharacterMovement::Update` / `CCharacter::IsInFrustum` / `CCharacter::SetVisible` | character fog test, carried goods hidden with the carrier |
+| 006cdfb0, 006a4e60 | `Animal::UpdateVisibility` / `S2CG::Ship::UpdateEnabledFlag` | animal and ship fog tests |
+| 00787cc0 | `nGame::Cursor::PickVisibleEntityAtMouse` | ray pick of buildings, owner's exploration |
 | 006a8a20 | `S2CG::WorldRenderer::CreateGraphicResources` | water techniques and textures |
 | 006a7c70, 006a7de0 | `WorldRenderer::BeginWaterPass` / `AddWaterTileQuad` | water surface |
 | 006a65a0 | `S2CG::WorldRenderer::UpdateWaterAnimation` | normal map matrices |

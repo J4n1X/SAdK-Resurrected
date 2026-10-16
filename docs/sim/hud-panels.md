@@ -186,7 +186,7 @@ string and the source id.
 | +0x1a8 | u8 `bVisible` | |
 | +0x1a9 + type | u8[9] filter | indexed by message type 0..8; the constructor sets all nine to 1 |
 | +0x3e0.. | 8 slot buttons (0x3f8 each), labels at +0x23a0 (0x228 each) | |
-| +0x35b0 / +0x3a18 / +0x3e80 | three buttons (0x468 each) | scroll up / scroll down / jump to last (XML children `up`, `down`, `last`; the shipped `last` has `visible="false"`; §3.5) |
+| +0x35b0 / +0x3a18 / +0x3e80 | three buttons (0x468 each) | scroll up / scroll down / jump to last; made in code by `InitAndAttachToParent` S 005f8fa0 at (10, 35), (10, 60), (10, 85) px with the tooltips `!Scroll up.`, `!Scroll down.`, `!Jump to last one.` (XML children `up`, `down`, `last`; the shipped `last` has `visible="false"`; which position holds: [ingame-ui.md](ingame-ui.md) §3.8.5; §3.5) |
 | +0x34e0.. / +0x3520.. | per slot: cell x, y / message id (16 bytes per slot) | |
 | +0x35a4 | vector of `Message*` (first / last / end pointers) | the filtered list |
 | +0x42e8 | u8 stick-to-newest | |
@@ -636,12 +636,19 @@ S 005f86a0, S 005f73e0, S 005f85b0 unless tagged:
    is tested first → set the record's read flag (+0x78) and, if it has a cell, put the camera into standard
    mode (if it is not) and `FocusOnCell`; else right → `Messages::RemoveById`, sound `uiRemove`.
 6. **Expiry**: once per **1.0 s** of frame time `Messages::RemoveExpired` is called on the local player's
-   store. The remaining time itself falls in the simulation (players-victory.md §3.9).
+   store; it removes every record for which `!(timeRemaining > 0)` holds (S 005c1c10). The remaining time
+   itself falls in the simulation (players-victory.md §3.9).
 7. **Row opacity**, every frame, for the slot button and its label: `alphaMin + (1 − alphaMin) ×
    timeRemaining / 600` (`timeRemaining` = the record's float at +0x18).
 8. **Pulse**: the listener's "added" callback refreshes and restarts a scale animation `scaleMax → 1.0` over
    `scaleTime` on the row's button and label (S 005f8c30); the "updated" callback does the same only when
    `scaleOnRefresh` is set (S 005f8dd0; shipped false).
+9. **The store behind the list**: `Messages::AddWithPosition` S 005c2360 appends a record with no limit on the
+   count, so the list grows until the expiry removes records; `PlayerMessages_SendOrRefreshToPlayer` S 005c0270
+   looks for `FindMatchingWithArg(type, text, arg, cell, 1)` and, on a match, sets its `timeRemaining` back to
+   600 instead of adding a record ([quests-sacrifices-stats.md](quests-sacrifices-stats.md) §3.6.1).
+10. **Rows** (geometry, row text, the code-made scroll buttons): [ingame-ui.md](ingame-ui.md) §3.8.5;
+   `Messages::Refresh` S 005f8b90 applies the nine filters and the 7-row window with stick-to-newest.
 
 In a network match the three NComm message callbacks of the game screen (player joined / left / kicked
 notices and errors) all become a letter (type 8) of the local player: `Game::ShowCommMessageAsLetter`
@@ -744,7 +751,9 @@ and no capture is pending; `dirty` is set by the map's "visibility region change
 `MarkDirty` (building created / removed, sacrifice started: [ingame-ui.md](ingame-ui.md) §3.8.5). Every frame
 the two overlay pictures get the minimap's source rectangle × 0.5 (their textures have half the resolution).
 
-- Overlay 0, territory: per cell, owner −1 → 0; else the owner's colour as ARGB; `& 0x99ffffff` (alpha 0x99)
+- Overlay 0, territory: per cell, owner −1 → 0; else the owner's colour as ARGB, from
+  `ai::player::Player::GetColorEntry` S 005be2c0, the table `g_PlayerColors` the military flags use (§3.6.2);
+  `& 0x99ffffff` (alpha 0x99)
   unless the cell's grid state has bit 0x20 (territory border); alpha 0 when the cell is unexplored for the
   local player.
 - Overlay 1, objects: the loop runs over the pixels of the overlay texture, row by row; pixel (px, row) maps
@@ -1136,6 +1145,9 @@ survives from one match to the next inside one program run depends on the object
 | 00647150 / 00647740 / 00647d20 / 00648070 / 00648700 | `TooltipBuilding` / `TooltipSacrifice` / `TooltipGood` / `TooltipSoldier` / `TooltipInfoboxBuilding` `::ShowFor` | tooltip content |
 | 00646e90 / 00647590 / 00646830 | `nMenu_Tooltip_FormatLabelValue` / `nMenu_Tooltip_SetDurationText` / `Tooltip::FillGoodSlots` | tooltip helpers |
 | 005f86a0 / 005f73e0 / 005f85b0 / 005f8c30 / 005f8dd0 | `nMenu::Messages::Update` / `PollNewMessages` / `RebuildFilteredList` / `PulseSlotForMessage` / `PulseSlotForMessageIfEnabled` | message list |
+| 005f8fa0 / 005f8b90 / 005f75a0 | `nMenu::Messages::InitAndAttachToParent` / `Refresh` / `SetupSlot` | rows and code-made scroll buttons; filters and window; row text and icon |
+| 005c2360 / 005c0270 / 005c1e40 | `NPlayer::Messages::AddWithPosition` / `PlayerMessages_SendOrRefreshToPlayer` / `Messages::FindMatchingWithArg` | the message store: unbounded append, refresh of a matching message |
+| 005be2c0 | `ai::player::Player::GetColorEntry` | player colour of the minimap's territory overlay and of the military flags |
 | 005eb120 | `nMenu::Game::ShowCommMessageAsLetter` | session notices as letters |
 | 006403c0 / 0063fd10 / 00641030 | `OverlayBuilding::UpdateFromBuilding` / `UpdateMissingGoodIcons` / `Update` | building overlay |
 | 0055fd00 / 006d2820 / 006d2d80 | `NVillage::Military::HasMilitaryFlag` / `CMilitaryFlagRenderer::DrawFlags` / `GetFlagMeshPath` | military flags |

@@ -229,10 +229,10 @@ public interface IRenderKind
 
 ### 4.5 Fog of war and visibility in the shaders [draft]
 
-The original hides an object unless its terrain block (4 × 4 cells) is in view **and** revealed, hides characters
-outside the visible block rectangle, hides ships on unexplored cells and buildings without the fog-visible flag,
-and darkens everything by the exploration overlay (`CalcFOW`) (RE §3.7). The renderer does this without CPU work per
-object:
+The original hides a block object (map object, goods pile, flag, building) unless its terrain block (cells
+`4b .. 4b + 4`, edges shared) is in view **and** revealed, hides characters, animals and ships on cells the viewing
+player has not explored, hides buildings without the fog-visible flag (which follows the anchor cell), and darkens
+everything by the exploration overlay (`CalcFOW`) (RE §3.7). The renderer does this without CPU work per object:
 
 - `FogOfWarService` keeps three textures for the local player: the **exploration overlay** (the original's
   `(2W+1) × H` "WorldElevationMap": alpha = explored, blue = 1 − normalised height), a **cell mask** (`W × H`) and a
@@ -242,6 +242,29 @@ object:
   original's `CalcFOW` darkening with `fow_noise.tga`. A kind's vertex shader collapses an instance whose block is not
   revealed (all vertices to one point, so it rasterises nothing); its fragment shader applies `CalcFOW`.
 - Frustum culling is Godot's, per batch box.
+
+**As built** [implemented, sadk-remake b00b759]:
+
+- **Layer**: `FogOfWarLayer` (the map layer `core.game.fogofwar`, order 50) keeps the local player's exploration as
+  R8 `ImageTexture`s, published as the global shader parameters `sadk_fow_*`; the shaders read them through
+  `fow.gdshaderinc`. The setting is `<Graphics><FogOfWar enabled>` (§19).
+- **Darkening in Godot's fog**: `sadk_fog_fow` folds the original's factor `f` (`a · lerp(noise, 1, a)`, RE §3.7)
+  into Godot's `FOG` output. With `d` the fog amount and `bg` the fog colour Godot would apply and `k = f^2.2`
+  (the factor taken into linear colour), the shader writes the fog alpha `t = 1 − k(1 − d)` and the colour
+  `bg · d / t`, so the pixel becomes `k(1 − d) · c + d · bg`: darkened first, then fogged, the original's order.
+  Water as the original's: `rgb *= a`, `alpha += 1 − a` (RE §3.5).
+- **Measured**: showing the whole map costs 8.65 ms (Steinfjord); an exploration change 13 to 101 µs (radius 2 to
+  20); at most one R8 upload per frame (26.5 KB); no CPU work per frame.
+- **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): no left-over-texel
+  quirk (RE §3.7 item 2); no separate black `Unexplored` pass; the overlay clamped in every shader (the original
+  wraps it except in `water_shader.fx`); a character uses the cell of the sample vertex nearest its interpolated
+  position (the original tests its logic cell); a border post is kept or hidden whole (the original fades it per
+  pixel with `CalcFOWWithAlpha` and the alpha test); flags and carried goods follow the block rule (the original
+  hides carried goods with their carrier, S 006919b0); hiding a building's node hides its decal and flag; the
+  water of the border skirt is opaque black; no refined variant.
+- **Open**: selection and hover still ignore unexplored cells (the original's ray pick S 00787cc0 and hover
+  tooltip S 005efd60, RE §3.7); the resource particles (S 0068b220); the consumer of the second "FogOfWar" texture
+  (`CEnviromentMgr +0x11c`, RE §10 Q10); the map objects exempt from block hiding (type virtual returning 2).
 
 ### 4.6 Proxy nodes [binding, maintainer 2026-10-15]
 
@@ -687,9 +710,9 @@ animals, ships and animated building parts use one skinning path of their own in
   h) in the original's axes. Data: the Bavarian ship's idle file holds no animation (the original plays none either);
   three ramp tables written without the `[data]` prefix resolve below `[data]`.
 - **Not built yet**: attachments (goods in hands, tools, boats), animation events, idle variations, the death sink,
-  turning by fixed steps, route splines, the evade offset, boat bobbing, fog of war (`CalcFOW`), the two-bone Low
-  technique (Q16). Open: the atlas's untouched texels (Q15; the remake starts them transparent black); where swimming
-  settlers stand in height.
+  turning by fixed steps, route splines, the evade offset, boat bobbing, the two-bone Low technique (Q16). The fog
+  of war came with §4.5 (as built). Open: the atlas's untouched texels (Q15; the remake starts them transparent
+  black); where swimming settlers stand in height.
 - **Gallery**: `core.game.charactergallery {map, tribe (Bavarian by default), clip, owner, walkers, field, view=grid|
   first|walker|animals|ship|lod|field, lod, level, notifiers, ownPhase, stats, …}`.
 
@@ -1234,7 +1257,35 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 
 ### 15.4 Fog of war
 
-§4.5.
+§4.5: the design and the layer as built (sadk-remake b00b759).
+
+### 15.5 HUD frame, minimap and messages
+
+**As built** [implemented, sadk-remake f6f296c]:
+
+- **Frame**: follows `menuingame.xml` and the parents the original's `SetupHud` gives the widgets (ingame-ui §3.4:
+  the selection frame holds back, forward, settings and statistics; the minimap frame holds the info-map, speed and
+  options buttons; the pause panel lies on the desktop; the rest on the HUD root). The message list stands at the
+  top left, where the layout puts it (`pos="-26 -4"` without alignment).
+- **Messages**: rows, row text and scroll buttons follow the original's (ingame-ui §3.8.5, hud-panels §3.5); a
+  message's remaining time falls by the tick's simulated time.
+- **Minimap**: the map picture is each cell's pattern average colour lit by the map's light, water in the map's
+  water colour, one pixel per cell; the territory and building overlays and the click as the original's
+  (S 005f3fc0, S 005f4390, S 005f1520; hud-panels §3.7); the symbol lifetimes from `mapSymbols.xml`; unexplored
+  cells transparent.
+- **Statistics panel**: the curves, coloured from `menu.cfg`.
+- `debug=true` shows the developer panel.
+- **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the message
+  lifetime counts simulated time (the original subtracts the frame time once per logic tick, so its lifetime
+  depends on the frame rate); the minimap picture (the original renders the scene from above) and its resolution
+  (the original's overlays are a fixed 256 px); no statistics key (**S** moves the camera); no build or pause
+  button (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells
+  transparent as documented, not seen in the original; the curve colours from `menu.cfg` (the original's table
+  S 0087f8c8 not compared).
+- **Open**: the minimap's wheel zoom and middle-button pan, its ship and fight symbols; the statistics player
+  rows and the inventory, buildings and tech tabs; the menu combo box, the goods bar, the quests, the chat, the
+  selection preview, back and forward cycling, info-map buttons 2 and 3; whether the original hides `btOptions`
+  or `btQuests` in code (ingame-ui §10 Q15).
 
 ## 16. Particles [draft]
 
@@ -1311,6 +1362,7 @@ object. Every change applies at once, including the region size and blended foli
 | `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
 | `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4) |
 | `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed, Off), `curve` (Smooth, Linear); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
+| `FogOfWar` | `enabled` (§4.5) |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
 | `AntiAliasing`, `Scaling`, `Textures` | `msaa`, `screenSpace`, `temporal`; `upscaler`, `scale`, `sharpness`; `anisotropy`, `mipmapBias` |
 | `AmbientOcclusion`, `DepthOfField` | `enabled`, `intensity`, `radius`, `lightAffect`; `enabled`, `strength` (follows the eye distance, easing at the original's focus speed 3, S 00696d20) |
