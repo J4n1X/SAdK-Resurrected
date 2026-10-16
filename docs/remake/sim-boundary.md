@@ -123,7 +123,7 @@ public sealed class TickRecord             // immutable once published
   remake's, so frame timing decides only when a tick runs. The 5 s clamp applies after the speed
   (`dt = frameSeconds × speed; if dt > 5`, logic-core §3.1, game-commands §4): at speed 3 a real frame over about
   1.67 s counts as one tick.
-- **Built** [implemented 2026-10-15, sadk-remake a7a220c]: `Sadk.Session.SimHost.Advance(simSeconds, realSeconds)`,
+- **Built** [implemented, sadk-remake a7a220c]: `Sadk.Session.SimHost.Advance(simSeconds, realSeconds)`,
   fed by the pausable `SimDriver` node (`Sadk.Presentation/Simulation`), which also sets `Engine.TimeScale` from the
   world's speed and back to 1 when it leaves the tree; `Step(n)` and `Flush()` for headless runs. Tick 0 runs in the
   first frame; all due ticks run in one frame without a cap; the tick interval comes from the registry
@@ -318,7 +318,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 §3.9), randomised walking paths (SJ §3.8.3), the soldier's alternative work clip length (`attackWaitTime + rnd %
 10`, SJ §8), carrier parking spots (SJ §3.8.6), sow patterns (MR §3.9), and `lookAtPos` (hashed, SJ §8).
 
-### 6.4 The settler core as built [implemented 2026-10-16, sadk-remake a2bd808]
+### 6.4 The settler core as built [implemented, sadk-remake a2bd808]
 
 - **Services**: the settler services and job interfaces resolve to the first system that implements them.
 - **Debug command** `core.game.debug.spawnsettlers`: no original id; refused in a session that has a game seed.
@@ -332,7 +332,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   40 (`Entered`, with `Into`). The stray count matches SJ §3.4, the dying times SJ §3.2 (dying time 28, skeleton
   after 14) and the removal ticks SJ §3.3.
 
-### 6.5 The street net as built [implemented 2026-10-16, sadk-remake fb451d1]
+### 6.5 The street net as built [implemented, sadk-remake fb451d1]
 
 - **Seams**: the village, the settlers and the transport plug into the street net through `IStreetNetHooks`
   (registered with `AddHooks`). Without them nobody carries, nothing is ordered and no building blocks a flag's
@@ -344,7 +344,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Measured**: an 18-command script starting at the castle flag (46, 55) built 6 streets and 7 flags, the split at
   (49, 55) included; its replay gave 128 net-tick checksums, none of which differed.
 
-### 6.6 The living map as built [implemented 2026-10-16, sadk-remake 514d96c]
+### 6.6 The living map as built [implemented, sadk-remake 514d96c]
 
 - **Presentation**: `AnimalFeed` takes the animals from the motion samples. The render type is the animal type's
   `gfxName`; it plays Walk while moving, Stand1 or Stand2 at rest (chosen from a private presentation stream seeded
@@ -391,7 +391,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 
 ## 7. The way back: commands [draft]
 
-**As built** [implemented 2026-10-15, sadk-remake a7a220c]: a command is a record with
+**As built** [implemented, sadk-remake a7a220c]: a command is a record with
 `[GameCommand("core.game.speed", Original = 0x20023, Version = 1)]` implementing `IGameCommand` (`Validate` without
 side effects, `Execute`). The sender is envelope data (`CommandContext.Sender`, the player index the session fills
 in, −1 the session itself), not a field, so a peer cannot act in another's name. `World.Execute` validates, executes

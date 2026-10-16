@@ -638,7 +638,7 @@ animals, ships and animated building parts use one skinning path of their own in
   their vertices nor their interpolation are processed; the pose is computed from the clock in the vertex shader, so
   a character shows the right point of its clip the moment it comes back into view.
 
-### 9.1 As built [implemented 2026-10-16, sadk-remake 5aa8e1b]
+### 9.1 As built [implemented, sadk-remake 5aa8e1b]
 
 - **Feed** (`Core.Game.Rendering.Characters.CharacterLayer`, the map layer `core.game.characters`, order 600):
   `Add(id, CharacterSpec, tick, CharacterPose)` gives the first sample (previous = current, so nothing glides in);
@@ -826,7 +826,7 @@ show the 1.5-unit facets.
 - **Faithful** reproduces the original's own terrain LOD exactly (maintainer, 2026-10-15): its three levels per block,
   its selection (RE §3.3), its stitching and its hard switch, popping included. The refined settings morph instead.
 
-### 10.4 As built [implemented 2026-10-16, sadk-remake 1135c7c]
+### 10.4 As built [implemented, sadk-remake 1135c7c]
 
 **The mesh.**
 - Patches (solid/blend per pattern, rank order, transition-mask UVs) are built once per block (TerrainMesher); a level only
@@ -1061,7 +1061,7 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   **ruins** with their own decal until the remains are removed (`burnTicks`).
 - **Building sites and farms**: goods on the site (§14) and farm animals at `boneLink<i>` bones by productivity.
 
-### 13.1 As built [implemented 2026-10-16, sadk-remake 6885d9e]
+### 13.1 As built [implemented, sadk-remake 6885d9e]
 
 - **Feed**: the simulation implements `IBuildingSource.Connect(IBuildingSink)` and hands over every building, then
   feeds `Add(BuildingSpawn)`, `AddRemains`, `Update(id, BuildingState)` (every tick while constructing or upgrading,
@@ -1124,7 +1124,7 @@ crossings as hexagon fans, water-street buoy chains, sea-route strips with the 1
 to §3.8); built per street on a worker thread from `EntityAdded` / `StreetUpgraded` / removal, rebuilt on height
 changes under it. Street previews of the placement mode come from `IQueries` and draw with the preview tint.
 
-**As built** [implemented 2026-10-16, sadk-remake fb451d1]:
+**As built** [implemented, sadk-remake fb451d1]:
 
 - **Mesh**: `StreetMesher` follows the Hermite route spline with tangent factor 1.3 and 31-chord segment lengths;
   the strip has 8 slices per segment and leaves out a slice at a flag with several streets; a crossing is a
@@ -1166,7 +1166,7 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - Selection markers: decals laid on the terrain triangles like the ground decals (Godot's `Decal` is not available on
   the Compatibility renderer), additive, spinning, from the UI's selection.
 
-**As built** [implemented 2026-10-16, sadk-remake d2d47ee]:
+**As built** [implemented, sadk-remake d2d47ee]:
 
 - **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `Renderer/BuildMode/`) keeps one rendering-server MultiMesh per
   16 × 16-cell region, one instance per cell with an icon at the cell's point on the drawn terrain surface. A region is

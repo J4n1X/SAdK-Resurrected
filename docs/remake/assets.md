@@ -351,7 +351,7 @@ everything the original's look depends on; engine-native forms only in the dispo
   `boneLink<i>`).
 - The renderer does not keep glTF scenes as node trees: it converts them into its own mesh, skeleton and animation
   tables and caches those as engine-native resources ([renderer.md](renderer.md) §6).
-- [implemented 2026-10-15, sadk-remake `Sadk.Formats/Gltf`] The engine-neutral model (`SadkModel`) is what both
+- [implemented, sadk-remake `Sadk.Formats/Gltf`] The engine-neutral model (`SadkModel`) is what both
   sides share: the converter writes it as `.glb`, the runtime reads `.glb`, `.gltf` and raw `.KEX` into it.
   - **Units**: positions are divided by the file's `unitScale` (1, 39.37 or 100), which is the original loader's
     result for model scale 1.0; the extension keeps `unitScale` as a record only, and the runtime must not divide by
