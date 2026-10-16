@@ -182,9 +182,9 @@ Series index (the "category" of `AddSample`) `[known]` S 00537ba0:
 | Index | Content | Source |
 |---|---|---|
 | 0 | territory share in percent | `ComputeTerritoryShare` S 00532fc0 |
-| 1 | number of buildings | `CountBuildingsPerPlayer` S 00532f60 |
+| 1 | number of buildings, construction sites included | `CountBuildingsPerPlayer` S 00532f60 |
 | 2 | population: units in four settler lists plus stocked settler goods of the tribe's job list (§3.11) | S 00534110; "population" is `[inferred]` |
-| 3 | sum of all goods stored in depot-category buildings | `SumStoredGoodsPerPlayer` S 005334d0 |
+| 3 | sum of the output stocks of the buildings in the depot list | `SumStoredGoodsPerPlayer` S 005334d0 |
 | 4 | military strength | `ComputeMilitaryStrengthPerPlayer` S 005335b0 |
 | 5 | coin counter (`counter98`) | S 00537ba0 |
 | 6 | average building productivity in percent (0..100) | S 005332e0 |
@@ -208,9 +208,13 @@ Series index (the "category" of `AddSample`) `[known]` S 00537ba0:
   (`push_back`) to the list without clearing it and sets the initialised flag to 1, also without a tribe; its
   callers are the `0x20022` executor S 007828d0, which calls `GoodPriorities::Clear` S 005c28f0 first, and
   `Player::Init` S 005bea90, which does not (§3.3). `SetPriorities` S 005c2b50 (command 0x20021) replaces the list
-  by a vector assignment (S 005c2940) and leaves the initialised flag as it is `[known]`. `MoveRank(from, to)` moves
-  one good and shifts the ranks in between by one so the ranks stay a permutation. `GetRankOfGood` returns 0 for a
-  good that is not listed.
+  by a vector assignment (S 005c2940) and leaves the initialised flag as it is `[known]`. `MoveRank(from, to)`
+  S 005c27c0 walks the whole list: **every** entry whose rank equals `from` gets `to`; every other entry whose
+  rank lies in `[min(from, to), max(from, to)]` is shifted by one towards `from` (−1 when `from < to`, else +1)
+  `[known]`. The ranks are not required to be a permutation: the Scots defaults are not one (several goods share
+  the ranks 0, 4, 5 and 13, `gp_setTransportPriority` in `Goods.lua`) `[known]` data, so a move takes every good of
+  the `from` rank along. `GetGoodAtRank(rank)` S 005c2690 returns the first entry in list order with that rank, -1
+  when there is none; `GetRankOfGood` returns 0 for a good that is not listed.
 - **`NPlayer::GoodArrangement`** (0x1c) `[known]` S 005c1370: list of `GoodArrangementGroup` (0x20). Default: for
   every building type of the tribe (in `tp_addBuilding` order) with default weight (`BuildingProperty +0xe4`,
   `bp_setArrangementValue`) >= 0, an entry in production slot 0 and a non-empty input list for it, the building
@@ -747,19 +751,27 @@ which calls `menu.lockBuilding(player0, casernHalCross)`) `[known]` data.
 - `Statistics::AddGoodAmount(player, goodId, amount)` S 00537230: if `goodId` equals the tribe's
   `soldierUpgradeGoodId` (the coin: `tp_setSoldierUpgradeGoodId(bavarians, coinBav)`), `counter98 += 1` — one per
   call, regardless of `amount`. Then `goodHistory[goodId].last += amount`. Callers: production delivery, soldier
-  training and upgrade completion, worker update, the "give goods" sacrifice, package put-down `[known]`. The
-  good must already have a history entry (all goods and jobs of the tribe are seeded).
+  training and upgrade completion, the release of a produced settler (working mode 4, state 0x24, S 0065d7f0:
+  1 of `BuildingProperty +0xec producedSettler` per spawned settler), the "give goods" sacrifice, and a
+  gatherer's harvest (`NMovie::PutDownPackage::Update` S 0077a8e0: the full harvest count, added once the first
+  unit is dropped and before the flag is looked up for the extra units, so extra units that are discarded still
+  count) `[known]` (`docs/sim/settlers-jobs.md` §3.5.5). The good must already have a history entry (all goods
+  and jobs of the tribe are seeded).
 - Kill: when a soldier's health drops below 1 in `TakeDamage` S 00659260, the attacker's player gets
   `killCount += 1` `[known]`.
 - `Statistics::RegisterProductionEvent(building)` S 00538460 (building productivity: first event 0.5, each later
   event +0.25, capped at 1.0) belongs to the economy; listed because series 6 samples it `[known]`.
 
-**Schedule** — `Statistics::Update` S 00537ba0, once per tick while `initialized` `[known]`:
+**Schedule** — `Statistics::Update` S 00537ba0, once per tick while `initialized` `[known]`. Both tests use the
+tick converted to a float: `(float)tickCounter == 0` and `(uint)(float)tickCounter % 600` `[known]`. Below 2^24
+ticks (about 466 hours at 10 ticks per second) this equals the integer form; above it the float rounds the tick,
+so phases repeat or are skipped `[inferred]` (float32 arithmetic).
 
-- If `tickCounter == 0`: for every active player slot: `PlayerStatistics.active = 1`, the three counters = 0,
-  and `InitGoodAndJobHistories` (one history entry with a single 0 for every good id and every job id of the
-  tribe).
-- `phase = tickCounter % 600`:
+- If the tick is 0: for every active player slot: `PlayerStatistics.active = 1`, the three counters = 0,
+  and `InitGoodAndJobHistories` S 0053b8f0. It walks the tribe's goods (`TribeProperty +0x20`) first, then its
+  jobs (`+0x30`), and appends one 0 to the history of each id; an id that is in both lists therefore starts
+  with `[0, 0]`, one element longer than the others `[known]`. The cumulative last element is 0 either way.
+- `phase = tickCounter % 600` (in the float form above):
 
 | Phase | Work |
 |---|---|
@@ -787,13 +799,22 @@ which calls `menu.lockBuilding(player0, casernHalCross)`) `[known]` data.
   (`RecountLandCells` S 00678010) `[known]`. So the share is "owned cells on land continents / all
   land-continent cells"; cells without a continent (grid bit 0x400, or a land cell with bit 0x40 or a pattern
   whose property byte `+0x3c` is set) count on neither side.
-- Military strength (S 005335b0): for every living soldier, weight `max(1, trunc((level + 1) * 0.8))` added to
-  its owner, where level = `MilitaryConfig::FindSoldierLevel`; plus, for every active player, for both soldier
-  classes and every level: `stockCount(soldier good) * max(1, trunc((level + 1) * 0.8))`. The factor is the
-  double at S 007e7ad8, bytes `00 00 00 a0 99 99 e9 3f` (0.8 as a float widened to double) `[known]`.
-  Resulting weights for levels 0..4: 1, 1, 2, 3, 4 `[inferred]` (arithmetic); the shipped `military.lua` defines
-  levels 0..2 only (`mi_setSoldierId`), so the weights in use are 1, 1, 2. The living soldiers are taken from
-  one settler list (`settlersKind3`) `[known]`.
+- Military strength (S 005335b0): for every living soldier, weight `w = trunc((level + 1) * 0.8)`, replaced by 1
+  when `w < 2`, added to its owner, where level = `MilitaryConfig::FindSoldierLevel`; plus, for every active
+  player, for both soldier classes and every level: `pStock.count(soldier good) * weight(level)`, read from the
+  player's stock cache `pStock` (§3.9, up to 22 ticks old). The factor is the double at S 007e7ad8, bytes
+  `00 00 00 a0 99 99 e9 3f` (0.8 as a float widened to double) `[known]`. Resulting weights for levels 0..4: 1, 1,
+  2, 3, 4 `[inferred]` (arithmetic); the shipped `military.lua` defines levels 0..2 only (`mi_setSoldierId`), so
+  the weights in use are 1, 1, 2. The living soldiers are taken from one settler list (`settlersKind3`) `[known]`.
+  The stock loop is a do/while over a `SoldierLevelRange(tribe, class, 0)`: it runs its body before testing the
+  end, so for a soldier class with no levels it runs once with level −1 and reads
+  `MilitaryConfig::GetSoldierId(tribe, class, −1)` without a range check `[known]`. The shipped `military.lua`
+  defines at least level 0 for both classes of all three tribes (Egyptian swordsmen level 0 only, Scots bowmen
+  0..1, the rest 0..2), so the case does not arise there `[known]` data.
+- Building count (series 1, `CountBuildingsPerPlayer` S 00532f60) counts construction sites as well as finished
+  buildings `[known]`.
+- Stored goods (series 3, `SumStoredGoodsPerPlayer` S 005334d0): the sum of the **output stocks** of the buildings
+  in the village's depot list; input stocks and buildings outside that list are not counted `[known]`.
 - Population (S 00534110): number of units per owner in four settler lists (`NSettlers::System +0x34, +0x04,
   +0x14, +0x44`) plus, per active player, the `pStock` count of every id in the tribe's job list (the vector at
   `TribeProperty +0x30`, Lua `tp_addJob`) whose `GoodProperty.type == 1` `[known]`. The tribe's ware list
@@ -1211,13 +1232,15 @@ to ticks.
 | 00674800 / 00674ad0 | `MapModifier::ExploreArea` / `DetectTerritoryContacts` | spotted / reached |
 | 00537a60 / 00537ba0 | `Statistics::Init` / `Update` | statistics set-up and schedule |
 | 00537230 | `Statistics::AddGoodAmount` | production history, coin counter |
-| 0053b2c0 / 0053b420 | `PlayerStatistics::AddSample` / `CommitSamplePeriod` | series maintenance |
+| 0053b2c0 / 0053b420 / 0053b8f0 | `PlayerStatistics::AddSample` / `CommitSamplePeriod` / `InitGoodAndJobHistories` | series maintenance; history seeding (goods, then jobs; an id in both gets `[0, 0]`) |
 | 0053ad50 / 0053adc0 | `PlayerStatistics::GetLatestValue` / `GetGoodHistory` | readers |
 | 00532fc0 / 005335b0 / 00534110 | `GameQueryHelper::ComputeTerritoryShare` / `ComputeMilitaryStrengthPerPlayer` / `CountUnitsAndStockedKind1GoodsPerPlayer` | samplers |
+| 00532f60 / 005334d0 | `GameQueryHelper::CountBuildingsPerPlayer` / `SumStoredGoodsPerPlayer` | samplers of series 1 (sites included) and 3 (output stocks of the depot list) |
+| 0065d7f0 / 0077a8e0 | worker state 0x24 (working mode 4) / `NMovie::PutDownPackage::Update` | `AddGoodAmount` callers: produced settler, gatherer's harvest |
 | 0053ab60 / 0053bad0 | `PlayerStatistics::Store` / `Load` | save |
 | 005c00e0 / 005c0120 / 005c0270 / 005c05b0 | `PlayerMessages_SendToPlayer` / `SendToAllExcept` / `SendOrRefreshToPlayer` / `SendLetterToPlayer` | notifications |
 | 005c1e40 / 005c1fd0 | `Messages::FindMatchingWithArg` / `FindMatching` | de-duplication |
-| 005c2bf0 / 005c27c0 | `GoodPriorities::InitFromGoodTable` / `MoveRank` | transport priorities |
+| 005c2bf0 / 005c27c0 / 005c2690 | `GoodPriorities::InitFromGoodTable` / `MoveRank` / `GetGoodAtRank` | transport priorities; `MoveRank` moves every entry of the `from` rank, `GetGoodAtRank` returns the first match |
 | 005c2b50 / 005c2940 / 005c28f0 | `GoodPriorities::SetPriorities` / its vector assignment / `GoodPriorities::Clear` | priority list replaced (0x20021) / emptied (0x20022) |
 | 005c10f0 / 005c0fb0 / 005c0f40 / 005c2df0 / 005c0d40 | `GoodArrangement::FindGroupForGood` / `GoodArrangementGroup::SetEntryWeight` / `vector::at` / `ArrangementObject::SetWeight` / `GoodArrangementGroup::ResetToDefaults` | distribution weights (0x2001F, 0x20020) |
 | 005c1370 / 005c30c0 | `GoodArrangement::InitFromTribe` / `ArrangementBase::PickNext` | good distribution |

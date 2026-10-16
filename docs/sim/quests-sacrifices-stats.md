@@ -112,6 +112,14 @@ So player *p*'s record starts at `System + 0x20 + p * 0x188` `[known]` S 0065f5a
 | +0x17c | bool | `initialized` | |
 | +0x180 | ptr | `ownerTable` | back pointer to the `SacrificePlayerTable` |
 
+A record lists only the sacrifices its player owns. The sacrifices aimed at a player are collected from the
+other records: `SacrificePlayerData::CollectIncomingSacrifices` S 00662c70 skips the player's own record, walks
+the other records in index order and, in each record's list order, takes every sacrifice whose `targetPlayer` is
+the player `[known]`. A sacrifice a player aims at itself (`def.target == 0` sets `targetPlayer` to the owner,
+§3.2.4) is therefore never among them. Its only caller is the sacrifice bar's antibuff row
+(`nMenu::SacrificePanel::AssignIncomingSacrifices` S 00625200, for the player the game screen holds at
++0xfff4; ingame-ui.md §3.8.9) `[known]`.
+
 `ai::logic::Sacrifice` (0x58 bytes; base `NLogic::Unique`) `[known]` S 00661850, S 00661050 — one running
 sacrifice:
 
@@ -547,7 +555,7 @@ One-shot effects in the shipped data `[known]` data: `FunctionGoodExchange` (thr
 | 1005 | `FunctionExploreHarbors` | for **every** harbor object of the navy system (no owner filter): callback slot +0xc0 with its cell, then `ExploreArea(cell, radius = arg1, owner)` (S 00660100) |
 | 1006 | `FunctionRunScript` | call the map script's global `sacrifice_execute(definition id)` if a map script is loaded (S 005b2410) |
 | 1007 | `FunctionExploreMap` | `ExploreArea(cell (0, 0), radius 1000, owner)` (S 00660020): the whole map |
-| 1008 | `FunctionDestroyShips` | every ship of the **target** player whose construction is complete (both remaining-work values <= 0) is scheduled to sink (`NNavy::Ship::ScheduleSinking`), callback slot +0xb8 per ship (S 00660360). Ships still on the slipway are spared |
+| 1008 | `FunctionDestroyShips` | every ship of the **target** player whose construction is complete (both remaining-work values <= 0) is scheduled to sink (`NNavy::Ship::ScheduleSinking`), in the order of the navy system's ship vector; per ship the sinking is scheduled first and the callback slot +0xb8 is raised after it (S 00660360). Ships still on the slipway are spared |
 | 1000, 1002, any other | `FunctionSpawnSoldier`, – | nothing; the `fired` bit is still set |
 
 Types 0..15 are never dispatched here; type 15 is neither a modifier (`type < 15`) nor a one-shot (`type > 15`)
@@ -719,14 +727,15 @@ Lua readers depend on `[known]` S 00537ba0, S 0053b2c0, S 0053b420, S 00537230, 
 
 | Quantity | Updated | Rule |
 |---|---|---|
-| produced amount per good / job | at the event | `Statistics::AddGoodAmount(player, good, n)`: `history[good].last += n`. Callers: production delivery, soldier training and soldier upgrade completion, the worker update, a package put down, the good-exchange sacrifice |
+| produced amount per good / job | at the event | `Statistics::AddGoodAmount(player, good, n)`: `history[good].last += n`. Callers: production delivery, soldier training and soldier upgrade completion, the release of a produced settler (working mode 4, state 0x24, S 0065d7f0: 1 of `BuildingProperty +0xec producedSettler` per spawned settler), a gatherer's harvest put down (`NMovie::PutDownPackage::Update` S 0077a8e0: the full harvest count, added when the first unit's drop completes and before the flag is looked up for the extra units, so extra units that are discarded still count; settlers-jobs.md §3.5.5), the good-exchange sacrifice |
 | coin counter | at the event | `+1` per `AddGoodAmount` call whose good is the tribe's `soldierUpgradeGoodId`, whatever `n` |
 | kill counter | at the event | `+1` for the attacker's player when a soldier's life points drop below 1 |
 | building productivity | at the event | first production event of a building without an entry: 0.5; later events `+0.25`, capped at 1.0 (`RegisterProductionEvent`). Placing a building and transferring it to another owner set 0.5 (`ResetBuildingProductivity` S 00538440). `GetProductivity` S 005373b0 returns -1.0 for a building without an entry |
 | the eight series | every 600 ticks | below |
 
-**Schedule** (`tickCounter % 600`): tick 0 of the match activates the statistics of every active player, zeroes
-the three counters and seeds one history entry `[0]` for every good id and job id of the player's tribe. Phase 0:
+**Schedule** (`tickCounter % 600`, computed on the tick converted to float, players-victory.md §3.11): tick 0 of
+the match activates the statistics of every active player, zeroes the three counters and seeds one history entry
+`[0]` for every good id and job id of the player's tribe (an id in both lists gets `[0, 0]`). Phase 0:
 productivity decay (every entry of a finished building: idle counter `+1`, productivity `-0.05`, floor 0;
 entries of vanished buildings are erased), series 0 and `regionSize`, then the period commit (every history gets
 a new last element equal to its previous last element, series 7 gets `killCount`). Phase 1: series 3 and 5.
@@ -1321,7 +1330,8 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 00662860 / 00662660 / 00662720 / 006626a0 | regenerations add / contains / remove expired / progress | cool-down |
 | 0065fae0 / 0065ff00 / 0065fde0 / 0065fbd0 / 0065fb80 / 0065fb40 | `SacrificeResearch::Start` / `SacrificeResearch::Update` / `ai::logic::SacrificeResearch::Complete` / `ai::logic::SacrificeResearch::Cancel` / `SacrificeResearch::IsAtBuilding` / `ai::logic::SacrificeResearch::GetProgress` | research |
 | 0065f550 / 0065f610 / 00661ff0 | `PauseForCinematic` / `ResumeAfterCinematic` / `ShiftStartTicks` | cinematic pause |
-| 00662040 / 00661f50 / 00662c70 | `HasSacrificeOfDef` / `FindSacrificeById` / `CollectIncomingSacrifices` | queries |
+| 00662040 / 00661f50 / 00662c70 | `HasSacrificeOfDef` / `FindSacrificeById` / `CollectIncomingSacrifices` | queries; incoming = other records in index order, `targetPlayer` = the player |
+| 00625200 | `nMenu::SacrificePanel::AssignIncomingSacrifices` | the only caller of `CollectIncomingSacrifices` (antibuff row) |
 | 0065f500 / 0065f650 / 0065f540 | `System::Store` / `Load` / `NSacrifice::System::PostLoad` | save |
 | 005a9db0 / 005273d0 | `GameFile_LoadLogic` / `NLogic::System::PostLoad` | version gates of the logic part; post-load order (sacrifices, chests, spawn points) |
 | 00662b40 / 00662ba0, 00661dd0 / 00662390 | `SacrificePlayerData::Store` / `Load`, `StoreSacrifices` / `LoadSacrifices` | save |
@@ -1345,8 +1355,9 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 005aeda0, 005aec70, 005b0210, 005b0340, 005b0430, 005b0970, 005b1000 | Lua `vi_orderSacrifice`, `vi_startSacrifice`, `pl_getSacrificeState`, `pl_sacrificeStarted`, `pl_sacrificeStartedOnContinent`, `vi_isSacrificeBuildingAtContinent`, `pl_sendOrderSacrificeMessage` | bindings |
 | 005dac60, 005dab40, 005dabd0, 005d9550, 005b2410 | Lua `menu.addSacrifice`, `lockSacrifice`, `unlockSacrifice`, `showSacrificeEffect`; `sacrifice_execute` call | bindings |
 | **Statistics** | | |
-| 00537a60 / 00537b50 / 00537ba0 | `Statistics::Init` / `Reset` / `Update` | life cycle, schedule |
+| 00537a60 / 00537b50 / 00537ba0 | `Statistics::Init` / `Reset` / `Update` | life cycle, schedule (tick tested as a float) |
 | 00537230 / 0053af40 | `Statistics::AddGoodAmount` / `PlayerStatistics::AddGoodAmount` | production counts, coin counter |
+| 0065d7f0 / 0077a8e0 | worker state 0x24 (working mode 4) / `NMovie::PutDownPackage::Update` | `AddGoodAmount` callers: produced settler (1 per spawn), gatherer's harvest (full count) |
 | 00538460 / 00538440 / 005373b0 | `RegisterProductionEvent` / `ResetBuildingProductivity` / `GetProductivity` | building productivity |
 | 0053b2c0 / 0053b420 / 0053b8f0 | `PlayerStatistics::AddSample` / `CommitSamplePeriod` / `InitGoodAndJobHistories` | series and histories |
 | 0053ad50 / 0053adc0 / 005b0e80 | `GetLatestValue` / `GetGoodHistory` / Lua `pl_getProducedGoodCount` | readers |
