@@ -35,6 +35,26 @@ encrypted container or a plain text file (maintainer, 2026-10-12), so that map m
 encryption step. Belongs with the two other things scripted online maps need: the `logic` table registered in
 network sessions and script timing tied to the tick counter.
 
+## assetshare: warn when the host's server mod is older than yours
+
+A server mod runs in the host's copy for every player, and the mod version is never bumped, so a host with an old
+build replaces everyone's newer one without a word. 2026-10-17: an hour-long match crashed at 005719e3 because the
+host ran navalcombatfix `08551286…` (built 2026-10-09, before the null-fight fix) while the joiner had the fixed
+build (`docs/navy-and-military.md` §7). To do:
+- **Build time in the manifest.** Every mod.dll carries its link time in the PE header (`IMAGE_FILE_HEADER.TimeDateStamp`,
+  PE header + 8; MinGW's ld writes it on every build, so the builds already handed out have it too). The host's
+  manifest line (`mod\tname\tversion\thash\tflags`, `assetshare.cpp`) gets it as a fifth field; older joiners ignore
+  it (`sscanf ... >= 3`).
+- **Joiner warns.** Same name and version, other hash, own build newer than the host's: a room line such as "Your
+  navalcombatfix (built 2026-10-12) is newer than the host's (built 2026-10-09); the host's copy runs for this game.
+  Ask the host to update." A host manifest without the field: "the host's assetshare is older; its mods probably
+  are too". The joiner can also read the stamp of the downloaded copy itself.
+- **The host should hear it too** [decision open]: the joiner's warning only reaches the joiner. Telling the host
+  needs a message back (the room chat is the obvious way, but it changes what the room shows).
+- **Real versions without bumping.** `sadkmod/mods.mk` writes each mod's last commit time
+  (`git log -1 --format=%ct -- <mod>`) into the DLL as its build version; the PE stamp stays the fallback for builds
+  without it. A rebuild of old source then no longer looks newer.
+
 ## Build checksum: name the differing file
 
 A joiner whose installation differs is kicked with `!CHECKSUM MISMATCH` and no hint which file is at fault. The build
