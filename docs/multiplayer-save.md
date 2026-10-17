@@ -24,6 +24,8 @@ Whether a multiplayer match can be saved and continued, how the game saves and l
 - The assignment of players by name on a load ("Who plays which player", `AssignByName`) builds and the mod's
   patches match the binary (`make -C mods verify`); it is **not tested in the game**. The live results above were
   made with the seat rule, in which nobody changes players.
+- The autosave ("Autosave", `AutosaveMinutes`) builds and its hooks match the binary; it is **not tested in the
+  game**.
 - The check of who sent one of the mod's events and the check that a save is of the session's map ("Who may send
   the mod's events", "The same map") were added after those live results and are **not tested in the game**. The
   mod's events and their texts are unchanged (format 2), so a game with the build of the live results and a game
@@ -397,6 +399,38 @@ rebuilt by `PostLoad`) [open]; and the cause of the first desync, if it is a dif
 the players rather than in state. The map script's Lua state and the HUD are new after the load, as after the
 game's own load [known] S 007834e0, S 00784d40.
 
+## Autosave
+
+The game's autosave (`nGame::Autosave::Update` S 0078b040) runs only in network role 0 and counts real time per
+player (`docs/sim/app-shell.md` §3.9) [known]. The mod's autosave (`AutosaveMinutes`, default 5; 0 = off) saves on
+**every** game of the match, each into its own saves folder, so that after a crash whoever hosts the match again
+has the file and can load it from the menu (synchronised load, above).
+
+**The same tick everywhere.** A logic tick is `GameConfig::gameSpeed` seconds of game time (the interval
+`NLogic::System::Update` S 00527070 advances its tick time by; 0.1 in the shipped data) [known], so the interval is
+`AutosaveMinutes × 60 / gameSpeed` ticks, the same on every game: the properties are the same, and the host's
+`mpsave.ini` counts for everyone. The tick loop calls `NComm_Manager::AdvanceNetTick` S 00411990 once per logic tick
+with the tick's number (`NLogic::System::tickCounter`, `+0x88`, counted up just before) [known]; after the call for a
+tick that is a multiple of the interval the mod arms the save, the loop's next `CanAdvanceTick` S 004088b0 answers
+"no" (the same gate as for a load), and the save is written at the start of the next frame, before the game's frame
+ticks on. Every game thus writes the state after the same tick, and whatever the save itself changes
+(`GameFile_Save` S 005aa260 sets `MapInfo +0x1f0`) it changes on every game at that tick [inferred from the lockstep
+loop]. Two details of the gate [known]:
+- the save is armed *after* `AdvanceNetTick` returns, because `AdvanceNetTick` asks `CanAdvanceTick` itself, inside
+  the tick, and a "no" there skips the net sub-tick;
+- the stop holds only in reconnect state 0: `NComm_Manager::Process_MainLoop` S 00410f70 asks `CanAdvanceTick` in
+  reconnect state 1 and takes a "no" as "restart the session".
+
+**Files.** `<saves>\mpsave_auto <map> <h>h<mm>.aav`: the session's map name (characters `GameFile_Save` replaces or a
+joiner refuses in an offered name become `_`) and the game time of the state. A save of the same name from an earlier
+match is replaced. After each autosave only the newest `AutosaveKeep` (default 6) files named `mpsave_auto *` stay,
+by write time, of any match. A file that a load of the session names is never replaced or deleted: the load reads it
+again when it executes (`load_now`). Every autosave says `mpsave: autosaved as "<name>"` on the line the game uses for
+`!DESYNC DETECTED`, and the mod log has it.
+
+**After a load** the tick counter is the save's (`NLogic::System::Load` S 00527d60) [known]; an autosave was taken
+right after a multiple of the interval, so the next one follows a full interval later.
+
 ## Proposed mod design
 
 `mods/mpsave/mpsave.cpp`, a server mod. One operation, `sync_load(name)`, serves the load menu and the resync.
@@ -411,6 +445,7 @@ game's own load [known] S 007834e0, S 00784d40.
 | All | LOAD (same net tick): write the slot table into the session's slots (`PlayerInfo::SetPlayerIndex`), stop ticking; at the next frame (`events::on_frame`, before the game's own frame) check the file's CRC again, then the game's load without its session part: `DeactivateAllScreens`, `nGame::System::Shutdown` if still running, `GameLoadDescriptor::SetMapName`, `ActivateGameScreen`; kinds after PostLoad; tick on. The mod log has a line before the leave, one before the enter and one after the load. A game that cannot load stays stopped and tells its player to leave. | hook `NComm_Manager_CanAdvanceTick`, `GameFile_LoadLogic`, `GameFile_FinishLoad`; hooks that do nothing during the load: `NComm_Manager::Shutdown`, `BeginGameStarting`, `SendGameLoadedEvent` |
 | All, offline | Absent humans become AI players of level `AiLevel`. | hook `GameFile_LoadMapInfo`; `NAI::System::ActivatePlayer` |
 | Host | Desync → save → `sync_load` with the slots' present indices. | hook `NComm_WriteDesyncDump` |
+| All | Autosave: after every tick that is a multiple of the interval, stop before the next tick, save at the next frame, keep the newest `AutosaveKeep`. | hook `NComm_Manager::AdvanceNetTick`, `NComm_Manager::CanAdvanceTick`; `GameFile_Save`, `NProperties::StaticAccess::EnsureInstance` |
 | All | The host's session data arrives after a load: the last table is written again. | `events::on_net_event` |
 
 **Lobby server.** Nothing is needed for a load inside a running match: the referee sees one match (`RegisterGame`
@@ -484,13 +519,15 @@ What the next live test (two players, then a desync provoked on purpose) has to 
 8. Offline load of a network save with `AiLevel` 1 and 3: the mod log names the level ("now an AI player (level
    n)"), and the players build and fight.
 9. Resync (`AutoResync = true`): after a provoked desync the host's save is loaded and `!RESYNC DETECTED` appears.
+10. Autosave: after five minutes of play both mod logs have `autosaved as "mpsave_auto <map> 0h05"`, the match goes
+   on without `!DESYNC DETECTED`, and the save loads in a new match of the same players (host's menu, Load).
 
 Not determinable from the binary alone: the size of a save late in a match (transfer time: 2 × 2100 bytes per
 frame by default), the largest event the bridge passes, and whether a save taken while a cutscene, a pause or a
 sacrifice animation runs loads cleanly.
 
 Not done: saves are not offered in the pre-game room (a match cannot *start* from a save; it is loaded after the
-start), autosave stays off in network matches, and a player who rejoins (`UserReJoinGame`) is not considered.
+start), and a player who rejoins (`UserReJoinGame`) is not considered.
 
 ## Functions and addresses
 
@@ -543,7 +580,9 @@ start), autosave stays off in network matches, and a player who rejoins (`UserRe
 | 00408b10 | `NComm_Manager::QueueGameCommand` | lockstep command |
 | 0040fd80 / 00408b60 | `NComm_Manager::BroadcastEvent` / `SendEvent` | immediate event |
 | 00411990 | `NComm_Manager::AdvanceNetTick` | net tick, checksums, desync detection |
-| 004088b0 | `NComm_Manager_CanAdvanceTick` | lockstep gate |
+| 004088b0 | `NComm_Manager::CanAdvanceTick` | lockstep gate; asked by the tick loop, by `AdvanceNetTick` and by `Process_MainLoop` (reconnect state 1) |
+| 00410f70 | `NComm_Manager::Process_MainLoop` | per-frame NComm pump |
+| 0054a140 | `NProperties::StaticAccess::EnsureInstance` | the property database; `gameConfig->gameSpeed` is the tick interval |
 | 00410530 / 0040e560 | `NComm_Manager::ExecuteEventPackage` / `HandleEvent` | event execution / router |
 | 00527070 | `NLogic::System::Update` | logic ticks |
 | 00784080 / 007845a0 | `nGame::System::ComputeChecksum` / `HandleGameCommand` | desync CRC / game commands |

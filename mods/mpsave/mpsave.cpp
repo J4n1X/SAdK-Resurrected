@@ -56,6 +56,9 @@
 //      violation in Stl_VectorDword_PushBack S 00654e50 on a null object's +0x6c, right after the activation).
 //   5. Resynchronising. When the game detects a desync it only says so (AdvanceNetTick: "!DESYNC DETECTED",
 //      NComm_WriteDesyncDump S 0041f5e0). With AutoResync the host then saves its state and runs sync_load on it.
+//   6. Autosave. Every AutosaveMinutes of game time every game of the match saves the same tick's state as
+//      "mpsave_auto <map> <game time>" (autosave); after a crash any of the players can host the match again and
+//      load it as in 3. The game's own autosave (nGame::Autosave::Update S 0078b040) runs only offline.
 //
 // [TODO live] Built from the binary and not tested in the game: the assignment of players by name (assign_players,
 // the slot table in LOAD), the sender check of the mod's events (net_event) and the map check (is_session_map). What
@@ -69,11 +72,14 @@
 #include <sadkmod/game/sadk_noav/fn/NComm_Manager.hpp>
 #include <sadkmod/game/sadk_noav/fn/NCore.hpp>
 #include <sadkmod/game/sadk_noav/fn/NLogic.hpp>
+#include <sadkmod/game/sadk_noav/fn/NProperties.hpp>
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
 #include <sadkmod/game/sadk_noav/fn/ai.hpp>
 #include <sadkmod/game/sadk_noav/fn/nMenu.hpp>
 #include <sadkmod/game/sadk_noav/vars.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -123,6 +129,8 @@ std::size_t g_piece_bytes = 2100;     // per event, before base64 (2800 characte
 std::int32_t g_pieces_per_frame = 2;
 DWORD g_ack_timeout_ms = 120000;
 DWORD g_resync_pause_ms = 60000;
+std::int32_t g_autosave_minutes = 5;  // game time between two autosaves; 0: none
+std::int32_t g_autosave_keep = 6;     // autosave files kept in the saves folder
 
 // ── Small helpers ────────────────────────────────────────────────────────────────────────────────────────────────
 std::uint32_t crc32(const std::uint8_t *p, std::size_t n)
@@ -295,6 +303,7 @@ bool g_offline_start = false;     // inside StartPendingMap's own (offline) star
 bool g_resync_wanted = false;
 DWORD g_last_resync = 0;
 bool g_old_format_said = false;
+std::int32_t g_autosave_tick = 0; // the logic tick whose state this game saves at the next frame; 0: none
 
 std::uint32_t other_humans(Manager *m)
 {
@@ -729,6 +738,7 @@ void on_load(Manager *m, const std::string &text)
     g_frozen = true;
     g_load_failed_said = false;
     g_resync_wanted = false;   // the load replaces whatever was out of sync
+    g_autosave_tick = 0;       // and the state an autosave was due for
     g_host = HostSync{};
     SlotTable table;
     if (text.size() < 9 || text[8] != '|' || !parse_table(text.substr(9), table)) {
@@ -864,8 +874,14 @@ void fix_players()
 // The menu's three "is this an offline game?" questions: yes, so Save and Load stay in the menu and open the panel.
 bool SADK_FASTCALL menu_is_offline(void *) { return true; }
 
+// The tick loop's gate (NLogic::System::Update S 00527070 asks before every logic tick): no tick while a load is
+// under way, nor while an autosave is due. The autosave's stop holds only outside a reconnect: in reconnect state 1
+// NComm_Manager::Process_MainLoop S 00410f70 asks CanAdvanceTick too and takes a "no" as "restart the session".
 using CanAdvanceTick = sadk::Hook<fn::NComm_Manager::CanAdvanceTick>;
-bool SADK_THISCALL can_advance_tick(Manager *m) { return !g_frozen && CanAdvanceTick::original(m); }
+bool SADK_THISCALL can_advance_tick(Manager *m)
+{
+    return !g_frozen && !(g_autosave_tick && m->reconnectState == 0) && CanAdvanceTick::original(m);
+}
 
 using LoadLogic = sadk::Hook<fn::GameFile_LoadLogic>;
 void SADK_CDECL load_logic(void *stream)
@@ -959,6 +975,120 @@ bool resync()
     return true;
 }
 
+// ── Autosave ─────────────────────────────────────────────────────────────────────────────────────────────────────
+// Every AutosaveMinutes of game time every game of a network match writes <saves>\mpsave_auto <map> <h>h<mm>.aav, so
+// that after a crash whoever hosts the match again can load it from the menu (sync_load). The game's own autosave
+// (nGame::Autosave::Update S 0078b040) runs only offline (network role 0), on real time.
+//
+// Every game saves the state after the same logic tick: the save is armed after each tick whose number is a multiple
+// of the interval (advance_net_tick), the tick loop then stops before the next tick (can_advance_tick, as for a load)
+// and the file is written at the start of the next frame (frame(), which runs before the game's frame). So whatever
+// the save does to the world (GameFile_Save S 005aa260 sets MapInfo +0x1f0, for one), it does on every game at the
+// same tick.
+const char kAutoPrefix[] = "mpsave_auto ";
+
+// Seconds of game time per logic tick: GameConfig::gameSpeed, the interval NLogic::System::Update S 00527070 advances
+// its tick time by (0.1 in the shipped data; the property script's cfg_setGameSpeed S 0054c380 sets it). The same on
+// every game of a match, as the properties are. 0 when there are none.
+float tick_seconds()
+{
+    game::ai::properties::PropertiesDb *db = fn::NProperties::StaticAccess::EnsureInstance();
+    return db && db->gameConfig && db->gameConfig->gameSpeed > 0.0f ? db->gameConfig->gameSpeed : 0.0f;
+}
+
+std::int32_t autosave_ticks()
+{
+    float seconds = tick_seconds();
+    if (g_autosave_minutes <= 0 || seconds <= 0.0f) return 0;
+    return static_cast<std::int32_t>(std::lround(static_cast<float>(g_autosave_minutes) * 60.0f / seconds));
+}
+
+// A file of a load of this session (g_files): an autosave never replaces or deletes it, or the load would find it
+// changed (load_now).
+bool is_load_file(const std::string &name)
+{
+    for (const auto &file : g_files)
+        if (file.second == name) return true;
+    return false;
+}
+
+// "mpsave_auto <map> <h>h<mm>": the session's map and the game time of the state. A character that GameFile_Save
+// would replace or that a joiner refuses in an offered name (on_offer) becomes '_'.
+std::string autosave_name(Manager *m, std::int32_t tick)
+{
+    std::string map = session_map_name(m).substr(0, 60);
+    for (char &c : map)
+        if (static_cast<unsigned char>(c) < 0x20 || std::strchr("\\/:*?\"<>|", c)) c = '_';
+    while (!map.empty() && (map.back() == ' ' || map.back() == '.')) map.pop_back();
+    long minutes = std::lround(static_cast<double>(tick) * tick_seconds() / 60.0);
+    char time[32];
+    std::snprintf(time, sizeof time, "%ldh%02ld", minutes / 60, minutes % 60);
+    return kAutoPrefix + (map.empty() ? std::string("match") : map) + " " + time;
+}
+
+std::uint64_t write_time(const std::string &path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &data)) return 0;
+    return std::uint64_t(data.ftLastWriteTime.dwHighDateTime) << 32 | data.ftLastWriteTime.dwLowDateTime;
+}
+
+// Keeps the newest AutosaveKeep autosaves in the saves folder (by the time they were written, of any match).
+void prune_autosaves(const std::string &dir)
+{
+    std::vector<std::pair<std::uint64_t, std::string>> found;   // write time, name without ".aav"
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((dir + "\\" + kAutoPrefix + "*.aav").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string file = fd.cFileName;
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || file.size() < 4 || _stricmp(file.c_str() + file.size() - 4, ".aav") != 0)
+            continue;
+        found.emplace_back(std::uint64_t(fd.ftLastWriteTime.dwHighDateTime) << 32 | fd.ftLastWriteTime.dwLowDateTime,
+                           file.substr(0, file.size() - 4));
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    std::sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    for (std::size_t i = static_cast<std::size_t>(g_autosave_keep); i < found.size(); ++i)
+        if (!is_load_file(found[i].second) && DeleteFileA((dir + "\\" + found[i].second + ".aav").c_str()))
+            sadk::log("autosave \"%s\" deleted (AutosaveKeep = %d)", found[i].second.c_str(), g_autosave_keep);
+}
+
+void autosave()
+{
+    std::int32_t tick = g_autosave_tick;
+    g_autosave_tick = 0;
+    game::NLogic::System *logic = *var::g_pGameSystem;
+    if (!logic || !in_net_match() || logic->tickCounter != tick) return;   // the world is not that tick's any more
+    Manager *m = manager();
+    std::string name = autosave_name(m, tick);
+    if (is_load_file(name)) {
+        sadk::log("autosave skipped: \"%s\" is the file of a load", name.c_str());
+        return;
+    }
+    std::string path = save_path(name);
+    std::uint64_t before = write_time(path);
+    msvc::string n = msvc::string::borrow(name.c_str(), name.size());
+    fn::GameFile_Save(kSaveType, &n);   // returns nothing; the file's write time tells
+    if (write_time(path) <= before) {
+        say("mpsave: the autosave \"%s\" could not be written.", name.c_str());
+        return;
+    }
+    prune_autosaves(path.substr(0, path.find_last_of('\\')));
+    say("mpsave: autosaved as \"%s\".", name.c_str());
+}
+
+// NComm_Manager::AdvanceNetTick S 00411990: the tick loop calls it once per logic tick, with the tick's number
+// (NLogic::System::tickCounter, already counted up). The autosave is armed after it: AdvanceNetTick asks
+// CanAdvanceTick itself, inside the tick, and a "no" there would skip the net sub-tick.
+using AdvanceNetTick = sadk::Hook<fn::NComm_Manager::AdvanceNetTick>;
+void SADK_THISCALL advance_net_tick(Manager *m, std::int32_t tick)
+{
+    AdvanceNetTick::original(m, tick);
+    std::int32_t every = autosave_ticks();
+    if (every > 0 && tick > 0 && tick % every == 0 && !g_frozen && in_net_match()) g_autosave_tick = tick;
+}
+
 // ── Events ───────────────────────────────────────────────────────────────────────────────────────────────────────
 void frame(void *)
 {
@@ -969,6 +1099,7 @@ void frame(void *)
             g_frozen = false;
     }
     if (g_table_set && !in_net_match()) g_table_set = false;   // the table belongs to the running match
+    if (g_autosave_tick && !g_frozen) autosave();
     if (g_resync_wanted && resync()) g_resync_wanted = false;
     host_frame();
 }
@@ -1079,6 +1210,7 @@ void session_over(void *)
     g_frozen = false;
     g_resync_wanted = false;
     g_last_resync = 0;
+    g_autosave_tick = 0;
     g_table_set = false;
     g_old_format_said = false;
     g_rejected.clear();
@@ -1101,6 +1233,10 @@ bool mpsave_start()
     if (g_pieces_per_frame < 1) g_pieces_per_frame = 1;
     std::int32_t timeout = ini.get_int("MpSave", "TransferTimeoutSeconds", 120);
     g_ack_timeout_ms = static_cast<DWORD>(timeout < 10 ? 10 : timeout > 3600 ? 3600 : timeout) * 1000;
+    g_autosave_minutes = ini.get_int("MpSave", "AutosaveMinutes", g_autosave_minutes);
+    if (g_autosave_minutes < 0) g_autosave_minutes = 0;
+    g_autosave_keep = ini.get_int("MpSave", "AutosaveKeep", g_autosave_keep);
+    if (g_autosave_keep < 1) g_autosave_keep = 1;
 
     int menu = sadk::patch_calls(fn::nMenu::Game::LoadFromXml, fn::NComm_Manager_IsRole0, (void *)menu_is_offline,
                                  "mpsave: Save and Load stay in the menu of a network match", 1) +
@@ -1110,16 +1246,20 @@ bool mpsave_start()
                 FinishLoad::install(finish_load) + LoadMapInfo::install(load_map_info) +
                 StartPendingMap::install(start_pending_map) + DesyncDump::install(desync_dump) +
                 NetShutdown::install(net_shutdown) + BeginGameStarting::install(begin_game_starting) +
-                SendGameLoaded::install(send_game_loaded);
+                SendGameLoaded::install(send_game_loaded) + AdvanceNetTick::install(advance_net_tick);
     int events = sadk::events::on_frame(frame) + sadk::events::on_net_event(net_event) +
                  sadk::events::on_session_end(session_over);
-    bool ok = menu == 3 && hooks == 9 && events == 3;
+    bool ok = menu == 3 && hooks == 10 && events == 3;
     char absent[32] = "idle";
     if (g_former_humans_ai) std::snprintf(absent, sizeof absent, "AI, level %d", g_ai_level);
+    char autosave_text[64] = "off";
+    if (g_autosave_minutes > 0)
+        std::snprintf(autosave_text, sizeof autosave_text, "every %d minutes of game time, the last %d kept",
+                      g_autosave_minutes, g_autosave_keep);
     sadk::log(ok ? "saving and loading in network matches: on (players of a loaded save: %s; resync after a desync: %s; "
-                   "absent humans offline: %s)"
-                 : "mpsave NOT fully active (players %s, resync %s, absent humans %s)",
-              g_assign_by_name ? "by name" : "by seat", g_auto_resync ? "automatic" : "off", absent);
+                   "absent humans offline: %s; autosave: %s)"
+                 : "mpsave NOT fully active (players %s, resync %s, absent humans %s, autosave %s)",
+              g_assign_by_name ? "by name" : "by seat", g_auto_resync ? "automatic" : "off", absent, autosave_text);
     return ok;
 }
 

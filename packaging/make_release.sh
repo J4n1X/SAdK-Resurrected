@@ -12,7 +12,7 @@ OUT="$REPO/release"
 export SADKMOD="$REPO/sadkmod"
 # This repository's mods a release ships. Test mods (cheatstart, propreload), nomeshcache (for model makers) and
 # npcmodels stay out.
-EXTRA_MODS="borderless oscursor nopreview foresterfix navalcombatfix"
+EXTRA_MODS="borderless oscursor nopreview foresterfix navalcombatfix mpsave"
 
 # Plain make: the Makefiles track their dependencies. (make -B rebuilds sadkmod's precompiled header from several
 # sub-makes at once, which corrupts it.)
@@ -46,6 +46,9 @@ Mods for "Die Siedler - Aufbruch der Kulturen". They need the DRM-free SADK.exe 
   foresterfix     server mod: the forester no longer crashes the game on volcanic ground
   navalcombatfix  server mod: soldiers cross the water through their own harbours, naval invasions;
                   settings in navalcombatfix.ini, described in navalcombatfix-README.md
+  mpsave          server mod: Save and Load in network matches, and an autosave every 5 minutes on every
+                  player (mpsave.ini); after a crash, host the match again and load the newest
+                  "mpsave_auto <map> <time>" from the menu
 
 gamebridge, assetshare and billboards are also inside SAdK-ServerConfig, which installs them by itself.
 
