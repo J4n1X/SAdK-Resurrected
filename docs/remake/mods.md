@@ -705,3 +705,41 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
 5. Consent per content hash for received code mods; data-only mods automatic (§7.4).
 6. Command ids of mod commands from a name hash (§6.7) versus a registry assigned at match start.
 7. Confirm that the original's simulation reads no value from the settings XML (§8.3).
+
+## 14. TODO: a mod-friendly engine [the maintainer's priority 2026-10-18]
+
+Modding is the remake's top priority (`../remake-architecture.md` §1). Today the engine is mostly a data store
+(definitions, registry, property scripts) and a rendering base; the game's behaviour is closed code inside core.game.
+State of `sadk-remake` a923aeb:
+- `BuildingDef` is a flat port of the original's `BuildingProperty`; the component model of architecture §5
+  (`ComponentDef` on the type, `ComponentState` per instance, capability interfaces) is not built.
+- What a worker does is chosen by `Production.WorkingMode`, the original's 12 modes, dispatched by `switch`
+  statements in core.game (`Settlers/WorkerJobs.cs`, `GathererJobs.cs`). A mod cannot add a mode.
+- Placement (`Village/VillageSystem.Placement.cs`) has no rule a definition or a mod can add.
+- The generic building panel (`IInspectable`, `<ComponentSections/>`, §6 of the architecture) is not built.
+- What does exist: mods add `SimSystem`s by position (`[SimSystem(After, Before)]`) with their own checksum and save
+  data, entries through the data stage, and Harmony on anything.
+
+**Acceptance scenario: the Salzfeld.** A Bavarian large building that may only be placed within N cells of a shore.
+Its worker either walks to the shore, scoops water and fills one of three evaporation slots, or harvests salt from a
+finished slot; the panel shows the three slots. It must be possible as **one small mod without Harmony**: a data-stage
+entry, one behaviour class, one component state, assets. It goes into the SDK as the example mod and into the tests.
+
+Work, in this order:
+1. **Components on types.** `ComponentDef` / `ComponentState` with `Tick`, `Save`, `Load`, `WriteChecksum`, attached to
+   building types (later settlers, map objects); state saved and checksummed by the engine, not by each mod.
+2. **Placement rules.** A list of rules on the building definition (distance to water, terrain, neighbours, …) that the
+   site check runs and that build mode shows, so valid sites appear without renderer code.
+3. **Named work behaviours.** The 12 original modes become registered behaviours (faithful mode keeps the original's
+   code and order); `Production.Behaviour` names one; a mod registers its own. The original's job steps (walk to a
+   cell, search a water or resource cell, play an animation, carry, take from and put into a building) become a step
+   library behaviours are built from.
+4. **Panel sections.** `IInspectable` components bring their rows and buttons into the building panel.
+5. **Audit core.game for closed dispatch.** Every `switch` on a type, mode or kind enum is a candidate seam; each one
+   becomes a registry or stays, with the reason written down.
+6. **Move the mechanisms into the engine.** The frameworks of 1 to 4 live in `Sadk.Engine` (simulation side) and
+   `Sadk.Presentation` (panels, build-mode display); core.game keeps the original's content and behaviours.
+
+Constraint: in compatibility mode the registered original behaviours run in exactly the original's order with the
+original's random draws, so the checksum against the original holds; a mod that adds a behaviour makes the match
+remake-only (§9.4).

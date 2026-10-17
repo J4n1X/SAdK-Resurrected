@@ -6,6 +6,9 @@ The renderer's own decisions and what the testbed viewer found: [`remake-renderi
 
 ## 1. Goals that shape the layout
 
+- **Modding is the top priority** (maintainer, 2026-10-18): making mods as easy as possible is the most important
+  thing the remake has to do. Where an ease-of-modding choice competes with anything but compatibility mode's
+  lockstep, modding wins.
 - **Two modes.** A *compatibility mode* runs in lockstep with the original client: same simulation results tick by
   tick, same quirks where they change simulation state. A *refined mode* fixes the original's bugs and jank.
 - **Everything moddable,** down to core systems such as pathfinding.
@@ -23,7 +26,11 @@ The renderer's own decisions and what the testbed viewer found: [`remake-renderi
 
 ## 3. Mod model
 
-Modelled on Factorio: **the base game is a mod.** The engine knows no content.
+Modelled on Factorio: **the base game is a mod.** The engine knows no content, but it **knows the game**: buildings,
+workers and their jobs, placement, goods and stocks, building panels are the engine's own extensible mechanisms, not
+code inside core.game (maintainer, 2026-10-18: the engine must be tied tighter to the game instead of being mostly a
+data store and a rendering agent). core.game is the original's content plus the original's behaviours, registered
+through the same extension points a mod uses. The work list is [`remake/mods.md`](remake/mods.md) §14.
 
 - **Load stages** over all mods in dependency order: settings, then data (each mod's definitions, then all
   "updates", then all "final fixes"), then the frozen registry becomes the game's content, then runtime.
