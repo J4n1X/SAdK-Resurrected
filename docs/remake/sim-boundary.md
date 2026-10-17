@@ -177,12 +177,39 @@ public sealed class TickRecord             // immutable once published
 4. `Alpha`, interpolation, animation with `SimDelta`, particles with simulation time, audio with `RealDelta`.
 5. Render; picking for the next frame's input.
 
-### 4.3 Threading [draft]
+### 4.3 Threading [the maintainer's decision 2026-10-18; draft]
 
-The first version runs the simulation on the main thread inside step 2, as the original does. The shape above
-allows a simulation thread later without changing consumers: the presentation reads only published tick records
-and views; views then go through a snapshot or a tick-boundary lock. CPU-heavy presentation work (terrain region
-rebuilds, decal clipping, particle simulation) runs on worker threads and is applied on the main thread.
+**The simulation runs on a thread of its own, in faithful mode too.** The original runs it on the main thread
+between UI and render, so every tick is paid for inside a frame. Determinism does not depend on that: it rests on
+the order of work *within* the simulation (the fixed system order, the single random stream, single-precision
+floats, commands at fixed ticks and gaps), and one simulation thread keeps that order exactly. Which frame a tick
+falls into is presentation. The simulation thread is the only thread that runs ticks; inside a tick it stays
+sequential.
+
+What changes against §4.1 and §4.2:
+- **Driver.** The simulation thread owns `SimHost`: it advances the accumulator (the original's semantics, 5 s
+  clamp, catch-up without cap), runs the due ticks, pumps the transport and publishes each `TickRecord` into a queue.
+  `SimDriver` on the main thread only feeds it the scaled time and the real time, and takes the records in step 3.
+- **Commands.** `Submit` enqueues; the simulation thread executes offline commands in the next gap between two
+  ticks, with the previous tick's counter, the place the original's UI call gives them. The command log records tick,
+  gap and order as before, so a replay is the same with or without the thread.
+- **Views.** `IWorldView` is no longer "valid between Advance calls": the presentation reads a snapshot published at
+  a tick boundary, or takes a tick-boundary lock for rare queries (picking, info boxes). It never reads live state.
+- **Godot state.** `Engine.TimeScale` and `SceneTree.Paused` are set on the main thread from published records; the
+  simulation thread touches no Godot API (godot-capabilities §6).
+- **Clock.** `SimClock` is published with each record, so `Alpha` (and faithful mode's stall saw-tooth) is computed
+  from published values on the main thread.
+- **Frame-time hazards of §1.** The cinematic screen's switches, UI calls into map-script callbacks, frame-aged
+  player messages and "local player" branches must reach the simulation as commands or tick-time work, not as calls
+  from the main thread. [TODO] list each one and its route; the map script's Lua threads that the original wakes by
+  wall time each frame (offline only, `../sim/lua-runtime.md`) need a decision on which thread they run.
+
+CPU-heavy presentation work (terrain region rebuilds, decal clipping, particle simulation) runs on worker threads
+and is applied on the main thread.
+
+**Refined mode** [TODO, later]: parallel work *inside* a tick (path searches, AI evaluation, territory and
+visibility maps computed against a read-only view, applied in a fixed order; deadline jobs started at tick N and
+applied at N + k). Not designed yet; it may not draw random numbers or combine floats out of order.
 
 ## 5. The event stream
 
