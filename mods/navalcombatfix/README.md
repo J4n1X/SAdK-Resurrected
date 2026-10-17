@@ -58,6 +58,7 @@ What it does:
 - **The invasion button's look:** it borrows the attack button's icon and shows plain English texts. It needs its
   own icon (the action icon atlas) and translated texts (the game's text database), like the game's buttons.
 - **Translated messages:** the event-log messages (`!navalcombatfix_*`) are English only.
-- **Ship bug fixes to move out:** deselecting a sunk ship (a crash of the unmodded game) and sending stranded ships
+- **Ship bug fixes to move out:** deselecting a sunk ship (a crash of the unmodded game), the null fight of soldiers
+  deleted aboard a ship (a crash of the unmodded game, `docs/navy-and-military.md` §7) and sending stranded ships
   home are general fixes, not combat rules; they belong in a separate ship-fixes mod (`mods/IDEAS.md`).
 - Everything above still needs testing in the game; the doc's §7 lists what to check.

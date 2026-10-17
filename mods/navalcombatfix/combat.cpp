@@ -667,6 +667,26 @@ void SADK_THISCALL finish_mission(NavyMission *m)
             fn::ai::military::SoldierFightState::LeaveFight(&aboard[i]->fightState);
 }
 
+// MilitaryLink_UnlinkSoldierFromFight S 0053cfe0 (soldier, fight): Fight::RemoveSoldier, then the soldier's fightRef
+// is cleared. SoldierFightState::ReleaseAll S 0065bfe0 hands it ReferenceFight::Get of the soldier's fightRef without
+// a test, so a soldier whose fight reference is gone while inFight is still set passes a null fight, which
+// Fight::RemoveSoldier S 005719b0 reads through (crash at 005719e3). finish_mission takes away the way there that is
+// known (soldiers aboard a ship whose mission ends); this catches any other: with no fight there is nothing to leave,
+// and the reference is cleared as the game's function does. Its other callers (Fight::RemoveShip S 00571500,
+// MilitaryFightSoldierList_dtor S 00576a20) pass the fight the soldier is listed in, never null.
+// [live 2026-10-17: the crash of 2026-10-10 again, same stack from NNavy::System::Update -> Ship::dtor, in a match
+// whose host ran a build from before finish_mission's fix]
+using UnlinkSoldierFromFight = sadk::Hook<fn::MilitaryLink_UnlinkSoldierFromFight>;
+void SADK_CDECL unlink_soldier_from_fight(void *soldier, void *fight)
+{
+    if (fight) {
+        UnlinkSoldierFromFight::original(soldier, fight);
+        return;
+    }
+    sadk::log("a soldier left a fight that is gone: nothing to leave");
+    fn::NLogicReference_ClearIds(&static_cast<game::NSettlers::Soldier *>(soldier)->fightState.fightRef);
+}
+
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
 // their route once their mission is over.
 using ShipUpdate = sadk::Hook<fn::NNavy::Ship::Update>;
@@ -707,7 +727,8 @@ bool combat_start()
               HarborInRange::install(harbor_in_range) && DispatchAttackers::install(dispatch_attackers) &&
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
               NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update) &&
-              MilitaryFinish::install(finish_mission) && ShipDtor::install(ship_dtor);
+              MilitaryFinish::install(finish_mission) && ShipDtor::install(ship_dtor) &&
+              UnlinkSoldierFromFight::install(unlink_soldier_from_fight);
     sadk::log("%s", ok ? "combat by sea: soldiers cross through their own harbours" : "combat by sea NOT active");
     return ok;
 }

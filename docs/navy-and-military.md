@@ -587,9 +587,16 @@ soldier is deleted, `SoldierFightState::Destruct` `0065c080` sees `inFight` and 
 passes the null result of `ReferenceFight::Get` to `Fight::RemoveSoldier` (crash at `005719e3`). A ship deleted with
 an active mission does exactly this: `Ship::dtor` ends the mission, then `ai::navy::NavyCargo::dtor` `005bd7f0` deletes the
 settlers aboard. The crash dump has this stack; that the soldier was on its way to the fight is `[inferred]`. The
-unmodded game has the same path; ShipLostOnDefeat makes it common. In its `Military::Finish` hook the mod lets the
-mission's soldiers who are aboard and marked leave the fight after the game's `Finish`, as the game's state `0x2d`
-does (`SoldierFightState::LeaveFight` `0065be90`). In the game `[TODO]`.
+unmodded game has the same path; ShipLostOnDefeat makes it common, but it occurs without it too [live 2026-10-17: the
+same crash and stack, `NLogic::System::Update` → `NNavy::System::Update` → `Ship::dtor` → `NavyCargo::dtor` →
+`ReleaseAll` → `RemoveSoldier(null)`, in an hour-long match whose host ran a mod build from before the fix below,
+ShipLostOnDefeat off]. In its `Military::Finish` hook the mod lets the mission's soldiers who are aboard and marked
+leave the fight after the game's `Finish`, as the game's state `0x2d` does (`SoldierFightState::LeaveFight`
+`0065be90`). `ReleaseAll` hands `ReferenceFight::Get` to `MilitaryLink_UnlinkSoldierFromFight` `0053cfe0` without a
+test, and only `ReleaseAll` can pass a null fight there (its other callers, `Fight::RemoveShip` and
+`MilitaryFightSoldierList_dtor` `00576a20`, pass the fight the soldier is listed in) `[known]`; the mod's hook on
+`0053cfe0` therefore takes a null fight as "nothing to leave" and only clears the soldier's fight reference, as the
+function does after `RemoveSoldier`, which covers any other way to the same state. Both in the game `[TODO]`.
 
 A sinking ship keeps its mission: the game deletes a sunk ship at state 7, and `NNavy::Ship::dtor` `005baf20` ends an
 active mission then. Ending it at once (`Military::Finish`) would release the fight while its last soldiers were only
