@@ -49,7 +49,7 @@ inline std::span<Ship *> ships()
 inline std::span<Building *> territory_buildings()
 {
     game::NVillage::System *village = logic()->village;
-    return {static_cast<Building **>(village->listDefF5Begin), static_cast<Building **>(village->listDefF5End)};
+    return {static_cast<Building **>(village->territoryBuildings.first), static_cast<Building **>(village->territoryBuildings.last)};
 }
 
 inline std::int32_t owner(Building *b) { return b->ownerPlayer->index; }
@@ -102,7 +102,7 @@ inline bool carries_fight(NavyMission *m) { return m->fight.unique.idHi >= 0; }
 inline bool carries(NavyMission *m, Fight *fight)
 {
     game::NLogic::Unique &id = m->fight.unique;
-    return id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
+    return id.idLo == fight->unique.idLo && id.idHi == fight->unique.idHi;
 }
 
 // The fight is over for the mission once every one of its soldiers has left it (or none is left).
@@ -160,6 +160,7 @@ struct Settings {
     bool shipLostOnDefeat = false;        // ShipLostOnDefeat: a lost attack by sea sinks the attacker's ship
     std::int32_t landingReach = 9;        // LandingReach: cells a landing harbour may lie beyond a target's range + 1
     bool harborMustHaveGarrison = true;   // HarborMustHaveGarrison: expeditions may take ungarrisoned enemy harbours
+    bool borrowStreetShips = true;        // BorrowStreetShips: a fight may take a ship that serves another sea street
 };
 extern Settings g_settings;
 

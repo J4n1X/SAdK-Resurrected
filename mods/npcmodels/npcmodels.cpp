@@ -7,7 +7,7 @@
 // is otherwise unused for NPCs; this patch makes it the set number. bdyprt 0 (every record NPC so far) behaves as
 // before.
 //
-// At 005081db, after `CALL ActorProxy::AsType2` (EAX = the NPCProxy):
+// At 005081db, after `CALL ActorProxy::AsNPC` (EAX = the NPCProxy):
 //   MOV EDX,[EAX] / MOV ECX,EAX / MOV EAX,[EDX+0x1C] / XOR EBX,EBX / CALL EAX / MOV EBP,EAX
 // becomes
 //   MOVZX EBX,BYTE [EAX+0x48] / MOV EDX,[EAX] / MOV ECX,EAX / CALL [EDX+0x1C] / MOV EBP,EAX

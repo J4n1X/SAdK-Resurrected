@@ -21,6 +21,7 @@ bool cheatstart_start();
 bool oscursor_start();
 bool nopreview_start();
 bool mpsave_start();
+bool distantlands_start();
 
 int main(int argc, char **argv)
 {
@@ -53,12 +54,13 @@ int main(int argc, char **argv)
     oscursor_start();
     nopreview_start();
     mpsave_start();
+    distantlands_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 6 + 1 + 1 + 22 + 1 + 3 + 2 + 12;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
+    const int expected = 6 + 1 + 1 + 22 + 1 + 3 + 2 + 12 + 3;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
                                                         // navalcombatfix 22 hooks, cheatstart 1 hook, oscursor 3
                                                         // hooks, nopreview 2 hooks, mpsave 9 hooks and 3 redirected
-                                                        // calls (events are not verified)
+                                                        // calls (events are not verified), distantlands 3 hooks
     std::printf("%d patches match, %d do not (%d expected to match; log: %s)\n", n.matched, n.mismatched, expected, log);
     if (FILE *f = std::fopen(log, "r")) {
         char line[512];

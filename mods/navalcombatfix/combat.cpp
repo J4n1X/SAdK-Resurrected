@@ -70,6 +70,7 @@ struct SeaLink {
     bool onRoute = false;           // already on the route (carrying this fight), else idle and still to be linked
     bool invasion = false;          // a naval invasion ship waiting at home (invasion.cpp), still to be linked
     bool routeShip = false;         // the route's own ship (its sea street), taken from its service, still to be linked
+    bool streetShip = false;        // the ship of another sea street of the player, still to be taken off it and linked
     std::int32_t distance = 0;      // d(target, H1) + d(H2, building)
 };
 
@@ -83,7 +84,12 @@ struct SeaLink {
 //     landmass]. Taken whatever it is carrying, so a fight never depends on when the ship happens to be free
 //     (maintainer's rule); see take_route_ship;
 //   - else the nearest idle ship of the player at H2's exit (NNavy::System::FindNearestIdleShipAtHarborExit
-//     S 005b3450), linked to the route only when the soldiers are actually sent.
+//     S 005b3450), linked to the route only when the soldiers are actually sent;
+//   - else the nearest ship serving another sea street of the player (other_street_ship). The game's idle ships have
+//     no route, and every idle ship puts itself on a sea street that has none (Ship::ReturnToOwnHarbor S 005bab60
+//     from ship state 0; Harbor::FindOwnRouteForShip S 005b4c50 takes the first exit, in order, with such a route).
+//     A player with no more ships than sea streets therefore has no idle ship at all: of a harbour with two routes
+//     and one ship, only the route the ship went to could carry a fight. See take_street_ship.
 constexpr std::int32_t kShipIdle = 0;      // NNavy::Ship states (Ship::Update S 005bb500): 0 picks up a mission
 constexpr std::int32_t kShipWaiting = 1;   // (an active mission -> 5); 1-3 are a route ship's service: wait for
 constexpr std::int32_t kShipCarrying = 3;  // passengers, load, sail and unload; 4 expedition, 5 mission
@@ -118,7 +124,7 @@ void forget_lent(Ship *ship)
 
 // Takes the route's own ship for a fight, whatever it is doing (maintainer's rule: a fight must not depend on when the
 // ship is free). Its service is put aside:
-//   - passengers assigned to board it are released (NavyCargo_UnassignPendingSettlers S 005bd3b0, as Ship::Update
+//   - passengers assigned to board it are released (ai::navy::NavyCargo::UnassignPendingSettlers S 005bd3b0, as Ship::Update
 //     does when a ship loses its route);
 //   - its mission starts (NNavy::Military::Activate, what NavyLink_LinkMilitaryRoute does last; the ship stays linked
 //     to its route) and the fight is linked;
@@ -131,12 +137,48 @@ void forget_lent(Ship *ship)
 // The route is remembered; give_back puts the ship back on it when the mission is over.
 void take_route_ship(Ship *ship, NavyShipRoute *route, Harbor *soldiersSide, Fight *fight)
 {
-    fn::NavyCargo_UnassignPendingSettlers(ship->cargo);
+    fn::ai::navy::NavyCargo::UnassignPendingSettlers(ship->cargo);
     fn::NNavy::Military::Activate(ship->military);
     fn::NavyLink_LinkMilitaryFight(fight, ship);
     ship->state = kShipIdle;
     fn::NNavy::Movement::MoveToHarbor(ship->movement, soldiersSide);
     if (lent_index(ship) < 0 && g_lentCount < 64) g_lent[g_lentCount++] = {ship, route};
+}
+
+// The ship of `player` serving a sea street (serves_route, on a route) that is nearest to `exit` on its water: the
+// game's idle-ship search (same water body, hex distance, the first on ties) for ships that have a route.
+Ship *other_street_ship(HarborExit *exit, std::int32_t player)
+{
+    Ship *best = nullptr;
+    std::int32_t bestDistance = 0, water = region(&exit->posX);
+    for (Ship *ship : ships()) {
+        game::NNavy::Movement *mv = ship->movement;
+        if (ship->player->index != player || !serves_route(ship) || mv->route.unique.idHi < 0 ||
+            region(&mv->base.currentCellX) != water)
+            continue;
+        std::int32_t d = distance(&mv->base.currentCellX, &exit->posX);
+        if (!best || d < bestDistance) best = ship, bestDistance = d;
+    }
+    return best;
+}
+
+// Takes the ship of another sea street for a fight over `route`, which has no ship of the player (same rule as
+// take_route_ship: a fight must not depend on which of the player's routes the ship happens to serve). As there,
+// with one difference: the ship leaves its street (NavyLink_UnlinkMovementRoute S 0053c3f0, which also releases its
+// docking position; the street goes while it has no ship, NavyShipRoute::UpdateSeaStreet S 005b71d0) and is put on
+// `route` the way the game puts an idle ship there (NavyLink_LinkMilitaryRoute). With no target harbour left,
+// MoveToHarbor sails it straight to its dock at the soldiers' side, as it does an idle ship. The street it served is
+// remembered; give_back puts it back when the mission is over.
+void take_street_ship(Ship *ship, NavyShipRoute *route, Harbor *soldiersSide, Fight *fight)
+{
+    NavyShipRoute *served = fn::NLogic::ReferenceShipRoute::Resolve(&ship->movement->route);
+    fn::ai::navy::NavyCargo::UnassignPendingSettlers(ship->cargo);
+    fn::NavyLink_UnlinkMovementRoute(ship, served);
+    fn::NavyLink_LinkMilitaryRoute(route, ship);
+    fn::NavyLink_LinkMilitaryFight(fight, ship);
+    ship->state = kShipIdle;
+    fn::NNavy::Movement::MoveToHarbor(ship->movement, soldiersSide);
+    if (lent_index(ship) < 0 && g_lentCount < 64) g_lent[g_lentCount++] = {ship, served};
 }
 
 std::int32_t distance_to(Ship *ship, Harbor *h)
@@ -156,6 +198,8 @@ bool sea_street(NavyShipRoute *route, std::int32_t player, Harbor **a, Harbor **
 // not necessarily the route it served. While that route is still a sea street, the ship goes back to it the same way
 // (NavyLink_LinkMovementRoute S 0053c3d0 + MoveToHarbor to its nearer end + state 3: unload, then wait). Otherwise
 // (a harbour of it lost, or the route gone with a destroyed harbour) it is left to the game and to return_stranded.
+// So it is when the player has another ship on that route by now: a street a ship was taken off (take_street_ship)
+// is open to the next idle ship, and a route takes one ship per player.
 void give_back(Ship *ship)
 {
     int i = lent_index(ship);
@@ -166,6 +210,7 @@ void give_back(Ship *ship)
     if (ship->state >= kShipSinking || !route_alive(route) || !sea_street(route, ship->player->index, &a, &b)) return;
     NavyShipRoute *now = fn::NLogic::ReferenceShipRoute::Resolve(&ship->movement->route);
     if (now != route) {
+        if (fn::ai::navy::NavyShipRoute::HasPlayerEntry(route, ship->player->index)) return;
         if (now) fn::NavyLink_UnlinkMovementRoute(ship, now);
         fn::NavyLink_LinkMovementRoute(ship, route);
     }
@@ -214,7 +259,12 @@ bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight
         }
     } else {
         ship = fn::NNavy::System::FindNearestIdleShipAtHarborExit(logic()->navy, player, &exit->posX);
-        if (!ship) return false;
+        if (!ship) {
+            if (!g_settings.borrowStreetShips) return false;
+            ship = other_street_ship(exit, player);
+            if (!ship) return false;
+            link->streetShip = true;
+        }
     }
     link->route = route;
     link->ship = ship;
@@ -365,7 +415,9 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
     }
     SeaLink link;
     if (!own_sea_link(building, target, connector->fight, &link)) return;
-    if (!link.onRoute) {   // the first building of this fight on the route brings the ship in
+    if (link.streetShip) {   // no ship on the route and none idle: one from another sea street (take_street_ship)
+        take_street_ship(link.ship, link.route, link.home, connector->fight);
+    } else if (!link.onRoute) {   // the first building of this fight on the route brings the ship in
         fn::NavyLink_LinkMilitaryRoute(link.route, link.ship);
         fn::NavyLink_LinkMilitaryFight(connector->fight, link.ship);
     } else if (link.invasion) {   // the invasion ship is on its route already; the fight starts its boarding
@@ -579,7 +631,7 @@ void deselect(Ship *ship)
 // them out of the fight (0053cfe0: Fight::RemoveSoldier, fightRef cleared) and leaves inFight set. When such a soldier
 // is deleted, SoldierFightState::Destruct S 0065c080 sees inFight and calls ReleaseAll S 0065bfe0, which hands the
 // null fight of the cleared reference to Fight::RemoveSoldier [live 2026-10-10: crash at 005719e3 while a sunk ship
-// was deleted with a soldier aboard: Ship::dtor ends the mission, then NavyCargo_dtor deletes the cargo's settlers].
+// was deleted with a soldier aboard: Ship::dtor ends the mission, then ai::navy::NavyCargo::dtor deletes the cargo's settlers].
 // The unmodded game has the same path; ShipLostOnDefeat makes it common. After the game's Finish those soldiers leave
 // the fight the way the game's state 0x2d does (SoldierFightState::LeaveFight S 0065be90: building links, opponent,
 // fight groups, inFight = 0). Whichever of RemoveShip and Finish runs first (Fight::dtor S 00571790 calls RemoveShip
@@ -597,8 +649,8 @@ void SADK_THISCALL finish_mission(NavyMission *m)
             auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it)));
             if (!soldier) continue;
             game::NLogic::Unique &id = soldier->fightState.fightRef.unique;
-            bool inFight = id.idLo == fight->uniqueIdLo && static_cast<std::uint32_t>(id.idHi) == fight->uniqueIdHi;
-            if (inFight && !fn::Settler_IsAboardShip(soldier->base.movement))
+            bool inFight = id.idLo == fight->unique.idLo && id.idHi == fight->unique.idHi;
+            if (inFight && !fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->base.movement))
                 fn::NavyLink_UnlinkMilitarySoldier(&soldier->base, ship);
         }
     }
@@ -606,7 +658,7 @@ void SADK_THISCALL finish_mission(NavyMission *m)
     int count = 0;
     for (void **it = m->soldiers.refs_first; it != m->soldiers.refs_last && count < kMaxAboard; ++it) {
         auto *soldier = reinterpret_cast<game::NSettlers::Soldier *>(fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it)));
-        if (soldier && soldier->fightState.inFight && fn::Settler_IsAboardShip(soldier->base.movement))
+        if (soldier && soldier->fightState.inFight && fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->base.movement))
             aboard[count++] = soldier;
     }
     MilitaryFinish::original(m);

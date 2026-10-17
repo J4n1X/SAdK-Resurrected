@@ -43,13 +43,14 @@ void load_settings()
     s.shipLostOnDefeat = ini.get_bool(section, "ShipLostOnDefeat", s.shipLostOnDefeat);
     s.landingReach = ini.get_int(section, "LandingReach", s.landingReach);
     s.harborMustHaveGarrison = ini.get_bool(section, "HarborMustHaveGarrison", s.harborMustHaveGarrison);
+    s.borrowStreetShips = ini.get_bool(section, "BorrowStreetShips", s.borrowStreetShips);
     sadk::log("settings: attackers by sea %d, defenders by sea %d, attack from own landing %d, retreat harbours %s, "
               "proximity over own routes %d, neutral landings %d, crossing distance %d, pickup timeout %d, ship lost on defeat %d, "
-              "landing reach %d, harbour must have garrison %d",
+              "landing reach %d, harbour must have garrison %d, borrow street ships %d",
               s.attackersBySea, s.defendersBySea, s.attackFromOwnLanding,
               kRetreatHarborNames[static_cast<int>(s.retreatHarbors)], s.proximityOverOwnRoutes,
               s.neutralLandings, s.crossingDistance, s.pickupTimeout, s.shipLostOnDefeat,
-              s.landingReach, s.harborMustHaveGarrison);
+              s.landingReach, s.harborMustHaveGarrison, s.borrowStreetShips);
 }
 
 bool navalcombatfix_start()

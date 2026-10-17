@@ -154,24 +154,23 @@ void SADK_THISCALL set_action(ActionButton *button, std::int32_t *action, bool r
     if (*action != kInvasionAction) return SetAction::original(button, action, refresh);
     std::int32_t borrowed = kAttackAction;
     SetAction::original(button, &borrowed, false);
-    button->action = kInvasionAction;
-    button->actionHigh = 0;
+    button->data.data = kInvasionAction;
     set_tip(button, kReasonTexts[kReady]);
     if (refresh) fn::nMenu::ActionButton::RefreshAvailability(button);
 }
 
 void SADK_THISCALL set_availability(ActionButton *button, bool enabled, std::uint32_t reason)
 {
-    if (button->action != kInvasionAction) return SetAvailability::original(button, enabled, reason);
-    button->action = kAttackAction;   // the look of an enabled / disabled button; the texts are ours
+    if (button->data.data != kInvasionAction) return SetAvailability::original(button, enabled, reason);
+    button->data.data = kAttackAction;   // the look of an enabled / disabled button; the texts are ours
     SetAvailability::original(button, enabled, 0);
-    button->action = kInvasionAction;
+    button->data.data = kInvasionAction;
     set_tip(button, kReasonTexts[enabled || reason >= kReasonCount ? kReady : reason]);
 }
 
 void SADK_THISCALL refresh_availability(ActionButton *button)
 {
-    if (button->action != kInvasionAction) return RefreshAvailability::original(button);
+    if (button->data.data != kInvasionAction) return RefreshAvailability::original(button);
     Reason reason = invasion_reason(selected_route(), local_player());
     fn::nMenu::ActionButton::SetAvailability(button, reason == kReady, reason);
 }
@@ -185,7 +184,7 @@ void SADK_CDECL execute_action(std::int32_t *action)
     game::NLogic::Unique &route = selection->shipRoute.unique;
     if (selection->kind != game::ai::game::ESelectionKind::ShipRoute || route.idHi < 0) return;
     game::NComm_Manager *manager = fn::NComm_GetManager();
-    std::int32_t slot = fn::NComm_Manager_FindLocalPlayerSlot(manager);
+    std::int32_t slot = fn::NComm_Manager::FindLocalPlayerSlot(manager);
     std::int32_t net = static_cast<std::int32_t>(fn::NComm_Manager::GetLocalNetId(manager));
     game::NComm::EventInt64_1Integer command;
     fn::NComm::EventInt64_1Integer::ctor(&command, kPrepareInvasionCommand, net, slot, route.idLo,
@@ -212,7 +211,7 @@ void prepare_invasion(game::NComm::EventInt64_1Integer *command)
     sadk::log("player %d prepares a naval invasion with ship %d", player, ship->shipNumber);
 }
 
-void SADK_THISCALL handle_game_command(game::NComm::IEventHandler *handler, std::int32_t *event)
+void SADK_THISCALL handle_game_command(game::nGame::System_offset_0x8_ handler, std::int32_t *event)
 {
     auto *command = reinterpret_cast<game::NComm::EventInt64_1Integer *>(event);
     if (static_cast<std::uint32_t>(command->typeId) != kPrepareInvasionCommand)
@@ -288,7 +287,7 @@ void land_attackers(Ship *ship)
     game::NLogic::ReferencesSettler &soldiers = ship->military->soldiers;
     for (void **it = soldiers.refs_first; it != soldiers.refs_last; ++it) {
         Settler *soldier = fn::NLogic::ReferenceSettler::Resolve(static_cast<game::NLogic::ReferenceSettler *>(*it));
-        if (!soldier || !fn::Settler_IsAboardShip(soldier->movement)) continue;
+        if (!soldier || !fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->movement)) continue;
         fn::NavyLink_UnlinkCargoSettler(ship, soldier);
         fn::ai::settlers::SettlerMovement::DisembarkAt(soldier->movement, ship);
     }
@@ -330,7 +329,7 @@ bool invasion_update(Expedition *e)
         e->state = kInvUnload;
         break;
     case kInvUnload:
-        if (!fn::NavyCargo_UnloadStep(ship->cargo)) e->state = kInvLoad;
+        if (!fn::ai::navy::NavyCargo::UnloadStep(ship->cargo)) e->state = kInvLoad;
         break;
     case kInvLoad:
         if (fn::NNavy::Expedition::GatherCargo(e)) {

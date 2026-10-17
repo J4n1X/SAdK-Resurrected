@@ -72,8 +72,8 @@ void forget_pickup(NavyMission *m)
 
 bool same_harbor(game::NLogic::ReferenceHarbor &ref, Harbor *h)
 {
-    return ref.unique.idHi >= 0 && ref.unique.idLo == static_cast<std::uint32_t>(h->uniqueIdLo) &&
-           ref.unique.idHi == h->uniqueIdHi;
+    return ref.unique.idHi >= 0 && ref.unique.idLo == h->unique.idLo &&
+           ref.unique.idHi == h->unique.idHi;
 }
 
 // Who owns the territory at the harbour's flag cell (NMap::Territory, one int per cell). The harbour itself is -1
@@ -168,7 +168,7 @@ bool stranded_soldier(game::NSettlers::Settler *settler)
 {
     return settler->state == kLeavingMap &&
            settler->property->settlerType == game::ai::properties::ESettlerType::Soldier &&
-           reinterpret_cast<game::NSettlers::Soldier *>(settler)->health > 0 && settler->ship.unique.idHi < 0;
+           reinterpret_cast<game::NSettlers::Soldier *>(settler)->livepoints.livepoints > 0 && settler->ship.unique.idHi < 0;
 }
 
 // NMovie::MoveToHome::Start S 007776f0: where the game finds no home for a stranded soldier, a ship picks it up

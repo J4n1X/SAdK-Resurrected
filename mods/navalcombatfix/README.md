@@ -10,6 +10,8 @@ What it does:
 - **Attacks across the water through your own harbours** (`combat.cpp`): soldiers from buildings across the water
   count and sail when you own both harbours of the route, from a colony, or through a neutral harbour where no colony
   fits (`landing.cpp`). The soldier count is the game's ground rule on the land distances, the crossing free.
+  The ship is the route's own, else an idle one, else the nearest ship of another of your sea routes (a harbour
+  with two routes and one ship); it returns to its route afterwards.
 - **Defence across the water**, the same way, with the defender's own ships.
 - **Retreat** (`retreat.cpp`): soldiers left with nowhere to go (the game lets them wander until they die) are
   picked up by a ship from a harbour on their landmass, as soon as the game finds no home for them. Which harbours
@@ -49,6 +51,7 @@ What it does:
 | `LandingReach` | 9 | cells a landing harbour may lie beyond a target's territory range + 1 (enemy, own and neutral landings); 0: the game's rule |
 | `ShipLostOnDefeat` | false | a lost attack by sea sinks the attacker's ship, a defence lost with its harbour the defender's; false: they sail home (an invasion unloads its cargo) |
 | `HarborMustHaveGarrison` | true | an enemy harbour without a land street to one of its owner's finished military buildings can be taken by an expedition (and a naval invasion's colony takes its land against a third player) |
+| `BorrowStreetShips` | true | a fight over a route without a ship may take the player's nearest ship from another sea street (it returns afterwards); `false`: an idle ship is needed |
 
 ## To do
 

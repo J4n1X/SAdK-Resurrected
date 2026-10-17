@@ -23,8 +23,8 @@ int reloads;
 
 void log_counts(const char *when, game::ai::properties::PropertiesDb *db)
 {
-    sadk::log("%s: %u buildings, %u goods, %u tribes, %u animals, %u AI, %u sacrifices", when, db->buildingMapSize,
-              db->goodMapSize, db->tribeMapSize, db->animalMapSize, db->aiMapSize, db->sacrificeMapSize);
+    sadk::log("%s: %u buildings, %u goods, %u tribes, %u animals, %u AI, %u sacrifices", when, db->buildingMap.size,
+              db->goodMap.size, db->tribeMap.size, db->animalMap.size, db->aiMap.size, db->sacrificeMap.size);
 }
 
 void match_enter(void *)

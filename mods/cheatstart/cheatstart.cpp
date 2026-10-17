@@ -12,7 +12,7 @@
 //
 // What it adds, per depot:
 //   - Goods (cheatstart.ini) units of every good the tribe has (TribeProperty::goods, tp_addGood);
-//   - Soldiers units of every soldier type (0 melee, 1 ranged) and level the tribe has, the way Player_Update
+//   - Soldiers units of every soldier type (0 melee, 1 ranged) and level the tribe has, the way ai::player::Player::Update
 //     S 005bf8a0 counts them: ai::military::SoldierLevelRange over MilitaryConfig::GetSoldierId.
 #include <sadkmod/game/sadk_noav/fn/NLogic.hpp>
 #include <sadkmod/game/sadk_noav/fn/NProperties.hpp>
@@ -30,7 +30,7 @@ namespace {
 using AddInitialStock = sadk::Hook<fn::NVillage::Depot::AddInitialStock>;
 
 constexpr std::int32_t kNoGood = -1;
-constexpr std::int32_t kSoldierKinds = 2;   // MilitaryConfig: 0 melee, 1 ranged (Player_Update's loop)
+constexpr std::int32_t kSoldierKinds = 2;   // MilitaryConfig: 0 melee, 1 ranged (ai::player::Player::Update's loop)
 
 std::int32_t g_goods = 1000;
 std::int32_t g_soldiers = 99;

@@ -29,7 +29,7 @@
 //        c. when every connected human has answered, the host queues a LOAD command as a lockstep game command
 //           (NComm_Manager::QueueGameCommand S 00408b10), which every game executes at the same net tick
 //           (NComm_Manager::AdvanceNetTick S 00411990 -> ExecuteEventPackage S 00410530 -> HandleEvent);
-//        d. on LOAD every game stops ticking at once (NComm_Manager_CanAdvanceTick S 004088b0 answers "no", which
+//        d. on LOAD every game stops ticking at once (NComm_Manager::CanAdvanceTick S 004088b0 answers "no", which
 //           ends the tick loop of NLogic::System::Update S 00527070) and, at the start of the next frame, leaves and
 //           re-enters the game screen the way StartPendingMap does for a save, without the session calls
 //           (load_now): the old world and its scene are destroyed and a new world is built from the file. Then it
@@ -89,7 +89,7 @@ namespace {
 using Manager = game::NComm_Manager;
 
 constexpr std::int32_t kSaveType = 0x6e;      // MapPath type of a savegame: <My Documents>\SAdK\saves\<name>.aav
-constexpr std::uint32_t kNoPlayerId = 0xefffffee;   // a slot without a network player (NComm_Manager_CanAdvanceTick)
+constexpr std::uint32_t kNoPlayerId = 0xefffffee;   // a slot without a network player (NComm_Manager::CanAdvanceTick)
 constexpr std::int32_t kKindAi = 1, kKindLocal = 2, kKindRemote = 3;          // ai::player::Player::kind
 
 // Event ids of the mod, outside the game's own (0x20002..0x2002b game commands, 0x30001.. session events). The game
@@ -178,7 +178,7 @@ bool write_file(const std::string &path, const std::vector<std::uint8_t> &data)
     return std::fclose(f) == 0 && ok;
 }
 
-// The game's own path of a savegame (ai::game::MapPath, MapPath_BuildDirectory S 0052c320).
+// The game's own path of a savegame (ai::game::MapPath, ai::game::MapPath::BuildDirectory S 0052c320).
 std::string save_path(const std::string &name)
 {
     msvc::string n = msvc::string::borrow(name.c_str(), name.size());
@@ -195,7 +195,7 @@ Manager *manager() { return fn::NComm_GetManager(); }
 bool in_net_match()
 {
     Manager *m = manager();
-    return m && !fn::NComm_Manager_IsRole0(m) && m->eManagerState == game::EManagerState::EManagerState_GameRunning;
+    return m && !fn::NComm_Manager_IsRole0(m) && m->eManagerState == game::ai::ncomm::EManagerState::EManagerState_GameRunning;
 }
 
 // A line for the player, on the channel the game uses for "!DESYNC DETECTED" (AdvanceNetTick S 00411990: a
@@ -227,7 +227,7 @@ bool send(std::uint32_t id, const std::string &text, bool lockstep = false)
     if (!m) return false;
     game::NComm::EventText ev{};
     msvc::string t = msvc::string::borrow(text.c_str(), text.size());
-    fn::NComm::EventText::ctor(&ev, id, fn::NComm_Manager::GetLocalNetId(m), fn::NComm_Manager_FindLocalPlayerSlot(m), &t);
+    fn::NComm::EventText::ctor(&ev, id, fn::NComm_Manager::GetLocalNetId(m), fn::NComm_Manager::FindLocalPlayerSlot(m), &t);
     // Cast kept: QueueGameCommand takes the map's flat NComm_Event, a struct unrelated to EventText (same header).
     bool ok = lockstep ? fn::NComm_Manager::QueueGameCommand(m, reinterpret_cast<game::NComm_Event *>(&ev), true)
                        : fn::NComm_Manager::BroadcastEvent(m, &ev);
@@ -295,7 +295,7 @@ bool g_old_format_said = false;
 std::uint32_t other_humans(Manager *m)
 {
     game::NComm::EventGameInformation *info = fn::NComm_Manager::GetGameInformation(m);
-    std::int32_t self = fn::NComm_Manager_FindLocalPlayerSlot(m);
+    std::int32_t self = fn::NComm_Manager::FindLocalPlayerSlot(m);
     std::uint32_t mask = 0;
     for (std::int32_t i = 0; i < 6; ++i) {
         game::NComm::PlayerInfo *slot = fn::NComm::EventGameInformation::GetSlot(info, i);
@@ -450,7 +450,7 @@ bool apply_table(Manager *m, const SlotTable &t, bool log_changes)
 // The humans who play: human slots with a connected player, the host's own among them.
 std::uint32_t playing_humans(Manager *m)
 {
-    std::int32_t self = fn::NComm_Manager_FindLocalPlayerSlot(m);
+    std::int32_t self = fn::NComm_Manager::FindLocalPlayerSlot(m);
     return other_humans(m) | (self >= 0 && self < kSlots ? 1u << self : 0u);
 }
 
@@ -852,8 +852,8 @@ void fix_players()
 // The menu's three "is this an offline game?" questions: yes, so Save and Load stay in the menu and open the panel.
 bool SADK_FASTCALL menu_is_offline(void *) { return true; }
 
-using CanAdvanceTick = sadk::Hook<fn::NComm_Manager_CanAdvanceTick>;
-bool SADK_FASTCALL can_advance_tick(Manager *m) { return !g_frozen && CanAdvanceTick::original(m); }
+using CanAdvanceTick = sadk::Hook<fn::NComm_Manager::CanAdvanceTick>;
+bool SADK_THISCALL can_advance_tick(Manager *m) { return !g_frozen && CanAdvanceTick::original(m); }
 
 using LoadLogic = sadk::Hook<fn::GameFile_LoadLogic>;
 void SADK_CDECL load_logic(void *stream)
