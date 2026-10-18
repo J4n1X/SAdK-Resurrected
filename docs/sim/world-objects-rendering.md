@@ -419,7 +419,8 @@ carrier faces the stack it picks from or puts on during those clips. Presentatio
 frame in which the character has a skeleton instance, `boneMatrix[boneIndex] * characterMatrix`, or the
 character's world matrix alone when `boneIndex` is -1. When the character's visible flag differs from the
 item's, the item's `visible` becomes: character visible and the character's item switch
-(`CCharacter::GetItemComponentByte4`) set. Attaching registers the item as the character's override item, sets
+(`CCharacter::GetItemComponentByte4` S 006903e0, which returns `CharacterMovement +0x04`, the fog visibility byte)
+set. Attaching registers the item as the character's override item, sets
 `boneIndex` when one is given and clears `landed` and `fallVelocity`. Detaching first clears the old
 character's override item when it still is this item and takes the attached matrix one last time, then resets
 the matrix to identity rotation at the last position with `landed` = false, so the item falls from where it was
@@ -656,7 +657,8 @@ per segment and half width `routeWidth`, without the trimming at flags (the firs
 and every segment has all its slices). Each slice is one quad, not clipped to terrain: vertices previous left,
 previous right, current left, current right, with the frame normal of their cross-section, colour white,
 tangent = the averaged side vector; indices (0, 1, 2) (3, 2, 1) plus the running base; `u` and `v` by the
-street formulas with `routeWidth` and `routeTexStretch`, `vAccum += routeTexStretch * sliceLength`. The quad
+street formulas with `routeWidth` and `routeTexStretch`, `vAccum += routeTexStretch * sliceLength`; lengths are
+taken with the table square root `Math_FastSqrt` S 006e8a20 (256-entry table S 007fd118), not the exact root. The quad
 lies at the spline's fixed height [inferred]: the spline of a sea route is built by `S2CG::ShipRoute::ctor`
 S 006d2430, which was not read.
 
@@ -667,7 +669,13 @@ matrix 0 scales u by `1 / routeTexCount` and offsets it by `frame / routeTexCoun
 frames, cross-faded at `routeTexSpeed` (10) frames per second. `frame` is taken by truncation. The matrices
 are bound with the route texture on stages 0 and 1, and the shader's result is
 `lerp(tex(stage 0), tex(stage 1), ROUTE_TEX_MIXER)` [known] `street_shader.fx`. `time` is the first argument
-of `StreetRenderer::Render` S 006c3ab0.
+of `StreetRenderer::Render` S 006c3ab0. A sea route is drawn in every frame in which it passes the frustum
+test (§3.8). `route_texture.tga` is 2048 x 128: 16 frames of a dark teal wake whose alpha is at most 75 / 255
+(mean 20) [known, file]; the water is drawn after the streets (`Scene::RenderPasses` S 0067eb20 →
+`RenderObjectsAndWater`, [rendering.md](rendering.md) §3.1), so a sea route is barely visible by its data.
+Water-street buoys sit at the segment midpoints at the spline's height, the sea level; a water street across a
+single water cell between two shore cells puts them under the shore, where they cannot be seen [known]
+S 006e1e30.
 
 ### 3.8 Street drawing order
 
@@ -675,7 +683,12 @@ of `StreetRenderer::Render` S 006c3ab0.
 
 1. shift the near plane of the projection by `depthBias` (`CGraphicDevice::SetNearPlaneOffset`; 0.1 unless the
    CVar "Street/DepthBias" changes it, `docs/sim/rendering.md` §2.4): streets are pulled toward the camera in
-   depth instead of using a depth-bias render state;
+   depth instead of using a depth-bias render state. The offset is added to the camera's near plane of 1.0
+   ([camera-input-cutscenes.md](camera-input-cutscenes.md) §3.1), so the street pass is projected with a near
+   plane of 1.1. With the far plane (500) much larger than the near plane, a point at view depth `d` is then
+   depth-tested like a point at `d / 1.1` of the other passes: a pull of about 9 % of the view depth, about 3.6
+   units at 40 units, not a fixed 0.1 units [inferred, from the projection formula S 006e97e0]. This is what
+   keeps the unclipped crossing fans (§3.6) visible where the terrain bulges through them;
 2. technique `Select(lowQuality, shadows)`; pass `RenderStreet`: kind-1 streets, kind-0 streets, then crossings
    of kind 1 and crossings of kind 0 (`DrawCrossings` S 006c3030);
 3. pass `RenderStreetUnderConstruction`: the alpha list, then the red list (each only when not empty; both
@@ -1202,9 +1215,15 @@ A remake may therefore change any rule of this document without affecting synchr
   sample the height field at a finer step, but must keep the Hermite path (tangent factor 1.3, segment
   lengths), the half width 1.0, `u` across, `v = 0.25` per unit, the trimmed first and last slice at flags
   with more than one street, and the six-triangle hexagon fan of radius 2.25 with its uv mapping (centre at
-  the node position, each corner at the terrain height under it, not clipped to the terrain). Use a small
-  depth offset toward the camera or render-priority ordering in place of the near-plane shift. Street
-  material: albedo + normal map, alpha blended, no depth write, clamped in u and repeated in v.
+  the node position, each corner at the terrain height under it, not clipped to the terrain). The near-plane
+  shift is not a small offset: it pulls streets by about 9 % of the view depth (§3.8, about 3.6 units at 40
+  units). A small fixed depth offset leaves most of a flat crossing fan under the terrain wherever the ground
+  bulges between its corners (the fan's radius 2.25 spans more than one terrain vertex step of 1.5), so only the
+  trimmed street ends show, as hard cuts. Where the renderer cannot reproduce the shift for streets alone
+  (opaque objects drawn before transparent ones would then be covered by streets), keep the fan's
+  interpolation and raise the parts that would lie under the drawn ground onto it: subdivide each fan
+  triangle and lift only the buried points; this gives the original's visible result. Street material: albedo
+  + normal map, alpha blended, no depth write, clamped in u and repeated in v.
 - **Sea routes**: flat strip at the route spline's height (the water level [inferred], §3.7), half width 2.5;
   a 16-frame horizontal strip texture cross-faded at 10 frames per unit of the render time (two uv offsets and
   a mix uniform).

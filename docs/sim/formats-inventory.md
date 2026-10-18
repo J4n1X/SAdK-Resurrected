@@ -525,6 +525,24 @@ yOffset  = file.yoffset  - pad[0]
 xAdvance = file.xadvance + spacing[0]
 ```
 
+- The padded values are what the game draws [known]: `ParseCommonLine` S 004e2770 stores `1/scaleW` and
+  `1/scaleH`, and `BuildGlyphQuads` S 004e2c60 draws the whole grown rectangle with texture coordinates
+  `x / scaleW`, `y / scaleH`. So a converter that writes the arithmetic above into a standard BMFont file pads
+  once, as the game does (Subline_Garamond `n`: file x 126, width 12, xoffset −2 → drawn x 124, width 16,
+  xoffset −4).
+- Sampling [known] `gfx/fx_20/ui_shader.fx`, drawn by `UIRenderer::DrawGlyphQuads` S 004e1350: the passes
+  `RenderFont` and `RenderFontDepth` use `addressU/V = Wrap` and linear filtering; `RenderFontDepth` adds an
+  alpha test (`Greater`, reference 7). A padded rectangle that reaches past the page's edge therefore reads the
+  opposite edge: Subline_Garamond's `e` lies at x 0, its rectangle starts at x −2 and samples columns 254–255,
+  which are transparent. 430 glyphs of 13 fonts reach past an edge; `mini` and `title` have none [known, data].
+  A reader that clamps instead of wrapping repeats the edge texels and paints them beside the glyph; a
+  conversion has to add a border holding what the wrap reads, or draw fonts with repeat addressing.
+- Page formats [known, data]: `title_00.tga` is the only 24-bit page (no alpha); the other 14 pages,
+  `Kopie von system_00.tga` among them, are 32-bit.
+- Glyph shapes [known, data]: `Body_Arial` and `small_no_alias_white` share their glyphs (Arial at about an
+  11 px em with a 1 px edge and a shadow; gold in `Body_Arial`, grey in `small_no_alias_white`). `Mini_Silk` is
+  a 5 × 7 pixel font (face `fixed_v01`) with `xadvance=6` for every glyph but the space (4), so 7 px with the
+  file's `spacing=1,1`.
 - Page texture: `<base path>_00.tga`, lower-cased, through the shared font texture table
   (`BitmapFont::LoadPageTexture` S 004e36b0) [known]. `Body_Arial.fnt` names `test_00.tga` on its `page` line;
   the game loads `Body_Arial_00.tga` all the same.

@@ -330,7 +330,8 @@ S 006c63a0 disassembly)
 the colour-index texture, `+0x48` `link` bone name (default `"SLOT_HandR"`). **[known]** (S 00694c00)
 
 Globals read from `<Characters>` (S 00695130) **[known]**: `scale` S 008816e0, `evadeRadiusScale` S 008816e4,
-`evadeStart` S 008816e8, `goodRotation` S 008816ec (degrees), `lod0Range` / `lod1Range` / `lod2Range` S 008816f0 /
+`evadeStart` S 008816e8 (both read only by the street evasion, `CCharacter::ResolveStreetAvoidance` S 006912e0,
+§3.19), `goodRotation` S 008816ec (degrees), `lod0Range` / `lod1Range` / `lod2Range` S 008816f0 /
 f4 / f8, `boatOffset` S 00881704 (2 floats), `goodOffset` S 0088170c (2 floats).
 
 **The transport ox** **[known]** `CCharacterMgr::CreateCharacter` S 00695490: a `Carrier` whose settler id is
@@ -739,14 +740,25 @@ every entry. **[known]** The value handed to `Update` is the entry's accumulated
    | other | | -1 |
 
    If the render logic's byte `+0x2c` is set and the result is 4, 5 or 6, the result becomes -1 (the settler is
-   not shown working). Otherwise, for 7 or 8 with the character's pile latch set, the latch value (pile height)
-   is copied into the movement component (`+0xe8`) and the latch is cleared. **[known]** The byte `+0x2c` is
+   not shown working). Otherwise, for 7 or 8 with the character's pile latch set, the latch value is copied into
+   the movement component's target yaw (`+0xe8`), its snap flag (`+0x108`) is cleared and the latch is cleared, so
+   the figure turns toward it at the turn rate of §3.19. **[known]** The latch value is the direction of the pile
+   stack the good goes to or comes from, written by `Item::UpdateCarrierAttachment` S 006d09b0
+   ([world-objects-rendering.md](world-objects-rendering.md) §3.3): a carrier faces the stack while picking up or
+   putting down. **[known]** The byte `+0x2c` is
    written only for workers (`CharacterWorker::UpdateTargetBuilding` S 006c8c10): once the worker's workplace
    reference is valid it becomes the byte at `+0xb0` of the workplace's property record, and 0 again when the
    reference is gone. **[known]** That byte is the building property `catapult` (`properties-data.md`):
    the crew of a catapult never shows a work animation of its own. **[inferred]**
-5. Advance the render movement (`CharacterMovement::UpdateLogic`).
-6. If `req` is still -1: below the water level → `2 + moving`; else → `moving ? 1 : 0`.
+5. Advance the render movement (`CharacterMovement::UpdateLogic` S 006c4f40, §3.19). When the render logic's
+   byte `+0x2a` (copied to `CCharacter +0xa0` on every tick) was set before this tick's request and is clear
+   now, `CharacterMovement::ResetPositionInterpolation` S 006c4870 drops the interpolation, so the figure is
+   placed at once. The byte means "riding aboard a ship": `CharacterSettler::UpdateShipRideFacing` S 006c7140
+   sets it while the settler references a ship, has no wait-flag reference and its wait state (`SettlerMovement
+   +0x1cc`) is 4, and `CharacterSettler::Update` clears it while the figure moves; `CCharacter::IsInFrustum`
+   S 00690f80 hides a figure while it is set. **[known]**
+6. If `req` is still -1: below the water level (`CharacterMovement::IsBelowWaterLevel` S 006c4820) →
+   `2 + moving` (`SwimIdle` / `SwimFwd`); else → `moving ? 1 : 0`. **[known]**
 7. Queue `(req, loopMode)`; it is applied in the next frame update.
 
 **Per frame** (`CCharacter::Update` S 00690bd0): apply the queued request with
@@ -843,34 +855,63 @@ B (a good and a profession are both named `Oxen`); 19 names match no record and 
 
 ### 3.10 What the per-type render logic adds
 
-All of this reads simulation state and writes only render state.
+All of this reads simulation state and writes only render state. The per-type `Update` is slot `+0x08` of the
+render logic's vtable (`CharacterSettler::Update` S 006c7640 at S 007fb98c; the subclasses call it first) and runs
+**once per logic tick**, from `CCharacter::UpdateLogic` S 006909f0 (§3.9 step 2), for every character, in view or
+not (`CCharacterMgr::UpdateLogicAll` S 006929e0 has no visibility test); `dt` below is the third float of the time
+record, the tick length (§4). The per-frame `CCharacter::Update` S 00690bd0 calls only slots `+0x0c` (the attached
+item matrices, `UpdateAttachedItem` S 006c7760 in the base) and `+0x10`. **[known]**
+
+The render logic is created per settler class by `CCharacter::Init` S 00690760; `InitAttachedItem` S 006c7850
+runs in the constructors of the worker, constructor, soldier and specialist logics with the definition's `link`
+bone, never for carriers, so a carrier holds nothing when it carries nothing. Key A starts as that item's good
+(`GetDefaultItemGoodId` S 006c72b0). The character's item switch read by attached goods
+(`CCharacter::GetItemComponentByte4` S 006903e0) is `CharacterMovement +0x04`, the fog visibility byte. **[known]**
 
 - **Base** (`CharacterSettler::Update` S 006c7640) **[known]**: refresh the target building when asked to
-  (virtual `+0x34`, only while the figure has no route spline); while the figure is **not** moving, face the
-  cell at `settler +0x70` when it is not -1; run the door trigger of the target building when there is one;
-  when the settler state is 5 (dying): wait until the current animation's remaining time is `<= 0` (or the
-  figure has no pool instance), then sink the figure on every update: `offset -= dt * 0.35`, written to the
-  movement component (`+0x120`); `dt` = the third float of the time record.
+  (virtual `+0x34`, only while the figure has no route spline); while the figure is **not** moving, first
+  `UpdateShipRideFacing` S 006c7140 (a settler that references a ship faces the ship's current cell; once aboard,
+  wait state 4, it is marked as riding, byte `+0x2a`, and hidden), then face the cell at `settler +0x70` when it is not -1 (`FaceTowards` S 006c4b50, not
+  snapped); run the door trigger of the target building when there is one (`UpdateBuildingEntrancePass`
+  S 006c7510: entering when the path ends on the entrance, leaving when it starts there, `GetDoorPassDirection`
+  S 006c73a0; fine paths within hex distance < 4); when the settler state is 5 (dying): wait until the current
+  animation's remaining time is `<= 0` (or the figure has no pool instance), then sink the figure on every
+  update: `offset -= dt * 0.35`, written to the movement component (`+0x120`). The sink therefore runs at 0.35
+  units per simulated second, whatever the frame rate and whether the figure is in view.
 - **Worker** (`CharacterWorker::Update` S 006c8ab0) **[known]**: while the action timer kind is 4 or 5,
   `workElapsed = (total - remaining) * dt` and `workDuration = total * dt` (timer fields at `settler +0x24` /
-  `+0x20`, `dt` = the third float of the time record). Then by the workplace's working mode: mode 1 handles
-  tree felling / facing the work object (branch structure **[inferred]**); otherwise `UpdateWorkplaceWork`
+  `+0x20`, `dt` = the third float of the time record). Then by the workplace's working mode: mode 1 on a tree
+  (map object property `0xCD6EC133`) → `UpdateFellingObject` S 006c87d0: take the job's tree unless it is
+  falling or fallen (state 3 or 4), face it, forget it once fallen, and when `workElapsed > 3.0` start its fall
+  with the negated worker-to-tree direction (`TreeInstance::StartFalling` S 006dd050, [rendering.md](rendering.md)
+  §3.11); mode 1 on another object → `FaceWorkObject` S 006c86d0; otherwise `UpdateWorkplaceWork`
   S 006c88c0: if the worker is at its
   workplace and the building's work animation is not running (or must restart: building flag `+0xb0` and
   `workElapsed == 0`), start it with `Building::PlayOneShotAnimation(time, workDuration, kind, workElapsed,
   speed)` where `speed = Worker::GetWorkAnimSpeedFactor()` if `Worker::ShouldSpeedUpWorkAnim()` else 1.0; if the
   figure's own animation still has time left and the set has a keyB/keyC override for the current type
-  (`HasSlotOverride`), call `Building::TriggerWorkCycle`. After that, for working modes 0 and 2 (the job's
+  (`HasSlotOverride` S 006caa80, asked with keyA = -1), call `Building::TriggerWorkCycle`; at the workplace the
+  figure takes the building's yaw at once (movement target yaw `+0xe8`, snap flag `+0x108` = 1). After that,
+  for working modes 0 and 2 (the job's
   target object, cell at its `+0x20`), 3 (the cell at `job +0x94`) and 7 (the hunted animal's cell) the figure
   is turned towards that cell. Workers with an animated tool create the tool's `AnimatedItem` while working
   (hiding the static tool) and destroy it afterwards.
 - **Constructor** (S 006c8480): while timer kind 4, face the construction site. **[known]**
-- **Soldier** (S 006c7f80): face the fight target; show buff particle effects (`SoldierDamage` at the right-hand
-  bone matrix, `SoldierDefense`, `BlindSoldier` at the head matrix, `ArcherSpeed`). **[known]**
-- **Carrier** (S 006c9250) **[known]**: on a water street with a boat, start the `BoatFX` emitter, switch between
-  boat mode and wading, bob with `sin(phase) * 0.15 + 0.3` times the boat draft
-  (`phase += dt * 0.7 * const` S 00882840), and return animation type `4 + moving` (so `WorkLoop0Boat` /
-  `WorkLoop1Boat` through keyA = the boat good **[inferred]**).
+- **Soldier** (S 006c7f80): while not moving and with a valid fight reference, face the fight target
+  (`soldier +0x278`); show buff particle effects: `SoldierDamage` at the right-hand bone matrix while the
+  sacrifice-scaled hit damage exceeds the property's `hitDamage`, `SoldierDefense` at the figure's render
+  position while the sacrifice-scaled armour exceeds the property's `armor`, `BlindSoldier` at the head matrix
+  for a ranged soldier while `AdjustRangedHitChance` gives ≥ 1, `ArcherSpeed` at the figure's render position for
+  a ranged soldier while its attack-time entry differs from the good's `+0x9c`; the first three are stopped
+  while the figure is hidden, inside its building or riding a ship, `ArcherSpeed` whenever its condition fails.
+  **[known]**
+- **Carrier** (S 006c9250, `UpdateAttachedItem` S 006c8ee0) **[known]**: on a water street with a boat, take the
+  street's boat item (placed by `boatOffset`, sunk by `draft * 0.7`), hide the street's parked boat, carry the
+  cargo in the boat (`goodOffset`, turned by `goodRotation`), run the `BoatFX` emitter while moving, bob with
+  `sin(phase) * 0.15 + 0.3` times the boat draft (`phase += dt * 0.7 * const` S 00882840), and return animation
+  type `4 + moving` looped (so `WorkLoop0Boat` / `WorkLoop1Boat` through keyA = the boat good **[inferred]**).
+  Without a boat the figure wades: height offset `max(0, draft * bob + seaLevel − ground)`, so it can drop
+  below the water level and then plays the swim types (§3.9 step 6).
 
 ### 3.11 Idle variations (`RandomAnimDesc`, `RandomAnimPlayer`)
 
@@ -882,7 +923,9 @@ children (`RandomAnimDesc::LoadXml` S 006de030): each child is loaded as an anim
 good, resolved with `PropertiesDb::FindGoodIdByName` — the group is stored in `randomAnimByItem[goodId]`;
 without one it becomes the set's default (a later default group replaces an earlier one). **[known]**
 
-`RandomAnimPlayer::Update(dt)` S 006ddfa0: `timer -= dt`; when `<= 0`: next index in a shuffled order of
+`RandomAnimPlayer::ctor` S 006ddf30 (created by `AnimationSet::CreateRandomAnimPlayer` S 006cac90 for the group of
+keyA, or the default group for keyA -1) sets the first delay to `minDelay + rand01 * (maxDelay - minDelay)`.
+**[known]** `RandomAnimPlayer::Update(dt)` S 006ddfa0: `timer -= dt`; when `<= 0`: next index in a shuffled order of
 `totalWeight` entries (reshuffle on wrap), `timer = duration(animation) + minDelay + rand01 * (maxDelay -
 minDelay)`, return true. `rand01` comes from the generator at S 0088e120, not the simulation's. **[known]**
 
@@ -915,7 +958,9 @@ stays active. A particle event starts its effect at the event's world transform 
 with `duration == 0` the emitter is told to stop right after the start (S 006b0710). An item event creates a
 visual item of the named type through `ItemMgr::CreateItemByType`, marks it externally positioned (item byte
 `+0x58`) and copies the event's world transform into the item's matrix every tick; it never ends by itself
-(S 006b0800, S 006b0840). `SoundEvent::Start` / `Update` (S 006b0550, S 006b01f0) were not read → **[TODO]**.
+(S 006b0800, S 006b0840). A sound event plays its sound unless it is a non-looping one-shot without duration more
+than 0.5 s late, and an event with a duration stops its sound at `start + duration` (`SoundEvent::Start` /
+`Update` S 006b0550, S 006b01f0; [audio.md](audio.md) §3.9). **[known]**
 
 When an `AnimatedVisual` starts an animation it instantiates the animation's events (§3.7). Each frame its
 callback (`Callback_OnAnimUpdate` S 006d8570) computes the event time — the slot's animation time plus the slot's
@@ -1216,7 +1261,9 @@ S 00698cb0 not read line by line). Mesh, skeleton and the three animations are l
 `Ship::Update(time)` S 006a54c0, per logic tick **[known]**: while the logic ship's move progress
 (`position record +0x20`) is `<= 0` the ship sits on its cell and the animation state is 2 when the logic
 ship's state (`+0x28`) is 6 or 7, else 0; while it is `> 0` the position is interpolated between the two cells
-and the state is 1. On a change the old slot is removed and `animSet[state]` is started through the object's
+and the state is 1. The yaw steps toward its target by at most 0.43982297 rad per tick, clamped at the target,
+and keeps the previous and current value for the per-frame interpolation (`Ship::StepYawTowardTarget` S 006a4eb0,
+called only from here). On a change the old slot is removed and `animSet[state]` is started through the object's
 virtual `+0x0c` (`AddAnimationWithCallback`, §2.11) with the tick time as start time and `maxLoops = 1` on the
 switch to state 2, 0 otherwise: idle and move loop, sink plays once and holds. That states 6 and 7 are the
 sinking states is **[inferred]** (`navy.md`).
@@ -1235,10 +1282,12 @@ phase += dt * 0.25 * const                       dt = the fifth float of the fra
 
 (frequencies at S 007fa3a4, S 007e77f0, S 007e349c, S 007fa3a8; offsets 0.2 and 0.4 as doubles at S 007e6d70,
 S 007e7820; "under way" = the movement's `progress >= 0`, `navy.md` §2.6). The starting `phase` of a ship is
-the global S 0088d9b0 (0 at start), which grows by 0.89759797 (2π / 7) for every ship created, so neighbouring
+the global S 0088d9b0 (0 at start), which grows by 0.89759797 (2π / 7: float π S 007fccfc times the double
+0.2857142984867096 S 007fa378 at the FPU's 24-bit precision, S 006a547b) for every ship created, so neighbouring
 ships swell out of step **[known]** (constructor, S 006a5222). While the byte `+0xd4` is set (an unfinished
-ship, below) there is no status mesh, pitch and roll stay 0, the phase does not advance and the
-alpha comes from the clip fade (`+0xc4..+0xd0`); otherwise alpha is 1. Then `CAnimatedObject::Update(now)` with
+ship, below) there is no status mesh, pitch and roll stay 0, the phase does not advance (the height term
+`(sin(phase) + 1) * 0.06` still applies, with the phase held, so a ship on the slipway is lifted by a constant)
+and the alpha comes from the clip fade (`+0xc4..+0xd0`); otherwise alpha is 1. Then `CAnimatedObject::Update(now)` with
 the second float of the frame record, and `SetWorldTransform`. While the ship is enabled and visible (`+0x9`,
 `+0x8`) it keeps a `ShipFX` emitter under way, and a `ShipSpeedUp` or `ShipSpeedDown` emitter while the ship's
 speed bytes (`+0xfc`, `+0xfd`) are set (`Ship_SpawnParticleEffect` S 006a5bf0, `UpdateFxEmitter` S 006a4a20;
@@ -1267,14 +1316,104 @@ set by the constructor).
 names `Stand1`, `Stand2`, `Walk`, `Dying`. Each type gets its own `AnimationSet` and `CModelCache`
 (`AnimalMgr::LoadAnimalTypesFromXml` S 0069b7c0). **[known]** (data; callers of the two constructors)
 
+`Animal::ctor` S 006ce090 starts `Stand1` looping at heading 0, without a random draw. **[known]**
+
 `Animal::UpdateLogic` S 006ce2c0, per logic tick **[known]**:
 
 - Logic animal state (`+0x88`) 5, 7, 8 or 9 → play `Dying` once on an exclusive instance; latch dying.
 - Alive and standing (move progress `+0x4c <= 0`): snap to the cell; if it was walking, play `Stand1` or `Stand2`
   looping, chosen with a static generator seeded `0x5432ace0`.
 - Alive and moving: position = cell + (next cell − cell) * progress; start `Walk` looping if not walking; target
-  heading from the hex direction table S 007f9494 (degrees).
+  heading from the hex direction table S 007f9494 (degrees), reached by steps of at most 0.43982297 rad per tick
+  (`Animal::StepHeading` S 006cde40), interpolated per frame (`UpdateTransform` S 006ce610, which also adds the
+  sink offset to y).
 - Dying and the death animation finished (`GetAnimRemainingTime <= 0`): sink, `offset -= dt * 0.4` per tick.
+
+### 3.19 Movement between ticks, facing and street evasion
+
+All of this is render state in `ai::render::CharacterMovement` (0x160 bytes; layout in
+[rendering.md](rendering.md) §2.6); nothing in `NSettlers` reads it. **[known]**
+
+**Path** `CharacterMovement::SetPath` S 006c5160, from `CCharacter::SetPath` S 006905e0 on the scene's "settler
+path changed" callback (`Scene::OnSettlerPathChanged` S 00681690) **[known]**: the old spline is released; for a
+rough street walk (path mode 2, not a fine step) the street under the current or requested cell
+(`GetStreetAtEitherPos`) is looked up in the street set, and the figure walks on that street's own route spline
+(shared with `CStreet::BuildSpline` S 006cd320, not owned) and is registered on the street for evasion (below);
+otherwise, while the walk progresses, a walk over more than two cells gets a `RouteSpline` built over its own path
+cells (owned). The first and last segment of the path are looked up among the spline's points. The position
+record restarts at the logic position with an inverse duration of `1 / gameConfig.gameSpeed`.
+
+**Per tick** `CharacterMovement::UpdateLogic` S 006c4f40 **[known]**: keep the previous height and lateral
+offsets; standing (progress ≤ 0): previous ← target ← logic position, `WrapYaw` S 006c4a40; moving: without a
+spline `StepTileToTile` S 006c4bf0 (straight from cell to cell, target yaw from the hex direction table S 007f9494:
+90, 150, −150, −90, −30, 30 degrees), with one `StepAlongSpline` S 006c4d90 (position = the spline at the path's
+segment and progress, run backwards with `1 − progress` when the walk goes against the spline's direction; target
+yaw = the tangent, reversed in that case); then the lateral offset (below) and, while visible, the `SettlerSpeed`
+flag (the sacrifice-scaled speed of the settler's kind above `gameConfig.settlerSpeed`, `particles.md`); last
+`UpdateFacing`.
+
+**Per frame** `CCharacter::Update` S 00690bd0 **[known]**: apply the queued animation type, run
+`CharacterMovement::Update` S 006c57b0 and the footstep sound, then take the render position, with two height
+rules: a figure flagged inside its building (render logic `+0x29`) that plays a type 4..6 with a pool instance
+stands at the terrain height under the centre of its clip's world bounds; one playing a swim type (2 or 3) at the
+sea level (`GetSeaLevelHeight` S 00687050). The movement's matrix (`+0x64`) with that position is the world
+matrix.
+
+**Facing** `UpdateFacing` S 006c48c0 **[known, disassembly]**: unless the snap flag (`+0x108`) is set, the yaw
+(`+0xe4`) moves toward the target yaw (`+0xe8`) by at most 0.43982297 rad (double S 007fa360) per tick and stops at
+the target; with the flag it takes the target at once and the flag is cleared. The yaw is compared as a plain
+number (no wrap to the shorter way inside this step; `WrapYaw` runs while standing). Previous and current yaw are
+kept for the per-frame interpolation. A half turn takes about 0.7 s. `FaceTowards` S 006c4b50 sets the target yaw
+toward a world point, snapping when asked. Ships and animals step their yaw with the same constant (§3.17,
+§3.18).
+
+**First facing** `RandomizeInitialFacing` S 006c53f0 **[known]**: a new figure without a spline takes a random hex
+direction (`NextInRange(0, 5)`, snapped); with one it faces the spline's last cell when `NextInRange(0, 100) < 51`,
+else its first cell (snapped). The generator is a function-static `RandomGenerator` seeded `0x7c0` on first use,
+not the simulation's. The constructor S 006c5540 clamps the start height up to the sea level **[known]**.
+
+**Visibility** `CCharacter::IsInFrustum` S 00690f80 **[known]**: false unless the fog byte (`+0x04`) and the
+position-valid byte (`+0x28`) are set; false while `CCharacter +0xa0` is set (the render logic's byte `+0x2a`,
+§3.9 step 5); false for a figure flagged inside its building (render logic `+0x29`, set by
+`UpdateInsideBuildingFlag` S 006c7590 while it stands on its target building's entrance cell, not in a fine step)
+that plays type 0; for one inside that plays a type 4..6 with time left the bounding sphere's radius is multiplied
+by 10. Otherwise the bounding sphere around the render position is tested against the frustum.
+
+**Street evasion** (presentation only) **[known, disassembly]**. Carriers and the transport ox step aside for
+each other on a street:
+
+- *Registration*: the figure is entered in the street's slot list when `SetPath` gives it a street
+  (`CCharacterMgr::AssignStreetSlot` S 00693200: removed from the old list, where the last entry fills the gap,
+  `CharacterStreetSlot::Remove` S 00692340; appended to the new one, `Add` S 00693030), active = visible and
+  fog-visible. `CCharacter::Release` S 00691870 and `OnRouteRemoved` S 00690650 unregister it.
+- *When*: `UpdateLogicAll` S 006929e0 sets the dirty byte `CCharacterMgr +0x166`; the next frame's
+  `CCharacterMgr::Update` S 00692a30 runs `ResolveStreetCollisions(slot, force = 0, frustum)` S 006925f0 for every
+  slot whose street passes `CStreet::IsVisibleOrFlag4C` S 006ccdf0, as long as the pose pool has animated
+  instances. A figure that becomes active (`CCharacter::SetVisible` S 006919b0) runs its slot with `force = 1`. The
+  byte `+0x167`, set only by the constructor and cleared at the end of every `Update`, forces all pairs once.
+- *Pairs* S 006925f0: `i` over the active entries, `j > i` active; while entries right after `i` are inactive, `i`
+  jumps to `j + 1`, so of `A, b (inactive), C, D` the pair `C, D` is skipped (a quirk).
+- *Pair rule* `CCharacter::ResolveStreetAvoidance` S 006912e0 (`this` = the earlier entry): nothing unless one of
+  the two moves or the pass is forced; "opposite" = the dot product of the two forward vectors (`+0xec`) ≤ 0; both
+  moving the same way and not forced → nothing. `r = R × evadeStart` with `R` the earlier figure's radius; only
+  when the squared distance of the two logic positions (`+0x4c`) is below `r²`:
+  `push = (1 − d² / r²) × R × evadeRadiusScale`. Both moving (or forced): each gets `±push / 2`, the sign of the
+  sum of both current offsets (≥ 0 → +); one moving: it gets `±push` by the sign of its own offset, the other 0.
+  Not opposite and (both moving or forced): the one with the smaller absolute offset flips its sign (on a tie the
+  second). Each offset is clamped to ± its own radius × `evadeRadiusScale`. Written by
+  `CharacterMovement::SetLateralOffset` S 006c4790; positive is the figure's +x, its right
+  (`Matrix44::SetRotationY` S 004efa20, `TransformNormal` S 004ef940).
+- *Decay* in `UpdateLogic` S 006c4f40: while moving, if `|offset| ≥ 0.2` the logic position is moved sideways by
+  the offset along the figure's x axis (the facing of the previous tick) and the offset shrinks by
+  `0.75 × tick length` toward 0, else it becomes 0. A standing figure keeps its logic position, so one that stops
+  with `|offset| ≥ 0.2` is drawn with the offset baked in and the lateral term applied again (a quirk).
+- *Draw* `CharacterMovement::Update` S 006c57b0: render position = the interpolated position + the world x axis ×
+  the interpolated offset, then snapped to the terrain.
+- *Radius*: `CCharacter::Init` S 00690760 → `CMesh::ComputeBoundingSphere` S 0076bd80 →
+  `BoundingSphere::FromPointsStrided` S 0076b900 (centroid, largest distance) over the LOD 0 vertices at the model
+  scale; the ox (`CharacterCarrier::IsDonkey` S 006c8d60) × 0.66. Computed from the shipped meshes: Bavarian
+  carrier and helper 1.3731, Egyptian 1.3674, Scots 1.3973 (evasion range about 2.75 with `evadeStart` 2.0), the ox
+  1.191. **[known]** for the formula, the values computed from the data.
 
 ---
 
@@ -1302,12 +1441,14 @@ which poses each shared skeleton once, (b) per character, only when the manager'
 (`+0xb4..+0xc0`, copied from the map renderer just before) lies inside the map: a character outside that
 rectangle is only hidden (unless the manager's force flag is set, which one update clears); every other one gets
 `CCharacter::Update` — apply the queued animation type, advance the render movement, build the world matrix,
-per-type logic (§3.10), attached item matrices, bounds — then (c) the frustum test, visibility and LOD;
+the render logic's per-frame slots (`+0x0c` attached item matrices, `+0x10`), bounds — then (c) the frustum
+test, visibility and LOD;
 `ShipMgr::UpdateGraphicEntries` (only in the branch taken when the scene has a selection context whose byte
 `+0x50` is set); `ItemMgr::Update`; `AnimalMgr::Update` (its pools with the same `dt`, then every animal's
 transform and visibility); `ShipMgr::UpdateVisibility` (→ `Ship::UpdateVisuals`); swarms; projectiles; particle
-emitter culling; environment. So the per-type logic of a settler outside the visible cell rectangle does not
-run: its death sink (§3.10) stands still until it is in view again. **[inferred]**
+emitter culling; environment. The per-type logic of §3.10 is not part of this: it runs per logic tick for every
+character (§3.9 step 2), so a settler outside the visible cell rectangle keeps sinking. **[known]** (S 006929e0,
+S 006909f0, S 00690bd0)
 
 Within one `CAnimatedObject::Update` S 0076ac90: hand over the time (model virtual `+0x24`) and, only while at
 least one slot is active, `KModel::Update` (virtual `+0x28`: advance and sample every control, blend every bone)
@@ -1329,11 +1470,11 @@ S 0076a890 (virtual `+0x2c`), which the pool calls with the identity matrix (S 0
   (`logic-core.md` §3.1), so pooled animations run faster and slower with the game speed and stand still while
   the simulation does. **[known]** (S 00692a30, S 0069aeb0, S 0067f6b0)
 - The float at `+0x08` is a constant, not a delta. Code that multiplies by it converts ticks to seconds
-  (the worker's `workElapsed`, §3.10) or advances by one tick interval **per call**: the idle-variation timer
-  and the animal sink once per logic tick, the settler death sink once per call of the per-frame
-  `CharacterSettler::Update` S 006c7640, the building one-shot countdown once per call of `Building::Update`
-  S 006abcf0. **[known]** That the settler sink therefore depends on the frame rate is **[inferred]**; how often
-  `Building::Update` runs is **[TODO]** (its callers are the virtual updates of the building subclasses).
+  (the worker's `workElapsed`, §3.10) or advances by one tick interval **per call**: the idle-variation timer,
+  the animal sink and the settler death sink (`CharacterSettler::Update` S 006c7640, render logic slot `+0x08`)
+  once per logic tick, the building one-shot countdown once per call of `Building::Update` S 006abcf0.
+  **[known]** How often `Building::Update` runs is **[TODO]** (its callers are the virtual updates of the
+  building subclasses).
 - `Scene::Update` is entered with a flag; when it is non-zero the record is driven by a wall-clock timer instead
   (`+0x10` = timer step, `+0x04` and `+0x00` = its running sum). Which caller passes a non-zero flag is
   **[TODO]** (the function is reached only through the scene vtable S 007f8f2c slot 8).
@@ -1451,6 +1592,12 @@ slot's control speed is `globalSpeed * slotSpeed` (§3.7), so all skeletal anima
 cycle. Event `start` / `duration` values are compared against `(time - startTime) * globalSpeed`
 (`EventBase::Tick` S 006b00f0), i.e. they are positions on the file's own time axis.
 
+The work clips are authored so that at 1.8 they match the simulation's work timers at 10 ticks per second
+**[known, data]** (file length → played length → the timer it covers): `woodcutter_chop` 10.0 s → 5.56 s (the
+woodcutter's 55 work ticks), `work_shovel` 10.0 s → 5.56 s (55), `settler_reap` 14.83 s → 8.24 s (the farmer's 83),
+`settler_saw` 15.0 s → 8.33 s, fishing 60.0 s → 33.3 s (the fisher's 333), `geologist_hammer` 14.17 s → 7.87 s
+(the dig's 80), `stonecutter_crush` 13.0 s → 7.22 s (the stone pit's 55, cut off at 5.5 s).
+
 ### 6.6 Constants in code **[known]**
 
 | Value | Use | Evidence |
@@ -1459,7 +1606,12 @@ cycle. Event `start` / `duration` values are compared against `(time - startTime
 | `1e-5` | "is neutral" threshold for bind keys | S 0072f720 |
 | `0.01` | slerp → linear switch on `1 - dot` | S 0072e250 |
 | more than 10.0 s on the pool timer and more than 5 entries | pool garbage collection | S 006ad380 |
-| 0.35 / 0.4 times the tick interval, per call | sink step of dead settlers (per frame update) / animals (per logic tick), §4 | S 006c7640, S 006ce2c0 |
+| 0.35 / 0.4 times the tick interval, per call | sink step of dead settlers / animals, both once per logic tick, §4 | S 006c7640, S 006ce2c0 |
+| 0.43982297 (double S 007fa360) | largest yaw step per logic tick of settlers, ships and animals (§3.19) | S 006c48c0, S 006a4eb0, S 006cde40 |
+| 0.2, 0.75 | lateral offset dead zone and decay per second of street evasion (§3.19) | S 006c4f40 |
+| 3.0 s | `workElapsed` after which a felled tree starts to fall | S 006c87d0 |
+| 1.2, `(π/2) / (globalSpeed × 20)` | per-call growth and start value of a falling tree's angular speed | S 006dcd40, S 006dd050 |
+| `0x7c0` | seed of the function-static generator of the initial facing | S 006c53f0 |
 | 0.6 (on the time record's first float) | door-open phase of a work cycle | S 006aa640 |
 | `MAX_BONES = 50` | bone matrices per draw (`g_InstanceMatrix[MAX_BONES]`) | `gfx/fx_20/shared.inc` |
 | `Wrap` | default sampler address mode of every stage (`ADDRESS_MODE_U0..` / `V0..`) | `gfx/fx_20/shared.inc` |
@@ -1644,10 +1796,10 @@ palettes' random source.
 | 1 | Do the settler meshes look right with the constant quarter turn of §2.6 applied (i.e. is the turn compensated by the mesh data or by the render movement's heading)? Partly answered [inferred]: in the remake's renderer, with the stored quarter-turn inverse bind, a settler turned by `RotationY(h)` faces (sin h, 0, cos h) in the original's axes and walkers face their step. | One converted settler viewed with a walk animation next to a screenshot of the original. |
 | 2 | Front-face winding as the engine draws it: the `STATES_*` macros of `shared.inc` and the three object shaders set no cull mode, and samplers default to `Wrap` (§9); a `D3DRS_CULLMODE` write from code is not excluded. | Static: search the device wrapper for the cull render state; or one converted model viewed next to a screenshot. |
 | 3 | Answered (§3.9): the tested number is the tribe id itself (bits 3, 19, 3 for the three tribes), so the masks 3 and 5 of the data never match. | — |
-| 4 | Which code sets the render logic's byte `+0x2a` (copied to the character each tick and, as the animation's track flag, to `currentTrack +0x50`; §3.9 treats it as "visible"). | Static read of the writers of that byte in `S2CG::Character*`. |
+| 4 | Answered (§3.9 step 5): the render logic's byte `+0x2a` is "riding aboard a ship", written by `UpdateShipRideFacing` S 006c7140 and cleared by `CharacterSettler::Update` S 006c7640 while the figure moves; a figure is hidden while it is set. | — |
 | 5 | Which caller enters `Scene::Update` with a non-zero flag (wall-clock time record, §4), and how often `Building::Update` runs. | Static: the callers of scene vtable slot 8 (S 007f8f2c) and of the building subclasses' virtual update. |
 | 6 | Timer kind 7 → `Hit`: none of the 15 callers of `NSettlers::Animation::Start` S 0065f080 passes 7 (they pass 2, 3, 4, 5 or 6; `Soldier::Update` S 006594a0 passes 5) **[known]**, so `Hit` looks unreachable **[inferred]**. Is the kind field (`settler +0x1c`) written anywhere else than `Start`, `Tick` and the loader? | Static: write references to the field. |
-| 7 | `SoundEvent::Start` / `Update`: when a sound event ends and whether `duration` cuts it (§3.12). | Static read of S 006b0550, S 006b01f0. |
+| 7 | Answered (§3.12, [audio.md](audio.md) §3.9): an event with `duration > 0` stops its sound at `start + duration`; one without plays on, and a non-looping one-shot more than 0.5 s late is dropped. | — |
 | 8 | Where an event's `slot` name is resolved to a bone and what an event without `slot` is attached to. | Static read of the three event constructors (S 006b0350, S 006b0400, S 006b0880) and `EventBase::GetWorldTransform` S 006b0480. |
 | 9 | The vertex declarations per object class (settlers S 00881670, buildings, items) and so the exact `.mshraw` vertex layouts. | Read the declaration tables (data bytes) and `VertexLayout::Init`. |
 | 10 | Construction-site display: how the `frame` mesh and the construction progress (`Building::Update` S 006abcf0 stores `1 - remaining` with its time) are drawn. | Static read of `GetConstructionClipPlane` and the building renderer. |
@@ -1762,3 +1914,13 @@ palettes' random source.
 | S 0065cd70 / S 0065cdc0 / S 0065ce30 | `NSettlers::Worker::IsAwayFromWorkplace` / `ShouldSpeedUpWorkAnim` / `GetWorkAnimSpeedFactor` | read-only getters used by the worker's render logic |
 | S 0065a6c0 | `NSettlers::Carrier::GetStreetCached` | read-only getter of the carrier's street pointer |
 | S 0065f080 / S 0065f040 | `NSettlers::Animation::Start` / `Tick` | the simulation's action timer (see `settlers-jobs.md`) |
+| S 006c5160 / S 006c4f40 / S 006c4bf0 / S 006c4d90 | `ai::render::CharacterMovement::SetPath` / `UpdateLogic` / `StepTileToTile` / `StepAlongSpline` | path spline, per-tick step (§3.19) |
+| S 006c48c0 / S 006c4b50 / S 006c4a40 / S 006c53f0 | `CharacterMovement::UpdateFacing` / `FaceTowards` / `WrapYaw` / `RandomizeInitialFacing` | yaw stepping and first facing (§3.19) |
+| S 006c4790 / S 006c4820 / S 006c4870 | `CharacterMovement::SetLateralOffset` / `IsBelowWaterLevel` / `ResetPositionInterpolation` | evasion offset, swim test, snap after a ship ride |
+| S 006925f0 / S 006912e0 / S 00693200 | `CCharacterMgr::ResolveStreetCollisions` / `CCharacter::ResolveStreetAvoidance` / `CCharacterMgr::AssignStreetSlot` | street evasion (§3.19) |
+| S 00690f80 / S 006c7590 | `CCharacter::IsInFrustum` / `UpdateInsideBuildingFlag` | hiding figures inside buildings and aboard ships |
+| S 006c7140 / S 006c7510 / S 006c73a0 | `CharacterSettler::UpdateShipRideFacing` / `UpdateBuildingEntrancePass` / `GetDoorPassDirection` | base render logic (§3.10) |
+| S 006c87d0 / S 006c86d0 | `CharacterWorker::UpdateFellingObject` / `FaceWorkObject` | woodcutter and work-object facing (§3.10) |
+| S 006dd050 / S 006dcd40 / S 006dcfd0 | `TreeInstance::StartFalling` / `UpdateFalling` / `SetFallAxis` | falling tree |
+| S 006a4eb0 / S 006cde40 / S 006ce090 | `S2CG::Ship::StepYawTowardTarget` / `S2CG::Animal::StepHeading` / `Animal::ctor` | ship and animal turning |
+| S 006ddf30 | `RandomAnimPlayer::ctor` | first idle delay (§3.11) |

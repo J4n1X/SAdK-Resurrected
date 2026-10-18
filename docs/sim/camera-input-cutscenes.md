@@ -248,7 +248,9 @@ maximum and step (constructors S 005c6270, S 005c6370, S 005c64a0).
   `CGraphicDevice + 0x518` to the near plane; `SetNearPlaneOffset` S 004d9e10 is its only writer and is called
   by the map renderer, the street renderer and the overview-texture render (S 006898f0, S 006c3ab0, S 00680d90),
   which use it as a depth bias for decals and streets and put it back to 0 [inferred for the values passed], so
-  the camera's near plane is 1.0 for everything else. Slot 5 doubles the far plane while
+  the camera's near plane is 1.0 for everything else. The streets' offset of 0.1 makes their near plane 1.1,
+  which depth-tests a point at view depth `d` like one at `d / 1.1`: a pull of about 9 % of the depth, not of
+  0.1 units ([world-objects-rendering.md](world-objects-rendering.md) §3.8). Slot 5 doubles the far plane while
   `nMenu::System.uiSuppressed` is set; no write of that byte other than the constructor's 0 was found (§3.13),
   so the far plane is 500 in the shipped game [inferred].
 - **Every frame**, `Camera::Update` S 00787530 [known]: `isUpdating = 1`; zoom easing

@@ -227,7 +227,7 @@ vector [known] S 006c0410.
 | `S2CG::BuildingDesc` | 0xc0 | name, mesh path, frame path; LOD mesh parts (+0x54), animated visual (+0x5c), bounds (+0x68 min.y, +0x74 max.y), door and work animations (+0x80..+0x88), production sub-desc (+0x8c), stage count (+0xa4), stage subset table (+0xa8), frame render object (+0xac) | [known] S 006aabe0 for bounds, [inferred] S 006d3880, S 006a15a0 |
 | `S2CG::CCharacter` | 0xbc [inferred, mapped struct] | animation (+0x80), movement (+0x84), per-type logic face (+0x88), queued animation (+0xa4), effects (+0xb0) | [known] S 006909f0 |
 | `S2CG::CharacterAnimation` | 0x6c [inferred, mapped struct] | model cache (+8), current track (+0xc), instance handle (+0x30), selection keys (+0x38, +0x3c, +0x40, +0x44), requested slot (+0x54), loop mode (+0x58), owner face (+0x60), one-shot playing (+0x64), idle sequencer (+0x68) | [known] S 006c64c0, S 006c6590 |
-| `ai::render::CharacterMovement` | 0x160 | fog visibility byte (+0x04, §3.7; [known]), previous and target position (+0x2c, +0x38), inverse duration (+0x48), render position (+0x58), route spline | [inferred] S 006c57b0 |
+| `ai::render::CharacterMovement` | 0x160 | fog visibility byte (+0x04, §3.7; [known]), previous and target position (+0x2c, +0x38), inverse duration (+0x48), logic position (+0x4c), render position (+0x58), world matrix (+0x64, copied by `CCharacter::Update`), rotation matrix (+0xa4), yaw / target yaw (+0xe4 / +0xe8), forward vector (+0xec), yaw previous / current / time (+0xf8 / +0xfc / +0x100), snap-yaw flag (+0x108), lateral offset (+0x10c, with its previous / current / time record up to +0x11c), height offset (+0x120, the death sink and the carrier's boat), route spline | [known] S 006c48c0 (disassembly), S 006c4f40, S 006909f0, S 00690bd0; [inferred] S 006c57b0 for the rest |
 | `S2CG::InstanceMesh` | 0x7c | object type (+4), id (+0xc), cell (+0x10), bounds, world matrix (+0x1c), colour (+0x5c), visibility byte (+0x6c; [TODO] not established: whether 1 means hidden or shown, read the constructor and the block's hide call S 006b4f80), handle (+0x70) | [inferred] mapped struct and ctor comment |
 | `ai::render::MapObjDef` | 0xbc | one `<LandscapeElement>` (§6.4) | [inferred] S 0068f200 |
 | `S2CG::EnvData` | 0x34 | background rgb, ambient rgb, light rgb, shadow intensity (+0x28), fog start and end (+0x2c, +0x30) | [inferred] S 006ae2e0 |
@@ -1094,8 +1094,9 @@ Start: one-shot particle effect `DemolitionDust`, or `SmallDemolitionDust` when 
 (8) and ship sites (16) get the small dust; a 3D sound; the ground decal and the material pile are removed;
 `demolishProgress = 0`. Per frame: `demolishProgress = min(1, demolishProgress + dt * 0.35)` and
 `worldPos.y = terrainHeight(cell) - modelHeight * progress^2`; the fire points follow. On the logic tick after the
-progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` with its own decal S 006d4e00
-[inferred].
+progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` (scene slot +0x70 S 0067f210 →
+`BuildingRenderer::AddRuin` S 006a19b0 → `Ruin::ctor` S 006d4e00) drawn with the model named
+`"<tribe>_<remains gfx name>"` and the dead building's `GROUND` decal (a second name lookup) [known].
 
 **Fire** `Building::UpdateFireEffects` S 006abbb0 [known, disassembly]: the first `burning` fire points run the
 effect `BuildingFire`, the others are stopped, with
@@ -1232,8 +1233,12 @@ pos = lerp(prev, target, f)
 ```
 
 then the height is snapped to the terrain, a sideways offset (street avoidance of oncoming settlers,
-`evadeRadiusScale`, `evadeStart`) is applied and decayed, and the yaw turns toward the hex direction of the move
-by a fixed step per tick. Death (entity state 5): the figure sinks at `0.35 * dt` S 006c7640.
+`evadeRadiusScale`, `evadeStart`) is applied and decayed, and the yaw turns toward its target by at most
+0.43982297 rad per logic tick, interpolated over the tick [known] S 006c4f40, S 006c48c0. A walk on a street
+follows the street's route spline, a free walk of more than two cells a spline of its own; the rules, the
+layout of `CharacterMovement` and the street evasion are in [animation-models.md](animation-models.md) §3.19.
+Death (entity state 5): once the death clip has ended the figure sinks by `0.35 × tick length` per logic tick
+S 006c7640 [known].
 
 **Animation slots** [known] pointer table S 008816b8 (10 entries; names at S 007f997c..):
 
@@ -1289,9 +1294,12 @@ a one-shot variation (`probability` attribute per animation), which is played on
 time reaches 0 the slot's base animation is looked up again and resumed. Any other slot request destroys the
 player.
 
-**Carried goods and tools** [inferred] S 006c7850, S 006c74f0: an item is attached to a bone (`Bip01 R Hand`,
-`Bip01 Head` or the type's attach bone); a carried good overrides the default tool item; `<Characters goodOffset
-goodRotation boatOffset>`. Animation events (`<Sound>`, `<Particle>`, `<Item>` children of an `<Animation>`)
+**Carried goods and tools** [known] S 006c7850, S 006c7460, S 006c74f0: every settler class except the carrier
+gets the settler type's tool or weapon item (its `gfxGoodId`) attached at the definition's `link` bone
+(`SLOT_HandR`); a carried good overrides it (the tool is hidden while a package is held and shown again after),
+and while nothing is carried the tool's good is animation key A, which selects the `…Axe`, `…Scythe`, `…Sword`
+clips ([animation-models.md](animation-models.md) §3.9, §3.13); `<Characters goodOffset goodRotation
+boatOffset>`. Animation events (`<Sound>`, `<Particle>`, `<Item>` children of an `<Animation>`)
 fire at their `start` time S 006867d0.
 
 **Other per-type visuals** [inferred]: soldier buff effects `SoldierDamage` (hand), `SoldierDefense` (body),
@@ -1385,6 +1393,14 @@ water height, so only their part above the water is drawn, in the step that draw
 (`resource +0x18`), scale `(min(1, 3g), g, min(1, 3g))`; state 2 standing (growth ≥ 1): optional sway, a rotation
 about a horizontal axis by `amplitude * sin(phase)` while being felled at; state 3 falling: rotation about the
 same axis by a fading angle; state 4 fallen. Value changes are faded at rate 10 per second (one logic tick).
+The fall [known] S 006c87d0, S 006dd050, S 006dcd40: the woodcutter's render logic (`CharacterWorker::UpdateFellingObject`,
+§3.10 of [animation-models.md](animation-models.md)) takes the job's tree unless it is already falling or fallen
+(state 3 or 4), turns the figure toward it, and once `workElapsed > 3.0` s calls `TreeInstance::StartFalling` with
+the negated worker-to-tree direction: state 3, angular speed `(π/2) / (g_AnimTimeScale × 20)`, the fall axis from
+that direction (`SetFallAxis` S 006dcfd0), the tree's emitter stops looping, and sound `0x01c27b83` (`sound_treefall`)
+plays at the tree. Each `UpdateFalling` call adds `speed × tick length` (`speed / timeRecord[3]`) to the angle (with
+the previous value kept for the fade) and multiplies the speed by 1.2; past π/2 the state becomes 4, and the tree
+lies until its deposit is removed. That the tree falls away from the worker is [inferred] (`SetFallAxis` not read).
 Wind is in the vertex shader (`tree_shader*.fx`): `pos.x += s * sin(waveSpeed * m41 + t)`,
 `pos.z += s * cos(waveSpeed * m43 + t)`, `s = saturate(dot(pos, pos) * waveStrength) * m22` [known, file]. `waveSpeed` = 0.35 pi,
 `waveStrength` = 0.003 (`tree_shader_willow.fx`: 0.3 times that, and `pos.z += 0.12 * sin(pos.z * 8 + 2.6 t)` where
@@ -1394,6 +1410,24 @@ light of trees is multiplied by the vertex colour. Other vertex animations [know
 + 2t)`), ducks (bobbing `0.07 sin(2z + 4t)` and circling with radius 4.5), ice floes (rocking by `0.6 * vertexColour.r`).
 
 **Wheat** `WheatInstance::UpdateAnimation` S 006dc590 [inferred]: Y scale = growth, faded the same way; state 2 = grown.
+One `WheatInstance` exists per field deposit (ctor S 006dc490, `UpdateGrowth` S 006dc660; `Scene::OnDepositAdded`
+S 006815e0 → `SpawnLandscapeObject` S 00690240 → `AddInstance` kind 4 S 006b90a0); once growth ≥ 1 and the
+resource's level counter (+0x50) is 0, state 2 uses the base matrix [known].
+
+**Extended meshes: the wheat field cluster** [known]. `meshType` is parsed by S 0068f200: `"extended"` → 1, `"none"`
+→ 2, anything else 0 (exact compares); `Wheatfield` is the shipped element with `meshType="extended"`.
+`InstanceMeshRenderer::LoadMesh` S 006b9690 builds a mesh of type 1 as `ExtendedMeshData::ctor(3.0, (1, 1, 1))`
+S 006dd7e0: one instance is a cluster of 300 sub-instances. `ExtendedMeshData::Load` S 006dddc0 loads the KEX with
+`CMesh::Load(merge = true, rebase = false)` S 0076e0d0, so the variants are the file's subsets (`LO_Wheat.KEX`: six
+tufts `RS_Wheat07..02`, 36 vertices and 54 indices each); each sub-instance gets the variant
+`Rng_ParkMillerNext % n` from the generator S 0088e118, which only this code uses and which is seeded `0x5432ace0`
+at program start (S 007cb190; [engine-core.md](engine-core.md)). `BuildInstancedVertices` S 006dd8e0, per
+sub-instance `i`: `SetSeed(this + i)` (a heap address, so the scatter differs between runs), `r = NextUnit × 3.0`,
+`a = NextUnit × 2π` (S 00882840), the variant's vertices scaled, then moved by `(cos a × r, 0, sin a × r)`; byte 0 of
+`BLENDINDICES` is the batch slot, bytes 1..3 are not read by `weed_shader.fx`. `BuildInstancedIndices` S 006ddce0:
+the variant's local indices plus `i × verticesPerVariant`. A field is therefore drawn as a disc of wheat tufts about
+6 units across around its deposit, one cluster per deposit. The material is the first subset's texture
+(S 006b9690); the cull bounds are those of the unscattered mesh [inferred].
 
 **Deposits (level fade)** `MapObjLayer::AnimateMeshesAndLevelFades` S 0068d160 [inferred]: a counter 0..20 on the logic
 object (`+0x50`) lowers the instance by `level * extentY` (the pile shrinks into the ground), faded at rate 10.
@@ -1446,14 +1480,18 @@ up to 40.
 
 **Ships** [inferred] S 006a54c0, S 006a5cc0: position = lerp between the logic ship's two
 cells by its progress; animation state 0 idle, 1 moving, 2 when the logic state is 6 or 7 (sinking set of
-`ships.xml`: `idle`, `move`, `sink`); yaw steers toward the hex heading; sine bobbing; a status overlay mesh
+`ships.xml`: `idle`, `move`, `sink`); yaw steers toward the hex heading by at most 0.43982297 rad per logic tick,
+clamped at the target, interpolated over the tick (`Ship::StepYawTowardTarget` S 006a4eb0 [known]: about 0.7 s
+for a half turn); sine bobbing; a status overlay mesh
 (`<Freight>`, `<Expedition>`, `<Soldiers>` meshes) by cargo kind; construction `frame` mesh per tribe, drawn
 triangle by triangle with the frame's progress before the hulls, and a hull that rises through a user clip plane
 with its fade ([animation-models.md](animation-models.md) §3.17) [known].
 
 **Animals** [inferred] S 006ce2c0: logic states 5, 7, 8, 9 play the death animation once, after which the model
 sinks at `0.4 * dt`; standing animals play one of two idles chosen with a private generator (static seed
-0x5432ace0); moving animals interpolate between cell and next cell. Definitions in `animals.xml` (`model`,
+0x5432ace0); moving animals interpolate between cell and next cell and turn by at most 0.43982297 rad per logic
+tick (`Animal::StepHeading` S 006cde40 [known]); a new animal starts with `Stand1` looping and heading 0, without
+a random draw (`Animal::ctor` S 006ce090 [known]). Definitions in `animals.xml` (`model`,
 `mesh`, `scale`, `<Animation
 name filename>`).
 
@@ -1684,7 +1722,17 @@ flags the construction map stores never produce these two, because 0x40 is set o
 along the view y axis, so the icon stands on the cell's world position and faces the camera; `iconOffset` is
 added in view space (−1 on z = one unit toward the camera). Size and offset come from the `<Landscape>`
 attributes `iconSize 3.0` and `iconOffset "0 0 -1.0"` [known, file]; without them the defaults are 1.5
-(S 008814ec) and 0 (S 0088cf68). The quads are batched 50 at a time and tinted by the renderer's overlay colour.
+(S 008814ec) and 0 (S 0088cf68). The quads are batched 50 at a time (`FlushQuads` S 006b3530) and tinted by the
+renderer's overlay colour.
+
+**Order and depth** [known] S 00688c40, S 006b36d0, S 006db220, S 006dad30, `infomap_shader.fx`: the visible block
+list is collected nearest child first ([world-objects-rendering.md](world-objects-rendering.md) §3.14), and the
+overlay walks it from its last entry to its first, so blocks are drawn far to near; inside a block cells go row by
+row in y, each row in x. Technique `Default`: depth test on (`ZFunc LessEqual`), no depth write, alpha blend. The
+overlay is drawn after the whole map, water included, and before the particles (`RenderPostFxAndOverlay`
+S 00680a00, §3.1), and after the post processor's combine, so depth of field never blurs it. The icons are
+world-sized quads: they grow on screen as the camera comes closer, and nearer plants, rocks and figures cover
+them through the depth test. `water_shader.fx` writes no depth, so water never hides an icon [known, files].
 
 **When it is drawn** [known]: only while the tint alpha is > 0 (S 00688c40). The alpha is 0 from the
 `CMapRenderer` constructor S 006890f0 and is changed only by `nMenu::Game::StartOverlayColorFade` S 005eabd0.

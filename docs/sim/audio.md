@@ -318,10 +318,14 @@ handler only, so callers must remove only what they added.
    position replaced by `(-FLT_MAX, -FLT_MAX, -FLT_MAX)`; if afterwards `trunc(currentVolume) == 0` and
    `trunc(targetVolume) == 0`, stop the channel (`FSOUND_SetReserved(channel, false)`, `StopChannel`, erase the
    record and the `soundId → channel` entry); otherwise set `keep = true`.
-5. **Start.** `free = 4 − channelCount`. For each nearest entry: if its sound has a channel, update that channel's
-   volume with the real listener position; else if `free > 0`: `channel = PlayEntry(emitter.soundId)`; on success
-   create the channel record `{channel, emitterKey, keep = false, 0, 0}`, map `soundId → channel`, update the
-   volume, `FSOUND_SetReserved(channel, true)`, `FSOUND_SetPaused(channel, manager.paused)`, `free -= 1`.
+5. **Start.** The channel-record count is read once, before this loop. For each nearest entry: if its sound has a
+   channel, update that channel's volume with the real listener position; else if that count `!= 4`:
+   `channel = PlayEntry(emitter.soundId)`; on success create the channel record
+   `{channel, emitterKey, keep = false, 0, 0}`, map `soundId → channel`, update the volume,
+   `FSOUND_SetReserved(channel, true)`, `FSOUND_SetPaused(channel, manager.paused)`. The count is not updated as
+   channels start, so with fewer than four records every nearest entry without a channel starts in the same frame
+   (two or more new channels at once), and with four records (fading ones included) none starts: a nearby new
+   sound waits until a fading channel is freed [known, S 0056d2e0].
 
 Volume of one emitter channel, `UpdateChannelVolume(record, listenerPos, dt)` S 0056bab0 [known]; `e` = owning
 emitter, `r = e.prop.distance2D`:
@@ -354,7 +358,7 @@ conversion `__ftol2_sse` S 006f2af0 then decides:
   `targetVolume = −2147483648.0`. `trunc(targetVolume)` is never 0, so `StopChannel` is not called: the record
   stays, `currentVolume` falls by 255 per second without a bound, and the channel keeps one of the four
   places. A sound that is claimed again ramps up from that value (silent for about as long as it was
-  unclaimed); with four records `free` is 0 and a sound without a channel cannot start;
+  unclaimed); with four records the start test of step 5 fails and a sound without a channel cannot start;
 - with the flag clear the fallback (S 006f2b26, `FISTP qword`) yields a low dword of 0 for a NaN:
   `targetVolume = 0`, the volume ramps to 0 within a second and the channel is freed.
 
@@ -468,9 +472,14 @@ empty nothing is picked, and a tribe without an entry in map B simply gets no pe
   `uiSuppressed` is set.
 
 **Menu music**, `nMenu::System::PlayMusic(index)` S 005d9f60 [known]: nothing if `index == currentMusicIndex`.
-If the game screen is not open: `StopMusic`, `PlayMusicGroup(musicSoundIds[index])`. If it is open:
+If the game screen is not open: `nMenu::System::StopMusic` (below, so the playlist is reset too; not
+`SoundSystem::StopMusic` alone), then `PlayMusicGroup(musicSoundIds[index])`. If it is open:
 `playlist.SetForcedGroup(musicSoundIds[index])`. `nMenu::System::StopMusic` S 005d9850: game screen closed →
 `SoundSystem::StopMusic` and `SoundPlaylist_Reset`; open → release the forced group; `currentMusicIndex = -1`.
+
+Entering a match: `nMenu::Game::OnEnter` S 005eed00 calls `nMenu::System::StopMusic` after the game desktop is
+attached, so it takes the "open" branch and only releases a forced group; the menu theme keeps playing until the
+playlist's first track (playlist step 2 above) cross-fades it out [known].
 
 | Caller | Index | When |
 |---|---|---|
@@ -553,6 +562,13 @@ from the caller lists of `Play3D`, `PlayUiSound`, `AddEmitter`].
 | effect movie keyframe with a `sound` | by name | element position, tracked | `EffectMovieElement::Start` S 006c6bc0 |
 | a tree starts falling | `sound_treefall` 0x01c27b83 | tree position | `TreeInstance::StartFalling` S 006dd050 |
 | UI widget events (button click, edit box key, list item, ...; 13 callers) | by name (§3.5) | none | `UiResourceManager::PlaySoundByName` S 00494180 |
+| a layout button is clicked; an `EditEx` field takes the focus; a list item is clicked | `uiClick0` | none | `Button::OnClicked` S 004b12d0, `EditEx::OnMouseButton0Down` S 0049b7b0, `Item::WasClicked` S 004c6da0 |
+| a typed character, Space, Backspace or Delete in an `nUi::Edit` field | `uiKey0` | none | S 004c07e0, S 004c0a40 |
+| a row of the HUD message list is clicked: the rows are `nUi::Icon`s (S 005f8fa0), so a left click plays the icon click | `uiClick1` | none | `Icon::OnMouseButton0Up` S 004ce980 → `PlayClickSound` S 004cf3a0 |
+| a new player message arrives (not for a list restored from a save) | `uiMessage0` / `uiMessage1` | none | `Messages::PollNewMessages` S 005f73e0 |
+| a message row is removed | `uiRemove` | none | `Messages::Update` S 005f86a0 |
+| an `Overlapped` window opens: the requester (S 005ffef0) and the end-of-game dialog (S 0061ff20); only the cinematic screen turns this sound off (`ClearPlayOpenSound` S 0062e1b0) | `uiDialog0` | none | `Overlapped::OnShow` S 0062e750 |
+| a picked slot of the settings panel is dropped back: `CancelSlotDrag` has no "silent" flag and plays whenever a slot is picked | `uiCancel` | none | `CancelSlotDrag` S 00620c90 |
 | lobby minigame and NPC actions | by id | none (`PlayUiSound`) or a fixed position (`Play3D`) | `CLobbyClient_MiniGame::PlaySound` S 00523720, `PlaySoundAt` S 00523770; both skipped while the local avatar is engaged at a different minigame table |
 
 The three building sounds are played only when the building's virtual slot 1 returns 0; the two door sounds in
