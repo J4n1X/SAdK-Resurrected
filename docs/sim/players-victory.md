@@ -1034,8 +1034,10 @@ the stored index, not by the loop position. The neutral player is rebuilt afterw
    (`+0x14`) but go through the stream's bool, which is 4 bytes in the file (`docs/sim/save-format.md` §2.2), so
    the block is 32 bytes `[known]`
 7. `Messages` — `"Messages"` v0: u32 count, count × `"Message"` v2 {float timeRemaining, cell position, string
-   text, string text2, i32 msgType, i32 isRead, Unique id, string arg (version >= 1)}. On load, messages of type
-   8 (letters) are read and dropped.
+   text, string text2, i32 msgType, i32 isRead, Unique id, string arg (version >= 1)} (`Messages::Store` S 005c1900,
+   `Message::Store` S 005c0300). `Message::Load` S 005c03b0 reads the argument only from version 1 on. On load,
+   messages of type 8 (letters) are read and dropped; `Messages::Load` S 005c2520 pushes the others into the list
+   without notifying the listeners, so a load plays no message sound and adds no minimap symbol `[known]`.
 8. `pStock` (only when active; see the stock rule below)
 9. i32 updatePhase
 10. `ShipNames` — `"Player ShipNames"` v0: u32 nameIndex

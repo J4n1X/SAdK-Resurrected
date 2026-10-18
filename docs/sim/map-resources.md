@@ -637,7 +637,8 @@ resets the street planners and all subsystems (village, settlers, military, net,
 all `MapModifier` methods; scan of every byte store through a pointer loaded from `+0x38`]. During a match the
 byte is therefore always 1; the five steps are skipped only for the buildings torn down by a reset.
 
-**Removing a source** `RemoveTerritorySource(cell, radius, owner)` S 00673b20 [known]: collect the remaining sources
+**Removing a source** `RemoveTerritorySource(cell, radius, owner)` S 00673b20 (through `NMap::Territory::RemoveSource`
+S 0067a320, which does nothing for radius 0; caller `TerritoryUpdater::dtor` S 00565270) [known]: collect the remaining sources
 and recompute the same spiral, without notification; then the same five steps. The building being removed is
 skipped by the collector because its anchor equals `pos`.
 
@@ -646,7 +647,8 @@ Only the spiral of radius `radius` is recomputed, although rule 2 lets a source 
 
 **Lost territory message** [known] S 006797f0: during a recomputation every player who owned a cell that now has a
 different owner is flagged; with `notify` set, each flagged player gets the message `!Lost Territory.` (category 1,
-empty text, at the source position) unless an identical message near that position is still pending. In the full
+empty text, at the source position) unless a message of the same type and key is still pending on that cell
+(`Messages::FindMatching` S 005c1fd0, distance `< 1`, the argument not compared); a pending one is not refreshed. In the full
 recomputation (`RecalcFullMap` S 00679ac0) the flag array `lost[0..7]` has one byte in front of it: a cell whose
 old owner was -1 or is unchanged writes `lost[-1]`, a sink byte that the notification does not read [known].
 
@@ -767,8 +769,12 @@ the shipped maps uses one of them, so regrowth does not occur in shipped content
 4. Result `PlaceResourceSignAndNotify` S 0077b2f0: read the cell's `{amount, type}`; amount 1000 counts as 7; if
    the cell has the buildable bit 0x200 the result is forced to `water` (0xa9676263), amount 1; the sign doodad from
    the sign table for (type, amount) is created on the cell; if a type was found the owner gets the message
-   `!Found Resource` (category 2, argument = the good's name), or an identical pending message within 7 cells has
-   its timer reset to 600.
+   `!Found Resource` (category 2, argument = the good's name), unless a listed message matches: the first one,
+   oldest first, with type 2, the same key and good name and `HexDistance(find cell, message cell) < 7`
+   (`PlayerMessages_FindNearWithArgForPlayer` S 005c01f0 with maxDist 7, the `PUSH 0x7` at 0077b430 →
+   `FindMatchingWithArg` S 005c1e40). A match has its timer reset to 600 and keeps its cell. There is no flood
+   fill and no per-cell memory: the player's message list is the only record of what was reported
+   (`quests-sacrifices-stats.md` §3.6.1) [known].
 5. `digsRemaining` is decremented (forced to 0 when the home building's production is disabled); while it is
    positive the search repeats.
 

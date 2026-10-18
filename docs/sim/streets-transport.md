@@ -214,7 +214,9 @@ ship reference (exactly one valid), +0x48 `goodId`, +0x4c `stamp` (tick of creat
 +0x50 `servingPackage` reference (valid = a package is on its way) [known] S 006528b0, S 00652e00.
 
 `NTransport::NeedGoods` (0x18) is the per-building (or per-ship) list of requests, `Depot+0x44`: `owner`, and a
-`vector<NeedGoodElement*>`; an element is `{goodId, packageRef}` and mirrors one `NeedGood` [known] S 0064eb80.
+`vector<NeedGoodElement*>`; an element is `{goodId, packageRef}`, one per requested unit [known] S 0064eb80. The
+elements are **not** paired with particular `NeedGood`s: a package is linked to the first element of its good that
+has none (fill order, S 0064e800) and unlinked from the element that holds it [known] S 0064e880.
 
 `ai::logistics::GoodOrderStore` (0x348): 8 `GoodOrderPlayerBlock` (0x68). A block has, per **category** 0..2, a
 vector of bucket entries (0x18 each: `vector<NeedGood*>` at +4/+8, `goodId` at +0x10, `category` at +0x14) in order
@@ -309,8 +311,9 @@ is deleted (§3.8).
    f. if a carrier was taken over: he is linked to street A (first slot) when his current cell is on A's path, or
       when A's start flag has a valid building reference and his current cell equals that building's cell
       (`Building+0x20`); otherwise to street B (`StreetNet_AssignCarrierToSplitStreet` S 00664fb0). His current
-      cell is the cell at `SettlerMovement+0x28` when the movement float at `+0x04` is > 0 and the mode at `+0x44`
-      is 2 ([inferred] the cell he is stepping to on a street walk), else his cell (`+0x128`).
+      cell is the rough movement's requested cell (`SettlerMovement+0x28`, the cell he is stepping to) when the
+      interpolator progress (`+0x04`, float) is > 0 and the path mode (`+0x44`) is 2 (street walk), else his cell
+      (`+0x128`) [known] S 00664fb0.
 3. **No split.** If there is a street but it is not attached (a street under construction): remove it from the map
    registration, create and register the flag, register the street again (so cell ownership is recomputed). With
    no street: create and register the flag.
@@ -405,7 +408,8 @@ S 00776500, S 00676840, S 0052fb10, S 005300e0].
   water)); `b` or `a` is water; `b` has none of border 0x20, logic object 0x400, ship tile 0x10000; `b` is owned by
   the player. Cost 2 if `b` has the shore bit, else 1 if `b` is shallow water, else blocked.
 - *Shallow water* (`Map_IsShallowWaterCell` S 0052e550): `0 < waterLevel − height(cell centre vertex) ≤
-  GameConfig+0x40` = `cfg_setMaxWaterStreetWaterDepth` (shipped 4000) [known].
+  GameConfig+0x40` = `cfg_setMaxWaterStreetWaterDepth` (shipped 4000) [known]. The function keeps the maximum depth
+  in a function-static, initialised once per process [known].
 
 **Type 3 (sea street)** is built by the navy code along a ship route: `NavyShipRoute::UpdateSeaStreet`
 S 005b71d0 starts the navy's planner with type 3 and calls `BuildStreet(..., 3)` [known]; no other caller with
@@ -650,7 +654,8 @@ the removal cut off keep the old id, which is no longer in the index; they still
 so connectivity tests (below) are unaffected, but `NNet::System::ContinentIdsContain` S 00664f40 is false for that
 id until a recomputation reaches the part [known for the functions; inferred consequence]. The same holds for a
 new flag (§3.1). The index's only reader in the simulation is mode 1 of `BuildingList_FindNearestReachable`
-S 00557fe0 (a settler's home search, `settlers-jobs.md` §3.2, net kind 1): a building of the player counts when
+S 00557fe0 (a settler's home search, `settlers-jobs.md` §3.2, net kind 1; distance limit `maxDist + 1`, −2 = no
+limit; "finished" = construction `+0x70` and `+0x74` both ≤ 0): a building of the player counts when
 the map continents of the settler's cell and of the building are equal or joined by one of the player's sea
 routes (`Navy_AreContinentsConnectedForPlayer` S 0052eba0, true at once for equal ids), or else when the index
 lists the kind-1 net continent of the building's entrance flag under the settler's map continent [known]. So only
@@ -1104,8 +1109,13 @@ place on the full flag, and the two carriers trade streets.
 
 **Creating and cancelling** [known]: `NeedGoods::AddRequest(good)` S 0064eb80 / `AddRequests(list)` S 0064ea00
 create one element and one `NeedGood` per unit (`NeedSystem::CreateNeed` S 00652420: stamp = current tick, pushed
-to the need vector and into the open index). `CancelRequest(good)` S 0064e3a0 removes an open (unserved) request
-first; if none, the **last** request of that good with a package, whose package is released to the free packages.
+to the need vector and into the open index). `CancelRequest(good)` S 0064e3a0 removes the first open (unserved)
+element of the good together with a need through `RemoveUnassignedNeed` S 00651a30, which takes the first
+unserved need of (target, good) in the global need vector, so a cancel can remove an older open need than the one
+just served; if no element is open, the **last** element of that good with a package goes, and its package is
+released to the free packages (`ReleasePackageAndRemoveNeed`). `ClearAll` and the destructor work front to back;
+the destructor cancels an open front element and releases a served one, until the list is empty [known]
+(S 0064e3a0, S 0064e5d0, S 0064e6d0, S 0064e900, S 00651980, S 00651a30, S 00651b00).
 The callers (production, construction, sacrifice, training, expedition, catapult) are in `village-buildings.md`.
 
 **`NeedSystem::Update`** S 00652170, every 11th tick (§4) [known]:
@@ -1175,7 +1185,10 @@ if B and B.settlerSpawn.cooldown == 0 and not B.entranceFlag.IsFullForGood(good)
   entrance flag is in the same kind-0 continent as the flag at
   the given cell, whose stock has the good, and (unless `ignoreGoodFlags`) whose good flag for the good is **not**
   enabled; minimum `GetFlagPathCost(fromFlag, building.entranceFlag, 0)`, taken when `cost < best || best == −1`,
-  so ties keep the earlier list element; the building's owner is not tested [known].
+  so ties keep the earlier list element; the building's owner is not tested [known]. `GetFlagPathCost` S 00667f30
+  returns either −2 ("not connected", cached like a cost unless `+0x1cc` is set) or a cost ≥ 0, and −2 passes
+  `cost < best`, so a building reported as not connected wins over a connected one; `BuildingList_FindNearestConnected`
+  S 00557ef0 has the same rule [known].
 - `FindSupplierBuilding(..., requireReady)` S 006517d0: the same search, then the building's settler spawn must be
   ready and its entrance flag not full for the good [known].
 - `HasFreePackageInNetwork` S 006501d0: any free package of the good registered on a flag in the node's kind-0
@@ -1263,9 +1276,17 @@ registration order [known]:
   +0x20 by `GetFlagPathCost` from the package's flag, kind 0 (`BuildingList_FindNearestConnected` S 00557ef0). None
   → wait. If `B`'s entrance flag is the package's flag: stock +1 in `B`, destroy the package (no carrier needed).
   Else assign `B` (target set, `SetNextHop(flag cell)`).
-- **Has none, and is in a carrier's hand**: `F` = the flag at the cell the carrier is heading for
+- **Has none, and is in a carrier's hand** (any settler type): `F` = the flag at the cell the carrier is heading for
   (`SettlerMovement+0x140`); `B` = nearest connected building from `F`; assign `B` only if the next hop from `F`
-  towards `B` (or, failing that, from the far end flag of the carrier's street) lies on the carrier's street path.
+  towards `B` (or, failing that, from the far end flag of the carrier's street: its start flag when `F` is the
+  street's end flag `+0x58`, else its end flag; street from `movement +0xa0/+0xb8`) lies on the carrier's street
+  path.
+
+A return building keeps the packages returning to it in `Depot+0x5c` (`returningGoods`; linked when assigned,
+`AssignReturnBuilding` S 0064fd80, unlinked on arrival or release). When that building is destroyed,
+`Depot::dtor` S 0055af70 → `ReturningGoodSystem::dtor` releases them, looping until the list is empty, and the next
+`PackageNeedSystem::Update` assigns them another building [known] (S 0055f330, S 00650120, S 0053c920,
+S 0053c950).
 
 [inferred] Free packages therefore drift to the nearest storehouse unless a need takes them first (§3.11 prefers a
 free package whenever its path cost is not higher than the nearest supplier's).
@@ -1285,6 +1306,9 @@ fromCell, toCell, currentStreet)` S 007735b0 [known]:
   S 007741e0). `FindShortestLinkToFlag` has no preferred-street parameter: it returns the link to that flag
   whose street has the strictly smallest `length`, so among equal lengths the first in link order wins; the
   exception for the current street is made by its caller [known].
+- the flag list of the search result is trimmed at both ends: when element `n − 2` is the start street's flag
+  (`+0x58`) the start flag is dropped (pop back); when the size is above 1 and element 1 is the end street's flag
+  (`+0x58`) the target flag is dropped (erase front) [known] S 007735b0.
 
 `ai::settlers::SettlerMovement::AdvanceStreetRoute` S 00657b80 [known]: at a flag with a harbour link, when the next
 flag of the route also has a harbour link and the shortest street between them is a sea street with a valid ship
@@ -1610,6 +1634,7 @@ disappears without being booked when there is no such building.
 | 6 | Answered (§3.9, "Extra units of a worker's product"): index 0 is product slot 0 (`bp_setGoods`, `BuildingProperty+0x44`); `GetGoods` S 00552f30 indexes `+0x44 + slot × 8`, written only by `SetGoods` S 00552ef0 from `bp_setGoods` (slot 0) and `bp_setSecondGoods` (slot 1) | — |
 | 7 | Answered (§3.8 GoToPackageTarget, §4): `SettlerMovement+0x38` is `rough.finalTarget`, the target cell of the current rough move (writer `Rough::StartMoveTo` S 00773c10; constructor and load besides), not the next step cell; settler `+0x10` is `unique.idLo` | — |
 | 8 | Can an open need change its category (§2.6) between `AddNeed` and `RemoveNeed`, which would make `RemoveNeed` use a null entry? Candidates: a `depot` building whose construction values change sign while a need of it is open (the shipped upgrade chains hold no `depot` type) | static: the writers of `Construction+0x70/+0x74` against the callers of `NeedGoods::CancelRequest` / `ClearAll` |
+| 9 | Do sacrifice buildings receive goods that have a distribution group (`cornBread`, `cheese`, `milk`, `salt`, `stone`, `iron`, …)? By §3.11 a category-0 need of a good with a group is served only when its building's type (or `defaultType`, for a site) is an entry of that group (S 00652b70); whether the tribes' arrangement groups list the sacrifice building types was not read [TODO] | data: the arrangement groups built from the tribe data (`players-victory.md` §2.6) against the sacrifice building types and their costs |
 
 ---
 

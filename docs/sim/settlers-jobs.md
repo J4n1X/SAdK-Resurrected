@@ -494,13 +494,16 @@ the loop are not updated until the next tick (consequences in 3.1, "When a new s
 **[known]** (S 00654a10)
 
 Destructors unlink: the base dtor (S 006568b0), in this order, discards a carried package
-(`NTransport::System::DiscardPackage`), unlinks the home building, unlinks the ship link (`+0xf8`) with
+(`NTransport::System::DiscardPackage`), unlinks the home building (`Settler_UnlinkHomeBuilding` S 0053bf80: home
+reference cleared, the first matching id erased from the building's home list), unlinks the ship link (`+0xf8`) with
 `Settler_UnlinkShip` when that ship's expedition is active (ship `+0x30` → `+0x08`), else with
 `NavyLink_UnlinkMilitarySoldier`, and destroys and frees the movement object (`SettlerMovement::Destruct`
 S 00657050: if queued, leave the flag's waiting list; if the movement's ship reference is valid, leave that
 ship's cargo list; then the movies and the base); `Worker` removes itself from its workplace's worker list;
 `Carrier` releases its packages and frees its street slot. **[known]** (S 006568b0, S 00657050, S 0065d220,
-S 0065afb0).
+S 0065afb0). A `Constructor` unlinks the ship it builds through `NavyLink_UnlinkShipConstructor` S 0053c360 (clears
+`ship->construction +8` and `constructor +0x120`) from its destructor S 0065e600 and from `Constructor::Update`
+S 0065ea20 when it has no site; `Construction::dtor` and `UpdateShipConstruction` call it too. **[known]**
 
 ### 3.4 Going home (`NMovie::LeaveMap`, state 3)
 
@@ -925,6 +928,13 @@ target `(-1, -1)`, fail.
 animal reference, `building +0x70`) → `LeaveBuilding` (8) → `MoveToAnimal` (9) → on arrival, if the animal
 reference is still valid: unless the animal's state is already 5, 7, 8 or 9 set it to 5 (killed); `Working` (10)
 → finished with step 10. An invalid reference or a failed walk ends the movie with step ≠ 10.
+`LookForAnimal::Start` (S 00778e40) only tests the link; it does not search. The lodge links an animal in its
+51st finished update and then every 51 ticks (`UpdateHuntTargetSearch` S 0055c050, `village-buildings.md` §3.9),
+with no production or occupancy test. A hunter whose start fails (no animal linked yet) goes through
+`RestOrIdleOutside` (3.5.4): state 0x1d and then 0x23 in the same tick, and a rest of `restTime` (1500 for the
+hunting lodges), or `IdleOutside` when more than 600 ticks have passed since his last work. A hunter who is in
+his lodge before its first link therefore waits a whole rest before his first hunt [known] (S 00778e40,
+S 0065d660, S 0065d3b0, S 0077b6d0, S 0065d7f0, S 0055c050, S 0055e2f0).
 `MoveToAnimal` (S 00777a20, S 007785f0): `Start` tests only that the workplace's animal reference has an id hi
 below `0x80000000` (building `+0x84`; the animal is not looked up for validity), then free-walks to the animal's
 **walk target** cell (`Animal +0x38`, the target cell of its current walk, the cell it rests on when idle) with
@@ -941,14 +951,20 @@ cell (`MapModifier::SetDigReservationAtCell`, object layer 4) → `LeaveBuilding
 Worker standing on its workplace's work cell → `MoveToPosition` (9) → `DigForResources` (10;
 S 0077e840: animation of 80.0 ticks, kind 5 when the cell has neither `GridStates` bit `0x200` nor a resource
 entry, else kind 4) → place the resource sign doodad for what the cell holds (S 0077b2f0) and, only when the
-cell yields a good id other than -1, send the `!Found Resource` message (kind 2) or refresh an existing one
-near the cell (refresh timer 600); release the cell, `--digsRemaining` (forced to 0 when the settler has a
+cell yields a good id other than -1, send the `!Found Resource` message (kind 2) or refresh the first listed one
+with the same key and good name whose cell is within hex distance `< 7` of the find (refresh timer 600; the
+message keeps its cell; [`map-resources.md`](map-resources.md) §3.8 step 4); release the cell, `--digsRemaining` (forced to 0 when the settler has a
 workplace whose production is disabled). Ends when no digs remain or a search fails.
 
 **`IdleOutside`** (S 0077ae80, S 0077aec0): fine-walk to idle position 0, then to idle position 1, then set the
 look-at position to the workplace's flag; finished. **`ReturnFromIdle`** (S 0077d3d0, S 0077d420): clear the
 look-at, fine-walk to idle position 0, then to the fine centre of the building's work cell (`building +0xf8`);
-finished. **[known]**
+finished. **[known]** The saved and hashed state of these walks is the package's `currentStep` (0 from the
+constructor): `IdleOutside` goes 1 → 0x16 and has no finished test when it starts its second leg, so it finishes
+on a later call; `ReturnFromIdle` (0x16 → 0x0c) and `LeaveBuildingFromIdle` (0x16 → 1, S 0077e510) fall through to
+the finished test and finish in the same call that starts their second leg. The idle positions are keyed by the
+owner player's current tribe (player +0x44; `GetIdlePosition` S 00553340, through S 0052ddb0). **[known]**
+(S 0077aec0, S 0077d420, S 0077e510, S 0077dee0)
 
 **`CatapultAttack`** (S 0077b940, S 0077b880): `Start` aims the catapult (`Catapult::AimAtTarget`) and starts
 `RotateCatapult` (0x1c; animation kind 4 for `(turns + 1) * cfg CatapultRotationTimeFactor`, `turns` = minimal
@@ -969,9 +985,11 @@ finished.
 `Carrier::Update` (S 0065b710): base update; return if not active; if `notYetOnStreet` → 3.6.1; else if the
 street reference is valid → 3.6.2; else `StopAndSetState3()`. **[known]**
 
-`AssignToStreet(street)` (S 0065b150): `notYetOnStreet = 0`, store the street reference; if the carrier is
-currently street-walking and busy: cancel the route, and if its cell lies on the street's cell list, cut the
-remaining route at the next flag and trim the walked part behind the previous flag. **[known]**
+`AssignToStreet(street)` (S 0065b150): `notYetOnStreet = 0`, store the street reference
+(`Rough::AssignStreetRef` S 00773b00); if the carrier is currently street-walking (path mode 2) and busy: cancel
+the route, and if its cell (`movement +0x128`) lies on the street's cell list (`street +0x18`), cut the remaining
+route at the next flag (S 00774450), trim the walked part behind the previous flag (S 00774500) and only then call
+the path-changed callback (slot 0x5c). **[known]**
 
 #### 3.6.1 Unassigned carrier delivering one package (S 0065ad70)
 
@@ -980,8 +998,8 @@ remaining route at the next flag and trim the walked part behind the previous fl
 | State | Rule |
 |---|---|
 | 1 | no deliverable package → `LeaveBuilding` (0x11). Else find the owner's flag near the cell; none → `StopAndSetState3()`; if the flag can take the package → `LeaveBuilding` (0x11) (else wait in state 1) |
-| 0x11 | movie finished: no deliverable package → `StopAndSetState3()`; a flag is on the cell → `Drop` (0x19); else `StopAndSetState3()` |
-| 0x19 | no flag on the cell → `StopAndSetState3()`; `Drop` finished: still holding a deliverable package → `Drop` again (0x19), else `StopAndSetState3()` |
+| 0x11 | movie finished: no deliverable package → `StopAndSetState3()`; a flag of **any** owner is on the cell (`GetFlagAtPos` S 006650a0) → `Drop` (0x19); else `StopAndSetState3()` |
+| 0x19 | no flag (of any owner) on the cell → `StopAndSetState3()`; `Drop` finished: still holding a deliverable package → `Drop` again (0x19), else `StopAndSetState3()` |
 
 #### 3.6.2 Street carrier (S 0065b200)
 
@@ -1331,6 +1349,10 @@ The cells of a leg come from `StreetPath::ComputeRoute` (S 007741e0): kind 0 →
 kind 1 → from the cell along the start street to the planned flag; kind 2 → along the end street from its flag to
 the cell; kind 3 → the street from the start flag toward the next flag, preferring the settler's current street
 when it connects the two flags, else the shortest link (`NNet::Flag::FindShortestLinkToFlag`). **[known]**
+`ComputeRoute` clears the byte at +9, plans, and **appends** the leg's cells through the street getters S 00669900 /
+S 006699f0 / S 00669760 (each pushes back); it then sets `index = count − 1` and `valid = 1`. It never empties the
+cell vector itself: only `ReplanFromCurrentCell` S 007746a0 and `Reset` S 00774620 do. **[known]** It never writes
+`StreetPath +0x48` either; the writer of +0x48 was not found. **[TODO]**
 
 `StreetPath::CanAdvance` (S 007747b0): the route is valid, not finished, and the next cell still has the street
 bit (`GridStates & 0x2`); with `noReplanAtFlags` set, additionally no flag of the owner on that cell. A street
@@ -1548,8 +1570,10 @@ Inputs:
 - Home reference (`Settler +0xd8`, used by `MoveToHome`, 3.4): set by `Settler_LinkDestinationReference`
   (S 0053bf50), which also adds the settler to the building's settler list (`(building +0x108) +4`); its only
   caller is `VillageOrder_LinkSettlerToDestination` for order category 3 (3.1), so the settlers with a valid
-  home reference are those ordered into a storehouse or barracks. **[known]** No other writer of the reference
-  besides `Load` was found. **[inferred]**
+  home reference are those ordered into a storehouse or barracks. **[known]** The other writers are `Load` and
+  `Settler_UnlinkHomeBuilding` S 0053bf80 (from the settler destructor and from `BuildingOrderingComp::Destroy`
+  S 00563c10, which releases a removed building's home settlers last entry first; `village-buildings.md` §3.10).
+  **[known]**
 - Unlinking: clearing a workplace / street / site reference makes the next `Update` call `StopAndSetState3()`.
 - `NVillage::Workers::ReleaseAllWorkers`, `NVillage::Soldiers::ReleaseAll`, `NavyCargo::ReleaseAll` and
   `NNet::Street::dtor` call `System::RemoveSettler` (immediate delete). `System::RemoveSettlersOfPlayer` is used

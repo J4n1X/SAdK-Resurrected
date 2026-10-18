@@ -494,7 +494,7 @@ side action 29 additionally cancels a running placement mode right after queuein
 the block reason is 0). Executor S 007813d0: flag found among all players' flags and
 `NNet::Flag::GetRemoveBlockReason` S 00669f70 = 0 → `NNet::System::RemoveFlag` S 00665c10 (deletes every street
 attached to the flag, the flag, and an attached building). Block reasons, in order: with an attached building: 3
-the building is in a fight, 2 it is headquarters-type (`depot`, `casern` +0xf1 and `territoryBuilding` +0xf5 of its
+the building is in a fight (its military component's fight reference, id hi at `Military+0x84`, is valid), 2 it is headquarters-type (`depot`, `casern` +0xf1 and `territoryBuilding` +0xf5 of its
 property all set), 4 its type's `constructionTime` (`BuildingProperty+0x88`) is below 1 and it is not the
 headquarters type (`Entity_IsIdle_88_Flags` S 00532960); then 1 the flag has a harbour link and its cell lies in
 its owner's territory; else 0. Owner check: none.
@@ -558,7 +558,9 @@ stub. **The command does nothing in this build** [known].
 #### Military
 
 **`0x2000D` GE_Military_Attack** — `EventInt64_1Integer`: target building id, soldier fraction (f32 bits). Sender
-`SendStartAttack` S 00781a00 from `AttackSlider::ExecuteAttack` S 00624700 (action 11): fraction = max(slider
+`SendStartAttack` S 00781a00 from `AttackSlider::ExecuteAttack` S 00624700 (action 11); the target id is the game
+selection's building, not the slider's own target, and nothing is sent without a selected building [known];
+fraction = max(slider
 value, `Military_GetMinAttackerFraction`), where the minimum is 1 / (2 × the largest number of available attackers
 against this target in any single building of the player), 1.0 if none (S 00575f00; the buildings iterated are
 the village system's vector at +0x3c, in list order [known]; it holds the buildings whose type has property
@@ -572,7 +574,8 @@ building's military component (+0x64), dispatches attackers scaled by the fracti
 are under attack!` unconditionally [known]. `NMilitary::Attack::DispatchAttackers` S 00576320 walks the same
 village list as the minimum above (vector at village system +0x3c) in list order and, for every building of
 the attacker, sends `(int)(GetAvailableAttackers(target, building) × fraction + 0.5)` soldiers (truncated; the
-0.5 is the double at S 007d4a90) when that is above 0, by sea or overland (`Military_ShouldAttackBySea`)
+0.5 is the double at S 007d4a90, the arithmetic is single precision: `(int)(float)((float)(n·f) + 0.5f)`,
+`docs/navy-and-military.md` §3.4) when that is above 0, by sea or overland (`Military_ShouldAttackBySea`)
 [known]. The fraction therefore acts per source building, not on the total. A forged `0x2000D` against an own
 or allied building does find attackers when the target is on the same landmass: `Military_GetAttackReachFactor`
 S 00575320 returns the overland distance falloff without any owner test when both cells have the same continent

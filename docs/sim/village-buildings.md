@@ -247,6 +247,10 @@ That B is the frame phase and A the main phase follows from `RequestMaterials`, 
 | +0x5c | `returningGoods` | references to packages on their way back to this building |
 | +0x74 | `settlerRefs` | settlers linked to the building (detached on teardown) |
 
+`Depot::dtor` S 0055af70 works in this order: reset both stocks, the settler references, `ReturningGoodSystem::dtor`
+(the returning packages are released and look for a new target, [streets-transport.md](streets-transport.md)),
+`NeedGoods::dtor` [known].
+
 Where a delivered ware lands is decided by `Depot::CollectGoods` (§3.19).
 
 A `Stock` is an ordered `map<goodId, count>` plus a running total of units (`totalUnits`, `Stock+0x14`; layout
@@ -486,7 +490,9 @@ S 0054c470 is the only access to `+0x14`.
 ### 3.4 Construction
 
 **Start** (`StartWithType` S 0055efa0) [known]: if `constructionTime > 0` and the game is not batch editing →
-`RequestMaterials`; otherwise `Complete` at once (headquarters, Olympic flame: `constructionTime = -1`).
+`RequestMaterials`; otherwise `Complete` at once (headquarters, Olympic flame: `constructionTime = -1`). There
+is no ship-site case: a ship-building site placed while batch editing is completed like any other building, no
+constructor is ordered and no ship is made ([navy.md](navy.md) §3.2) [known] S 0055efa0, S 0055d980.
 
 **Material requests** (`RequestMaterials` S 0055eb50) [known]. For list 0 (`frameCost`, phase fraction
 `1 − remainingB`) and then list 1 (`cost`, `1 − remainingA`):
@@ -798,7 +804,9 @@ storage building supplies to a request leave it differently, with a carrier spaw
 - `RequestMissingInput(good, target)` (S 005654f0): `missing = target − inputStock[good] − openRequests[good]`;
   add `missing` single-unit requests.
 - `GetHpScaledStockLimit` (S 0055c200): `stockLimit` when the type has no `health`; else
-  `max(1, trunc(hitpoints / health × stockLimit))`.
+  `max(1, trunc(hitpoints / health × stockLimit))`. A type without `bp_setStockLimit` keeps the default −1, so
+  its scaled limit is 1: the Olympic flame (health 60, no stock limit) asks for one unit of each recipe good once
+  it is damaged [known].
 - On every hit-point change (`RebalanceInputRequests` → `AdjustInputRequest` S 00565620): per recipe good,
   `have = stock + open requests`; if above the scaled limit cancel up to the surplus in open requests, then
   move any remaining surplus from the input stock to the output stock; if below, request the difference.
@@ -917,6 +925,13 @@ So a storehouse with a good "collected" keeps one **unassigned** request open; r
 package assigned are not counted, so more than one unit can be on its way [inferred]. The test for "finished"
 uses the building's own construction. Command 0x2001e toggles the flag of one good: a good without an entry,
 or with a disabled one, becomes enabled; an enabled one becomes disabled [known] S 007817f0, S 00557630.
+
+**Home settlers.** The ordering component (`Building +0x108`) holds at `+0x04` the settlers whose home is this
+building: `Settler_LinkDestinationReference` S 0053bf50 adds them (category-3 orders, [settlers-jobs.md](settlers-jobs.md)
+§3.1). `BuildingOrderingComp::Destroy` S 00563c10 releases them from the **last** entry first through
+`Settler_UnlinkHomeBuilding` S 0053bf80 (the settler's home reference cleared, the first matching id erased);
+the settler destructor S 006568b0 unlinks its home too (after the package discard, before the ship unlink and the
+movement) [known]. A settler whose home is gone takes the invalid-home branch of `MoveToHome` S 007776f0.
 
 Suppliers: when a requester asks for goods, storage buildings whose `goodFlags` has the good **enabled** are
 skipped as suppliers unless the search ignores flags [known] S 00557da0 — a store that collects a good does
@@ -1135,12 +1150,20 @@ and removes a **source**.
   within hex distance `< radius` with a footprint cell that is no longer a territory cell of its owner is
   marked and removed in the next `System::Update` (§3.5) [known] S 00558170. The footprint test
   (`IsFootprintOutsideTerritory` S 0055c0b0) asks `IsPlayerTerritoryCell(owner, water = false, border = false)`.
+- Removal gives the territory back: `TerritoryUpdater::dtor` S 00565270 (in `Building::dtor`, §3.5 step 6, before
+  the military component) removes the source through `NMap::Territory::RemoveSource` S 0067a320, which does
+  nothing for radius 0 [known]. On a transfer or conquest (§3.16) the old owner's source is therefore removed
+  before the new owner's source is added.
+- Border contacts (`DetectBorderContacts` S 005651e0 → `DetectTerritoryContacts` S 00674ad0, from `Activate` and
+  `Refresh`): with `p` the owner and `o` the foreign player met, `o.reached[p] = true`, `o.reachedPos[p] =` the
+  centre, `p.reached[o] = true`, `p.reachedPos[o] =` the ring cell, and `SetPlayerSpotted(o, p)`
+  ([players-victory.md](players-victory.md) §3.5) [known].
 
 ### 3.15 Hit points [known]
 
-- Regeneration (S 0055b910): when `tick − lastRegenTick >= mi_setRegenerationRate` (100) and
-  `hitpoints < health`: `lastRegenTick = tick`, and unless the game-wide flag `GameSystem+0xec` is set,
-  `hitpoints += 1`.
+- Regeneration (S 0055b910): when `tick − lastRegenTick >= mi_setRegenerationRate` (100), an **unsigned** compare
+  (`rate <= now − last`), and `hitpoints < health`: `lastRegenTick = tick`, and unless the game-wide flag
+  `GameSystem+0xec` (a cinematic) is set, `hitpoints += 1`; the timer restarts during a cinematic too [known].
 - Damage (S 0055b970, only caller: catapult hit S 0055e080): ignored while `GameSystem+0xec` is set; else subtract.
   The catapult hit posts `!Building hit by Catapult` to the owner, and when the damage is at least the current hit
   points `!Building destroyed by Catapult` (owner) and `!Enemy Building destroyed by Catapult` (attacker). The
@@ -1173,7 +1196,8 @@ and removes a **source**.
    no goods spilled, no remains (§3.5). Then remove the remembered entrance flag if it still exists.
 4. Construct the new building (`Building::ctor_Transfer` S 0055d4e0): all components fresh, new `Unique`,
    `variantKey` = the old one (not the new owner's tribe), entrance cell computed from it, footprint blocked,
-   territory source activated at once, "building added" raised. No ground levelling, no material requests.
+   territory source activated at once (`TerritoryUpdater::Activate` directly, so no `!Military building occupied!`
+   is posted), "building added" raised. No ground levelling, no material requests.
 5. Insert into the unique map and the building vector (at the end: the building moves to the back of the
    update order); attach the entrance flag (§3.2 step 3); `Construction::Complete`; route the map change;
    index; set the productivity statistic to its start value when the type has a product in slot 0 and is not
@@ -1495,7 +1519,9 @@ its own ([military.md](military.md) §7).
 Component layouts [known]: construction = tag, float `remainingA`, float `remainingB`, builder reference,
 site stock, type id, ship reference (version ≥ 1), byte `aborted` (version ≥ 2) (S 0055e720, Load
 S 0055e7a0). Depot = tag, byte +8, input stock, output
-stock, ware requests, returning packages, settler references (version ≥ 2; version 0 has an extra legacy
+stock, ware requests, returning packages, settler references (the checksum's untagged variant
+`Depot::StoreUntagged` S 0055ae70 writes the same order: stockA, stockB, NeedGoods, returning goods, settler
+references) (version ≥ 2; version 0 has an extra legacy
 byte instead; versions < 3 do not store the byte +8 and default it to true) (S 0055ad30,
 S 0055ada0). Production = tag, `bEnabled`, and
 `bCycleRunning` from version 1 (S 005655a0, Load S 005655e0). Blocking = tag, active byte, position, size
@@ -1523,7 +1549,9 @@ the type's `health` (S 0055b850, S 0055b910) [known]. Not stored either: `destro
 
 A second writer, `Building::StoreForChecksum` S 0055c690, feeds the same fields in the same order into the
 lockstep checksum (`nGame::System::ComputeChecksum` S 00784080) [known]. Differences from `StoreSavegame`:
-no `VillageBuilding` tag; military, catapult and ordering are written for every type; soldier training and
+no `VillageBuilding` tag; military, catapult and ordering are written for every type (the ordering component,
+S 00563c00, with its home settlers, after the upgrade and before the hit points), although only `depot` / `casern`
+types save it; soldier training and
 sacrifice keep their type conditions; unique, position, ticker, depot, blocking, hit points and projectile
 references go through untagged variants, the other components through their normal Store.
 

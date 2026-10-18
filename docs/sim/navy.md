@@ -316,9 +316,12 @@ one data reference, S 00538c78 from S 00528360). The only calls of slot 0 are in
 calls `NVillage::System::PlaceBuilding` or `RemoveBuilding`, and sets it back to 0 in the same call [known]
 (whole-binary search of the getter S 00695ea0 on `g_pGameSystem` and of direct `+0x38` loads after
 `g_pGameSystem`; an `Edit` pointer reached through another copied game-system pointer would not be found this
-way). A ship is created only when the constructor later reaches the site (§3.3), on a later tick, so even a
-ship-building site placed with that tool is built normally [inferred]; the instant completion is not reached
-by the shipped callers. In a free game with ships `SetBatchEditing` was not called and `Edit +4..+7` read 0
+way). A ship is created only when the constructor later reaches the site (§3.3), on a later tick. A
+ship-building site placed with that tool is not built at all: with the batch flag set,
+`Construction::StartWithType` S 0055efa0 completes the site at placement (its `constructionTime` 500 > 0, but
+batch editing wins), and neither S 0055efa0 nor `Building::ctor_Place` S 0055d980 has a ship-site case, so no
+constructor comes, no ship is created and the site stands as a finished building [known]. The zeroing in
+`SetBuildPosition` is therefore not reached by the shipped callers. In a free game with ships `SetBatchEditing` was not called and `Edit +4..+7` read 0
 [live, 2026-10-12].
 
 **Deletion paths** [known]: state 7 in `System::Update` (§4); `System::EraseShipByUnique` S 005b3890 (script
@@ -1239,7 +1242,7 @@ S 005bb1a0. The `initialized` byte is not written. The checksum stream ignores s
 
 | # | Question | What would settle it |
 |---|---|---|
-| 1 | Answered (§3.2): only the debug menu's building tool (`nMenu::Debug::HandleToolClick` S 00604dd0, tool mode 6) opens a batch edit, for the duration of one `PlaceBuilding` / `RemoveBuilding` call; a ship is created on a later tick, so the instant completion is not reached by the shipped callers | — |
+| 1 | Answered (§3.2): only the debug menu's building tool (`nMenu::Debug::HandleToolClick` S 00604dd0, tool mode 6) opens a batch edit, for the duration of one `PlaceBuilding` / `RemoveBuilding` call; a ship-building site placed that way is completed at placement by `Construction::StartWithType` S 0055efa0 and never makes a ship | — |
 | 2 | Answered (§2.10): no; the whole-binary scan of `PropertiesDb + 0x68` and of the `Ship.shipConfig` copies finds no reader of `+0x10` | — |
 | 3 | Answered (§3.1 rule 3): the null write is not reached through the game's own rules (one ship per player and route, `MoveToHarbor` only to ends of the own route, `ClearRoute` releases the docking position). A sea attack next to an own ship of the same route sends nothing by sea (`SendSoldiersBySea` S 00575510). Not covered: a save edited by hand, data with fewer than two docking positions per exit | static: S 005b97f0 and its five callers, S 005b9340, S 005b7050, S 005b4c50, S 005b3450, S 005b6d30, S 00575510 |
 | 4 | Answered (§3.4, §3.8): an anchored idle ship takes an own-to-own route on another water body (the continent test of S 005b4c50 compares the ship's cell with itself), and its first crossing starts with one straight step from its cell to `path[n-2]` | static: S 005b4c50 (disassembly), S 005bab60, S 005b99d0, S 005bdb30, S 005bd900, S 00772c50, S 005436d0, S 007728d0 |

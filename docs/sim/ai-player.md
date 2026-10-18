@@ -120,9 +120,16 @@ Sizes are rounded up: low-res = `(mapW+7)/8`, resource = ceil(`mapW/4`), low-res
 | +0x14 | `score` ("value[4]") | sum of `bp aiScore` of all the player's buildings in the block |
 | +0x18 | `harbors` | vector of {x,y} of the player's harbours in the block |
 
-A building is found per map cell with `NVillage::System::FindBuildingAtOrNearest(cell, 0)`, so a building that
-covers several cells is counted once per covered cell [inferred from the loop; the same remark is in the
-analysis of `SumOwnBuildingWeightAround` S 005327f0].
+The loop runs x from bx·8 to bx·8+7 (outer) and y from by·8 to by·8+7 (inner) over in-map cells, one lookup per
+cell with `NVillage::System::FindBuildingAtOrNearest(cell, 0)` S 00558890. That lookup reads object layer 1 at the
+cell (call at S 005588e0), accepts the id when its high word is > −1 and resolves it with `FindBuildingByUnique`
+S 00558250 [known]. Layer 1 holds a building on its **anchor only**: its only writer is
+`MapModifier::SetBuildingAtCell` S 006737d0, called from `Building::ctor_Place` S 0055d980, `ctor_Transfer`
+S 0055d4e0, `PostLoad` S 0055c260 (set) and `dtor` S 0055ce70 (clear), all with `&this->posX` (+0x20/+0x24); the
+other footprint cells carry only grid bit 0x100 (`Blocking::Set`). The other object layers: flag 0 (S 00674040),
+street 2 (S 00673820), deposit 3 (S 00673870), dig reservation 4 (S 006738c0) [known]. So a building adds its
+`aiScore` and threat **once, in the 8 x 8 block that contains its anchor**; a footprint reaching into a neighbouring
+block adds nothing there [known].
 
 **TerritoryMapElement** (0x30 bytes, per AI player and low-res cell): `cellId` (Unique of the AI cell that
 covers it, -1 none) and `counters[7]` (u32) [known] struct layout; use of each counter:
@@ -1082,8 +1089,14 @@ The best (strictly greater, start -100; x outer loop, y, then player) becomes th
    the target player and is not already an attack target (`NVillage::Military::HasNoAttackTarget`), at hex
    distance <= the area radius (12) from the area's map position (cell x 8), and either on a cell visible to the AI
    player or with cached enemy distance < 13. Candidates are ordered by **descending defensive weight**
-   `SumOwnBuildingWeightAround` (S 005327f0: over hex rings 0..10 around the building, `aiScore` of same-owner
-   buildings divided by `max(ring - 3, 1)`); equal weights keep the first.
+   `SumOwnBuildingWeightAround` S 005327f0; equal weights keep the first. The weight walks rings 0..10 in the
+   standard spiral (centre; per ring one step in direction 4, then `ring` steps in each of directions 0..5, visiting
+   after each step): 331 cells, each once, the loop counter equal to the cell's ring; out-of-map cells are skipped.
+   Per in-map cell whose layer-1 lookup (S 00558890, anchor only, see §2.2) finds a building of the argument's owner:
+   `sum = (float)aiScore / d + sum`, with `d = (float)(ring - 3)` when that is greater than 1.0 (double 1.0 at
+   S 007d8a08, `FCOMP; TEST AH,0x41`), else 1.0, so the divisor is 1 for rings 0–4 and 2–7 for rings 5–10. The sum
+   is a float at 24-bit x87 precision starting at 0 and includes the building itself at ring 0; each building counts
+   once, at its anchor's ring [known].
    - No candidate: report result 0.
    - For each candidate in order: `fraction` = attackers score (below); `ratio = EstimateStrengthRatio`.
      `ratio < 0` (nothing to send): next. `ratio < 0.25`, or `< 0.5` with military mode Safe: remember as
@@ -1799,8 +1812,8 @@ through the owner pointer from another module is not excluded].
   the fight history (a single remembered ratio per opponent).
 - Quirks to decide on deliberately: the 3x3 weight at (+1,+1); the discarded defenders score (it consumes a
   random number); budget units counting evaluation rounds, not attacks; Weak/Normal never building a
-  sacrifice building because `sacrificesStartTime` stays at FLT_MAX; buildings counted once per covered cell
-  in the military map; the free tool.
+  sacrifice building because `sacrificesStartTime` stays at FLT_MAX; buildings counted once, at their anchor
+  only, in the military map and the defensive weight; the free tool.
 - The AI never repairs `bEnabled` after the headquarters is lost: a computer player without headquarters
   stops planning entirely but its soldiers and buildings keep working through the normal simulation.
 - The profile is data: keep `ai.lua` semantics (keys of §6.1) so that the shipped file and mods load
@@ -1887,6 +1900,8 @@ through the owner pointer from another module is not excluded].
 | S 0058de80 / S 0058dae0 | `DestructionSystem::Update` / `CanDemolishBuilding` | demolition |
 | S 00585380 | `NAI::MilitarySystem::Update` | military schedule |
 | S 00586790 | `NAI::MilitaryMap::UpdateCell` | military map content |
+| S 00558890 / S 006737d0 | `FindBuildingAtOrNearest` / `MapModifier::SetBuildingAtCell` | building lookup by object layer 1 (anchor only) |
+| S 005327f0 | `GameQueryHelper::SumOwnBuildingWeightAround` | defensive weight of an attack candidate |
 | S 00599d60 | `MilitarySettings::Update` | slider tuning |
 | S 00597c80 | `MilitaryLimiter::Update` | attack budget |
 | S 00599a90 | `AttackSystem::Update` | attack round |

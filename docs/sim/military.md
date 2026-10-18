@@ -244,9 +244,10 @@ kind who fight the same enemy soldier".
 
 **Projectile** (`ai::military::MilitaryProjectile`, 0xd8) [known] S 00572b80, S 00572fa0: +0 unique id, +0x10
 type, +0x14 `flightTicks`, +0x18 `elapsedTicks`, +0x20 target, +0x78 source, +0xd0 damage. Target and source are
-`ProjectileOwner` (0x54): +0 kind (0 soldier, 1 building, else a position), building reference, settler
-reference, cell (+0x48/+0x4c), +0x50 int (the shooter's player index, used for the kill credit) [inferred from
-the uses in S 00572fa0 and S 0055e080].
+`ProjectileOwner` (0x54): +0 kind (0 soldier, 1 building, else a position), +0x08 building reference, +0x28 settler
+reference, +0x48/+0x4c cell, +0x50 int (the shooter's player index, used for the kill credit) [known for the
+offsets; the meaning of +0x50 is inferred from the uses in S 00572fa0 and S 0055e080]. The source's cell is
+therefore projectile +0xc0/+0xc4; for a catapult shot it is the catapult building's anchor.
 
 **Catapult** (`NVillage::Catapult`, `Building+0xf4`) [known] S 00567640: +8 target cell, +0x10 aim cell (-1 =
 none), +0x18 f32 last fire stamp (copy of the f32 at `GameSystem+0x78` when fired, S 005678b0), +0x1c f32
@@ -602,7 +603,8 @@ re-read for this document; the statements there hold. Additions and corrections:
    step 1 (`Fight::SetTargetBuilding` S 00570760 → S 0053be90 → S 00585cd0), so this assignment replaces it:
    the player setting is what counts [known from the call order in S 00576500].
 3. Dispatch attackers: for every territory building of the attacker in list order,
-   `n = trunc(GetAvailableAttackers * fraction + 0.5)`; if `n > 0` send by sea or overland
+   `n = trunc(GetAvailableAttackers * fraction + 0.5)` in single precision (`(int)(float)((float)(n·f) + 0.5f)`,
+   S 005763a2; `../navy-and-military.md` §3.4) [known]; if `n > 0` send by sea or overland
    (`Military_ShouldAttackBySea`).
 4. Message `!You are under attack!` to the defender, at the target.
 
@@ -673,7 +675,7 @@ count is 0), so this branch runs only for a castle that is itself the target, in
 - the target's own garrison: all available soldiers (`n = 0x7fffffff`, without the source test or the reach
   factor), by the same selection;
 - every other territory building of the defender: `trunc(GetAvailableAttackers(target, building) *
-  target.defenceFraction + 0.5)`, always overland. `GetAvailableAttackers` applies the same distance falloff as
+  target.defenceFraction + 0.5)` in single precision (S 005764b1), always overland. `GetAvailableAttackers` applies the same distance falloff as
   for attackers (full up to 12 cells, 0 from 24).
 
 In addition a soldier idling in a building that is under attack joins on its own once the fight has started and
@@ -1234,7 +1236,9 @@ it is driven only by the worker of a building type with `bp_setCatapult` and wor
    or nearest to the target cell (`FindBuildingAtOrNearest`), the projectile targets that building, else the
    position. Projectile damage = `bp_setCatapultDamage` of the catapult's type (10).
 5. **Impact** (`Building::OnCatapultHit` S 0055e080) [known]: `damage' = trunc(damage / buildingArmorFactor)`
-   of the **hit building's owner**; messages as in `village-buildings.md` §3.15; `Hitpoints::ApplyDamage`. A
+   of the **hit building's owner**; messages as in `village-buildings.md` §3.15 (`!Building hit by Catapult`,
+   refreshed with distance 1, and `!Building destroyed by Catapult` at the projectile's source cell;
+   `!Enemy Building destroyed by Catapult` at the hit building's anchor; `quests-sacrifices-stats.md` §3.6.2); `Hitpoints::ApplyDamage`. A
    building at 0 hit points is removed; a damaged military building has a smaller capacity (§2.4), and the
    allocation then releases surplus soldiers (§3.2). The catapult never hits soldiers [inferred: no settler
    target is ever set for type 1].
@@ -1528,7 +1532,8 @@ of §2.3 are hashed with the player (`players-victory.md`).
   compatibility [inferred].
 - **Floating point**: all conversions truncate (`ftol`), several add 0.5 first, the strike value adds 0.99.
   Single precision: garrison
-  size, send counts (`avail * fraction + 0.5`), strike multiplier, sacrifice factors, falloff. Fractions arrive
+  size, send counts (`avail * fraction + 0.5` = `(int)(float)((float)(n·f) + 0.5f)` at S 00576060, S 005763a2,
+  S 005764b1: an implementation in double sends one soldier more or less at some fractions [known]), strike multiplier, sacrifice factors, falloff. Fractions arrive
   as raw f32 bits in commands. The two flight-tick conversions truncate as well: they force the rounding bits
   of the x87 control word to truncation around a `FISTP` (S 0065f2ba..0065f2da, S 005679a8..005679c2) [known].
 - **Integer division** in the score (`lifePoints * 100 / maxHealth`), the gathering distances and the wounded

@@ -114,9 +114,22 @@ falloff(d) = d >= 24 ? 0 : min(36 - d, 24) / 24     // 1.0 up to d = 12, then do
 
 ### 3.4 Dispatch
 
-The attack slider sends a fraction `f`. Per building the count is **`(int)(GetAvailableAttackers * f + 0.5)`**
-[known: constant `007d4a90` = 0.5]. `Military_GetMinAttackerFraction` `00575f00` gives the slider step:
-`1 / (2 * the largest single-building count)`.
+The attack slider sends a fraction `f`. Per building the count is **`(int)(GetAvailableAttackers * f + 0.5)`**,
+evaluated in single precision: `Military_CountAttackersByKind` (at `00576060`), `DispatchAttackers` (`005763a2`) and
+`DispatchDefenders` (`005764b1`) all run `FILD available; FMUL float f; FADD double [007d4a90] = 0.5; CALL
+__ftol2_sse 006f2af0` (truncation) with the FPU at 24-bit precision, so the result is
+`(int)(float)((float)(n·f) + 0.5f)` [known]. Computing in double gives other counts at some fractions: n = 6,
+f = 0x3f6aaaaa gives a product 5.49999976 that rounds to 5.5, so the game sends 6 (double: 5); n = 1,
+f = 0x3effffff gives a sum that rounds to 1.0, so the game sends 1 (double: 0). This is simulation state.
+`Military_GetMinAttackerFraction` `00575f00` gives the slider step: `1 / (2 * the largest single-building count)`.
+
+`Military_CountAttackersByKind(target, attacker, scale, checkAvailability, outCounts, …)` `00575fd0` gives the
+slider's labels: over the attacker's territory-building list it adds `ftol(available · scale + 0.5)` (as above)
+to `outCounts[building.military.soldierKind]` (`military+0x68`), unchecked and without clearing the counts first
+(its callers clear them); with `checkAvailability` set nothing is counted unless `GetAttackAvailability` is 0
+[known]. Small wrappers: `Military_IsAttackAvailable` `00575b50` = `GetAttackAvailability == 0`;
+`Military_IsField8A0Zero` `00570d10` = fight phase == 0; `Military_IsField24Zero` `00570700` = `startCountdown == 0`
+[known].
 
 `ISoldierConnector` (`ISoldierConnector_vftable`) is the interface the dispatchers hand soldiers to [known: vtable
 `007e9b04` for `NMilitary::AttackConnector`; `NAI::StrengthCounter` implements it to count soldiers for the AI]:

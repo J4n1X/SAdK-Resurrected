@@ -918,6 +918,19 @@ to this system: it is a Lua routine that places goods into depots on a tick coun
   same type, text and arg whose cell is within hex distance `< 1` of `cell` (i.e. the same cell; S 005c1e40),
   set its `timeRemaining` back to 600.0 and notify "updated"; otherwise add a new one. Other senders do the same
   by hand with `FindNear...` and their own distance.
+- The finders: `Messages::FindMatchingWithArg` S 005c1e40 takes the **first** listed message (oldest first) with
+  the same type, text key and arg and `MapPos::HexDistance` S 00675040 (cell, message cell) `< maxDist`, compared
+  signed; `Messages::FindMatching` S 005c1fd0 is the same without the arg. A match is refreshed by
+  `Timer_ResetTo600AndRegister` S 005c0230 (`timeRemaining = 600.0`, then `NotifyMessageUpdated` S 005c1d80); the
+  matched message keeps its cell. Callers and distances `[known]`: `SendOrRefreshToPlayer` S 005c0270 (maxDist 1) from
+  `Military::Update` S 005609b0, `Transport_CarrierTryPlacePackageOnFlag` S 0064dae0 (`!flag blocked`, empty
+  arg), `LookForDeposit::Start` / `LookForAnimal::Start` (calls at S 00778e09 / S 00778eff) and
+  `LookForFishing::Start` S 0077f670; `PlayerMessages_FindNearWithArgForPlayer` S 005c01f0 from `OnCatapultHit`
+  S 0055e080 (maxDist 1) and the geologist's `GoDigging::PlaceResourceSignAndNotify` S 0077b2f0 (maxDist 7, the
+  `PUSH 0x7` at 0077b430); `NotifyLostTerritory` S 006797f0 uses `FindMatching` (distance `< 1`, arg not
+  compared) and refreshes nothing. There is no other memory of what was reported: no per-cell bits, no flood
+  fill; a geologist's find posts a new message once it is 7 or more cells from every listed message of that good,
+  or after the matching message expired or was removed.
 - `SendLetterToPlayer(player, text)`: a message of type 8 made with the two-text constructor, `text2` empty
   (`Messages::AddWithText2` S 005c2440).
 - Lifetime: every logic tick `ai::player::Player::Update` subtracts the **frame time in seconds** from `timeRemaining` of
@@ -950,8 +963,8 @@ position are `[known]` at the address given; the full trigger conditions are in 
 | 1 R | `!Building is not connected` | the upkeep of an empty military building with an open soldier order finds, on every 600th tick of that state, that the order system reports supply status 1 for it | the building's owner | building type name | building | S 005609b0 | military.md §3.3 |
 | 1 | `!Military building occupied!` | a territory building that is not of the castle type becomes occupied and its territory updater is activated; type has `territoryRange >= 1` | the building's owner | building type name | building | S 005653d0 | village-buildings.md §3.14 |
 | 1 | `!Watchtower occupied!` | same event for a type with `territoryRange < 1` and `exploreRadius >= 1` (no message when both are below 1) | the building's owner | building type name | building | S 005653d0 | village-buildings.md §3.14 |
-| 1 | `!Building hit by Catapult` | a catapult projectile hits a building and no such message for the same building type exists at the impact cell | the building's owner | building type name | impact cell | S 0055e080 | military.md §3.10 |
-| 1 | `!Building destroyed by Catapult` | the hit takes the last hit points | the building's owner | building type name | impact cell | S 0055e080 | military.md §3.10 |
+| 1 | `!Building hit by Catapult` | a catapult projectile hits a building and no such message for the same building type exists at the projectile's source cell (distance < 1) | the building's owner | building type name | the projectile's source cell (`MilitaryProjectile +0xc0`, the catapult building's anchor) | S 0055e080 | military.md §3.10 |
+| 1 | `!Building destroyed by Catapult` | the hit takes the last hit points | the building's owner | building type name | the projectile's source cell | S 0055e080 | military.md §3.10 |
 | 1 | `!Enemy Building destroyed by Catapult` | same event | the projectile's player | building type name | building | S 0055e080 | military.md §3.10 |
 | 1 | `!Lost Territory.` | a territory recomputation with `notify` took cells from a player and no such message exists at that cell | that player | empty | see map-resources.md | S 006797f0 | map-resources.md §3.6 |
 | 1 R | `!low soldiers` | periodic check: fewer than 5 stocked soldiers | the player | empty | none | S 005bf8a0 | players-victory.md §3.9 |
