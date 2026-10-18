@@ -227,7 +227,7 @@ deposits, doodads, flags, buildings, settlers and ships already carry the identi
 | state | `UpgradeStarted(building, targetType)`, `UpgradeCancelled`, `StreetUpgraded`, `DepositShown`, `DepositDepleted(id, depletedTicks)`, `SettlerPathChanged(id)`, `PackagePile(id, flag, attached)`, `ChestOpened(id, player)`, `HarborLinked(flag)`, `FightChanged(id)`, `CarriedPackageChanged(settler)`, `ActionTimerStarted(entity, kind, totalTicks)`, `EntityStateChanged(entity, state)` | slots +0x10..+0x14, +0x44..+0x50, +0x5c, +0x60..+0x6c, +0xc8..+0xd0; the per-tick polling of action timers and states |
 | one-shot | `Strike(attacker, target)`, `ProjectileLaunched(id, kind, source, target, launchTick, impactTick)`, `ProjectileEnded(id, impact)`, `SpawnTriggered(id)`, `SacrificeEffect(kind, subject)`, `SacrificeState(building, state)` | slots +0x30, +0x98, +0x9c, +0xa0..+0xc4, +0xdc |
 | map | `MapChanged(layer, rect, player)`, layer = Heights, Patterns, Territory, Exploration, ConstructionFlags, GroundResources, Reinitialised; one merged rectangle per layer, player and tick | `NMap::CallbackReceiver`; **new**: territory with a rectangle (the original rebuilds all borders), construction flags (the original recomputes the build overlay per frame) |
-| players | `PlayerAdded/Renamed/Removed`, `MessagePosted(player, messageKey, type, args, cell?)`, `QuestChanged(slot)`, `StatisticsSampled(player)`, `PlayerDefeated(index)`, `MatchDecided(winners)` | player table notifications; message and statistics listeners; the victory code's local-player branches |
+| players | `PlayerAdded/Renamed/Removed`, `MessagePosted(player, messageKey, type, args, cell?)`, `MessagesLoaded(player, messages)`, `QuestChanged(slot)`, `StatisticsSampled(player)`, `PlayerDefeated(index)`, `MatchDecided(winners)` | player table notifications; message and statistics listeners; the victory code's local-player branches |
 | session | `SpeedChanged(speed)`, `CommandResolved(sender, commandType, result)` | the speed command's local effects; the executors' direct calls into the local street placement mode (GC §3.4) |
 | script UI | `ScriptUi(player or all, request)`: book pages, tutorial page, minimap symbol, letter, action override, cinematic pages, particle at a cell, lock-map refresh | the UI-only `menu.*`, `ui.*`, `gfx.*` calls of map scripts ([lua.md](lua.md) §6) |
 | services | `ChestClaimed(chest, player, value)`, `MatchDecided` | the referee's ClaimChest and FinishGame, the campaign progress and profile writes |
@@ -253,6 +253,16 @@ cell, finePos, reason, growth)` is the deposit's `EntityAdded`, emitted where th
 and a field sown anew is shown again with its new growth. `DepositDepleted(id, depletedTicks)` comes from the marking
 (growth ≥ 0), `SpawnTriggered(id)` from both spawn kinds. An animal's `EntityRemoved` carries `Obstructed` (erased
 under a new building, MR §3.10) or `Destroyed` (a hunt abort).
+
+Messages as built (sadk-remake cc12218): `MessagePosted` carries the original's three posting rules as flags.
+`Refresh` is "post or refresh" (`PlayerMessages_SendOrRefreshToPlayer` S 005c0270): a listed message of the same type,
+key and argument whose cell lies at a hex distance below `RefreshDistance` only has its time reset to 600 (S 005c0230),
+the first match oldest first; `RefreshDistance` is 1 for every poster except the geologist's find, which passes 7
+(S 0077b2f0). `UnlessPending` is "post unless pending" (`NotifyLostTerritory` S 006797f0: nothing posted, nothing
+reset), and `MatchKeyOnly` leaves the argument out of the match (`Messages::FindMatching` S 005c1fd0 instead of
+`FindMatchingWithArg` S 005c1e40). `MessagesLoaded(player, messages)` comes inside the load's re-announcement and
+restores a player's list as the save holds it, with no sound and no minimap symbol (`Messages::Load` S 005c2520 pushes
+without the listener).
 
 `SimEvent` is an open base record: a mod's component emits its own event types, and the presentation maps event
 types to handlers, so a mod brings render and audio behaviour for its own events ([mods.md](mods.md) §8.2).
@@ -431,6 +441,13 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   list or no path in the gathering and origin steps; an undefined level in `ConquerBuilding`. Kill credit goes only to
   valid slots.
 - **Removal reasons**: a captured building leaves with `Transferred`, one destroyed by a catapult with `Destroyed`.
+- **Views for the attack menu and the music** [implemented, sadk-remake 8f20eb9, cc0b7e4]: `IFightView` has `Active`,
+  `StartCountdown` and `CountByKind` (the fight box and actions 11 / 12); `IAttackQueries.AvailableAttackers`
+  (`GetAvailableAttackers` S 00575dc0, with its transient cache) and the per-kind count of
+  `Military_CountAttackersByKind` S 00575fd0 feed the attack slider's labels; the engine view `IFightListView`
+  answers `FightList::IsPlayerInvolved` S 00573ad0 for the battle music. Compatibility mode needs the original's x87
+  rounding of the attack count in the slider and in both dispatches, `(int)(float)((float)(n·f) + 0.5f)`, not a
+  double-precision product ([military.md](../sim/military.md)): the two differ at some fractions.
 - **Open**: capture (built, not yet exercised in a run); `FindOrderForSoldier`; the AI hooks; the hook of the heal
   sacrifice 1003. The catapult is in §6.15; the sea branches, the soldiers' ship states and order category 6 are
   in §6.14.
@@ -640,7 +657,14 @@ Remake-only (no original id): a debug feature put together from three paths of t
 - **Placement**: the batch-editing branch of `Building::ctor_Place` S 0055d980 / `Construction::StartWithType`
   S 0055efa0 ([village-buildings.md](../sim/village-buildings.md) §3.2), taken per owner through the village's
   seam `IVillageBatchEditing`: a god's buildings are complete at once, their territory active, the worker inside
-  or a territory building's first soldier.
+  or a territory building's first soldier. Ship sites (size 0x10) are left out and built normally, the constructor
+  making the ship from the god's stores [the remake's own, sadk-remake cc12218]: the batch branch has no ship-site
+  case (S 0055d980, S 0055efa0), so it completes the site without a constructor and no ship is ever made, as the
+  original's debug tool leaves it ([navy.md](../sim/navy.md) §3.3).
+- **Scope**: god mode is infinite resources (the stock below), instant building (above) and full sight, nothing
+  else; work, transport, production, training and garrisons run as for any player, so the god's buildings need
+  streets. A god's hunter, for example, keeps the original's first wait of the lodge's `restTime` (1500 ticks),
+  because his lodge has no animal linked yet when he is created inside it.
 - **Stock**: `ItsLikeAJackpot` (`Cheat_FillStoreWithGoods` S 005eba50,
   [camera-input-cutscenes.md](../sim/camera-input-cutscenes.md) §3.12) made continuous: every tick, before the
   village, the system `core.game.godmode` tops every completed depot of a god up to 100 of each good of the
@@ -688,7 +712,12 @@ original does not survive (§11 item 4).
 - The selection, the placement modes, the street build mode and the message list are presentation state. The
   original allocates the selection in the logic system and keeps messages (with their remaining time) in the saved
   player object; the remake's save adapter writes the presentation's message list into the original's `Messages`
-  record and reads it back, the one place the two meet (compatibility saves only).
+  record and reads it back, the one place the two meet. As built [implemented, sadk-remake cc12218]: the engine
+  interface `IMessageArchive` hands the presentation's list (oldest first) to the save, F5 and the save panel both
+  pass it, and a player whose list no presentation keeps (another machine's, or a headless run) is saved with the
+  list it was loaded with; the load restores the local list through `MessagesLoaded` (§5.1). The records are the
+  original's (`Message::Store` S 005c0300: `Message` v2, the time left as a float, cell, text, second text, type,
+  read flag, unique id, argument); they enter neither the state hash nor the checksum.
 - While the session hangs: faithful mode drops commands as the original does (GC §3.1), refined mode refuses them
   with a visible reason.
 
@@ -735,8 +764,8 @@ since program start); refined mode gives every peer, every load and every sessio
 - **Beyond the original**: the remake keeps state the original loses on load: the active deposit order, the animal
   time stamps (the original's post-load clamp changes later checksums on `sp02_perpetual_ice`), the victory state,
   the ship sinking timer, the open-need index and a few appended fields. Ships go into an extension (the map part's
-  navy writes 0 ships). The AI, the messages, the chests and the quests are written in empty or default form into
-  the original's sections. The military's transient path cache is empty with stamp 0 after a load (the original
+  navy writes 0 ships). The messages are written as the original writes them, from the presentation's list (§7);
+  the AI, the chests and the quests are written in empty or default form into the original's sections. The military's transient path cache is empty with stamp 0 after a load (the original
   stamps it with the load tick, `Attack::PostLoad` S 00575800, MI §7). The saved next-tick time is the float32 sum.
 - **Open**: the AI state is not saved (computer players stop after a load); reading the original's saves of older
   versions (the shipped `C02.sav` is plaintext from an older build, SF); ships, expeditions, the catapult, the
@@ -868,10 +897,10 @@ These matter more in the remake than in the original, because Harmony patches ca
      `not-upgrading`; the `UpgradeChanged` event for the upgrade's progress; `IUpgradeQueries` for the block reason.
    - **Gatherers and specialists** (§6.13): `GoAfforest` without a planting type fails (the original creates type
      −1); `MoveToDeposit` ends when its deposit vanished; a good with no sign list gets no sign (the original
-     crashes); `!Found Resource` refreshes its message in radius 7 through `MessagePosted.Refresh`; the good flag
+     crashes); `!Found Resource` refreshes its message within hex distance 7 through `MessagePosted.Refresh` and
+     `RefreshDistance` (§5.1); the good flag
      `FoundOnBuildableGround` replaces the hard-coded water good id.
-   - **Building panels** ([renderer.md](renderer.md) §15.3): the reset buttons for `0x20022` and `0x20020` are the
-     remake's own; the panels read views only, the productivity through `IStatisticsView.TryGetProductivity`
+   - **Building panels** ([renderer.md](renderer.md) §15.3): the panels read views only, the productivity through `IStatisticsView.TryGetProductivity`
      (§6.15); parents and layout details are [inferred]; the settings panel opens with **L** or `btSettings`.
    - **The navy** (§6.14): one street planner per player (the original shares one); `Ship.Shipyard` in place of
      the village construction record (+0x50); no docking position and a search toward the dummy (−1, −1) dock

@@ -274,8 +274,17 @@ facing away), a band (yellowish facing the light, warm gold facing away) and the
 weight, widths and shadow are the theme's `garamond_*` items (`garamond_body`, `_highlight`, `_shade`, `_rim`, `_edge`,
 `_outline`, `_weight`, `_bevel`, `_rim_width`, `_outline_width`, `_shadow_soft`), so a mod restyles them in its
 `ui/theme.tres`. The values were matched to the original glyphs' colour statistics at the menu's sizes (edge
-saturation and the share of dark to coloured edge pixels within a few percent). Forms, the HUD
-and running text keep the plain theme font for legibility.
+saturation and the share of dark to coloured edge pixels within a few percent). The plain roles have their own
+vector styles too [implemented, sadk-remake 1fd6903]: `Body_Arial` (the default of every widget: labels, buttons,
+counts) and `small_no_alias_white` (the top bar's goods counts, the diplomacy rows, statistics; the same glyph shapes in
+grey) in Liberation Sans Regular at 11 px, 1 px between glyphs, with the original glyphs' face, outline and shadow
+colours; `Mini_Silk` (the 5 × 7 pixel font of slider limits, timers, "!Empty") in Liberation Mono Bold at 10 px with
+its 7 px advance. Liberation 2.1.5 ships under the SIL Open Font License 1.1 in `fonts/liberation/` with its licence.
+Each vector font's ascent and descent are its bitmap font's `base` and `lineHeight` (`UiFonts.LineBox`), so vector and
+bitmap texts sit on the same baselines. `light_system_outlined` is used only by a layout the original never loads, and
+the fonts the original names only in code (`system`, `title`, `mini`, `editor`, `dark_system`, `light_system`,
+`font_big_white`, `Gamertags_Garamond`) have no style until a built screen needs them. Godot spaces glyphs in whole
+pixels, so `Body_Arial` runs 3 to 7 % wider than the original.
 3. **Parse** into the runtime objects (visual descriptors, layouts, UI parts).
 
 Registry entries are not XML and are never patched this way: they change in the data stage.

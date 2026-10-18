@@ -543,11 +543,16 @@ depends on them.
 
 The original's pass order (RE §3.1) mapped to Godot: sky; opaque terrain; unexplored terrain black (by the fog
 shader); terrain blend layers (transparent, render priority by pattern rank); streets, crossings and routes
-(transparent, pulled toward the camera by the original's 0.1 near-plane bias, done in the vertex shader instead of
-writing depth); buildings with house decals before them; map objects; characters; goods; animals; ships; single
-meshes; selection decals; map objects clipped at the water and then the water itself (after blended objects, RR §4.1);
-particles; the build overlay. Godot sorts transparent objects by distance; render priorities enforce the pass
-boundaries where the original's order matters.
+(transparent; the original pulls them toward the camera by moving the near plane from 1.0 to 1.1, `SetNearPlaneOffset`
+S 004d9e10 with depth bias 0.1 in `StreetRenderer::Render` S 006c3ab0, a pull of about 9 % of the eye distance, some
+3.4 units at 40; §15.1 says how the remake stands in for it); buildings with house decals before them; map objects;
+characters; goods; animals; ships; single meshes; selection decals; map objects clipped at the water and then the
+water itself (after blended objects, RR §4.1); the build overlay; particles. The build overlay comes after the whole
+map, water included, and before the particles (`Scene::RenderPostFxAndOverlay` S 00680a00), and after the post-process
+combine, so the depth of field never blurs it. Godot sorts transparent objects by distance; render priorities enforce
+the pass boundaries where the original's order matters. As built (sadk-remake d515744, `Renderer/DrawOrder.cs`): the
+terrain blend layers clamp to priority 125 at most, the build overlay is at 126 and the particles at 127 (pass 0x100,
+the original's last); the remake's optional depth of field still blurs the overlay.
 
 ### 8.3 The mirror view [draft]
 
@@ -1179,8 +1184,17 @@ changes under it. Street previews of the placement mode come from `IQueries` and
   hexagon fan.
 - **Layer**: `StreetLayer` (map layer order 450) keeps one `MeshInstance3D` per street and one per crossing, named by
   street id or crossing cell; texture sets 0 and 1; draw order through render priority. A street is rebuilt on its
-  add, remove and upgrade and on `MapChanged(Heights)` under it. `street.gdshader` applies a depth offset of 0.1 and
-  the normal map; the parameters come from `graphics.xml` `<Street>`.
+  add, remove and upgrade and on `MapChanged(Heights)` under it, and all streets, crossings and door paths are
+  rebuilt when the terrain detail switches between the flat and the smooth surface. `street.gdshader` applies a depth
+  offset of 0.1 world units and the normal map; the parameters come from `graphics.xml` `<Street>`.
+- **The near-plane pull** (§8.2) is not reproduced as a depth shift: Godot draws opaque objects before transparent
+  ones, so a pull of several units would draw streets over settlers' feet, goods and buildings. A small offset alone
+  buries the original's flat 7-vertex crossing fan (radius 2.25, `BuildJunctionFan` S 006de590) where the ground
+  bulges through it, leaving hard cut edges at junctions and harbour flags. So each fan triangle is split 6 × 6
+  (`CrossingPieces`, the remake's own density), positions, normals and uv interpolated from the original's seven
+  vertices, and only the points below the drawn surface are raised onto it; with one piece the mesh is the
+  original's fan. A harbour flag reached only by sea routes has no crossing, as in the original (`AttachFlagNodes`
+  S 0069eeb0 runs on "street added", which a sea route never raises).
 - **Differences from the original**: the strip is a grid sampled from the heights, not the strip clipped against
   the terrain triangles; every flag node gets a crossing; the other streets at a node are rebuilt when its street
   count changes [inferred]; water streets and sea routes are not drawn yet; the normal map's
@@ -1217,7 +1231,12 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 **As built** [implemented, sadk-remake d2d47ee]:
 
 - **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `Renderer/BuildMode/`) keeps one rendering-server MultiMesh per
-  16 × 16-cell region, one instance per cell with an icon at the cell's point on the drawn terrain surface. A region is
+  4 × 4-cell terrain block (sadk-remake d515744), one instance per cell with an icon at the cell's point on the drawn
+  terrain surface, so Godot's back-to-front sort of the blocks follows the original's far-to-near walk
+  (`AddCellsInRect` S 006b36d0 walks the visible block list backwards, and that list is collected nearest first). The
+  icons are world-sized, depth-tested quads in the original too: nearer plants and rocks cover them, water never does
+  (`water_shader.fx` writes no depth), and they grow only as close as the camera comes (§8.1, the remake's free
+  camera comes much closer than the original's; whether to cap it is open). A region is
   asked again only when a `MapChanged(ConstructionFlags)` event marks it; the original asks every visible cell every
   frame. Icon index, atlas cell and quad follow RE §3.14 (`ConstructionIcons`, shader
   `shaders/overlay/buildicons.gdshader`); the cell under the cursor gets no icon; nothing draws while the info-map
@@ -1247,23 +1266,34 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   marker's look and the tints are the remake's own.
 - **Commands**: after a street is completed an extra `0x20007` can go out and is refused (as in the original's
   network flow; harmless).
+- **Attack** [implemented, sadk-remake 8f20eb9]: an enemy territory building gives kind 6, or 7 when its active
+  fight is led by the local player; a foreign building that is no enemy gives none (`MenuSelection_ComputeSelectionKind`
+  S 006156a0). Kind 6 binds the attack slider (`attackslider`, S 005ebd30 and its methods) and actions 11 / 12
+  (`RefreshAvailability` S 00623da0, `ExecuteAction` S 00623730) send `StartAttack` 0x2000D and `Retreat` 0x2000E;
+  kind 7 opens the fight box (`infoboxFight`) with its count pulse (`nMenu::Flash`).
 - **Open**: the ray pick of buildings, ships and routes (S 00787cc0); selection kind 3's third button (always 14);
-  kind 7 (fight), the sacrifice states and destroy block reason 2; `menu.allowActions`; action 30 until `0x20010`;
-  audio. Decisions to review: [sim-boundary.md](sim-boundary.md) §11 item 4.
+  the sacrifice states and destroy block reason 2; `menu.allowActions`; action 30 until `0x20010`. Decisions to
+  review: [sim-boundary.md](sim-boundary.md) §11 item 4.
 
 **Building panels as built** [implemented, sadk-remake 24823f6]:
 
 - **Boxes**: the construction, production and store boxes and the settings panel follow the original's layouts and
   rules (ingame-ui §3.6, §3.8, [`../sim/hud-panels.md`](../sim/hud-panels.md)): the good lists and their defaults,
-  the count formats and colours, the productivity text, the confirmation order of the settings. The reset buttons for
-  `0x20022` and `0x20020` are the remake's own; the settings panel opens with **L** or `btSettings`; parents and
-  layout details the layouts do not give are [inferred].
+  the count formats and colours, the productivity text, the confirmation order of the settings. The settings panel
+  has no reset buttons for `0x20022` and `0x20020`, as the layout has none (tab 1 holds only `contGoodPriority` and
+  `btConfirm`); it opens with **L** or `btSettings`; parents and layout details the layouts do not give are [inferred].
+- **Info boxes** [implemented, sadk-remake bad476e]: every good list shows its constructor's button count, empty
+  buttons drawn empty (construction 12, store 22, running sacrifice 3, production 12 of which stockLimit × inputs
+  are shown; ingame-ui §3.6), sorted as `CompareEntries` S 00648d10; the headline is rewritten every frame; the
+  product fans follow the worker's work progress; the store's soldier tab, the catapult box and a ship site's
+  progress are built; `ResetAndRefresh` S 00617db0 switches a box whose keep rule fails, and a box closed by another
+  kind's fades out behind the next one (`InfoBox::Hide` S 00631bc0, without its mover and zoom).
 - **Boundary** [implemented, sadk-remake c16efa5]: the panels read views only. `IBuildingView` carries `Requests`
   (the depot's `NeedGoods` +0x44 in filing order: the good and the package on its way), `Workers` (the worker
   slots) and `DepotSettlers`; the productivity comes through `IStatisticsView.TryGetProductivity`;
   `IPlayerView.MinesNeedFood` (`Player::IsStateNotDefault` S 005be330) serves the box and the selection rule.
-- **Open**: the stock overview (the statistics' inventory tab), the store's soldiers tab, the diplomacy rows, the
-  product progress fans, the worker flags, the box animations. Decisions to review:
+- **Open**: the stock overview (the statistics' inventory tab), the worker flags, the boxes' move-in, move-out and
+  zoom, a selected ship under construction (kind 5 of S 006397e0). Decisions to review:
   [sim-boundary.md](sim-boundary.md) §11 item 4.
 
 ### 15.4 Fog of war
@@ -1279,23 +1309,24 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   options buttons; the pause panel lies on the desktop; the rest on the HUD root). The message list stands at the
   top left, where the layout puts it (`pos="-26 -4"` without alignment).
 - **Messages**: rows, row text and scroll buttons follow the original's (ingame-ui §3.8.5, hud-panels §3.5); a
-  message's remaining time falls by the tick's simulated time.
+  message's remaining time falls by the tick's simulated time. The list is saved and restored with the game
+  ([sim-boundary.md](sim-boundary.md) §7).
 - **Minimap**: the map picture is each cell's pattern average colour lit by the map's light, water in the map's
   water colour, one pixel per cell; the territory and building overlays and the click as the original's
   (S 005f3fc0, S 005f4390, S 005f1520; hud-panels §3.7); the symbol lifetimes from `mapSymbols.xml`; unexplored
   cells transparent.
-- **Statistics panel**: the curves, coloured from `menu.cfg`.
+- **Statistics panel**: the curves, coloured from `menu.cfg`. The original's UI player colours (S 0087f8c8) are
+  iconconfig.xml's `<PlayerColors>` (`IconConfig::LoadFromXml` S 00611320) and differ from `menu.cfg`'s.
 - `debug=true` shows the developer panel.
 - **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the message
   lifetime counts simulated time (the original subtracts the frame time once per logic tick, so its lifetime
   depends on the frame rate); the minimap picture (the original renders the scene from above) and its resolution
   (the original's overlays are a fixed 256 px); no statistics key (**S** moves the camera); no build or pause
   button (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells
-  transparent as documented, not seen in the original; the curve colours from `menu.cfg` (the original's table
-  S 0087f8c8 not compared).
+  transparent as documented, not seen in the original; the curve colours from `menu.cfg` where the original's
+  panels use the `<PlayerColors>` table.
 - **Open**: the minimap's wheel zoom and middle-button pan, its ship and fight symbols; the statistics player
-  rows and the inventory, buildings and tech tabs; the menu combo box, the goods bar, the quests, the chat, the
-  selection preview, back and forward cycling, info-map buttons 2 and 3; whether the original hides `btOptions`
+  rows and the inventory, buildings and tech tabs; the chat, the selection preview, back and forward cycling, info-map buttons 2 and 3; whether the original hides `btOptions`
   or `btQuests` in code (ingame-ui §10 Q15).
 
 ## 16. Particles [draft]

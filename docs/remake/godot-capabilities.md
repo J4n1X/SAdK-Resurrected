@@ -109,7 +109,14 @@ Rules that follow:
   (text_server_adv.cpp:1078). Canvas fragment shaders have no `VERTEX`, so such a look is per glyph [source].
   `FontVariation.variation_embolden` tears holes into MSDF glyphs at overlapping contours (Ä, g, &, W), measured
   2026-10-15; a heavier stroke comes from moving the MSDF edge in the shader instead. `Button` has no font shadow
-  theme items; type variations may derive from other variations [measured].
+  theme items; type variations may derive from other variations [measured]. An outline on an MSDF font is measured
+  in field texels (48 to the em here), not screen pixels, and clamped to `px_range / 2 − 1`: `outline_size` 5 gives
+  about 1 px at 10 to 11 px. A `FontVariation` built on another `FontVariation` drops the inner one's spacing and
+  transform, and `variation_transform` widens the glyphs but not their advances [measured].
+- Canvas text samples its glyph page with clamped addressing; the original's font passes wrap (`ui_shader.fx`
+  RenderFont / RenderFontDepth, FI §3.6), so a glyph whose padded rectangle starts left of its page reads the far
+  edge in the original and the near edge in Godot; the conversion gives such pages a border ([assets.md](assets.md)
+  §6) [measured].
 - `Theme.MergeWith` merges items, type variations and the defaults; `Clear()` keeps the default font, font size and
   base scale [api; measured 2026-10-15]. The remake builds its UI theme by merging every layer's `ui/theme.tres`
   ([mods.md](mods.md) §6.6).
@@ -246,8 +253,26 @@ How the presentation uses these facilities [draft; suggestions forwarded by the 
   ([assets.md](assets.md) §8).
 - **Input**: controls are `InputMap` actions declared by the mod that owns them, so every control can be rebound
   ([renderer.md](renderer.md) §8.1).
-- **Audio**: Godot's buses (one per volume setting, effects on the buses) and `AudioStreamPlayer3D` for positional
-  sounds; many short one-shots of one kind share an `AudioStreamPolyphonic` player.
+- **Audio** [implemented, sadk-remake cc0b7e4]: the original's sound system (`SoundSystem`, the emitter manager, the
+  interface player, the music player with its playlist and the voice-over player; [`../sim/audio.md`](../sim/audio.md))
+  is ported Godot-free and plays through an output interface, so it is unit-tested with a fake mixer. The Godot
+  output is a pool of `AudioStreamPlayer` / `AudioStreamPlayer3D`, at most 32 channels as the original's; Godot's
+  attenuation is off, the original's FMOD roll-off is applied per frame and Godot only pans. The buses are Master,
+  Music, Ambience, Effects, Interface and Voice; the table that routes sound types to buses (`AudioBuses.ByType`) is
+  extensible, so a mod routes its types or adds buses. The volume settings are six sliders: master, music (0.3 by default, as the original), effects
+  (category 3), ambience (category 0), interface and notifications (category 2: clicks, dialogs, the message list's
+  sounds) and voice; ambience and voice are the remake's own splits of the original's `effectVol` and
+  `interfaceVol`, so turning the notifications down never silences the campaign speech. The sound table is the
+  registry's `sound` records, file references resolve through the virtual file system, and the menu tracks and the
+  battle record are data (`audio/music.xml`).
+- **Tips** [implemented, sadk-remake e06b183]: Godot's tooltips are replaced by a tip host of the remake's own (a
+  `CanvasLayer` made by every layout builder), a port of the original's `Tip::Update` S 004b5a70: it opens after more
+  than 0.07 s of still hover, follows the cursor, closes with the original's 0.2 s eased fade on any mouse button or on
+  leaving the widget, and keeps one popup per kind. Godot's tooltip window is freed at once, so the original's timing
+  and fade-out cannot be had from it, and Godot 4.7 calls `_MakeCustomTooltip` with an empty text on every control that
+  overrides it. The rich tips are an open registry of kinds (`UiTips.RegisterProvider`), so a mod adds kinds or
+  replaces the original's five (building, sacrifice, good, soldier, info-box building). Plain Godot controls given a
+  `TooltipText` still show Godot's tooltip.
 - **UI styling**: `Theme` resources, referenced by the XML layouts and replaceable or patchable by mods like any other
   asset; the layouts themselves stay XML ([mods.md](mods.md) §6.6).
 - **Animation of few objects**: `AnimationPlayer` on a `Skeleton3D` for buildings and other single instances; the
