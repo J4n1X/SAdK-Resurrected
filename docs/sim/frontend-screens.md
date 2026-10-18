@@ -480,8 +480,11 @@ button rule. Buttons and combos are matched by widget id (+0x11c), the three row
   kind 1 with level 0..2, unchanged otherwise;
 - of the team button's children `team0` .. `team6`, only `team<team + 1>` is visible (`team0` = no team; the
   layout gives teams 0..5 the symbols caro, heart, moon, pik, star, cross);
-- `PlayerColorBlob` and the start number are drawn in the player colour of the slot's colour index (colour table
-  of `nMenu::IconConfig`, S 0087f8c8; values from `menu.setPlayerColor` in `menu.cfg`);
+- `PlayerColorBlob` and the start number are drawn in the player colour of the slot's colour index (the UI
+  colour table of `nMenu::IconConfig`, S 0087f8c8, filled from `iconconfig.xml` `<PlayerColors>` by
+  `IconConfig::LoadFromXml` S 00611320 [known]; `menu.setPlayerColor` in `menu.cfg` writes the other table,
+  `g_PlayerColors` S 0087ead8, of the military flags and the minimap, [players-victory.md](players-victory.md)
+  §2; the two tables hold different values);
 - the start button shows `start + 1`, or `?` when its user data is −1;
 - `inRange` = `slotIndex < startPositionCount` (unsigned); the type combo is enabled when `inRange`;
 - `active` = `inRange` and (the slot is a computer (kind 1) or the row is row 0): the tribe combo is enabled,
@@ -601,7 +604,9 @@ Additional rules of the panel:
 - **Opening** (S 0060ce40, S 0060e0e0) [known]: the panel fades in over 0.2 s and is brought to the front. The
   root attribute `textLoad` (mode 0) or `textSave` (mode 1) is written to the confirm button and the headline
   (`!Load` / `!Save` in the install). Mode 0 hides the edit box; mode 1 shows it and fills it with the default
-  save name.
+  save name: `SaveGame_BuildDefaultSaveName` S 0060dd90 translates the map name and does not replace unsafe
+  characters; `GameFile_Save` S 005aa260 replaces them when it writes the file, and also shows the busy cursor
+  and calls `UserProfile::SetLastSaveName` (offline and as host) [known].
 - **Buttons** (S 0060d430) [known]: `btLoad` (hotkey Enter) confirms; `btDelete` (hotkey `d`) opens the message
   box with text `!Remove this file?`, title `!Delete file` and sets its pending action to 1; a click on any other
   widget, a list row included, copies the marked row's name into the edit box. `closeButton` has hotkey Esc.
@@ -616,6 +621,12 @@ Additional rules of the panel:
   and two box answers recorded].
 - **Load hand-over** (S 0060dd30) [known]: a non-empty chosen name → fade out (0.2 s), `System::SetPendingMapPath`,
   clear the name.
+- **Stale list** [known] S 0060ce40, S 0060dd30: the file list is read when the panel object is made and again
+  only after a delete (`listDirty`). The panel objects live on (one per mode on the game screen, created at
+  their first opening, [ingame-ui.md](ingame-ui.md) §3.8.8; one load panel on `Main`), so a save written after
+  a load panel was first opened is missing from it until a delete in that panel. Presentation only.
+- **Edit field** ([ui-toolkit.md](ui-toolkit.md) §3.7): Enter is not consumed by a single-line `EditEx`, so
+  `btLoad`'s hotkey 13 confirms while the field has the focus.
 
 ### 3.7 Options panel
 
@@ -978,7 +989,7 @@ connection when a lobby manager exists [known] S 0061fea0 (`../message-catalog.m
 | `ui\layout\menuLoading.xml` | root `loadingScreenCount`, `loadingScreen<n>`, `tipOfTheDayCount`; bar part names | 1, `ui_loadingscreen`, 51 |
 | `ui\layout\menugameend.xml` | root `wonTitle`, `wonDesc`, `defeatTitle`, `defeatDesc` (`reportTitle`, `reportDesc` unused); `title`, `text`, `btContinue`, `btEnd` | `!TitleWon`, `!DescWon` |
 | `ui\layout\menunetinfo.xml` | `id<n>`, `name<n>`, `team<n>`, `controller<n>`, `net<n>` (n = 0..7), `sync`, `exit` | row 0 at y = 90, 20 pixels per row; columns at x = 50, 120, 240, 310, 420 |
-| `scripts\menu.cfg` | `menu.setPlayerColor` (the colour table of rows and markers), `menu.setLanguage` | `app-shell.md` §3.6 |
+| `scripts\menu.cfg` | `menu.setPlayerColor` (the colour table `g_PlayerColors`; the menu rows use the `iconconfig.xml` table instead), `menu.setLanguage` | `app-shell.md` §3.6 |
 | `language\<code>\ui.txt` | map names (`MP_2P_fata_morgana`), `!MISSION <n>`, `!tip00`..`!tip50`, option and button texts, `!TitleWon`, `!DescWonMP`, `!<n> Minutes` | `Fata Morgana (2 Spieler)`, `5 Minuten` |
 | `language\<code>\briefings.txt` | mission titles `C01`, descriptions `C01_desc`, book pages | |
 | `language\<code>\credits.txt` | `cr000` .. `cr400` | 401 keys; a value may be empty (`cr000`), start with `#` or `%` (§3.8) |
@@ -1064,7 +1075,8 @@ simulation state while a match runs, with these boundaries:
 - **Logo sequence**: three still images, 5 s each with 1 s fades, skippable; no video codec is needed.
 - **A converter has to provide**: the three logo textures, the localised logo, the loading backdrop, the map
   previews (`.bmp` next to each map, 128 × 128; show the inner 120 × 120), the text tables (`ui.txt`,
-  `briefings.txt`, `credits.txt`), `campaigns.xml`, the player colour table from `menu.cfg`, and per map the
+  `briefings.txt`, `credits.txt`), `campaigns.xml`, the two player colour tables (`menu.cfg`, `iconconfig.xml`
+  `<PlayerColors>`), and per map the
   `MapInfo` fields the panel shows (size, start positions, per-slot kind, colour, level).
 - **Persistence**: one settings file and one progress file per user suffice (`app-shell.md` §3.9 for the
   original layouts if the remake wants to import an existing profile). The options map onto engine settings;

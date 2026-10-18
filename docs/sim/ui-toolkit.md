@@ -166,11 +166,19 @@ matrix is set before the glyphs are flushed.
    − lineHeight × sy × 0.5; Bottom: − lineHeight × sy. (sx, sy = the text's scale pair, default 1, 1.)
 3. Per valid glyph: quad left = trunc(pen x) + xOffset × sx − 0.5, top = trunc(line y) + yOffset × sy − 0.5,
    size = width × sx by height × sy; UV = (x, y, x + width, y + height) × (1 ÷ scaleW, 1 ÷ scaleH). Then
-   pen x += xAdvance × sx + charSpacing.
+   pen x += xAdvance × sx + charSpacing. The glyph values are those after the loader has grown each rectangle
+   by the `.fnt` padding (`BitmapFontGlyph::ParseCharLine` S 004e28b0, [formats-inventory.md](formats-inventory.md)
+   §3.6), and the whole grown rectangle is drawn.
 4. The wrap limit of this path is textWidth + 1 and its height limit is lineHeight, so a single line never
    wraps (constant 1.0 at S 007d8a08).
 
 There is no kerning [known: [formats-inventory.md](formats-inventory.md) §3.6].
+
+**Sampling** [known] S 004e1350, `gfx/fx_20/ui_shader.fx`: `UIRenderer::DrawGlyphQuads` draws through the
+techniques `RenderFont` and `RenderFontDepth` (the latter adds an alpha test, Greater 7); both sample the page
+with `addressU` / `addressV` = Wrap and linear filtering. A padded glyph rectangle that reaches past the page
+edge (for example `Subline_Garamond`'s `e` at x 0, grown to x −2) therefore reads the opposite edge of the page,
+which is transparent in the shipped pages; a clamping sampler would repeat the edge texels instead.
 
 **Boxed layout** (`wrapSize` set; `BuildTextInBox` S 004e3270, same glyph loop) [known, disassembly]:
 
@@ -256,6 +264,10 @@ The lobby's chat bubbles use the same layout in plain mode (tags not interpreted
 - Rotation (u16 at Shape +0x92, set by code): the quad is rotated about its centre by
   −value ÷ 65536 × 2π radians (S 00882840 = 6.2831855), so 65536 is a full turn.
 - Sampling is unfiltered when the owner's `pointfiltering` is set (Object +0x180).
+- Colour: `disabledColor` while the owner or any ancestor is disabled (`IsFlagE4SetInHierarchy` S 0042e330),
+  else `color`; then × widget opacity. Children's shapes therefore grey out with a disabled parent, each in its
+  own `disabledColor` (default 0.4667, `Shape::ctor` S 004aa5a0). `AlphaFanPicture` builds its fan quads with a
+  white vertex colour × alpha and never uses the disabled colour (S 004cd4a0).
 - With a mask texture the quad goes through the masked path with `maskUV0`, `maskUV1`.
 - The mapping is divided by the size of the texture as created, and UI textures are created with
   `D3DX_DEFAULT` sizes (`CTexture::CreateD3DTexture`, S 004e7a9e): a picture whose sides are not powers of two
@@ -378,6 +390,9 @@ to the other two before they are read), `padding` (4 numbers: left, top, right, 
 `PasswordEdit` with `font="Head_Garamond"`, `mapping="848 80 170 34"`, `padding="6 6 6 6"`; the chat input of
 `templates.xml` with `maxLength="255"`, `autohide="false"`, `clearonesc="true"`, `padding="12 4 12 4"`.
 
+**Creation** [known] `EditEx::Create` S 0049e4a0 (the factory's creation slot): font `Body_Arial`, texture
+`ui_menus`.
+
 **Focus** [known] S 00498c60, S 0049b7b0: left press while hovered focuses it (resets the caret timer, cancels
 its tooltip, clears the `Edit` focus global; `uiClick0` only when focus changed). A read-only field takes focus
 but ignores keys and characters.
@@ -396,14 +411,16 @@ selection length = caret index − anchor index (signed). Double click selects t
 | Ctrl+A (0x01) | select all |
 | Ctrl+C (0x03) | copy the selection; without a selection copy the caret's line |
 | Ctrl+X (0x18) | cut the selection; without a selection cut the caret's whole line |
-| Ctrl+V (0x16) | paste, truncated to maxLength − length + \|selection\| characters |
+| Ctrl+V (0x16) | paste, truncated to maxLength − length + \|selection\| characters; the pasted text is not filtered by `allowedChars` |
 | Tab (0x09) | inserted only with the allow-tab flag, else not handled |
 | Enter (0x0a, 0x0d) | inserted only if `multiline`, else not handled (so `hotkey="13"` buttons fire) |
 | 0x08, 0x0b, 0x0c, other codes < 0x20 | not handled |
 
 **Keys** (`HandleKey` S 0049f530, on key down) [known]: Backspace and Delete remove the selection, else one
-character; Left / Up / Right / Down move the caret (Shift extends the selection; Ctrl+Right jumps to the next
-word boundary); Home / End go to the start / end of the line (with Ctrl of the text; End on a soft-wrapped line
+character; Ctrl+Backspace first moves the caret to the previous word boundary and then deletes one character
+(`MoveCursor` S 0049bc40); Left / Up / Right / Down move the caret (Shift extends the selection; Ctrl+Right jumps
+to the next word boundary; character classes and word boundaries S 004985e0, S 00498760, S 00498fd0,
+S 00499030); Home / End go to the start / end of the line (with Ctrl of the text; End on a soft-wrapped line
 stops before the trailing space); Space inserts a space under the same rules as a character; Esc releases focus
 and, with `clearonesc`, empties the field; Tab without the allow-tab flag moves focus to the next (Shift:
 previous) `EditEx` sibling by z-order, wrapping round (S 0049c6f0, children of kind 7, at least two). Key-up of
@@ -422,7 +439,8 @@ scroll line (one line if not `multiline`), each left-aligned in white × widget 
 per character; the selection is a white rectangle with alpha 0.33 over the selected span; the caret is a
 vertical line of the line's height in colour ARGB 0xff0000ff, drawn while the caret timer ≤ 500 of its 1000 ms
 cycle, only with focus and not read-only. The timer adds the frame time in ms, modulo 1000 (S 0049a090).
-The mapping follows the Focus state (0 / 1 / 2 → the three mappings).
+The mapping follows the Focus state (0 / 1 / 2 → the three mappings). The horizontal scroll keeps the caret
+inside the text area (`ScrollToCursor` S 0049af70).
 
 **No IME**: text arrives only as `WM_CHAR` single bytes; the window procedure handles no `WM_IME_*` message
 [known] S 00401f30. A key-down that a widget handled is not translated, so it produces no `WM_CHAR`
@@ -445,7 +463,10 @@ S 004d0790, S 004d0830, S 004d0770, S 004cfdf0:
   size. Throttle position = trackStart + v × (trackEnd − trackStart) (S 004cff30).
 - Step buttons: `leftUp` → v − 1 ÷ snapCount, `rightDown` → v + 1 ÷ snapCount; snapCount 0 counts as 10.
 - Wheel while hovered: +0.1 for a positive delta, −0.1 otherwise. Double click: v = 0.5.
-- Value text (`useText`): `snprintf(textFormat, textValMin + (textValMax − textValMin) × v)` into 128 bytes.
+- Value text (`useText`): `snprintf(textFormat, textValMin + (textValMax − textValMin) × v)` into 128 bytes
+  (`%f` with a precision and `%%` are the forms the layouts use).
+- Hover: `mapping_cursorover` while hovered, else `mapping` (S 004cf4a0, S 004cf5e0). With the `templates.xml`
+  `slider` (130 px wide) the track runs from 16 to 105 px [known: data and the rule above].
 - XML (S 004d04b0): children `throttle`, `leftUp`, `rightDown`, `text`; attributes `mapping`,
   `mapping_cursorover`, `useText`, `textValMin`, `textValMax`, `textFormat`, `value`, `snapCount`.
 
@@ -505,6 +526,7 @@ type 0: y = value × (slider height − throttle height), x = 0; types 1, 2: x =
   the rows out again (S 004cb9e0), and unmarks the header when it closes (S 004cb2b0).
 - Rows are stacked below the header starting at `dropdownoffset`, each one row-template height apart; if the
   list would end below the screen (absolute y + list end > 1.0) all rows are shifted up by the overshoot.
+- Rows stand at x 0 of the widget (S 004b29c0).
 - Click on a row while open: `DropDownMenu` notifies "item chosen" with the row index and closes;
   `ComboBoxNew` sets `selectedIndex`, writes the row text into the header caption fitted to combo width − header
   button width − caption x pixels (ellipsis rule of §3.1), closes and notifies "selection changed" with the
@@ -525,8 +547,10 @@ visible tab buttons left to right from the first button's position.
 
 ### 3.13 ProgressBar, Graph
 
-- **ProgressBar** [known] S 004bd580: value clamped to 0..1; the `bar` child's width = full width × value; the
-  marker child sits at its base position + that width.
+- **ProgressBar** [known] S 004bd580, S 004bd280: value clamped to 0..1; the `bar` child's width = full width ×
+  value (the picture is squeezed to that width, not cut); the marker child sits at its base position + that
+  width. The constructor sets the value to 0, but the fill is computed only when a value is written, so a bar
+  that its owner never writes keeps its layout width (a full bar).
 - **Graph** [known] S 004c9410, S 004c7f90: the point list is smoothed `smoothingIterations` times; one pass
   moves every interior point towards the midpoint of its two neighbours by `smoothingStrength` (new = p +
   (mid − p) × strength, using the neighbours' values of the previous pass); fewer than 3 points are not
@@ -578,12 +602,19 @@ callers of S 004ade70].
   and its opacity reset to 1. `FadeOut(obj, d)` S 004c3c30: nothing if the object is invisible; a running fade
   is stopped and the new one starts from the current opacity (else from 1) to 0. `FadeIn(obj, d)` S 004c3d50:
   the start value is 0, or the object's current opacity if a running fade had to be stopped; the object is
-  shown, its opacity set to the start value, and the fade runs to 1 [known] S 004c3d50 (disassembly).
+  shown, its opacity set to the start value, and the fade runs to 1 [known] S 004c3d50 (disassembly). The
+  member `Object::FadeIn` S 0049fea0 calls it; a recursive fade sets the opacity of the whole subtree
+  (`SetOpacity` S 004a0630).
+- `nUi::Object::Hide` S 004a1130 stops no animation: a fade that runs goes on after the hide [known].
+  `ClearAnimations` S 004a23a0 removes the widget's own animations only, not those of its children [known] (the
+  pause panel's text pulse survives `SetPaused`, [ingame-ui.md](ingame-ui.md) §3.4).
 - **AlphaPulse** S 00763510: alpha = min + (max − min) × (0.5 + 0.5 × sin(2π × frequency × elapsed)), applied
-  with `SetAlpha` while the target is visible.
+  with `SetAlpha` while the target is visible. On a `Label` `SetAlpha` (vtable +0x40, S 004b1d90) writes the
+  text colour's alpha, not the opacity, so the drawn alpha is pulse × opacity (§3.1) [known].
 - **Scaler** S 004d25e0, S 004d24d0, S 004d2390: start pushes a copy of the target's deployment, records base
   position and size, clears dock and alignment. Scale s = from + (to − from) × t (per axis); pingPong replaces t
-  by a triangle wave of the total time × speed; easing as above. Applied about the centre: size = base × s,
+  by a triangle wave of the total time × speed; easing 1 is applied to t, not to the scale
+  (`AnimationScaler::Update` S 004d24d0) [known]. Applied about the centre: size = base × s,
   position = base + half × (1 − s). Stop pops the deployment copy.
 - **Mover** S 00769010, S 00768e80: same push / pop; position = base + from + (to − from) × t (reverse: from and
   to exchanged); optional hide on stop.

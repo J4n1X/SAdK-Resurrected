@@ -174,7 +174,18 @@ are laid out in [players-victory.md](players-victory.md) §2.6.
 
 One instance per kind is kept in a cache (`TooltipCache_GetOrCreate` S 0062bfd0) and shared by every widget
 whose tip names that kind [known] S 00645e90. A widget's `nUi::Tip` holds the provider pointer, a description
-string and the source id.
+string and the source id. The widgets that set a provider [known: the callers of the cache]:
+
+| Widget | Kind | Set by |
+|---|---|---|
+| build menu buttons | 0 | `BuildingButton::CreateForBuilding` S 0064b610 |
+| construction box picture | 0 | `InfoBoxConstruction::Update` S 006397e0 |
+| good buttons (info boxes, lists) | 2, or 3 for a settler entry | `GoodButton::SetEntry` S 00630530, S 0062fdc0, `InitFromSettler` S 0062fed0; `GoodButton::Clear` S 006309b0 removes it |
+| goods bar | 2 | S 00645e90 |
+| production box products | 2 | `InfoBoxProduction::Update` S 00635c50 |
+| info box help button | 4 | S 00631310, `UpdateHelpText` S 006316e0 |
+| sacrifice buttons (box and bar) | 1 | `SacrificeButton::SetSacrifice` S 0062f4e0, `InitAndAttachToParent` S 006269b0 |
+| world tooltip over a soldier | 3 | `UpdateWorldHoverTooltip` S 005ef740 |
 
 ### 2.6 Messages panel `nMenu::Messages` [known] S 005f86a0, S 005f85b0, S 005f73e0
 
@@ -335,7 +346,10 @@ drawn.
      the plot shows the last `timeRangeMinutes` samples and older ones are clipped at the left [inferred for
      the reading of `W`; the two assignments are known];
    - colour = the entry of the RGBA table at S 0087f8c8 (16 bytes per entry) selected by the player's
-     `colorIndex` (`Table_0087f8c8_GetEntryForPlayer` S 0060ee20), written to all four colour floats; it
+     `colorIndex` (`Table_0087f8c8_GetEntryForPlayer` S 0060ee20), written to all four colour floats; the table
+     is the UI player colour table that `IconConfig::LoadFromXml` S 00611320 fills from `iconconfig.xml`
+     `<PlayerColors>`, not the `menu.cfg` table `g_PlayerColors` of the flags and the minimap, and its values
+     differ from those [known]; it
      replaces the colours of the XML children `graph0..7`.
 3. `yScale = 1 / max`, with `max = 1` when it is 0. One maximum is shared by all shown players.
 4. Points of each shown player: `x_j = j / (n - 1)`, `y_j = sample_j * yScale`, for `j` = 0..n−1 over the whole
@@ -553,7 +567,7 @@ soldier buttons → `0x2001E`), and stock acceptance per depot in `InfoBoxDepot`
 
 Timing, the plain text popup and the list of kinds are in [ingame-ui.md](ingame-ui.md) §3.2.2. `Tooltip::Open`
 S 006464c0 [known]: if the popup is not already attached, attach it to `nUi::Root`, apply the template of §2.5,
-clear `canReceiveFocus`, fade in over 0.2 s. `Tooltip::Update_adjC` S 006463c0 closes the popup when its
+clear `canReceiveFocus`, fade in over 0.2 s (linear; `Tip::Update` replaces it at once with its eased fade). `Tooltip::Update_adjC` S 006463c0 closes the popup when its
 visibility slot reports false while it is attached [known].
 
 **Good slots.** `FillGoodSlots(list, count, prefix)` S 00646830 with `ApplyGoodSlots` S 006465e0 [known]:
@@ -582,7 +596,7 @@ duration, formatted by S 00647590: value < 100 → `!immediate`; value ≥ 10000
 positive.
 
 **Kind 2, good** `TooltipGood::ShowFor` S 00647d20 [known]: `lbGoodName` = the good's name; `lbBuildingName` =
-label `!Produced by:` (S 007c88a0) + the localised names of the viewing tribe's producer buildings
+label `!Produced by:` (the string at S 008809c0, set by S 007c88a0) + the localised names of the viewing tribe's producer buildings
 (`Economy_CollectProducerBuildings(tribe, good)`) joined with `", "`, or `-` when there is none; 4 slots `good`
 = the good's recipe.
 
@@ -667,15 +681,19 @@ S 005eb120 → `PlayerMessages_SendLetterToPlayer` [known for the call; inferred
 
 Creation, categories, layers and positioning: [ingame-ui.md](ingame-ui.md) §3.8.6.
 `OverlayBuilding::UpdateFromBuilding` S 006403c0 [known, read from the disassembly unless tagged] runs when
-the overlay is created and then every frame while the overlay is visible. The building's construction comes
-from S 0055bf90: `remainingA` +0x70, `remainingB` +0x74, `paused` +0x78, builder reference id +0x40 / +0x44.
+the overlay is created and then every frame while the overlay is visible. The building's effective
+construction comes from S 0055bf90 (the upgrade's construction while an upgrade runs): `remainingA` +0x70, `remainingB` +0x74, `paused` +0x78, builder reference id +0x40 / +0x44.
 "Under construction" = `remainingA > 0` or `remainingB > 0`.
 
 The widgets are, in object order, `hammers` (+0x440), the name `label` (text at +0x860), `progressBar`
 (+0x8f0), `textProductivity` (text at +0x11f0), `ship` (+0x1280), `notShooting` (+0x1508), `noWorker`
 (+0x1790), `productionStopped` (+0x1a18), `noCoins` (+0x1ca0), `swordsMen` (+0x1f28), `bowMen` (+0x23d8),
 `goodIcon` 0..9 (+0x3118 + i × 0x288) [known: S 0063ef50 loads them in this order; the offsets are those the
-update writes to].
+update writes to]. `OverlayBuilding::InitAndAttachToParent` S 0063f550 re-parents them [known: disassembly]:
+`hammers`, `label`, `progressBar` (with `textProductivity`), `ship`, `notShooting`, `noWorker`,
+`productionStopped`, `noCoins` and the ten `goodIcon`s become children of `labelBG`; `labelBG`, `swordsMen` and
+`bowMen` (each with its text) and `exclamation0..2` stay children of the overlay. So the XML positions of the
+first group are relative to `labelBG`.
 
 **Fixed parts.** `ship` is hidden on every update; [TODO] not established: whether any other code shows it.
 `label` gets the localised property `name` (`Text::SetText(…, localize = true)` → `Localization::GetText`,
@@ -691,7 +709,8 @@ S 004b3fe0). `hammers` is shown exactly while under construction.
 | `noCoins` | property `casern` is set, the type is not both `depot` (+0x54) and `territoryBuilding` (+0xf5) (a barracks, not a headquarters), and the byte at +0x14 of the `SoldierTraining` at building +0x124 is 0: the `enabled` flag of the `SoldierUpgrade` embedded at +0x10 ([military.md](military.md) §2.5) [known for the test]; [inferred] promotion with coins is switched off in that barracks |
 
 **Under construction**: progress `p = ((1 − remainingA) + (1 − remainingB)) × 0.5`; `textProductivity` =
-`int(p × 100)` + `%` (truncated); `progressBar` value p with the green bar and tip mappings (taken from the
+`int(p × 100)` + `%`, truncated, with the product computed in double (S 006406b7; a float product would differ,
+e.g. for 0.29); `progressBar` value p with the green bar and tip mappings (taken from the
 `progressbarGreen` template in S 0063f550), shown; `swordsMen` and `bowMen` hidden; the missing-goods icons
 are updated when `noWorker` is not shown, else all hidden. The function then returns, so the label colour is
 not touched while under construction: it keeps the XML or the previous colour.
@@ -708,11 +727,12 @@ not touched while under construction: it keeps the XML or the previous colour.
   Label colour (RGBA): `textColRed` when the fight reference of the building's `Military` (building +0xe0,
   +0x80 / +0x84) is valid ([inferred] the building fights or is attacked), else `textColGreen`. A territory
   building that is not a casern shows the hit-point bar: `r = Hitpoints::GetRatio(building +0x10c)` S 0055b850,
-  `textProductivity` = `int(r × 100)%`, `progressBar` value r with the red mappings, shown. A casern hides the
-  bar. `swordsMen` and `bowMen` stand at their XML positions (cached in S 0063ef50); with the bar hidden their
+  `textProductivity` = `int(r × 100)%` (double product, S 00640c72), `progressBar` value r with the red
+  mappings, shown. A casern hides the bar. `swordsMen` and `bowMen` stand at their XML positions (cached in S 0063ef50); with the bar hidden their
   y is reduced by the bar's deployment height.
 - tail of both branches, only for a type that produces a good (`HasGoods(0)`): without `hasProductivity` the
-  label is green; otherwise `v = NLogic::Statistics::GetProductivity(stats, building's Unique) × 100`
+  label is green, RGB only with the alpha kept (S 00640fba pushes keep-alpha 1); otherwise
+  `v = NLogic::Statistics::GetProductivity(stats, building's Unique) × 100`
   S 005373b0 (−1 without an entry, which shows red) and the colour is green for `v > 66`, orange for `v > 33`,
   else red (strict comparisons, thresholds S 007f6f7c / S 007f6f78; only RGB is set, alpha kept). This
   overrides the military red / green. The same value feeds `InfoBoxProduction::Update` S 00635c50,
@@ -734,9 +754,11 @@ continuously.
 
 **Unused children** [known]: `exclamation0..2` are only created, loaded from the XML, detached and destroyed,
 never shown or hidden by code, so their visibility is the XML default; their atlas cells in
-`ui_buildings2008.dds` are empty. `labelBG` is never touched. The template's `swords` and `clocksymbol`
-children are not referenced by the building overlay's code; `clockSymbol` is driven only by the fight overlay
-([ingame-ui.md](ingame-ui.md) §3.8.6), so [inferred] the clock of `overlayBuilding` stays static.
+`ui_buildings2008.dds` are empty. `labelBG` is only a parent (above); no update writes to it. The template's
+`swords` child is not referenced by the building overlay's code. Its `clocksymbol` is never created: it gets
+its `controltype` only through the template `clock`, which the factory does not consult for `controltype`
+([ingame-ui.md](ingame-ui.md) §3.1.2) [known] S 004c21d0; `clockSymbol` is driven only by the fight overlay
+([ingame-ui.md](ingame-ui.md) §3.8.6).
 
 #### 3.6.2 Overlays drawn by the renderer (pointers)
 
