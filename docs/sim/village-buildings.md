@@ -778,6 +778,7 @@ catapult the same field (25) is the length of the shoot animation ([military.md]
   {good, amount} through
   `GetEntryWithModifiers` (the amount of `goodAmountN`; for the single good id 0x17626a03, `corn`, the amount
   is doubled while the owner's sacrifice modifier flag 12, `Effect_CornDoubleProduction`, is above 0;
+  `egyptCorn` 0x4a852f49 is not, so the Egyptians' `nilflood` sacrifice changes nothing [known];
   S 00661c50, S 00663450), add it to the **output stock** and to the player's good statistics;
 - `bCycleRunning = false`.
 

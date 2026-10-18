@@ -508,7 +508,7 @@ Effects of the modifiers on other systems, with the owning document:
 | 9 `ShipSpeed` | speed of the target's ships | navy.md §3.4 |
 | 10 `PeaceTime` | **peace**: buildings of the owner cannot be attacked (attack target state 5), the owner cannot start attacks, and a fight in its fighting phase in which the attacker or the defender is in peace time ends | military.md §3.5, §3.6 |
 | 11 `BuildingArmor` | catapult damage to the target's buildings is divided | military.md §3.10 |
-| 12 `CornDoubleProduction` | the amount of the good `corn` produced by the owner is doubled | village-buildings.md §3.7 |
+| 12 `CornDoubleProduction` | the amount of the good `corn` produced by the owner is doubled. Only `corn` (id `0x17626a03`, a literal in S 00661c50): Egyptian farms produce `egyptCorn`, so `sacrifice_nilfloodEgypt` costs its goods and has no effect `[known]`; a simulation-state quirk that compatibility mode reproduces and refined mode fixes (the mod `mods/nilfloodfix` doubles `egyptCorn` too) | village-buildings.md §3.7 |
 | 13 `WorkerPause` | rest time of the target's workers is multiplied | settlers-jobs.md §3.5.4 |
 | 14 `ExpandTerritory` | territory range of the owner's territory buildings is raised by the value | §3.2.6 |
 

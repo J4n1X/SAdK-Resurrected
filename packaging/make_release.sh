@@ -12,7 +12,7 @@ OUT="$REPO/release"
 export SADKMOD="$REPO/sadkmod"
 # This repository's mods a release ships. Test mods (cheatstart, propreload), nomeshcache (for model makers) and
 # npcmodels stay out.
-EXTRA_MODS="borderless oscursor nopreview foresterfix navalcombatfix mpsave"
+EXTRA_MODS="borderless oscursor nopreview foresterfix navalcombatfix mpsave nilfloodfix"
 
 # Plain make: the Makefiles track their dependencies. (make -B rebuilds sadkmod's precompiled header from several
 # sub-makes at once, which corrupts it.)
