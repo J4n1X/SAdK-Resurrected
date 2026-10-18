@@ -796,8 +796,9 @@ or `rand`]:
   with the sign of `dir.x` (`+acos(d)` when `dir.x·1 − dir.z·0 > 0`, `−acos(d)` otherwise, so also for
   `dir.x == 0`). The input is not normalised here. `Math_YawBetweenPoints(from, to)`
   S 006eedc0 normalises `to − from` first. Used by figure facing and hit effects (presentation).
-- Approximations used by effects only [known]: `Math_FastSqrt` S 006e8a20 (256-entry table S 007fd118 on the
-  float's bit pattern), `Math_FastCosLut` S 006e8a50 (256-entry table S 007fcd10), `ai::math::SinTable1024`
+- Approximations of the presentation [known]: `Math_FastSqrt` S 006e8a20 (256-entry table S 007fd118 on the
+  float's bit pattern; used by effects and by the sea-route strip, `RouteDecal::BuildFromSpline` S 006e2450,
+  [world-objects-rendering.md](world-objects-rendering.md) §3.7), `Math_FastCosLut` S 006e8a50 (256-entry table S 007fcd10), `ai::math::SinTable1024`
   S 004ccb90 (1024 scaled sine entries; that they span one full turn and that the one instance S 00885dc8
   serves `AlphaFanPicture` is [inferred]: the sine argument is lost in the decompile and the user of the
   instance was not read),
@@ -1270,7 +1271,7 @@ decoded saves and maps if original files are to be loadable.
 | 006e97e0 / 006e8e10 / 006e9b70 / 006e8830 / 006e9200 | `Matrix44::PerspectiveFovLH` / `OrthoLH` / `LookAtLH`, `Quaternion::Slerp`, `Matrix44_InvertInPlace` | named only; bodies not read (§10) |
 | 006b0e60 / 006b24f0 / 006b25a0 / 006b1dd0 | `ai::terrain::TerrainGenerator::ctor` / `Run` / `RunToBuffer` / `ApplyFaultLines` | noise terrain; the only user of its generator |
 | 006eece0 / 006eedc0 | `Math_YawFromDirection` / `Math_YawBetweenPoints` | yaw against (0, 0, 1) |
-| 006e8a20 / 006e8a50 / 004ccb90 / 006e89f0 | `Math_FastSqrt` / `Math_FastCosLut` / `SinTable1024::Init` / `Math_FloatToIntRound` | effect-only approximations |
+| 006e8a20 / 006e8a50 / 004ccb90 / 006e89f0 | `Math_FastSqrt` / `Math_FastCosLut` / `SinTable1024::Init` / `Math_FloatToIntRound` | presentation approximations (effects; `Math_FastSqrt` also the sea-route strip) |
 | 0057b9b0 | `Fpu_SetDefaultControlWord` | x87 control word: exceptions masked, 24-bit precision |
 | 0057b790 / 0057b760 / 0057b990 / 0057b810 | `Timer_Init` / `Timer_QpcMilliseconds` / `Timer_Reset` / `Timer_UpdateFrame` | frame timer |
 | 0057b840..0057b8e0 | `Timer_GetCurrentMs`, `GetFrameDeltaSeconds`, `GetFrameDeltaMs`, `GetTotalSeconds`, `GetElapsed*` | timer readers |
