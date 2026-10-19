@@ -732,7 +732,10 @@ the soldier tooltip, with the description `!Soldier`); a flag on the cell: `!Fla
 localised name plus `NN%` productivity (clamped at 0), or `name (Under construction)` / `name (Construction
 stopped)` by the construction's paused byte (+0x78); a resource sign is the temporary type-1 doodad of the cell
 (`FindDoodadAtCell(cell, 1)`); else the resource or deposit name of the cell. Cursor 2 over a picked building
-(any owner) or own settler, else cursor 0. The text goes through `Tip::SetDescriptionAndShowNow` (§3.2.2). Ships: [TODO] S 00787a30.
+(any owner) or own settler, else cursor 0. The text goes through `Tip::SetDescriptionAndShowNow` (§3.2.2). Ships
+[known] S 005ef740: a ship of the local
+player under the mouse (S 00787a30) shows its name key; another player's ship shows nothing, and the resource sign
+is then not looked for.
 
 **Network hang notice** [inferred] S 005ebf90: in a network session, while not paused, the hang reason text of
 the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTip` background.
@@ -755,14 +758,26 @@ the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTi
 4. a ship under the mouse (S 00787a30) → Ship; a ship route under the mouse (S 00787b00) → ShipRoute;
 5. a street on the cell that has both flags and belongs to the local player → Street.
 
+**The ray picks** [known]: the map-object pick (`Pick_MapObjectAtScreenPos` S 0068c920) walks one object list in its
+order and takes the first object of kind 6 (`S2CG::Building`, its constructor S 006ac810 writes 6) or kind 8 (a
+`RouteBuoy` S 006dbb90, map-object type `routeBuoy` → kind 8 at S 0068f4b2) whose box the ray meets; a buoy's own
+ray test, vftable slot 9, is `return true` (S 0041eca0). Removing any map object can move a later building or buoy
+earlier in that list (S 0068cff0), which decides only which one wins when the ray meets both. A route's start buoy
+is placed by S 00683040; its end buoy only once both harbours are set. The ship pick (`PickShip` S 00697db0) takes
+the nearest ship whose bounding sphere the ray enters at a distance ≥ 0 and whose mesh it crosses: the sphere is
+the mean of the scaled vertices, placed at the ship's ground point and not turned (S 006a5020); the mesh test
+(S 0076ff90 → S 006ec8a0) does not test the distance along the ray.
+
 Nothing hit → nothing selected. `MenuSelection` then derives the selection kind (§3.6).
 
 **Left click** (`HandleClick`). First the clicked cell is copied from the game cursor (system +0x24 / +0x28)
 into +0x8c / +0x90. Then by mode:
 
 - **Mode 1 (normal).** `RefreshFromGameSelection(refreshPanel = true)`: push the selection to the scene's
-  highlight, build the target id from the game selection (a ship that sails a route selects the route; a ship
-  that belongs to a building selects the building), resolve its render instance, update the preview picture,
+  highlight (`PushSelectionToScene` S 00615bb0, so the scene marks the ship itself), build the target id from the
+  game selection (`MenuSelection_MakeUniqueFromState` S 00615a10: a ship that sails a route selects the route; a
+  ship on its slipway selects its site, and this changes the game's selection), resolve its render instance, update
+  the preview picture,
   compute the selection kind (§3.6) and call `SetSelectionKind`. If afterwards no info box is active and no
   object is selected, the cell's build flags for the local player are read
   (`nGame::Cursor::GetBuildFlagsAtCell`): if `flags & 0x1f != 0` (some building fits) → `BeginBuildPlacement`:
@@ -850,7 +865,12 @@ when their object stops fitting the box (§3.6), the sacrifice bar after selecti
 slider after sending an attack (§3.7).
 
 **Cycling** (`btBack` / `btForward`): the game selection moves to the previous / next object of the same type
-and the selection is refreshed with the camera focused on it [inferred] S 005eb850.
+and the selection is refreshed with the camera focused on it [inferred] S 005eb850 (→ S 00535300 / S 005354c0).
+
+The game selection is held apart from the menu selection: the sacrifice bar's `SacrificePanel::OnItemClicked`
+S 00624bd0 sets the game selection, then calls `ResetAndRefresh(true)`, then sets the cell, in that order [known].
+Its other readers are the cycling above and `RemoveBuilding` S 00559db0 (at S 00559e00, through S 005350e0 and
+S 00535220), which clears a selection showing the removed building ([village-buildings.md](village-buildings.md) §3.5).
 
 ### 3.6 Selection kinds, info boxes and their action buttons
 
@@ -897,6 +917,14 @@ S 00616f40 [known] puts on buttons 1..4 (action numbers of [game-commands.md](ga
 |---|---|---|---|---|---|
 | 0 | `InfoBoxShipRoute` (`infoboxShipRoute`) | 1 start expedition | 2 stop expedition | 3 finish expedition | |
 | 1 | `InfoBoxShip` (`infoboxShip`) | | | | |
+
+Availability of the route actions (`RefreshAvailability` S 00623da0) [known]: action 1 takes the code of
+`GetAssignShipBlockReason` S 005ba970 (1..4, [navy.md](navy.md) §3.10); action 2 is available while the player has
+an active expedition on the route, else code 1; action 3 takes `GetFoundColonyBlockReason` S 005baa50 (codes 1, 2).
+They read the game's selection, so a route reached by clicking its ship works the same.
+
+| Kind | Info box class (XML element) | Button 1 | Button 2 | Button 3 | Button 4 |
+|---|---|---|---|---|---|
 | 2 | `InfoBoxCasern` (`infoboxCasern`) | 4 destroy | 15 / 16 training sword on / off | 17 / 18 training bow on / off | 19 / 20 upgrading on / off |
 | 3 | `InfoBoxTerritoryBuilding` (`infoboxTerritoryBuilding`) | 4 destroy | 5 upgrade | 13 set to swordsmen if the military component's kind (+0x68) is 1, else 14 set to bowmen | |
 | 4 | `InfoBoxConstruction` (`infoboxConstruction`) | 4 destroy | 6 pause construction (7 resume, swapped by the button) | 30 cancel upgrade, only when an upgrade is running | |
@@ -941,7 +969,8 @@ therefore keeps what that box showed last, or the layout's text if the box never
 rewritten every frame from the selected building's name (`SetHeadlineFromBuilding` S 006312f0) by the updates
 of BuildingDefault S 00631d80, Catapult S 006329f0, Depot S 00633b60, Production S 00635c50, TerritoryBuilding
 S 0063a4b0 and Casern S 0063b590. The base `UpdateHelpText` S 006316e0 serves 15 box classes; CreateBuilding
-S 00634a90, Flag S 00638a20, Ship S 0063c4e0 and ShipRoute S 0063d1f0 override it.
+S 00634a90 (its filter +0x1638: 0x10 gives the anchor help, 0x08 the mine help), Flag S 00638a20, Ship S 0063c4e0 and
+ShipRoute S 0063d1f0 override it.
 
 **Keep rules** [known]: besides the "object gone" test, some updates call `ResetAndRefresh` (§3.5) when the
 object no longer fits the box, so the box of the new kind opens: Construction S 006397e0 keeps the box only while
@@ -954,8 +983,8 @@ What each box shows, and which commands its own controls send:
 
 | Box | Content | Controls → command |
 |---|---|---|
-| ShipRoute S 0063cb70 | ship name; state `!LOADING` / `!UNLOADING` (standing, by ship state 2 / 3), `!EXPEDITION` / `!TRANSPORT` (moving); 128 × 128 ship preview; tab "transport": cargo goods and settlers aboard; expedition part: required goods and settlers; military part: soldiers (`militarySoldiers`, 6 slots) | good buttons focus the camera on the unit; commands only through action buttons 1..3 |
-| Ship S 0063c100 | ship name; tabs goods / settlers aboard | none |
+| ShipRoute S 0063cb70 (ctor S 0063d280, binder S 0063c8a0) | the local player's first ship on the route, or `!NO SHIP` without one; state `!LOADING` / `!UNLOADING` while lying still in ship state 2 / 3, empty while lying still in any other state, `!EXPEDITION` / `!TRANSPORT` while moving; 128 × 128 ship preview, drawn once per ship (`RenderShipPreview` S 0068cb60); three parts, each with its own box width: transport (tabs goods and settlers, 14 buttons each; width 518), sea attack (`militarySoldiers`, 6 buttons) and expedition (3 goods buttons filled by S 00649900, plus the crew button), both 418 = the box's width − `tabControl` + `expCont` (or `militaryCont`) | good buttons close the action panel and focus the camera on the unit (`GoodButton::OnClicked` S 0062fe50 → `nMenu_FocusCameraOnUnique` S 00648de0); commands only through action buttons 1..3 |
+| Ship S 0063c100 (ctor S 0063c360, binder S 0063c090) | ship name; two tabs, goods and settlers aboard, 20 counting buttons each | none |
 | Casern S 0063b590, S 0063abc0 (ctor S 0063aec0, vtable S 007f63bc; `BindChildControls` S 0063a8c0) | for the tribe of the local player (`FindLocalPlayer`): 2 × 3 soldier buttons (`compStd0..2`, `compBow0..2`, levels from `SoldierLevelRange` S 005703d0 ascending, 0..max): stock, queued, accept flag; `Player::IsLocked(3)` is called but its result is dropped, so no lock state is shown; recruit costs per class (`costStd`, `costBow`, shared `costBoth0/1` as `have/need`, need = the raw `stockLimit` (+0x84) × the cost amount; `costBoth1` hidden unless there are two shared goods); upgrade cost with the text input count / (`stockLimit` × amount) | the button poll S 0063abc0: click on a soldier button → **`0x2001E` GE_Depot_ToggleFlags_UID** (building, that soldier good) |
 | TerritoryBuilding S 0063a4b0 (ctor S 0063a050, binding S 00639d30) | soldier slots: `settlerList`, 12 buttons under `contSoldiers` (`GoodList::InitWithItemCount` S 0064ab20, vtable +0x84), capacity scaled by health, filled with the garrison (`SetFromSoldiers` S 00649c00, `InitFromSettler` S 0062fed0; an empty slot shows `iconconfig.xml` `<Goods><EmptyGood>`); border-distance icon (3 classes, `<BorderDist><dist0..2>`); health bar and `"%.0f%%"` (100.0 at S 007d8ff0). The soldier count line `!IS BEING ATTACKED BY %u SOLDIERS` never shows: its format (`soldierCountFormat`, +0x271c) is written only by the constructor (empty) and the destructor [known]; [inferred] it was meant to count the attackers (the list `Military +0x30`, read by S 006312d0). Presentation bug | none (action buttons) |
 | Construction S 006397e0 (ctor S 00639210) | progress = ((1 − a) + (1 − b)) ÷ 2 of the two remaining-work fractions of the effective construction (+0x70, +0x74; the +0x74 term is added first) as bar and `N%` (text `"%.0f%%"`, rounded); for a ship site (kind-1 ship reference) the two fractions are the ship's +0x4c and +0x48, +0x4c first; building icon; missing and delivered material, one button per unit (`SetFromBuildingConstruction` S 0064b240 = `SetFromCountMapAndPendingGoods(construction stock, depot pending, no filter)`, list below) in 12 buttons (`InitWithItemCount(12, contMaterial)` at S 0063974b, counts off); the builder as one entry built like a worker button (S 00639a0f..S 00639ac7, from the builder reference +0x30 / +0x34, unique at +0x40 / +0x44 of the effective construction). Parents set by the constructor: `iconHammers` under `progress`, `textInProgress` under `picBuilding`, `textWorkers` and `picWorker` under `contWorkers`, `listMaterial` and `textMaterial` under `contMaterial`. [TODO] the kind-5 branch (a selected ship under construction) | none |
@@ -1195,7 +1224,9 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   fades to `inactiveOpacity` over 1 s. The line text is built as `<color><right>title` plus, with progress,
   ` (<flag-24 colour>before/<color>/<finishedColor>after<color>)` with the colour tags of
   [ui-toolkit.md](ui-toolkit.md) §3.2, and its alpha is the line's alpha × the widget opacity [known] S 00627ee0,
-  `AppendColorTag` S 00627e30; a quest is bound once start + 10 < now [known] S 00627650.
+  `AppendColorTag` S 00627e30; a quest is bound once start + 10 < now [known] S 00627650. The line is drawn by the
+  rich-text layout, which top-aligns it at its rectangle's y (`RichTextLayout::Render` S 004e3d20, align Left), not
+  centred on a point as a plain `Text` (ui-toolkit §3.1) [known].
 - **Quest log** (`questlog`): list of all visible quests, main quests first, then by the tick at which the quest
   was filled in (+0x54) (`QuestLog::RebuildList` S 005ea100 [known]), with header rows `!MAIN QUESTS` /
   `!SUB QUESTS`. A row (`QuestLog_FillQuestItem` S 005e9c90 [known]): red text for a failed quest, green for a

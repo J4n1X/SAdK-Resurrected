@@ -1591,6 +1591,20 @@ id is -1). `ResourceMapAdds` and `LowResResourceMapAdds` are created anew and th
 registers six order owners with the construction system again [known] S 00582e10. `Load` first runs `Reset`
 (deactivates and destroys all eight players, destroys the eight military maps, S 00581d40) and re-creates them.
 
+**Looked up again by the modules' `Load`** [known, each read in the named function]: CellDepotCreation the depot
+type (S 0059e380); CellClearing both producers (S 0059d680); ForesterConstruction the forester type (S 005a4080);
+ShipConstruction the shipyard type (S 005a58a0); ConstructionHunter the hunter type (S 005a5f60); the sacrifice site
+its planner's building type (S 005a1d60); MilitaryBuildingCreation the military ranking (S 0059a030); Casern its
+building (S 00597da0). Only when the module is active: FoodArrangement (S 0058cc80), GoodsArrangement (S 0058c430),
+ProductionControl (S 0058c030; their goods lists) and CatapultConstruction (S 00599340). `ResourceMapElements::Load`
+S 0059c990 appends the read elements to the cell's list without merging. The cell's trigger at +0x110 is not stored
+[known: absent from `Cell::Store` S 00594d80].
+
+**Defaults that a load keeps** [known]: `ConstructionOrder`'s constructor S 005a17a0 sets mode 1. The `Activate`
+functions are not called by a load: `MilitarySystem::Activate` S 00584d00; `AiProduction_Activate` S 00598880 sets
++0x0c = 1; `CatapultConstruction::Activate` S 005991a0 sets `cellsPerStep = max(1, w·h / (time / 5))` and the best
+score to `FLT_MAX`.
+
 Not stored (transient): the candidate map of an attack round, A* results, static scratch vectors.
 
 A reimplementation that does not need to read original saves can store its own AI state freely; one that does

@@ -852,13 +852,14 @@ package reference is valid (id hi `0..0x7fffffff`), else finished.
 - `PutDownPackage` (`Start` S 0077a850 = step 0x14 only, shared with `WaitForPackage`; `Update` S 0077a8e0):
   step 0x14 — no flag of the owner on the cell (`NNet::System::FindFlagAt`) → finished (still holding); the
   flag refuses the package → finished (still holding); else `Drop` (0x13, 3.7). Step 0x13, `Drop` finished:
-  for a Worker (type 0) with nothing left to carry and working mode 1, 2, 3 or 7:
+  for a Worker (type 0) with nothing left to carry and working mode 1, 2, 3 or 7 (the workplace read through
+  settler +0x120, its working mode at property +0x80):
   `SacrificePlayerTableRef::GetEntryWithModifiers(workplace, 0)` (S 00661c50) returns `{good, count}` =
   entry 0 of the workplace property's goods list (`BuildingProperty::GetGoods`; filled by
   `bp_setGoods(building, good, amount)`, e.g. `(woodCutter, wood, 1)` **[inferred]**). Only when that good
   is `0x17626A03` (`corn` in `Goods.lua`) and the owner's sacrifice flag 12 (`Effect_CornDoubleProduction`,
   int at modifiers `+0x30`) is `> 0`, `count` is doubled (S 00663450). If `good != -1`, `count` is added to
-  the statistics and, when the owner's flag is on the cell, `count - 1` extra packages of that good are
+  the statistics of the settler's player (+0x28) and, when the owner's flag is on the cell, `count - 1` extra packages of that good are
   created one by one in the worker's hands: each is put down at once if the flag can take it (the test is
   made up to twice), else discarded. So the number of goods delivered per harvest is the `bp_setGoods`
   amount, doubled for corn under that sacrifice. **[known]** (S 0077a8e0)

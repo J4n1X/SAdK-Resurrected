@@ -68,7 +68,7 @@ S 005c7150 [known].
 |---|---|---|---|
 | +0x00 | `output` | i32 | FMOD output type; constructor value 2 (DirectSound) |
 | +0x04 | `mixRate` | i32 | 44100 |
-| +0x08 | `maxChannels` | i32 | 32 software channels |
+| +0x08 | `maxChannels` | i32 | 32 software channels; FMOD frees a channel the moment its sound ends, so no player stops a one-shot's channel (§3.5) |
 | +0x10/14/18 | `entries` | vector of `SoundEntry*` | every loaded sound file; the index is the **sound id** used by all players |
 | +0x1c/20/24 | `tracks` | count, capacity, array of `{i32 channel, void* source}` | channels whose 3D position is polled each frame |
 | +0x28 | `listenerProvider` | interface pointer | slot 0 returns position, velocity, forward, up |
@@ -393,6 +393,11 @@ finds sample entries only. For a listed channel that is playing but maps to no s
 `type == 1` record played as UI sound) the loop jumps back without advancing (`JZ` at S 0056f5de) and so spins
 until FMOD stops reporting the channel as playing [known]; in step 1 of `Play` such a channel is skipped.
 
+The interface player never stops a channel whose sound has ended: `PruneChannels` only drops it from its list, and
+FMOD has already freed it [known: S 0056f550, `Sound_IsChannelPlaying`]. A reimplementation whose mixer keeps a
+channel until it is stopped must free ended channels itself; otherwise about 32 clicks exhaust the 32 channels and
+every later sound, the music rotation included, is refused.
+
 UI sounds are addressed by name: `UiResourceManager::RegisterSound(name)` S 00494080 finds the sound property whose
 `name` equals the string (its own scan of the sound table, first match in id order) and caches its id;
 `PlaySoundByName` S 00494180 looks the name up in that cache and calls `PlayUiSound` [known]. Names registered at menu
@@ -527,7 +532,8 @@ Effective FMOD volume per channel kind [known]:
   voice-over are paused. **Music and UI sounds keep playing** [known].
 - Mute: on `WM_ACTIVATE` (`CApplicationEx::HandleWindowMessage` S 00401f30), if the sound manager exists,
   `SoundManager::SetMuted(!active || minimized)` S 005c6730: nothing if the state is unchanged; muting saves
-  `FSOUND_GetSFXMasterVolume()` and sets the master volume to 0; unmuting restores the saved value [known].
+  `FSOUND_GetSFXMasterVolume()` and sets the master volume to 0; unmuting restores the saved value [known]. This is
+  `SetMuted`'s only caller: nothing else mutes the game [known].
 - Game speed above 3.0 suppresses new non-looping positional effects (§3.3) [known].
 
 ### 3.8 Voice-over
@@ -558,11 +564,15 @@ from the caller lists of `Play3D`, `PlayUiSound`, `AddEmitter`].
 | building enters animation state 1 (door closes): 0.6 s after the **latest** trigger of the pending work cycle, each trigger moving the time out again | `sound_doorclose` 0x9c700243 | building position | `Building::Update` S 006abcf0 → `PlayStateAnimation(1)` S 006aa3b0 |
 | building demolition starts | `sound_building_collapsed` 0xc5243073 | building position | `Building::StartDemolition` S 006ab840 |
 | catapult shot begins | `sound_catapult_shoot` 0x8489cc23 | building position | `CatapultBuilding::Update` S 006d6000 |
-| projectile impact | `impactSound` of its `projectiles.xml` template | target position | `Projectile::OnImpact` S 006a3af0 |
-| effect movie keyframe with a `sound` | by name | element position, tracked | `EffectMovieElement::Start` S 006c6bc0 |
+| projectile impact: only for projectile type 1 (catapult stones); `Scene::OnShipFxEnded` S 0067f340 removes the other types at once | `impactSound` of its `projectiles.xml` template, a name looked up with `FindSoundIdByName` (`ProjectileTable::LoadProjectilesXml` S 006a4440) | target position | `Projectile::OnImpact` S 006a3af0 |
+| effect movie keyframe with a `sound` | by name | the element is its own source; its position from `GetSoundPositionAndVelocity` S 006c6910; stopped with the keyframe or the movie (`Stop` S 006c6790) | `EffectMovieElement::Start` S 006c6bc0 |
 | a tree starts falling | `sound_treefall` 0x01c27b83 | tree position | `TreeInstance::StartFalling` S 006dd050 |
 | UI widget events (button click, edit box key, list item, ...; 13 callers) | by name (§3.5) | none | `UiResourceManager::PlaySoundByName` S 00494180 |
 | a layout button is clicked; an `EditEx` field takes the focus; a list item is clicked | `uiClick0` | none | `Button::OnClicked` S 004b12d0, `EditEx::OnMouseButton0Down` S 0049b7b0, `Item::WasClicked` S 004c6da0 |
+| a layout hotkey of a shown, enabled button (`Object::HandleHotkey` S 0049ffc0 → vftable slot 20 S 004af9a0 → `OnClicked`) | `uiClick0` | none | S 0049ffc0 |
+| the HUD's round buttons, action buttons 1–4, good buttons, the free game's team, colour and start-position buttons; the combo box (`ComboBoxNew`) header and rows, slider arrows, tabs, `ListBox2` rows | `uiClick0` | none | `RoundIngameButton::OnClick` S 00622d10, `ActionButton::OnClick` S 006243c0, `GoodButton` S 0062fe50, `OverlayButton` S 004b24b0 |
+| the selection is cancelled; the selection's click cases 0, 1 and 3 | `uiCancel` / `uiClick0` | none | `MenuSelection::Cancel` S 006162e0, `HandleClick` S 00617910 |
+| the close icon of an `Overlapped` window | `uiClick1` | none | `Icon::PlayClickSound` S 004cf3a0; hidden in `menurequester.xml` and `menugameend.xml` (`close visible="false"`), so neither shows it |
 | a typed character, Space, Backspace or Delete in an `nUi::Edit` field | `uiKey0` | none | S 004c07e0, S 004c0a40 |
 | a row of the HUD message list is clicked: the rows are `nUi::Icon`s (S 005f8fa0), so a left click plays the icon click | `uiClick1` | none | `Icon::OnMouseButton0Up` S 004ce980 → `PlayClickSound` S 004cf3a0 |
 | a new player message arrives (not for a list restored from a save) | `uiMessage0` / `uiMessage1` | none | `Messages::PollNewMessages` S 005f73e0 |
@@ -571,19 +581,40 @@ from the caller lists of `Play3D`, `PlayUiSound`, `AddEmitter`].
 | a picked slot of the settings panel is dropped back: `CancelSlotDrag` has no "silent" flag and plays whenever a slot is picked | `uiCancel` | none | `CancelSlotDrag` S 00620c90 |
 | lobby minigame and NPC actions | by id | none (`PlayUiSound`) or a fixed position (`Play3D`) | `CLobbyClient_MiniGame::PlaySound` S 00523720, `PlaySoundAt` S 00523770; both skipped while the local avatar is engaged at a different minigame table |
 
+The click rule [known]: `Button::OnMouseButton0Up` S 004aecf0 calls vftable slot 34, `Button::OnClicked` S 004b12d0,
+which plays `uiClick0`, only on the release, while the button and every parent are enabled and the cursor is over it.
+Silent clicks: `SacrificeButton::OnClicked` S 0062f390 does not call the base; the anti-buff button's slot 34 is the
+empty S 005657b0 (vftable 007f3414, RTTI 008801fc); `StatsGoodInfo::OnClick` S 0064c650 plays nothing; the
+`SliderEx` throttle (S 004b95a0: throttle +0x260, decrease arrow +0x4e8, increase arrow +0x9e8) is no button;
+typing in an `EditEx` is silent (only the debug `nUi::Edit` plays `uiKey0`). No sound name comes from a layout XML:
+every name is a string literal in the binary. GUI records of `sounds.lua` with no trigger in the binary:
+`clock_5sec` (registered by name at 0042abca, never played), `chipOnBoard`, `chipOnChip`, `sound_npc_helper`,
+`sound_chesstakepiece`, `sound_chesspiecechange` [known: the callers of `PlaySoundByName`, `PlayUiSound`,
+`UiSoundPlayer::Play`, `PlayClickSound` and the vftable click slots].
+
 The three building sounds are played only when the building's virtual slot 1 returns 0; the two door sounds in
 addition need a model and a building that is not under construction [known]. Slot 1 of the `S2CG::Building`
 vftable S 007fa79c is S 006ab260, which returns the `hidden` integer at `Building + 0xc0`; slot 0
 (`Building::SetHidden` S 006aa320) writes it and switches the model, shadow caster, scaffold and attachments
-accordingly [known]. So a hidden building makes none of the three sounds. [TODO] not established: who calls
-`SetHidden` (the callers of vftable slot 0), and whether a subclass overrides slot 1. The catapult shot has no
-such test.
+accordingly [known]. So a hidden building makes none of the three sounds. Slot 0's only caller is
+`TerrainCell::SetVisible` S 006b4f80, driven every frame by the main view's quadtree cull (S 006db440 → S 006db220 →
+S 006daff0 / S 006da740): a building is hidden unless its anchor's terrain block is both revealed and in the view
+frustum [known]. [TODO] not established: whether a subclass overrides slot 1. The catapult shot has no such test.
+
+`SetHidden` also sets the model's event `enabled` flag (model +0x50): not hidden and fog-visible (+0xc4). Every active
+building's model is updated every frame, in view or not (`BuildingRenderer::Update` S 0069ff70 → `UpdateTransform`
+S 006aaab0), so the `<Sound>` events of its clips tick everywhere and start only where the building is shown [known].
+`TriggerWorkCycle` marks the cycle pending even under construction; only the clip and the door sound wait for a
+finished building. The door's close is tested per logic tick against `timeInfo[0]` (`Building::Update` runs per
+logic tick, from `CMapRenderer::SyncLogicTick` S 006882c0) [known].
 
 Footstep gate [known]: the proximity level (`CCharacter + 0x90`, 0..100) is stepped once per frame by
 `CCharacter::UpdateProximityLevel` S 006903f0: +5 (capped at 100) while the settler is visible and the squared
 distance from its render position to the position handed in by `CCharacterMgr::Update` S 00692a30 is at most
 50.0; otherwise −3 (floored at 0). `CCharacter::UpdateCameraDistance` S 00691060 computes that squared distance
-on all three axes and sets it to `FLT_MAX` for an invisible settler. Steps are thus heard only from settlers
+on all three axes and sets it to `FLT_MAX` for an invisible settler. At the start of a walk the accumulator stands at
+1.0, so the first step sounds at once and leaves 0.5 + dt: the second follows on the next frame [known]. Steps are
+thus heard only from settlers
 within about 7.07 world units of that position, and for up to 33 frames after one leaves the range (100 / 3).
 That the position is the camera eye (device camera slot 2, as in §3.2) is [inferred] from the function's
 description, not read in its body.
@@ -594,9 +625,9 @@ to the updated animation. `Tick` does nothing for an inactive event; computes
 `localTime = (time − event.startTime) * g_AnimTimeScale`; calls `Start(time, localTime)` once, when
 `localTime >= desc.start`, the visual's `enabled` flag is set and the event has not started; and from then on
 calls `Update(localTime)` every time, keeping the event active while it returns true. `time` is the animation's
-own time plus the slot's offset, or the global clock when that offset is 0. [TODO] not established: when the
-event objects are created and re-armed (once per play of the animation or once per loop cycle); settle with the
-callers of the `EventCreator` vftable slot S 00685970 and the writers of `EventBase.startTime` / `started`.
+own time plus the slot's offset, or the global clock when that offset is 0. The event objects are created once per
+play of an animation, not per loop cycle (`AnimatedVisual::PlayAnimationWithEffects` S 006d8670) [known]: a `<Sound>`
+of a looping clip fires once per play.
 
 `SoundEvent` rules [known]:
 
@@ -898,8 +929,8 @@ Converter output:
 | 3 | Answered (§3.6): `music_won` and `music_lost` (menu indices 2, 3) are never played: the five callers of `nMenu::System::PlayMusic` pass only the constants 0, 1, 4, 5, 6 [known], and no `PlayMusic` call followed a won or a lost free game [live, 2026-10-12] | — |
 | 4 | Answered (§3.1): `FSOUND_LOOP_BIDI` on the music streams loops forward; `maintheme.ogg` restarts cleanly [live, maintainer, 2026-10-14] | — |
 | 5 | What reads the `nGame::Sound` byte +4 (`nGame::System + 0x614`; set by `BuildWorld`, cleared by `nGame::System::Shutdown`). The two observer slots do not test it: they test `SoundSystem.enabled` only [known] | static: accesses to `nGame::System + 0x614` |
-| 6 | Callers of `Building::SetHidden` (what hides a building and so silences its door and collapse sounds), and subclass overrides of slot 1 (§3.9) | static: the slot 0 and slot 1 entries of the `S2CG::Building` subclass vftables and their call sites |
-| 7 | When animation event objects are created and re-armed: does a `<Sound>` of a looping animation fire every cycle (§3.9)? | static: callers of the `EventCreator` slot S 00685970; writers of `EventBase.startTime` and `started` |
+| 6 | Answered in part (§3.9): `SetHidden`'s only caller is `TerrainCell::SetVisible` S 006b4f80 (the view's block cull). Open: subclass overrides of slot 1 | static: the slot 1 entries of the `S2CG::Building` subclass vftables |
+| 7 | Answered (§3.9): event objects are made once per play of an animation (`PlayAnimationWithEffects` S 006d8670), so a looping clip's `<Sound>` fires once per play | — |
 | 8 | Which position `CCharacterMgr::Update` hands to `UpdateCameraDistance` for the footstep range (§3.9) | static: the argument set-up in S 00692a30 |
 | 9 | Whether `nMenu::Game` (and with it `GameMusicState`) is constructed once per program run (§7) | static: callers of `nMenu::Game::ctor` S 005ee5d0 |
 | 10 | FMOD 3 attenuation curve and hardware-3D fallback as actually mixed | live: record the output at known distances; or the FMOD 3.7x documentation |

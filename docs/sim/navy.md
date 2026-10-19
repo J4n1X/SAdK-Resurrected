@@ -824,6 +824,11 @@ How the order finds a soldier and how the requests are served belong to the vill
 transport system (`village-buildings.md` §3.12; a goods request whose target is a ship is need category 1 in
 `streets-transport.md`).
 
+The soldier and the materials come to the harbour flag over streets, so an expedition whose harbour flag has no
+street to the stores stays in state 3 with its soldier order open (and `!Harbor is not Connected` every 1000 ticks)
+[inferred from the parts above; the remake's port behaves so on `MP_6P_ship_ahoi`, where a connected expedition
+reaches state 5 with 3 packages and 1 soldier aboard].
+
 **One soldier per expedition** [known for the parts, inferred as a whole]: an order is handed to exactly one
 settler and then removed (`OrderSystem::AssignOrderToSettler` S 00562580). For an order linked to a ship
 (order category 6) the hand-over is `Settler_LinkShip` S 0053bfb0: the settler's ship reference (+0xf8) is

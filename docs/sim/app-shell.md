@@ -215,11 +215,11 @@ field's setter in the in-game vtable (`nMenu::OptionsPanel::LoadOptionValue` S 0
 | +0x24 | bool | mirrored into bit 0x80 of the scene's render-flag word by `S2CG::Scene::ApplySceneSettings` S 0067f500 (in-game slots +0x08 set S 00695c60, +0x0c get S 00695c70) [known]. None of the options controls of `frontend-screens.md` §3.7 maps to it [inferred]. [TODO] not established: what bit 0x80 draws, and the setter's callers (virtual only) | | 0 |
 | +0x25 | bool | the fog-of-war display state the scene last applied: `S2CG::Scene::Update` S 006805e0 compares it with the scene's own show-fog flag, and stores the new value when they differ [known]. A cache, not an option [inferred]; it is still written to the file | | 0 |
 | +0x26 | bool | shadows on; derived: `shadowDetail > 1/6` | | derived |
-| +0x28 | f32 | shadow quality 0..1 | `cShadowQuality` | preset |
-| +0x2c | f32 | shadow detail 0..1 | `cShadowDetail` | preset |
+| +0x28 | f32 | shadow quality 0..1: the shadow map's size. `ShadowManager::SetQuality` S 00769600 takes `level = trunc(q × 4)` clamped to 0..4, no map at level 0, else `0x80 << level` pixels (128 .. 2048) [known] | `cShadowQuality` | preset |
+| +0x2c | f32 | shadow detail 0..1: the scene's shadow level `trunc(v × 6.0 + 0.5)` (`Scene::UpdateDetailFlagsAndTime` S 0067f6b0), which chooses what casts shadows (`Scene::ApplyShadowQuality` S 0067f420; [rendering.md](rendering.md)) [known] | `cShadowDetail` | preset |
 | +0x30 | bool | mirror on; derived: `mirrorQuality > 0` | | derived |
-| +0x34 | f32 | mirror quality 0..1; the control shows `(v − 0.25) / 0.75` | `cMirrorQuality` | preset |
-| +0x38 | f32 | mirror strength 0..1 | `cMirrorStrength` | preset |
+| +0x34 | f32 | mirror quality 0..1: the mirror target's resolution (`SetReflectionQuality` S 006a64c0) [known]; the control shows `(v − 0.25) / 0.75` | `cMirrorQuality` | preset |
+| +0x38 | f32 | mirror strength 0..1: the scene's reflection detail level `trunc(v × 4.0 + 0.5)` (S 0067f6b0), i.e. what the mirror draws [known] | `cMirrorStrength` | preset |
 | +0x3c | i32 | level, 2 (presets 0, 1) or 3 (presets 2..4) [known] S 00695860. `Scene::ApplySceneSettings` S 0067f500 copies it to the scene (in-game slot +0x54, S 00695ea0) and, whenever the copy changes, calls `CGraphicDevice::SetMaxShader(2)` [known]. [TODO] not established: what reads the scene's copy | | preset |
 | +0x40 | f32 | detail 0..1 | `cDetail` | preset |
 | +0x44 | f32 | object details 0..1 | `cObjectDetails` | preset |
@@ -679,7 +679,8 @@ Starting a map does not write `data.cfg`, so a "started" record reaches the disk
 0. While the stored time is 0.0 a call only stores `Timer_GetTotalSeconds()`; later, when `now − last > interval`
 (strictly greater; real time of the frame timer, not game time), it posts the message `!Autosave...` to the
 local player (message kind 8), stores `now` and writes the save
-`Autosave` (`save-format.md` §2.6). The options control `cAutosave` lists minute values; the stored interval is
+`Autosave` (`save-format.md` §2.6). It is ticked by `nGame::System::Update` S 00780d20, and `BuildWorld` resets its
+stored time [known]. The options control `cAutosave` lists minute values; the stored interval is
 `minutes × 60` [inferred: the control is matched with `interval / 60`, S 005e55b0].
 
 **Options panel** (`menuoptions.xml`, 27 controls bound by name, index = option number) [known: names from the

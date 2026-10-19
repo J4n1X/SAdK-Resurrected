@@ -635,8 +635,11 @@ Additional rules of the panel:
 - On creation, when the user profile is initialised and the session is not in a network role (1..4), the
   profile's game speed factor (`UserProfile +0x24`) is remembered and set to 0: an offline game stands still
   while the panel exists. The destructor writes the remembered value back.
-- `closeButton` (hotkey Esc) fades the panel out over 0.2 s and writes `settings.cfg`
-  (`app-shell.md` §3.9). The destructor writes it as well.
+- `closeButton` (hotkey Esc) fades the panel out over 0.2 s with the smooth curve (animation `+0x30` = 1) and writes
+  `settings.cfg` (`app-shell.md` §3.9); `nMenu::Game::SetOptionsPanelVisible` S 005eac90 fades linearly. The
+  destructor writes the file as well.
+- In a match the panel is created at every opening and deleted by `nMenu::Game::Update` S 005efea0 once it is hidden
+  and the game is not paused, so the offline stop lasts as long as the panel exists. `Main` keeps one panel (§2.1).
 - Root attributes `minResolutionX`, `minResolutionY` (1024, 720 in the install and as code defaults).
 
 **Binding** (`BindOptionControls` S 005e6780) [known]: for option number n = 0..26 the widget named by entry n
@@ -650,6 +653,9 @@ current value loaded into the control. Every change is applied at once; there is
 apply:  fraction = selectedIndex / (k − 1)
 show:   index    = min(trunc(fraction × (k − 1) + 0.5), k − 1)
 ```
+
+Both in single precision; `SelectComboByFraction` truncates with the FPU's chop and clamps with an unsigned compare,
+so a negative fraction selects the last entry [known].
 
 **Options** (entries from `menuoptions.xml` [known]; targets from `ApplyOptionValue` S 005e5bd0 and
 `LoadOptionValue` S 005e55b0 [known]; the scene fields are those of `app-shell.md` §2.7):
@@ -694,6 +700,9 @@ show:   index    = min(trunc(fraction × (k − 1) + 0.5), k − 1)
   category 0 (`SoundSystem +0xcc`; the categories are four floats from +0xcc on, S 00569f80); the control ends
   at category 0. Both sets notify, so the apply path writes that value to categories 0 and 3. Category
   meanings: `audio.md`.
+- **Sliders on show** [known] S 005e55b0 cases 16 to 20: the slider values are set with change notification on, so
+  opening the panel snaps each value to its slider's steps and applies it (music 0.3 becomes 0.333, a scroll speed
+  of 0.25 becomes 0.222) and, with the volume rule above, sets the effects volume to the ambience category's.
 - **Video mode on show** [known] S 005e5666: after `FillVideoModeCombo`, `LoadOptionValue(0)` selects the
   first list entry whose **width** equals the device's current width (the heights are only tested for
   non-zero). With two modes of the same width the control can show the other one.

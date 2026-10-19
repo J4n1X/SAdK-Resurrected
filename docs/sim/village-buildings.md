@@ -644,7 +644,8 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
 
 **`RemoveBuilding(unique, spill)`** S 00559db0 [known]:
 
-1. In batch editing mode: `spill = false`, `destroyed = true`.
+1. In batch editing mode: `spill = false`, `destroyed = true`. The test is the batch-editing query
+   (`GameSystem+0x38` vtbl+4, `NLogic::Edit`) that `Construction::StartWithType` S 0055efa0 asks as well.
 2. Clear the selection if it shows this building.
 3. `leaveRemains` = building finished and type has `remains`.
 4. If finished with remains and the type is `depot` or `casern`: when `spill` is false skip step 5;
@@ -669,8 +670,15 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
 8. Remove the flag at anchor + direction 1 when all three hold: `Flag::GetRemoveBlockReason()` is 0
    (S 00669f70; with the building gone only its reason 1 can still apply: the flag's harbour reference,
    flag +0x168, is valid and the cell is the owner's territory), all its package stacks are empty (flag +0x74),
-   and the vector at flag +0x64 is empty (the flag's street links, [streets-transport.md](streets-transport.md)
-   §2.2 [inferred]) [known].
+   and the vector at flag +0x64 is empty (the flag's street links, `linksFirst` at +0x68,
+   [streets-transport.md](streets-transport.md) §2.2 [inferred]) [known].
+
+So a destroyed building whose flag has no street and no goods takes its flag along; a finished building refunds
+half its cost (step 2 below) onto the flag, which then stays with the packages on it [known]. The destroy command
+does nothing else to the flag: the action panel's destroy action sends only `0x20003` (owner check and `CanDestroy`
+S 0055cd40, `ExecuteAction` S 00623730 case 4), and `HandleDestroyBuilding` S 00781150 → `DestroyBuilding`
+S 0055a7a0 lead here. Outside `RemoveBuilding`, flags are removed only by the AI (`DestructionSystem::Update`
+S 0058de80), by territory loss (S 00665ef0) and by transfers [known].
 
 **Spilled goods** (`Village_SpillBuildingGoodsOnRemoval` S 005594e0) [known], only when the entrance flag
 reference is valid:
@@ -871,7 +879,8 @@ callers of `RequestAllInputs` and `VillageSoldierTraining_UpdateInputRequests`].
 
 ### 3.9 Resource searches [known]
 
-- **Deposit** (`UpdateDepositSearch` S 0055bfb0): `tickCounter` counts 0..100; on the tick it wraps to 0, a
+- **Deposit** (`UpdateDepositSearch` S 0055bfb0): `tickCounter` counts 0..100 (it counts up while below 100, a
+  signed compare: `CMP 0x64; JL` at 0055bfba; the mine search the same at 0055df09); on the tick it wraps to 0, a
   building of mode 1 or 2 takes the **mining good** of its slot-0 product (`GoodProperty+0xbc`,
   `gp_setMiningGood`, S 00553070). If that good's byte +0x50 is set (`gp_enableDeposits`, S 0054e870; data:
   `stone`, `wood`, `corn`, `egyptCorn`, `stoneScots`, `stoneBav`) and no deposit is linked, it links the
@@ -906,7 +915,11 @@ callers of `RequestAllInputs` and `VillageSoldierTraining_UpdateInputRequests`].
   product's mining good (`GoodProperty+0xbc`; S 00542d50); the amount is not tested [known]; link the cell
   found.
   If none is found, production is enabled and the building's productivity statistic is below 0.5: post or
-  refresh the player message `!No resources found.` (category 3) at the building.
+  refresh the player message `!No resources found.` (category 3) at the building. `Statistics::GetProductivity`
+  S 005373b0 returns −1.0 for a building without an entry, which passes the test [known]. The message is posted
+  only by this search and the three worker searches (`LookForDeposit::Start` S 00778d50, `LookForAnimal::Start`
+  S 00778e40, `LookForFishing::Start` S 0077f670), never at placement: the string at 007e9510 has these four
+  references only [known].
 
 ### 3.10 Storage and barracks stock keeping (`ordering` component) [known] S 00563f40, S 00563cc0
 

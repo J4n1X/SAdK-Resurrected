@@ -149,12 +149,22 @@ afterwards). Strings are single-byte (Windows-1252 in the German install).
 **Default font** [known]: `Body_Arial`, centred, for every widget's text (S 004a56d0, S 004b3eee); a label
 made by the factory gets `Subline_Garamond`, white, left (S 004b2040) ([ingame-ui.md](ingame-ui.md) §3.10).
 
-**Draw position** [known] S 004b43c0: pixel x = round(owner absolute x × screen width) + round((pos.x + offset.x)
-× screen width), y likewise with the height (round = +0.5, truncate). The font gets `align | 1`, i.e. the text is
-always **vertically centred on that y**. Colour = text colour, alpha × owner opacity (+0x140). The owner's world
+**Draw position** [known] S 004b43c0, disassembly: pixel x = px(owner absolute x) + px(pos.x + offset.x), y likewise
+with the height, where px(rel) = `(int)(float)(screen × rel + 0.5)`: the product plus 0.5 is stored as a float
+(`FSTP`) and then truncated (`__ftol2_sse` S 006f2af0), and `pos + offset` is a float sum. The font gets
+`align | 1`, i.e. the text is always **vertically centred on that y**: the line top is `y − lineHeight × 0.5`
+(the double 0.5 at S 007d4a90), stored as a float, and the baseline is the line top + `base`. Colour = text colour,
+alpha × owner opacity (+0x140). The owner's world
 matrix is set before the glyphs are flushed.
 
 `contentHidden`: every character except `|` is replaced by `*` at draw time (`|` is the `Edit` caret, §3.6).
+
+**Loading** (`Text::LoadFromXml` S 004b46d0) [known]: `pos` and `offset` are given in pixels and stored relative to
+the screen; the default `align` is 8, HCenter (constructor S 004b3ed0).
+
+**Top-aligned texts** [known]: two paths do not centre on a point. `EditEx::DrawLine` S 0049a750 draws with align
+4 (Left), the line top at the text area's top; `RichTextLayout::Render` S 004e3d20 sets the align flags to Left and
+puts the line at the rectangle's y, so quest lines and tips (§3.2) are top-aligned.
 
 **Single-line layout** (`BuildTextScaled` S 004e3080 → `BuildGlyphQuads` S 004e2c60) [known, disassembly]:
 
@@ -164,7 +174,8 @@ matrix is set before the glyphs are flushed.
    a glyphless character leaves a hole in the buffer and loses its last quads [inferred from the two reads].
 2. Start x = draw x; HCenter: − textWidth × sx × 0.5; Right: − textWidth × sx. Start y = draw y; VCenter:
    − lineHeight × sy × 0.5; Bottom: − lineHeight × sy. (sx, sy = the text's scale pair, default 1, 1.)
-3. Per valid glyph: quad left = trunc(pen x) + xOffset × sx − 0.5, top = trunc(line y) + yOffset × sy − 0.5,
+3. Per valid glyph: quad left = trunc(pen x) + xOffset × sx − 0.5, top = trunc(line y) + yOffset × sy − 0.5 (the
+   −0.5 at S 0087c504 / S 0087c508),
    size = width × sx by height × sy; UV = (x, y, x + width, y + height) × (1 ÷ scaleW, 1 ÷ scaleH). Then
    pen x += xAdvance × sx + charSpacing. The glyph values are those after the loader has grown each rectangle
    by the `.fnt` padding (`BitmapFontGlyph::ParseCharLine` S 004e28b0, [formats-inventory.md](formats-inventory.md)
@@ -293,8 +304,11 @@ In styles 0 to 11 a Focus state outside 0..2 changes nothing. Atlas for the numb
 ([ingame-ui.md](ingame-ui.md) §3.2.1).
 
 **Caption** (`LayoutCaption` S 004afa10, `Draw` S 004afd10) [known]: the caption `Text` is positioned at the
-centre of the button (half width, half height − 0.001 of the screen height) and keeps `align` centre, so it is
-centred both ways. Per style:
+centre of the button (`GetHalfSize` S 004bbe50: half width, half height − 0.001 of the **real** screen height; the
+0.001 is the double at S 007df148, a widened float) and keeps `align` centre, so it is centred both ways. The style
+is dispatched through the jump table S 004afcf0 with the byte table S 004afd04 (styles 1..12 → cases 0, 1, 0, 2, 2,
+4, 0, 0, 0, 0, 0, 3). `LayoutCaption` is called only from `Create` S 004b0280 and `LoadFromXml` S 004afed0. Per
+style:
 
 | Style | Font | y shift | Colour idle / hover or pressed |
 |---|---|---|---|
@@ -305,7 +319,11 @@ centred both ways. Per style:
 | 6 | `Body_Arial` | −0.002 of the screen height | caption not drawn |
 | 12 | `font`, while hovered or pressed `font_cursorover`; `Body_Arial` if the text has no font | none | the `<text color>` |
 
-Style 7 draws through the base `Object::Render` instead of the button sprite.
+Style 7 draws through the base `Object::Render` instead of the button sprite. `Button::Draw` draws only the caption
+`Text` (+0x254); the second `Text` of the object (+0x3c, right-aligned at x 0) is drawn only through
+`Object::Render`, i.e. for style 7 [known]. The −0.002 of styles 0, 6 and above 12 is a widened float (S 007dffa8)
+of the real screen height, like the −0.001, so those captions climb with the resolution: a 20 px button's caption
+centre sits about 8 px below its top at 768 lines and about 6 px at 1440 [known: arithmetic of the two constants].
 
 **Check box**: `checkbutton="true"`; a click toggles `marked` before the click events go out (S 004b12d0).
 `ui.createCheckedButton` creates one from Lua ([lua-runtime.md](lua-runtime.md) §3.7).
@@ -342,6 +360,12 @@ on top `texture_selected` while hovered or `texture_pressed` while pressed, then
 if marked. In every mode except 1 `UpdateShapeTexture` swaps the shape's texture instead: marked →
 `texture_marked` (if it has one, else no change), else by Focus state 0 / 1 / 2 → not selected / selected /
 pressed. A mode other than 0, 1, 2 draws no sprite. Click sound `uiClick1`.
+
+**The `Overlapped` close icon** [known] S 004cf110, S 0062e1e0: an `Icon::CreateFromStrip` of `uiElements3` at
+(415, 32), 24 × 24, hover at x + 24, pressed and marked at x + 48; placed at the frame's width − 40 px, y 5 px; tip
+`!Close this dialog.`. It is polled by `Overlapped::IsCloseRequested` S 0062e1e0 (callers S 005fcbc0, S 006009b0,
+S 00609130, S 005fdf00, S 005fea40). `menurequester.xml` and `menugameend.xml` hide it (`close visible="false"`,
+loaded by `Overlapped::LoadFromXml` S 0062e110), so the requester and the end dialog have none.
 
 ### 3.6 Edit (single line, shared buffer)
 
@@ -494,6 +518,9 @@ type 0: y = value × (slider height − throttle height), x = 0; types 1, 2: x =
   range is 0), value = trunc(t × count), clamped by `SetValue`.
 - `Decrease` / `Increase` buttons step −1 / +1 (not while dragging) (S 004b9640). Wheel while hovered: +1 for a
   negative delta, −1 otherwise. Double click: value 0.
+- Members (S 004b95a0): the throttle at +0x260 is not a button, so dragging it makes no sound; the arrows
+  `Decrease` +0x4e8 and `Increase` +0x9e8 are buttons and click (`uiClick0`) while the slider and its parents are
+  enabled ([audio.md](audio.md) §3.9) [known].
 
 ### 3.10 ListBox2 [known] S 004b8880, S 004b8590, S 004b90d0, S 004b9180, S 004b8280, S 004b80e0
 
@@ -521,6 +548,8 @@ type 0: y = value × (slider height − throttle height), x = 0; types 1, 2: x =
 
 - XML: `size` (number of rows), `string0`… (`!`-keys are localised), `dropdownoffset` (pixels), children
   `button` (header) and `item` (row template); `ComboBoxNew` also `selection`.
+- The header and the rows are buttons, so they click (`uiClick0`) on the release over them while enabled, by the
+  button rule of §3.4 (`Button::OnMouseButton0Up` S 004aecf0) [known].
 - Click on the header while closed: open = show all rows, bring the widget to the front of its siblings, take the
   input capture. `DropDownMenu` notifies its "opened" observers first; `ComboBoxNew` marks the header and lays
   the rows out again (S 004cb9e0), and unmarks the header when it closes (S 004cb2b0).

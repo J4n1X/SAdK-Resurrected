@@ -591,6 +591,11 @@ streets (type 3) never raise "street added" (S 00668c70, S 006695a0, S 00668d60)
 S 00682ca0 draws only the flag model: a lone flag and a harbour flag with only sea streets have no circle. Water
 streets themselves are drawn as buoy chains (§3.7).
 
+The stone circle under a harbour flag is **not** a crossing: it is the harbour place's own ground plot, the
+`GROUND` decal of `Harbour_decal.KEX` that `Harborplace::ctor` S 006db7a0 lays at every harbour cell, owned or not,
+flag or no flag ([rendering.md](rendering.md) §3.11 "Harbour place plot") [known]. It is drawn with the house
+ground decals, after the streets, so it covers the end of a land street at the harbour flag.
+
 **Door path** [known]: every building has a short street from its door to its middle: a two-point `CStreet`
 (S 006ccc70) from the cell of the entrance flag (flag +0x28) to the building's anchor cell (+0x20), stored at
 `S2CG::Building +0x100`. It is made in `S2CG::Building::ctor` S 006ac810 and `Building::Update` S 006abcf0 through
@@ -754,7 +759,8 @@ the decal pass with cull mode 1 (`docs/sim/rendering.md` §3.1).
 
 - Selection marker [known] S 006b0b50, S 006b0d00, S 006890c0: uv rectangle (0,0)-(1,1), so a style is a whole
   texture of `decals.xml`; a marker whose style changes gets a new projector. Target, in this priority: a valid
-  ship id: centre = the ship position, `r` = the marker's radius field; else a cell inside the vertex grid:
+  ship id: centre = the ship position, `r` = the marker's radius field (11 for a ship, `SetTargetShip`
+  S 006b0cd0); else a cell inside the vertex grid:
   centre = the vertex position of the cell, `r` = the radius field; else a valid object id: centre and `r` from
   the building's bounds (`Bounds_GetCenterAndMaxXZExtent` S 006b0bc0: `r` = the larger of the x and z sizes of
   its box); `r` defaults to 1. `r` is the full side of the square (`BuildVertices` S 004efe20); a flag, a street
@@ -770,8 +776,11 @@ the decal pass with cull mode 1 (`docs/sim/rendering.md` §3.1).
   reference is the read in S 00690bd0 [known], so (0, 0).
 
 House ground decals (`ai::render::HouseDecalRenderer`) are meshes, not projected decals: `house_decal.fx` lights
-them per vertex, multiplies by the texture and the exploration term, alpha blended without depth write
-[known, file].
+them per vertex, multiplies by the texture and the exploration term, alpha blended without depth write, depth test
+`LessEqual`, no depth bias [known, file]. Their owners are buildings, ruins and harbour places; how a mesh is clipped
+onto the terrain (`GroundDecalMesh::Build` S 006da2a0), and why it cracks on slopes, is in
+[rendering.md](rendering.md) §3.9 "Ground decal". `HouseDecalRenderer::Render` S 006b3fe0 draws every decal, culled
+only by the frustum (the fog of war comes from the shader), in the buildings pass after the streets [known].
 
 ### 3.10 Sky dome
 

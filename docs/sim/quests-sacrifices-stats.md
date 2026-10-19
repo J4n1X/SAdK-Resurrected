@@ -508,7 +508,7 @@ Effects of the modifiers on other systems, with the owning document:
 | 9 `ShipSpeed` | speed of the target's ships | navy.md §3.4 |
 | 10 `PeaceTime` | **peace**: buildings of the owner cannot be attacked (attack target state 5), the owner cannot start attacks, and a fight in its fighting phase in which the attacker or the defender is in peace time ends | military.md §3.5, §3.6 |
 | 11 `BuildingArmor` | catapult damage to the target's buildings is divided | military.md §3.10 |
-| 12 `CornDoubleProduction` | the amount of the good `corn` produced by the owner is doubled. Only `corn` (id `0x17626a03`, a literal in S 00661c50): Egyptian farms produce `egyptCorn`, so `sacrifice_nilfloodEgypt` costs its goods and has no effect `[known]`; a simulation-state quirk that compatibility mode reproduces and refined mode fixes (the mod `mods/nilfloodfix` doubles `egyptCorn` too) | village-buildings.md §3.7 |
+| 12 `CornDoubleProduction` | the amount of the good `corn` produced by the owner is doubled. Only `corn` (id `0x17626a03`, a literal compared at S 00661c6f in `GetEntryWithModifiers` S 00661c50, which only for that id calls `ApplyAmountDoubling` S 00663450: amount × 2 while `flags[12]` (+0x30) is above 0; `ApplyOwnEffect` S 006630b0 sets it to 1). Readers: `DeliverProducts` S 00565990, `PutDownPackage::Update` S 0077a8e0 (a harvest puts count − 1 extra packages on the flag) and the presentation's farm buff in `S2CG::Building::Update` S 006abcf0. So a Bavarian `farmBav` (corn 2) yields 4 per harvest; Egyptian farms (`farmClay`) produce `egyptCorn`, so `sacrifice_nilfloodEgypt` costs its goods and has no effect `[known]`; the remake's port measures 2 → 4 and 1 → 1. A simulation-state quirk that compatibility mode reproduces and refined mode fixes (the mod `mods/nilfloodfix` doubles `egyptCorn` too; the remake's `refined` mod wraps the rule, [remake/mods.md](../remake/mods.md) §14 item 7) | village-buildings.md §3.7 |
 | 13 `WorkerPause` | rest time of the target's workers is multiplied | settlers-jobs.md §3.5.4 |
 | 14 `ExpandTerritory` | territory range of the owner's territory buildings is raised by the value | §3.2.6 |
 
@@ -764,7 +764,8 @@ Lua readers depend on `[known]` S 00537ba0, S 0053b2c0, S 0053b420, S 00537230, 
 the match activates the statistics of every active player, zeroes the three counters and seeds one history entry
 `[0]` for every good id and job id of the player's tribe (an id in both lists gets `[0, 0]`). Phase 0:
 productivity decay (every entry of a finished building: idle counter `+1`, productivity `-0.05`, floor 0;
-entries of vanished buildings are erased), series 0 and `regionSize`, then the period commit (every history gets
+entries of vanished buildings are erased; phase 0 includes tick 0, so a building finished before tick 0 starts at
+0.45), series 0 and `regionSize`, then the period commit (every history gets
 a new last element equal to its previous last element, series 7 gets `killCount`). Phase 1: series 3 and 5.
 Phase 2: series 1. Phase 3: series 2 and 4. Phase 4: series 6. Every vector is capped at 960 elements by
 dropping the oldest. 960 samples × 600 ticks = 576 000 ticks of history.

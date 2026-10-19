@@ -658,7 +658,17 @@ the owner's matrix. Per update, `Update` S 006c6c80 starts an element when `star
 it is already past its end; `IsPastEnd` S 006c67c0 is `duration > 0 && start + duration <= elapsed`, so a keyframe
 with `duration = 0` never ends on its own. `Start` S 006c6bc0 passes the current time (`*now`) as the emitter's
 start time, not the movie's start, so a back-dated movie skips keyframes but does not fast-forward the particles of
-the ones it starts.
+the ones it starts. The element's world matrix is the link bone's attach matrix (`GetNodeMatrices` + index × 0x40)
+times the owner's matrix, and the emitter takes both its position and its rotation from that product
+(`GetWorldRotationAndPosition` S 006c6a60: `D3DXQuaternionRotationMatrix` of the product, S 00696450);
+`ParticleEvent` S 006b05e0 / S 006b0710 does the same with the event's world matrix. A link matrix with scale would
+give a non-unit quaternion [inferred: the D3DX routine is not in the binary]. Afterwards
+`EffectList::UpdateEmitterTransforms` S 006c6da0 moves and turns the emitters with their links, but it is called
+only from `CCharacter::Update` S 00690bd0 and `Ship::UpdateVisuals` S 006a5cc0: characters' and ships' effects follow
+their links, buildings' attachments (the sacrifice movies) stay where they started and are advanced per logic tick
+by `EffectList::Update` inside `Building::Update` S 006abcf0 [known]. Since a particle's start position and velocity
+are turned by `R(q)` when it is spawned (§3.3), a later turn of the emitter does not swing particles already in
+flight.
 
 **Projectiles** [known]: `ProjectileTable::AddProjectile` S 006a3d90 picks the `projectiles.xml` record by the
 logic projectile type: type 0 → record 1, 1 → 0, 2 → 3, 3 → 2. The flight time is `T = flight ticks × 0.1` s
@@ -668,7 +678,10 @@ vertically. `Projectile::Update` S 006a3400 moves the projectile, and its `fligh
 arc. The target point (`ComputeImpactPoint` S 006a3610) starts at the bottom centre of the target's box and is moved
 back along the normalised launch-to-target direction, per axis by that direction's component times 0.3 of the
 box's width (x), 0.5 of its height (y) and 0.3 of its depth (z), so the projectile lands on the near face. `OnImpact` S 006a3af0 plays
-`impactPFX` once at the impact and calls `ReleaseEffect` on the flight emitter.
+`impactPFX` once at the impact and calls `ReleaseEffect` on the flight emitter. Only the catapult stone reaches
+`OnImpact`: `Scene::OnShipFxEnded` S 0067f340 calls it for type 1 and removes the other types at once, so an arrow's
+`impactPFX` or `impactSound` never plays [known]. `impactSound` is a sound name, looked up with `FindSoundIdByName`
+by `ProjectileTable::LoadProjectilesXml` S 006a4440 [known].
 
 **Building fire points** (`Building::InitFirePoints` S 006ac510, called only from the building constructor
 S 006acc23) [known]: the model nodes `FIRE_03`, `FIRE_06`, ... (the counter starts at 0 and adds 3 before each
@@ -958,7 +971,7 @@ one-shot events (impacts, demolitions, animation events in progress) are not res
 | 2 | Writer of `ParticleManager +0x98` (`disableAlphaBlend`) | static: writers of the byte; likely a debug CVar |
 | 3 | Loader (if any) of the direct `<PFX name link>` and `<Particle name position timer>` children of `<Building>` (§3.13) | static: readers of the `buildings.xml` building node besides `LoadAnimEvents` S 006867d0; running game: a gold mine's sparkle |
 | 4 | The data root `[data]` of the lobby's emitter paths (§3.14) | static: the path resolver used in the lobby context |
-| 5 | Whether the tree emitter `TreeInstance +0x124` (cleared in `Tick` S 006dcf00) is ever created, and with which effect (`FallingLeaves` has no reference) | static: writers of `TreeInstance +0x124` |
+| 5 | Answered: never. `TreeInstance +0x124` is only ever written null (constructor S 006dca49, destructor S 006dc908; every `+0x124` store and LEA checked), so the emitter branch of `StartFalling` S 006dd050 is dead and `FallingLeaves` has no user | - |
 | 6 | The texture-transform values `ParticleManager +0x54/+0x58` written by `InitResources` (affect the `ffp` technique only) | static: disassembly of S 004e0ad0 near the texture size call |
 
 ---
@@ -1007,6 +1020,8 @@ one-shot events (impacts, demolitions, animation events in progress) are not res
 | 00681850, 00681890, 006818d0, 00681930, 00681900, 0067f3b0, 006819a0, 00681fd0, 00681960 | scene callback slots +0xa0 .. +0xc4 | sacrifice movies, buff effects (§3.13) |
 | 006ace00 / 006acf70 / 006ad050 | `S2CG::SacrificeBuilding::StartEffect` / `StartResearchEffect` / `StartWaitForGoodsEffect` | back-dated movies |
 | 006c69a0 / 006c6bc0 / 006c6c80 / 006c67c0 | `EffectMovieElement::ctor` / `Start` / `Update` / `IsPastEnd` | effect movie keyframes |
+| 006c6a60 / 006c6da0 | `EffectMovieElement::GetWorldRotationAndPosition` / `EffectList::UpdateEmitterTransforms` | emitter position and rotation from the link; following it (characters, ships) |
+| 0067f340 | `S2CG::Scene::OnShipFxEnded` | projectile end: `OnImpact` for type 1 only |
 | 006a3d90 / 006a32b0 / 006a3400 / 006a3610 / 006a3af0 | `ProjectileTable::AddProjectile` / `Projectile::ComputeLaunchVelocity` / `Update` / `ComputeImpactPoint` / `OnImpact` | projectile flight |
 | 00683530 (reference S 006835e8) | `S2CG::Scene::OnFightStrike` | `HitDamage` |
 | 006964a0, 00696480, 00696450 | `Particles::SetVisible` / `SetEmitterLooping` / `SetEmitterPositionAndColor` | switches, transform |

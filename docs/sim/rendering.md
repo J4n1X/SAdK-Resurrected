@@ -66,6 +66,15 @@ sizes come from the first two virtuals of the grid's size source; they are the v
 that value times `heightScale` (`TerrainGrid::GetSeaLevelHeight` S 00687050) [known] S 006b4f60, S 006b6840.
 `seaLevel` and `deepWaterLevel` are the two ends of the overlay height range (§3.7) [known] S 006bed80.
 
+**Packed vertex normals** (`g_TerrainGrid +0x1c`, three bytes per vertex) `ComputeNormalsInRect` S 00687810,
+`PackNormalToBytes` S 00687090 [known]: per vertex, the x slope from the left and right neighbours of its row and
+the z slope from the rows above and below **at the same column index** (the half-step shift of odd rows is not
+compensated); at the map border, where one neighbour is missing, the divisor stays `2·step`, so a border
+vertex's slope comes out smaller than an inner one's on the same ramp. Packing truncates to bytes: flat ground
+packs to (127, 255, 127) [known]; that the byte is `trunc((n + 1) · 127.5)` is [inferred] from those values. Readers unpack `b · 0.0078431367874145508 − 1` (the float 2/255) and do not renormalise:
+the terrain mesh copies the bytes unchanged (S 006c0410), and the ground decal clipper builds its planes from them
+(§3.9).
+
 Both are constants of the program image: S 00881448 holds **-100** and S 0088144c holds **-3000** in the
 initialised data, every reference to them is a read, and `TerrainGrid::Init` writes only +0x20/+0x24 [known]. So
 the renderer's water plane is at world `y = -0.1` on every map, and the water depth value of the overlay
@@ -172,7 +181,8 @@ S 006aabe0, S 006aaab0.
 | +0x80, +0x8c, +0x98 | float[3] each | `ambient`, `diffuse`, `specular` | default 1 1 1 |
 | +0xa4 | std::string | `groundCover` | ground cover layer name |
 
-**`ai::render::TerrainPatternRecord`** (0x18 bytes; one per pattern the map uses; `CTerrainPatternManager +0x84`):
+**`ai::render::TerrainPatternRecord`** (0x18 bytes; one per entry of the pattern source that has a definition, §3.3;
+`CTerrainPatternManager +0x84`):
 `patternIdx` (+0, index into `g_TerrainPatterns`), `mapPatternId` (+4, the id stored in the map's pattern grid),
 `baseRecordIdx` (+8; for an alias: the record of the aliased pattern, else -1), `texture0` (+0xc), `texture1`
 (+0x10), ground cover layer index (+0x14) [known] S 006bb3a0, S 006bbb60; the field offsets are those of the
@@ -456,8 +466,13 @@ patch in the same triangle; three different patterns in one triangle give one so
 opaque, depth write, `ZFunc LessEqual`); (b) unexplored blocks in flat black; (c) all blend patches, record by
 record ("transition layers", alpha blend `SrcAlpha / InvSrcAlpha`, no depth write, `ZFunc Equal`); render states
 [known, file]. Only revealed blocks contribute to (a) and (c) [known] S 006bbde0, S 006bbeb0. Records are
-ordered: non-alias patterns by rank ascending, then alias patterns in the order of the map's pattern list
-[known] S 006bb3a0.
+ordered: non-alias patterns by rank ascending (a swap sort on `def+0`), then alias patterns in the order of the
+pattern source, each linked to the first record whose pattern name equals its `alias` [known] S 006bb3a0. The
+source is the object `CLandscape::Init` S 00689c90 passes (`patternInitArg`; slot 0 count, slot 1 entry with the
+name at +4, slot 2 its id). [TODO] not established: whether that source is the map's pattern list or the table of
+all defined patterns in id order; the remake's port takes the latter (records for every defined pattern, aliases by
+ascending signed id), and a read of the object behind `CLandscape +0xc` (set by the constructor called from
+S 006890f0) settles it.
 
 **Transition mask coordinates** [known] S 006bd940; with `b` = blend vertex, `s = 1 / (4 * stepX)` (one over the
 cell width) [known] S 006bd560:
@@ -634,10 +649,19 @@ Every pass ends with `CalcFOW` (§3.7). Shadow lookup: §3.13.
 
 ### 3.5 Water, coast and map border
 
-**Where water is drawn** [known] S 006889d0, S 006a7de0: one flat quad per visible terrain block whose minimum
-height is at or below the water level, covering the block's whole AABB in x and z at the water height. The quad
-is skipped when the block's AABB minimum y is not below the water renderer's own water level
-(`WorldRenderer +0x4a0` times `heightScale`) [known] S 006a7de0; quads are batched up to 8000 vertices. The coast
+**Where water is drawn** [known] S 006889d0, S 006a7de0, S 006a6a40: one flat quad per visible terrain block whose
+minimum height lies **strictly below** the water level, at the water height. Two tests apply: the block's minimum
+height at or below `seaLevel` (`IsMinHeightAtOrBelowSeaLevel` S 006b4f60), and the FCOMPP test of
+`AddWaterTileQuad` S 006a7de0, which draws only when `heightScale × WorldRenderer +0x4a0` (−100, set in the
+constructor at S 006a925d) is greater than the block box's lowest y; a block whose lowest vertex sits exactly at
+the water level gets no water. The quad spans the block's box in x and z and ends two vertex steps before the box's
+far end (`EmitWaterQuad` S 006a6a40, shader level ≥ 2 path). The box comes from `TerrainCell::Init` S 006b61f0:
+its x and z extents follow the block's cells (`CTerrainCellMgr::CreateTerrainCells` S 006b73b0, with the row
+overhang), but the overhang term `stepZ × overhangY` is added to the box's maximum **y**, not its z (disassembly
+S 006b6282..S 006b628d), and `UpdateHeightRange` S 006b62b0 then overwrites y, so a block's z ends at its last
+row [known]. The lowest height is taken over the vertices S 006b62b0 reads (§2.5). Quads are batched up to 8000
+vertices. The reflection request uses only the at-or-below test (S 006b4f60), a superset of the blocks that get
+water [known]. The coast
 line is therefore not geometry: it is the intersection of that plane with the terrain, softened in the pixel
 shader by the height channel of the overlay texture.
 
@@ -700,9 +724,24 @@ vertex positions are world positions (`TerrainMesh::UpdateVertexPositions` S 006
 [known]. So the factor `1 - saturate(depth * 0.15)` is 0 for every terrain vertex (it is above 0 only for
 `y > 93.3`) and the additive pass adds nothing to the picture [inferred: arithmetic]; a remake can leave it out.
 
-**Map border skirt** [inferred] S 006a7fa0, S 006a7400: for every edge block and the four corners one segment
-that extends the block 200 world units beyond the map edge and down to the minimum edge height; drawn first as
-flat black ground (`RenderMapBorderGround`, texture factor 0), then as water with the map-border water passes.
+**Map border skirt** `WorldRenderer::BuildMapBorderSegments` S 006a7fa0, `ComputeMapEdgeExtents` S 006a77d0,
+`RenderMapBorder` S 006a7400, `EmitWaterQuad` S 006a6a40 [known, decompile and disassembly]:
+
+- *Edge height*: one value for the whole map, the lowest height of the edge cells (S 006a77d0). A second copy,
+  S 006a79c0, is called from S 006882e0 and S 00688360 when a height change rectangle touches an edge cell; the
+  segments themselves are built once, in `InitForMap` S 006a88f0.
+- *Segments*: one per edge block plus the four corners, each extending its block `BorderReach` = 200.0 world units
+  (double S 007e2a78) beyond the map edge. The extents are coded per case: the corner with edge flags 0xc has an
+  inverted z range, corner 6 an extra step, left blocks `+3·step`, right blocks `−4·step` (doubles 3.0 S 007e5358,
+  4.0 S 007e5b38, 1.0 S 007d8a08). A segment (`MapBorderSegment`, §2.6) carries its edge flags at +0x29.
+- *Drawing*: two passes, both flat black (`RenderMapBorderGround`, texture factor 0), no depth write, no culling.
+  Pass 1 is sloped: the corners on the map side sit at the edge height, the outward corners at the water level − 1,
+  chosen by the edge flags. Pass 2 is flat at the water level. The skirt is drawn after the map's own passes and
+  before the water (`CMapRenderer::RenderObjectsAndWater` S 006889d0), so the water over the outermost blocks lies
+  on black and looks darker there.
+- *No water beyond the map.* Water is drawn only as the per-block quads above. The two border-water techniques
+  `RenderMapBorder` / `RenderMapBorderNoMirror` (`WorldRenderer +0x4c` / `+0x50`) are looked up in S 006a8a20 and
+  used by none of the water renderer's methods; beyond the edge the player sees black.
 
 **Fixed-function fallback** (shader model < 2): 64 pre-animated frames `water00..63.dds`, parameters
 `TextureScaleFFP`, `TextureAnimSpeedFFP`, `OpacityFFP`, `TextureMoveSpeedFFP` [inferred] S 006a8a20. A remake does
@@ -739,7 +778,11 @@ Three mechanisms:
    buildings. They are hidden unless the block is both in view and revealed (`TerrainCell::SetVisible`
    S 006b4f80, which calls slot 0 of the object's vtable), except map objects whose type virtual returns 2
    [known] S 006b4f80, S 006b7070. For a building (vftable S 007fc0d4) slot 0 is `SetHidden` S 006aa320, which
-   writes `hidden` (+0xc0), and slot 1 returns that byte [known].
+   writes `hidden` (+0xc0), and slot 1 returns that byte [known]. `TerrainCell::SetVisible` is its only writer,
+   driven every frame by the main view's quadtree cull (`GridQuadTree::Cull` S 006db440 → S 006db220 →
+   S 006daff0 / `HideSubtree` S 006da740), so a building is hidden unless its anchor's block is both revealed and
+   in the view frustum [known]. Hiding does not stop the building's per-frame model update (§3.9), but it gates
+   its door and collapse sounds and the start of its clips' events (§3.9).
 2. **Overlay texture** "WorldElevationMap" [known] S 006c0ca0, S 006bef70, S 006bed80: `(2*W + 1) x H` texels,
    format 0x15 (A8R8G8B8), one mip level (`Create(2W + 1, H, A8R8G8B8, 1)`), filled with 0xff at creation; cell
    `(x, y)` owns the texels `2x` and `2x + 1` of row `y`, shifted right by one texel on odd rows (matching the
@@ -961,8 +1004,8 @@ bottom-up and read with its origin flag honoured, as the D3DX loader does [infer
 **Frame and ruin shading** (pass `RenderFrame`: z test and write, no blending, no alpha test) [known, file]:
 `world = position * WORLD` (the building's world matrix, set per site),
 `rgb = (ambient + saturate(dot(N, -L)) * lightColor * shadow) * tex0(uv0).rgb`, `a = tex0.a` (no effect), then
-`CalcFOW`. No light map and no colour map. A ruin is drawn with its type's LOD part and its material's diffuse
-texture S 006a06d0.
+`CalcFOW`. No light map and no colour map. A ruin is drawn with LOD part 0 of its descriptor (`AddRuin` sets the
+LOD index 0 for every part count, disassembly S 006a1d21..S 006a1d4a), and its material's diffuse texture S 006a06d0 [known].
 
 **Construction and upgrade display.** Inputs are the two floats `remainingA` (+0x70) and `remainingB` (+0x74) of
 the logic `NVillage::Construction` (1.0 at the start, 0 when done; `docs/sim/village-buildings.md`), taken from
@@ -1046,8 +1089,40 @@ the building's construction, or from its upgrade record while upgrading.
 
 **Ground decal** `HouseDecalRenderer::AddDecal` S 006b4400, `GroundDecalMesh::Build` S 006da2a0 [known]: made
 with the instance (so also under construction; replaced on upgrade start and end) from the `GROUND` mesh of the
-type's `mesh` file: transformed by the building's world matrix, clipped against every terrain triangle under its
-bounds and laid on them, each vertex at the terrain height + 0.01. Ruins get their own (S 006d4e00 [inferred]).
+type's `mesh` file. Callers of `AddDecal`: buildings, ruins (`Ruin::ctor` S 006d4e00, the dead building's
+`GROUND`, §"Demolition") and harbour places (`Harborplace::ctor` S 006db7a0, `Harbour_decal.KEX`, §3.11). Meshes
+are loaded once per file (`GetOrLoadMesh` S 006b4240) and removed with `RemoveDecal` S 006b3e00. The build
+(`HouseDecal::ctor` S 006da650 → `Build` with step 1) [known, decompile and disassembly]:
+
+1. *Triangles, once.* The model's box (`ComputeAABB` S 0076b6f0) has its 8 corners transformed by the world matrix
+   (`TransformInPlace` S 006ea510); the terrain triangles under that one world box are collected
+   (`CollectTrianglesInBounds` S 0068a760 → `CollectTrianglesInAabb` S 006c08a0 → `AppendTriangleIfOverlapsXZ`
+   S 006c0600, an inclusive overlap test in x and z). On the grid's last row the collection reads past the vertex
+   array. `AddTriangle` S 006ecd90 inserts at the head of its list, so both lists are walked last-first; it writes
+   through a null pointer when its 512-triangle pool is full.
+2. *Clip.* Each terrain triangle clips the **whole** transformed mesh (`TriangleList::ClipByPlanes` S 006ed6e0,
+   `projectCulled` 0). Its three edge planes (`TriangleListNode::BuildEdgePlanes` S 006ed590,
+   `Plane::FromPoints` S 006eb9c0, `DotCoord` S 006eb4d0, `Math_Vec3_Normalize` S 004d8bb0, which multiplies by
+   `1 / length`) each pass through the edge's two vertices and the point `(((nA + vA) + vB) + nB) · 0.5`, with
+   `nA`, `nB` the packed normals of the two edge vertices (§2.1), unpacked and not renormalised. Neither face normals nor
+   vertical planes are used, so the planes lean with the averaged normals, and around a terrain vertex the planes
+   of neighbouring triangles do not meet in one line.
+3. *Height.* The mesh is clipped at the height it was authored at; afterwards each vertex goes through
+   `TerrainGrid::SampleHeightAndNormal` S 00687e60 at its clipped 3D position and gets `+0.01` (the double
+   S 007d4a70, equal to the float 0.01). `FindNearestVertex` S 00687570 searches in 3D, so the vertex's own height
+   takes part, and `FindTriangleAt` S 00687a70 tests only the wedge of the vertex's fan (tables S 00881478,
+   S 008814b0), not the far edge; `VertexToWorldPos` S 00687500.
+4. All of it runs at the x87's 24-bit precision (S 0057b9b0).
+
+Consequence [known: the algorithm; measured on a port of it]: a decal on a slope, and any decal mesh above or below
+the local ground, does not tile: pieces spanning a crease dip below the terrain and pieces overlap, so the original
+shows notches, small holes and thin cracks in building and harbour plots on sloped ground. On the harbour plot of
+`MP_6P_ship_ahoi` the port hides 6.8 % of the plot under the terrain; with vertical edge planes nothing is hidden.
+
+After a height change `Building::RefreshGroundPlacement` S 006ab420 lays the decal again with the matrix of the
+last frame: `UpdateTransform` S 006aaab0 rebuilds the matrix only on the next frame. Ruins (`RefreshGroundPlacement`
+S 006d4f90, slot 5 as well) set the new matrix first [known].
+
 Shader `house_decal.fx` [known, file]: positions already in world space,
 `rgb = (ambient + saturate(dot(N, -L)) * lightColor * shadow) * tex.rgb`, `a = tex.a`, z test without z write,
 blending `srcAlpha, 1 - srcAlpha`, then `CalcFOW`. Texture `[data]\buildings\house_decal.dds` (string S 007fac60
@@ -1055,22 +1130,41 @@ in the decal renderer's constructor) [inferred].
 
 **Door and work animations** S 006aa640, S 006aa3b0, S 006aa6f0, S 006abcf0 [known]: two playback slots on the
 building's instance of the type's animated model (created from `BuildingDesc +0x5c` in S 006ac810): slot 0 for
-the door clips, slot 1 for `Working`; neither starts while the building is under construction.
+the door clips, slot 1 for `Working`; neither clip starts while the building is under construction.
+
+**When a building updates** [known]. Primary vftable S 007fa79c: slot 11 `Building::Update` S 006abcf0 runs
+**per logic tick** (`Scene::SyncLogicTick` S 00680550 → `CMapRenderer::SyncLogicTick` S 006882c0), slot 12
+`UpdateTransform` S 006aaab0 per frame, slot 14 `PlayOneShotAnimation`. `BuildingRenderer::Update` S 0069ff70 calls
+`UpdateTransform` for every active building every frame, in view or not, so its model and clip events advance
+whether drawn or not. The events' enabled flag is the model's `+0x50`, written by `SetHidden` S 006aa320: set while
+the building is not hidden and fog-visible (+0xc4) (§3.7). Building attachments (the sacrifice movies) advance in
+`EffectList::Update` inside `Building::Update`, so per logic tick as well.
 
 - *Door*: `Building::TriggerWorkCycle` S 006aa640 (despite the name, the door trigger) sets
-  `doorCloseTime = now + 0.6` and, if the door is not open yet, plays `DoorOpen` on slot 0 and the 3D sound
-  0xE29EF893 (only when the building is visible). It runs when a settler passing the entrance gets beyond the
-  building's `enterDistance` or `leaveDistance` in its path progress, chosen by the pass direction S 006c73a0
-  (`CharacterSettler::UpdateBuildingEntrancePass` S 006c757b; positive direction → `enterDistance`, read as
-  going in [inferred]), and while a worker's work animation has a slot
-  override (`CharacterWorker::UpdateWorkplaceWork` S 006c89d4). The per-tick update plays `DoorClose` on slot 0
-  (sound 0x9C700243) once `now >= doorCloseTime`; every new trigger pushes that time back.
+  `doorCloseTime = now + 0.6` and marks the cycle pending, even under construction; only the `DoorOpen` clip on
+  slot 0 and the 3D sound 0xE29EF893 wait for a finished building, and the sound plays only when the building is
+  not hidden. The per-tick update plays `DoorClose` on slot 0 (sound 0x9C700243, same gate) once
+  `timeInfo[0] >= doorCloseTime`; every new trigger pushes that time back.
+- *Who opens it* (`CharacterSettler::Update` S 006c7640, [animation-models.md](animation-models.md) §3.10): each
+  settler's render logic keeps a target building, refreshed when its refresh flag (`CharacterSettler +0x18`, set by
+  `CCharacter::SetPath` S 006905e0) is set and the figure walks no street spline (`CharacterMovement +0`, set by
+  `SetPath` S 006c5160 for street paths). The target is chosen per class: worker S 006c8c10, soldier S 006c7a80,
+  carrier S 006c8df0, specialist S 006c8300 (shared with the constructor and the NPC; classes from
+  `CCharacter::Init` S 00690760), each looked up in the building grid, which is keyed by **entrance cell**
+  (`AddBuilding` S 006a2bf0 → `GetInstanceIdAtTile` S 0069f790). `UpdateBuildingEntrancePass` S 006c7510 triggers
+  the door when the figure's path progress passes the target's `enterDistance` or `leaveDistance`, chosen by the
+  pass direction (`GetDoorPassDirection` S 006c73a0, which compares the step's target cell, movement +0x28, and the
+  last cell reached, +0x30, or the fine position fields +0xe0 / +0xe8 on fine walks; positive → `enterDistance`,
+  read as going in [inferred]). A worker at its workplace also triggers it while its current clip still has time
+  left and has a slot override (`CharacterWorker::UpdateWorkplaceWork` S 006c88c0, call at S 006c89d4).
 - *Work*: `Building::PlayOneShotAnimation` S 006aa6f0 (vftable +0x38), called by `UpdateWorkplaceWork` while the
   worker is at its workplace and no one-shot runs (a building whose property byte +0xb0 is set, the catapult,
   restarts it at each new work start): `Working` on slot 1, started `workElapsed` into the clip [inferred: the
   offset argument of the play call], at the worker's
   speed factor (`Worker::GetWorkAnimSpeedFactor` when `ShouldSpeedUpWorkAnim`, else 1), stopped after the work
-  duration, which the per-tick update counts down by the tick length.
+  duration, which the per-tick update counts down by the tick length (`timeInfo[2]`, Scene +0x50, subtracted in
+  float). The one-shot's running flag and times are set even when there is no clip or the building is under
+  construction, so a new start waits for the countdown in either case [known] S 006aa6f0.
 - The `<Sound>` and `<Particle>` events of the clips fire as the clips play.
 
 **Level of detail** `BuildingRenderer::Update` S 0069ff70 (disassembly), S 0069fb10, S 006aa9d0 [known]:
@@ -1094,9 +1188,16 @@ Start: one-shot particle effect `DemolitionDust`, or `SmallDemolitionDust` when 
 (8) and ship sites (16) get the small dust; a 3D sound; the ground decal and the material pile are removed;
 `demolishProgress = 0`. Per frame: `demolishProgress = min(1, demolishProgress + dt * 0.35)` and
 `worldPos.y = terrainHeight(cell) - modelHeight * progress^2`; the fire points follow. On the logic tick after the
-progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` (scene slot +0x70 S 0067f210 →
-`BuildingRenderer::AddRuin` S 006a19b0 → `Ruin::ctor` S 006d4e00) drawn with the model named
-`"<tribe>_<remains gfx name>"` and the dead building's `GROUND` decal (a second name lookup) [known].
+progress reached 1.0 the instance is deleted. The remains are a `S2CG::Ruin` (vftable S 007fbfa4; scene slot +0x70
+`Scene::OnRemainsAdded` S 0067f210, raised by `CreateRemains` S 005598a0 → `BuildingRenderer::AddRuin` S 006a19b0 →
+`Ruin::ctor` S 006d4e00) [known]. `AddRuin` reads the remains object's remains type (+4), building type (+8), tribe
+(+0x40) and cell (+0x20/+0x24); the ruin is the descriptor `"<tribe>_<remains gfx name>"`, turned by that
+descriptor's `heading`, and its ground decal is the `GROUND` mesh of the dead building's descriptor
+`"<tribe>_<building gfx name>"` (its mesh path, desc +0x1c), laid with the ruin's matrix. When that second lookup
+fails, index −1 reads the memory before the type table. A ruin's bounds are the decal's when it has one
+(S 006d4c70). It lasts as long as its logic remains [inferred]; the shipped `remains.lua` sets a burning time of
+50 ticks (`rm_setBurningTime 50`, 600 commented out) [known, data], so a ruin shows for about 5 s, mostly under the
+demolition dust.
 
 **Fire** `Building::UpdateFireEffects` S 006abbb0 [known, disassembly]: the first `burning` fire points run the
 effect `BuildingFire`, the others are stopped, with
@@ -1118,8 +1219,9 @@ of the world bounds, `y` = the centre's height. `InitFirePoints` is called only 
 
 **Effects in `Building::Update`** (S 006abcf0) [known]: nothing runs while `demolishProgress > 0`, so the
 fires keep burning unchanged while the building sinks. The buffs run only when the building has no scaffold and
-`showEffects` is set; each starts its effect at the building's position with identity rotation
-(`StartByName(name, active 1, emitting 1, time, position, identity)`) while its condition holds and stops it
+`showEffects` is set; each starts its effect at the building's position with identity rotation (the identity
+quaternion S 008828d4, so buffs, fires and dust stand upright in world space and do not turn with the building's
+heading) (`StartByName(name, active 1, emitting 1, time, position, identity)`) while its condition holds and stops it
 (`Stop(true)`) otherwise:
 
 | Slot | Effect | Condition |
@@ -1237,8 +1339,11 @@ then the height is snapped to the terrain, a sideways offset (street avoidance o
 0.43982297 rad per logic tick, interpolated over the tick [known] S 006c4f40, S 006c48c0. A walk on a street
 follows the street's route spline, a free walk of more than two cells a spline of its own; the rules, the
 layout of `CharacterMovement` and the street evasion are in [animation-models.md](animation-models.md) §3.19.
-Death (entity state 5): once the death clip has ended the figure sinks by `0.35 × tick length` per logic tick
-S 006c7640 [known].
+Death (entity state 5): once the current clip has no time left the figure sinks by `0.35 × tick length` per logic
+tick (the double S 007fa780 = 0.3499999940395355) S 006c7640 [known]. The test runs before the tick's new clip is
+applied, so a figure that dies out of a looping clip (negative remaining time) starts sinking at once. The offset
+goes to the movement's height target (+0x120), is interpolated over the tick as previous / current (+0x124 /
++0x128, `UpdateLogic` S 006c4f40) and is added after the terrain snap (S 006c57b0) [known].
 
 **Animation slots** [known] pointer table S 008816b8 (10 entries; names at S 007f997c..):
 
@@ -1334,7 +1439,25 @@ below it if `alignOnWater`. `rot` is read as integer degrees and converted to ra
 `type` strings give the kinds flag 1, tree 2, stone 3, wheatField 4, gate 5, routeBuoy 8, harbor 9 [known]. The draws
 `r` are `Math_Random_NextUnitFloat` S 006ec410, `(next % 1000001) / 1000000` rounded to float, of the Park-Miller
 generator S 0088d4ec seeded 0x5432ace0 at program start and never reseeded (§8). An element with `meshType="none"`
-(`z_harbor_00`) is placed and drawn without a mesh, so it takes its draws and shows nothing.
+(`z_harbor_00`) is placed without a mesh, so it takes its draws and draws no model; the harbour place still shows
+its ground plot (below). When a height change re-grounds an object (vftable slot 5, below), the base
+`InstanceMesh::UpdateGroundHeight` S 006db520 sets an `alignOnWater` object to the water level always, not only
+when it lies below it [known].
+
+**Harbour place plot** [known]. `Scene::OnHarborCreated` S 00682ec0 places `z_harbor_00` (`type="harbor"`, kind 9)
+at every harbour cell, owned or not, through `SpawnLandscapeObject` S 00690240 → `AddInstance` S 0068dd40 →
+`InstanceMeshRenderer::AddInstance` S 006b90a0, whose case 9 creates an `S2CG::Harborplace`. `Harborplace::ctor`
+S 006db7a0 calls `HouseDecalRenderer::AddDecal` S 006b4400 with `"[data]/buildings/Harbour_decal.KEX"` (string
+S 007fc234), group `GROUND`, at the instance's world matrix, unconditionally. The file's `GROUND` mesh is a 6 × 6
+grid textured from `house_decal.dds`, quadrant u 0..0.5, v 0..0.5: the compass-rose stone circle [known, file].
+`Harborplace::UpdateGroundHeight` S 006db8d0 (slot 5) removes the decal and adds it again at the re-grounded matrix;
+the destructor S 006db700 removes it. Slot 5 is called by `CTerrainCellMgr::UpdateCellHeightsInRegion` S 006b7220
+for every object attached to a terrain block that a height change touches: the changed rectangle's corners go
+through `MapPos::SetFromFinePos` S 00675160 and are divided by 4 (blocks of 4 × 4 cells, §2.1), inclusive, and an
+object belongs to the block of `InstanceMesh::GetClampedMapCell` S 006db650 / 4 (`CTerrainCellMgr::AddObject`
+S 006b7070). The plot is drawn with every ground decal (§3.9), in the buildings pass after the streets, so it covers
+a street's end at the harbour flag. The harbour flag itself adds only its model `z_harbor_flag_00` and its goods
+pile (`Scene::OnFlagCreated` S 00682ca0).
 
 **Creation order**, which fixes which draws an object gets [known] S 005273d0, S 005b3a90, S 0053ec60, S 00543f50,
 S 00683040, S 00682ec0: the map's objects reach the renderer through the logic callbacks of `NLogic::System::PostLoad`:
@@ -1390,17 +1513,27 @@ water height, so only their part above the water is drawn, in the step that draw
 (`CMapRenderer::RenderObjectsAndWater` S 006889d0).
 
 **Trees** `TreeInstance::UpdateAnimation` S 006dcb10 [inferred]: state 1 growing: with `g` = the resource's growth 0..1
-(`resource +0x18`), scale `(min(1, 3g), g, min(1, 3g))`; state 2 standing (growth ≥ 1): optional sway, a rotation
-about a horizontal axis by `amplitude * sin(phase)` while being felled at; state 3 falling: rotation about the
-same axis by a fading angle; state 4 fallen. Value changes are faded at rate 10 per second (one logic tick).
+(`resource +0x18`), scale `(min(1, 3g), g, min(1, 3g))`; state 2 standing (growth ≥ 1): a sway branch, a rotation
+about a horizontal axis by `amplitude * sin(phase)` while being felled at, which never runs: the sway byte
+(`TreeInstance +0xe8`) is only ever written 0 (S 006dca2f, S 006dcf70) [known]; state 3 falling: rotation about
+the fall axis by a fading angle; state 4 fallen. Value changes are faded at rate 10 per second (one logic tick).
 The fall [known] S 006c87d0, S 006dd050, S 006dcd40: the woodcutter's render logic (`CharacterWorker::UpdateFellingObject`,
 §3.10 of [animation-models.md](animation-models.md)) takes the job's tree unless it is already falling or fallen
 (state 3 or 4), turns the figure toward it, and once `workElapsed > 3.0` s calls `TreeInstance::StartFalling` with
 the negated worker-to-tree direction: state 3, angular speed `(π/2) / (g_AnimTimeScale × 20)`, the fall axis from
-that direction (`SetFallAxis` S 006dcfd0), the tree's emitter stops looping, and sound `0x01c27b83` (`sound_treefall`)
-plays at the tree. Each `UpdateFalling` call adds `speed × tick length` (`speed / timeRecord[3]`) to the angle (with
-the previous value kept for the fade) and multiplies the speed by 1.2; past π/2 the state becomes 4, and the tree
-lies until its deposit is removed. That the tree falls away from the worker is [inferred] (`SetFallAxis` not read).
+that direction (`SetFallAxis` S 006dcfd0), and sound `0x01c27b83` (`sound_treefall`) plays at the tree. The
+emitter branch of `StartFalling` is dead: the tree's emitter `TreeInstance +0x124` is only ever written null (the
+constructor at S 006dca49, the destructor at S 006dc908; every `+0x124` store and LEA in the binary checked)
+[known]. The direction is `GetDirectionToObject` S 006c8740: from the figure's render position (movement `+0x58`)
+to the tree, horizontal only. The tree turns about that line itself, so it falls sideways across the line from the
+worker through the tree rather than straight away from the worker; on a scaled tree the axis is not normalised,
+which skews the fall slightly [known] S 006dcfd0. `RotationAxis` S 006e8fa0 builds the standard Rodrigues matrix
+but the engine applies it to row vectors, which is the opposite rotation sense to D3DX's [known]. Each
+`UpdateFalling` S 006dcd40 call adds `speed × tick length` (`speed / timeRecord[3]`) to the angle (with the previous
+value kept for the fade) and multiplies the speed by 1.2000000476837158 (the double S 007fc478); once the angle is
+`≥ (float)(π/180 · 90)` the state becomes 4, and the tree lies until its deposit is removed; the deposit level fade
+below then sinks it lying down, since `AnimateMeshesAndLevelFades` lowers only the translation y of the current
+matrix [known].
 Wind is in the vertex shader (`tree_shader*.fx`): `pos.x += s * sin(waveSpeed * m41 + t)`,
 `pos.z += s * cos(waveSpeed * m43 + t)`, `s = saturate(dot(pos, pos) * waveStrength) * m22` [known, file]. `waveSpeed` = 0.35 pi,
 `waveStrength` = 0.003 (`tree_shader_willow.fx`: 0.3 times that, and `pos.z += 0.12 * sin(pos.z * 8 + 2.6 t)` where
@@ -1577,8 +1710,17 @@ the hour advances in a match; read S 00683d50 and the device call S 004d3a50.
 | 5 | caster mask 0x3ff (all layers); flags 0x1a; technique 4 |
 | 6 | technique 5; flags 0x5a |
 
-The caster mask uses the map layer bits of §3.1 (`CMapRenderer::RenderWithExternalEffect` S 006884a0).
-Render target `128 << level`, level 0..4, R32F (or a hardware depth format), S 00769600; light matrices fitted
+The caster mask uses the map layer bits of §3.1 (`CMapRenderer::RenderWithExternalEffect` S 006884a0): terrain
+0x1, buoys 0x2, map objects 0x4, buildings 0x8 (parts, an upgrade's target parts, frames, ruins and military flags,
+as `BuildingRenderer::RenderWithExternalEffect` S 006a0cc0 draws them), territory borders 0x20 [known]. So the
+mask is 0 below level 2, 0x8 at 2, 0xc at 3 and 4, 0x3ff from 5, and the terrain casts shadows only from level 5;
+S 0067f420 also clears the mask while the shadow map quality (+0x2c) is 0 [known]. The level is
+`trunc(setting × 6.0 + 0.5)` (`Scene::UpdateDetailFlagsAndTime` S 0067f6b0, ftol), the options panel's
+`cShadowDetail` ([app-shell.md](app-shell.md) §2.7).
+Render target `128 << level`, level 0..4, R32F (or a hardware depth format), S 00769600: `ShadowManager::SetQuality`
+multiplies the quality (`cShadowQuality`, Scene +0x2c, passed by `Scene::RenderShadowMapPass` S 006810b0) by 4.0,
+truncates and clamps to 0..4 (disassembly), with a step down when free texture memory is 32 MB or less [known];
+light matrices fitted
 to the camera frustum clipped by the scene bounds, orthographic or perspective-warped S 00769880, S 00769f10.
 Lookup [known, `shared.inc`]: `test = z / w + shadowScale.y`; lit if `test < depth`, else `shadowIntensity`;
 2 x 2 taps bilinearly weighted (`SOFT_SHADOW`). `<Shadows scale="1.0" bias="-0.00325"/>` [known, file] feed the
@@ -1660,7 +1802,12 @@ size is [TODO] (the arguments of `CreateRenderTarget` in S 00697290 are not reso
 **Selection markers** `CMapRenderer::UpdateSelectionMarkers` S 00689500 [inferred]: up to 4 projected decals. By
 selection kind: a map cell with a radius, a building, a unit, a ship (radius fixed to 11). Enemy targets use
 style 2; linked buildings and destinations get the extra markers; a marker whose target is gone clears the
-selection. The decal is projected onto the terrain triangles under it (`CLandscape::ProjectDecal` S 0068aad0);
+selection. A selected ship gets a size-11 marker that follows it (`SetTargetShip` S 006b0cd0) plus the two end
+cells of its route while it is on one; a selected route gets its two end cells plus the local player's ship on it
+[known] S 00689500, S 006b0cd0, S 006b0d00 ([ingame-ui.md](ingame-ui.md) §3.5 for the picks and the selection
+kinds). A marker vertex below the water level is lifted to the water level (`DecalProjector::BuildVertices`
+S 004efe20, the `minHeight` argument, [world-objects-rendering.md](world-objects-rendering.md) §3.9) [known]. The
+ship box's 128 × 128 picture of the ship is rendered once per ship (`RenderShipPreview` S 0068cb60) [known]. The decal is projected onto the terrain triangles under it (`CLandscape::ProjectDecal` S 0068aad0);
 textures from `decals.xml` (3 `<Texture>` entries: `decals.dds`, `buildingselect.dds`, `catapultTarget.dds`, all
 in `[data]\gfx\`) [known, file]. The marker [known unless tagged]:
 
@@ -1682,7 +1829,12 @@ in `[data]\gfx\`) [known, file]. The marker [known unless tagged]:
 **Build-placement overlay** `ConstructionMapRenderer::AddCellsInRect` S 006b36d0: for every cell of every visible
 block, except the cell the cursor hovers, the construction flags of the cell for the local player
 (`docs/sim/map-resources.md` §3.5) choose an icon. Cells whose flags are 0 get none, and nothing is drawn when
-the player's byte +0x50 is clear [known]. The cell left out is the cursor's: `Begin` is handed
+the player's byte +0x50 (active) is clear [known]. The player is the game screen's (`+0xfff4`, the local player,
+`RenderPostFxAndOverlay` S 00680a00). The same +0x50 byte is read, together with kind 2, by
+`PlayerTable::HasActiveType2` S 005bdd70 and `FindLocalPlayer` S 005bdda0 (which falls back to the table base),
+and it changes only in `Player::Reset` S 005bea50 [known]. The overlay keeps no picture between frames: every
+frame it reads the flags (`ConstructionMap::GetCellFlags` S 00675740) and places each icon at
+`TerrainGrid::CellToWorldPos` S 00687790, so an emptied cell or a height change shows at once [known]. The cell left out is the cursor's: `Begin` is handed
 `nGame::System + 0x10`, the game cursor, and `AddCellsInRect` skips the cell at its +0x14 / +0x18 [known]. The
 hovered cell is not empty, though: `nGame::Cursor::UpdateCellMarker` S 007885e0 (from `Cursor::Update`
 S 0078a2b0, from `nGame::System::Render` S 007835d0) draws that cell's icon every frame, info-map mode on or off,
@@ -2230,6 +2382,8 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006a7c70, 006a7de0 | `WorldRenderer::BeginWaterPass` / `AddWaterTileQuad` | water surface |
 | 006a65a0 | `S2CG::WorldRenderer::UpdateWaterAnimation` | normal map matrices |
 | 006a7fa0, 006a7400 | `WorldRenderer::BuildMapBorderSegments` / `RenderMapBorder` | map border skirt |
+| 006a77d0, 006a79c0, 006a6a40 | `WorldRenderer::ComputeMapEdgeExtents` (two copies) / `EmitWaterQuad` | skirt edge height; water and skirt quads |
+| 00687810, 00687090 | `TerrainGrid::ComputeNormalsInRect` / `PackNormalToBytes` | packed vertex normals |
 | 006a93c0 | `Gfx_Water_LoadFromXml` | `<Water>` |
 | 006b29c0, 006d8f50 | `BorderMgr::BuildPlayerBorders` / `PlayerBorderPoints::BuildFromMap` | territory border points |
 | 006b2ae0 | `ai::render::BorderMgr::RenderSet` | border posts and buoys, the water posts' bob |
@@ -2256,6 +2410,13 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006d3880, 006d4060, 006a0990 | `BuildingDesc::LoadFromXml` / `LoadResources` / `ctor` | `buildings.xml`, meshes, defaults |
 | 006d50e0 | `S2CG::BuildingMaterial::Create` | texture usages of a subset |
 | 006b4400, 006da2a0 | `HouseDecalRenderer::AddDecal` / `GroundDecalMesh::Build` | ground decal laid on the terrain |
+| 0068a760, 006c08a0, 006c0600 | `CollectTrianglesInBounds` / `CollectTrianglesInAabb` / `AppendTriangleIfOverlapsXZ` | terrain triangles under a decal's world box |
+| 006ed590, 006ed6e0, 006ecd90 | `TriangleListNode::BuildEdgePlanes` / `TriangleList::ClipByPlanes` / `AddTriangle` | decal clip |
+| 00687e60, 00687a70, 00687570 | `TerrainGrid::SampleHeightAndNormal` / `FindTriangleAt` / `FindNearestVertex` | decal vertex heights |
+| 006ab420, 006d4f90 | `Building::RefreshGroundPlacement` / `Ruin::RefreshGroundPlacement` | decal laid again after a height change |
+| 006a19b0, 006d4e00 | `BuildingRenderer::AddRuin` / `Ruin::ctor` | ruin model and decal |
+| 006db7a0, 006db8d0, 006db700 | `Harborplace::ctor` / `UpdateGroundHeight` / `dtor` | harbour place plot |
+| 006b7220, 006db520 | `CTerrainCellMgr::UpdateCellHeightsInRegion` / `InstanceMesh::UpdateGroundHeight` | re-grounding block objects after a height change |
 | 006d2820, 006d2ec0, 006d2ab0 | `S2CG::CMilitaryFlagRenderer::DrawFlags` / `InitGraphicsResources` / `Render` | military flags |
 | 004d3df0 | `S2CE::CGraphicDevice::DetermineDeviceCaps` | `MaxUserClipPlanes` (S 0088d998) |
 | 00695130, 00694c00 | `CCharacterMgr::LoadFromXml` / `LoadCharacterDefs` | character data |

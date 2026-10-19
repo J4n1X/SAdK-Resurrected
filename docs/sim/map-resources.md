@@ -587,6 +587,10 @@ When the flags are recomputed [known]:
 | full territory recomputation, editor passes | whole map | `ConstructionMap_RecomputeAll` S 00675790 |
 | after a map is loaded for a match | whole map | `MapModifier_InitAfterMapLoad` S 00673000 |
 
+Not a trigger [known]: `MapModifier::SetGridBit10` S 00673e00 only sets or clears grid bit 0x400, and neither it nor
+`RemoveDoodad` S 00544480 or `AddDoodadAtFinePos` S 00544e00 invalidates the construction map, although bit 0x400
+enters the predicate; the flags of such a cell change only when another trigger reaches it.
+
 Batching (`MapUpdateBatch::InvalidateConstructionRadius` S 005322b0) [known]: while a batch is open
 (`counter < 1`) the cells of the area only grow `constructionDirty`; with no batch open the area is recomputed at
 once. `MapUpdateBatch_End` S 005321c0, when the outermost batch closes: remove obstructed doodads inside

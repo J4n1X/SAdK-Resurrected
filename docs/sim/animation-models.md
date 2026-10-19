@@ -869,28 +869,48 @@ bone, never for carriers, so a carrier holds nothing when it carries nothing. Ke
 (`CCharacter::GetItemComponentByte4` S 006903e0) is `CharacterMovement +0x04`, the fog visibility byte. **[known]**
 
 - **Base** (`CharacterSettler::Update` S 006c7640) **[known]**: refresh the target building when asked to
-  (virtual `+0x34`, only while the figure has no route spline); while the figure is **not** moving, first
+  (virtual `+0x34`, only while the figure has no route spline); the request is the flag `CharacterSettler +0x18`,
+  set by `CCharacter::SetPath` S 006905e0, and "no route spline" is `CharacterMovement +0`, which `SetPath`
+  S 006c5160 sets for street paths. The target per class: worker S 006c8c10 (its workplace), soldier S 006c7a80,
+  carrier S 006c8df0, specialist S 006c8300 (shared with the constructor and the NPC logic; classes from
+  `CCharacter::Init` S 00690760), each looked up in the building renderer's grid, which is keyed by the
+  **entrance** cell (`AddBuilding` S 006a2bf0 → `GetInstanceIdAtTile` S 0069f790). `OnBuildingRemoved` S 006c7040
+  clears the target and the inside flag when the building goes. While the figure is **not** moving, first
   `UpdateShipRideFacing` S 006c7140 (a settler that references a ship faces the ship's current cell; once aboard,
   wait state 4, it is marked as riding, byte `+0x2a`, and hidden), then face the cell at `settler +0x70` when it is not -1 (`FaceTowards` S 006c4b50, not
   snapped); run the door trigger of the target building when there is one (`UpdateBuildingEntrancePass`
   S 006c7510: entering when the path ends on the entrance, leaving when it starts there, `GetDoorPassDirection`
-  S 006c73a0; fine paths within hex distance < 4); when the settler state is 5 (dying): wait until the current
-  animation's remaining time is `<= 0` (or the figure has no pool instance), then sink the figure on every
-  update: `offset -= dt * 0.35`, written to the movement component (`+0x120`). The sink therefore runs at 0.35
-  units per simulated second, whatever the frame rate and whether the figure is in view.
+  S 006c73a0, which compares the step's target cell, movement `+0x28`, with the last cell reached, `+0x30`, or the
+  fine position fields `+0xe0` / `+0xe8` on fine walks; fine paths within hex distance < 4); when the settler
+  state is 5 (dying): wait until the current animation's remaining time is `<= 0` (or the figure has no pool
+  instance), then sink the figure on every update: `offset -= dt * 0.35` (the double S 007fa780 =
+  0.3499999940395355), written to the movement component's height target (`+0x120`, interpolated as `+0x124` /
+  `+0x128`, §3.19). The sink therefore runs at 0.35 units per simulated second, whatever the frame rate and
+  whether the figure is in view. The test runs before the tick's new clip is applied (§3.9), so a figure that
+  dies out of a looping clip, whose remaining time is negative, starts sinking at once.
+- **Inside flag** (render logic `+0x29`, read by `IsInFrustum`, §3.19) **[known]**: written by
+  `UpdateInsideBuildingFlag` S 006c7590 (from `UpdateAttachedItem` S 006c7760, every frame), by the soldier's
+  `UpdateAttachedItem` S 006c7b50 (`IsPresentInBuilding(true)`, S 00658f90), cleared always by the carrier's
+  S 006c8ee0, and cleared by `OnBuildingRemoved` S 006c7040.
 - **Worker** (`CharacterWorker::Update` S 006c8ab0) **[known]**: while the action timer kind is 4 or 5,
   `workElapsed = (total - remaining) * dt` and `workDuration = total * dt` (timer fields at `settler +0x24` /
   `+0x20`, `dt` = the third float of the time record). Then by the workplace's working mode: mode 1 on a tree
   (map object property `0xCD6EC133`) → `UpdateFellingObject` S 006c87d0: take the job's tree unless it is
   falling or fallen (state 3 or 4), face it, forget it once fallen, and when `workElapsed > 3.0` start its fall
   with the negated worker-to-tree direction (`TreeInstance::StartFalling` S 006dd050, [rendering.md](rendering.md)
-  §3.11); mode 1 on another object → `FaceWorkObject` S 006c86d0; otherwise `UpdateWorkplaceWork`
+  §3.11); mode 1 on another object → `FaceWorkObject` S 006c86d0 (the faced point is the object instance's
+  matrix translation, that is its vertex plus the element's `offset`: S 006c86d0 → S 0048ac80, S 0068dd40,
+  S 00690240); otherwise `UpdateWorkplaceWork`
   S 006c88c0: if the worker is at its
   workplace and the building's work animation is not running (or must restart: building flag `+0xb0` and
   `workElapsed == 0`), start it with `Building::PlayOneShotAnimation(time, workDuration, kind, workElapsed,
   speed)` where `speed = Worker::GetWorkAnimSpeedFactor()` if `Worker::ShouldSpeedUpWorkAnim()` else 1.0; if the
-  figure's own animation still has time left and the set has a keyB/keyC override for the current type
-  (`HasSlotOverride` S 006caa80, asked with keyA = -1), call `Building::TriggerWorkCycle`; at the workplace the
+  figure's own animation still has time left and the set has a keyB/keyC override for the type it is playing
+  (`HasSlotOverrideForCurrent` S 006c61a0 → `HasSlotOverride` S 006caa80, asked with keyA = -1), call
+  `Building::TriggerWorkCycle` on the render logic's target building. The type and key are those of the clip
+  already playing: this tick's request is only queued (§3.9 step 7, applied in S 00690bd0), so on the first work
+  tick it is the previous clip; an endless loop never opens the door, since its remaining time is negative
+  (S 0076ad40, S 00730020). At the workplace the
   figure takes the building's yaw at once (movement target yaw `+0xe8`, snap flag `+0x108` = 1). After that,
   for working modes 0 and 2 (the job's
   target object, cell at its `+0x20`), 3 (the cell at `job +0x94`) and 7 (the hunted animal's cell) the figure
@@ -898,7 +918,7 @@ bone, never for carriers, so a carrier holds nothing when it carries nothing. Ke
   (hiding the static tool) and destroy it afterwards.
 - **Constructor** (S 006c8480): while timer kind 4, face the construction site. **[known]**
 - **Soldier** (S 006c7f80): while not moving and with a valid fight reference, face the fight target
-  (`soldier +0x278`); show buff particle effects: `SoldierDamage` at the right-hand bone matrix while the
+  (`soldier +0x278`, `FaceEntity` S 006c7b10); show buff particle effects: `SoldierDamage` at the right-hand bone matrix while the
   sacrifice-scaled hit damage exceeds the property's `hitDamage`, `SoldierDefense` at the figure's render
   position while the sacrifice-scaled armour exceeds the property's `armor`, `BlindSoldier` at the head matrix
   for a ranged soldier while `AdjustRangedHitChance` gives ≥ 1, `ArcherSpeed` at the figure's render position for
@@ -1224,7 +1244,9 @@ Playing **[known]**:
 
 - `Building::TriggerWorkCycle(time)` S 006aa640: `workCycleEndTime = time + 0.6`; if no cycle is pending, stop
   handle slot 0, play `DoorOpen` once (`PlayAnimationWithEffects(id, time, 1, 0)`), play the sound with property
-  id `0xe29ef893` at the building when the building's virtual `+0x04` returns 0, and latch "pending".
+  id `0xe29ef893` at the building when the building's virtual `+0x04` returns 0, and latch "pending". The latch
+  and the close time are set even under construction; only the clip and the sound wait for a finished
+  building.
   `Building::Update` S 006abcf0: when a cycle is pending and `workCycleEndTime <= time`, it calls
   `PlayStateAnimation(1, time, 0)` (`DoorClose`) and clears the latch.
 - `Building::PlayStateAnimation(state, time, blend)` S 006aa3b0: states 0 and 1 use handle slot 0, state 2 slot
@@ -1236,9 +1258,16 @@ Playing **[known]**:
   `oneShotRemaining = duration`. `Update` S 006abcf0 subtracts the third float of the time record from
   `oneShotRemaining` on each call and, when it runs out, removes the slot's animation and clears the three
   fields.
-- Nothing plays while the building is under construction or has no skeleton.
+- No clip plays while the building is under construction or has no skeleton; the latches and times above are
+  still written, and `PlayOneShotAnimation` marks its one-shot running even without a clip.
+- `Building::Update` is slot 11 of the primary vftable S 007fa79c and runs per logic tick (`Scene::SyncLogicTick`
+  S 00680550 → `CMapRenderer::SyncLogicTick` S 006882c0), so `workCycleEndTime` is compared with `timeInfo[0]` and
+  the one-shot counts down by `timeInfo[2]` once per tick; slot 12 `UpdateTransform` S 006aaab0 advances the model
+  every frame for every active building, drawn or not.
 
-That the virtual `+0x04` test is a visibility test is **[inferred]** (plates of the two functions).
+The virtual `+0x04` test is the hidden flag: `SetHidden` S 006aa320, written only by `TerrainCell::SetVisible`
+S 006b4f80 from the main view's cull ([rendering.md](rendering.md) §3.7). The clips' event flag (model `+0x50`)
+is set by `SetHidden` while the building is neither hidden nor out of the fog (`+0xc4`). **[known]**
 
 The catapult turns two bones procedurally (`CatapultBuilding::ApplyBoneRotations` S 006d5e50) **[known]**: both
 bones are first reset to their bind key; the first gets a rotation about the axis constant S 00882864 by
@@ -1258,7 +1287,7 @@ plus three status meshes `<Freight>`, `<Expedition>`, `<Soldiers>`. **[known]** 
 S 00698cb0 not read line by line). Mesh, skeleton and the three animations are loaded with the ship's `scale`
 (§3.1).
 
-`Ship::Update(time)` S 006a54c0, per logic tick **[known]**: while the logic ship's move progress
+`Ship::Update(time)` S 006a54c0, once per logic tick (`SyncLogicTick` → `UpdateShips`) **[known]**: while the logic ship's move progress
 (`position record +0x20`) is `<= 0` the ship sits on its cell and the animation state is 2 when the logic
 ship's state (`+0x28`) is 6 or 7, else 0; while it is `> 0` the position is interpolated between the two cells
 and the state is 1. The yaw steps toward its target by at most 0.43982297 rad per tick, clamped at the target,
@@ -1327,7 +1356,8 @@ names `Stand1`, `Stand2`, `Walk`, `Dying`. Each type gets its own `AnimationSet`
   heading from the hex direction table S 007f9494 (degrees), reached by steps of at most 0.43982297 rad per tick
   (`Animal::StepHeading` S 006cde40), interpolated per frame (`UpdateTransform` S 006ce610, which also adds the
   sink offset to y).
-- Dying and the death animation finished (`GetAnimRemainingTime <= 0`): sink, `offset -= dt * 0.4` per tick.
+- Dying and the death animation finished (`GetAnimRemainingTime <= 0`): sink, `offset -= dt * 0.4` per tick (the
+  double S 007e7820 = 0.4000000059604645), added after the terrain snap in `UpdateTransform` S 006ce610.
 
 ### 3.19 Movement between ticks, facing and street evasion
 
@@ -1341,12 +1371,23 @@ rough street walk (path mode 2, not a fine step) the street under the current or
 (shared with `CStreet::BuildSpline` S 006cd320, not owned) and is registered on the street for evasion (below);
 otherwise, while the walk progresses, a walk over more than two cells gets a `RouteSpline` built over its own path
 cells (owned). The first and last segment of the path are looked up among the spline's points. The position
-record restarts at the logic position with an inverse duration of `1 / gameConfig.gameSpeed`.
+record restarts at the logic position with an inverse duration of `1 / gameConfig.gameSpeed`. The logic path
+(`StreetPath`) appends each new leg to its vector without clearing it; only a replan and the reset empty it, which
+matters for the count and index `StepAlongSpline` reads. **[known]**
 
-**Per tick** `CharacterMovement::UpdateLogic` S 006c4f40 **[known]**: keep the previous height and lateral
-offsets; standing (progress ≤ 0): previous ← target ← logic position, `WrapYaw` S 006c4a40; moving: without a
+**Street splines** **[known]**: every logic street of two cells or more gets a drawn street with a `RouteSpline`
+(`AddStreetFromRoute` S 0069f570 → S 006cd480 → `CStreet::BuildSpline` S 006cd320), at the sea level for water
+streets. `RouteSpline::EvaluatePosAndTangent` S 006d7280 uses the standard cubic Hermite basis
+(`Math_CubicHermiteBasis` S 006d6ab0) and extrapolates for `t` outside 0..1. The movement flag `+0x135` changes
+the spline step; its only reader is the carrier's boat (S 006c934d), and the carrier is the only render logic
+that overrides slot `+0x1c` (S 006c8d80, the boat), which `OnRouteRemoved` S 00690650 calls.
+
+**Per tick** `CharacterMovement::UpdateLogic` S 006c4f40 **[known]**, called from `CCharacter::UpdateLogic`
+S 006909f0 after the render logic's update: keep the previous height and lateral offsets (the height target
+`+0x120` becomes the pair `+0x124` / `+0x128`, interpolated over the tick and added after the terrain snap in
+`Update` S 006c57b0); standing (progress < 0): previous ← target ← logic position, `WrapYaw` S 006c4a40; moving: without a
 spline `StepTileToTile` S 006c4bf0 (straight from cell to cell, target yaw from the hex direction table S 007f9494:
-90, 150, −150, −90, −30, 30 degrees), with one `StepAlongSpline` S 006c4d90 (position = the spline at the path's
+90, 150, −150, −90, −30, 30 degrees, set only for a real direction, not 8), with one `StepAlongSpline` S 006c4d90 (position = the spline at the path's
 segment and progress, run backwards with `1 − progress` when the walk goes against the spline's direction; target
 yaw = the tangent, reversed in that case); then the lateral offset (below) and, while visible, the `SettlerSpeed`
 flag (the sacrifice-scaled speed of the settler's kind above `gameConfig.settlerSpeed`, `particles.md`); last
@@ -1363,14 +1404,17 @@ matrix.
 (`+0xe4`) moves toward the target yaw (`+0xe8`) by at most 0.43982297 rad (double S 007fa360) per tick and stops at
 the target; with the flag it takes the target at once and the flag is cleared. The yaw is compared as a plain
 number (no wrap to the shorter way inside this step; `WrapYaw` runs while standing). Previous and current yaw are
-kept for the per-frame interpolation. A half turn takes about 0.7 s. `FaceTowards` S 006c4b50 sets the target yaw
+kept for the per-frame interpolation; a snap shifts the pair twice, so both hold the new yaw and nothing is
+interpolated. A half turn takes about 0.7 s. `Math_YawFromDirection` S 006eece0 turns a direction into a yaw: the
+cosine to +z, 0 above 0.99, −π below −0.99, the sign taken from x. `FaceTowards` S 006c4b50 sets the target yaw
 toward a world point, snapping when asked. Ships and animals step their yaw with the same constant (§3.17,
 §3.18).
 
 **First facing** `RandomizeInitialFacing` S 006c53f0 **[known]**: a new figure without a spline takes a random hex
 direction (`NextInRange(0, 5)`, snapped); with one it faces the spline's last cell when `NextInRange(0, 100) < 51`,
 else its first cell (snapped). The generator is a function-static `RandomGenerator` seeded `0x7c0` on first use,
-not the simulation's. The constructor S 006c5540 clamps the start height up to the sea level **[known]**.
+not the simulation's. It sets only the target yaw, the snap flag and the matrix, so the figure is drawn at yaw 0
+until its first logic update. The constructor S 006c5540 clamps the start height up to the sea level **[known]**.
 
 **Visibility** `CCharacter::IsInFrustum` S 00690f80 **[known]**: false unless the fog byte (`+0x04`) and the
 position-valid byte (`+0x28`) are set; false while `CCharacter +0xa0` is set (the render logic's byte `+0x2a`,
