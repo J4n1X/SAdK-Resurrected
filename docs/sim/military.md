@@ -772,7 +772,12 @@ reference invalid); 3 TargetCaptured (target owned by the attacker); 0 Fighting.
 
 **Target lost** (`ReleaseTargetBuilding` S 00571720, when the target building object is unlinked) [known]: if
 the phase is Fighting and the defenders still have an engageable soldier: `ending = true`,
-`endCountdown = actionsInFightDelayTime / 10` (30). The target reference is cleared.
+`endCountdown = actionsInFightDelayTime / 10` (30). The target reference is cleared. When the target is destroyed,
+this runs from the military component's destructor inside `Building::dtor` S 0055ce70 (`Military::dtor`
+S 005606f0, after the territory updater's), while the building object still exists, so the phase is still
+Fighting [known]. The component destructors that run between the AI notification and the military one (depot,
+construction, workers, production, settler spawn, territory updater, bulldozing) read no military, fight or
+garrison state [known] S 0055af70, S 0055e8c0, S 0055b620, S 00565270.
 
 **Gathering positions** (S 00576fb0, S 00576d00) [known; summary in `../navy-and-military.md` §4]: `r` =
 smallest `bowRange` among the bow soldiers of both sides (0x7fffffff if none). Every distance below is measured

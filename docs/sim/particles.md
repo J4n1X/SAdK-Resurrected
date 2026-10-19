@@ -724,7 +724,10 @@ S 0068ac10, table built by `CLandscape::ctor` S 0068ad40) [known]:
   `realTime`, frame info +4; `nextCheck` starts at 0, so the first check is on the first frame).
 - Collection: `particleTime = now`; for every visible terrain block (4 × 4 cells, `rendering.md` §2.5), in the
   order of the visible list that the terrain culling built this frame (`CLandscape::UpdateVisibleCells`
-  S 0068a4a0 → `GridQuadTree::Cull` S 006db440: a quadtree walk with the frustum and a horizon occlusion test),
+  S 0068a4a0 → `GridQuadTree::Cull` S 006db440: a quadtree walk with the frustum and a horizon occlusion test;
+  `CullNode` S 006db220 is depth first: a node wholly inside and not occluded is collected whole, otherwise its four
+  children are visited in the order of the table S 007fc1b8 chosen by the nearest child; occluded blocks are not in
+  the list [known]),
   whose revealed byte (+0xa0, mapped as `hasLayers`; set by `TerrainCell::RevealFromExploreMap` S 006b5f80) is set
   and whose maximum vertex height is above the renderer's water level (`IsMaxHeightAtOrBelowSeaLevel` S 006b4f70,
   the raw height against `g_TerrainGrid.seaLevel` S 00881448 = -100, is false): `x = range(x0, x1)`, `y = range(y0, y1)` (inclusive block corners);

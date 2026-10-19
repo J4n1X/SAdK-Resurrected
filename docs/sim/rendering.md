@@ -852,8 +852,11 @@ every cell whose territory owner is that player and whose grid flag 0x20 (territ
 appended to list A (land) when the grid flag 0x4 (water) is clear, to list B (water) when set [known] S 006d8f50
 (the flag names are those of `docs/sim/map-resources.md`). A land point is the world position of the cell's sample
 vertex at its stored height (`TerrainGrid::CellToWorldPos` S 00687790) [known] S 006d8f50, S 00687790. The points
-are appended in a greedy nearest-neighbour order starting from the last cell of the scan; the order has no visible
-effect [inferred]. The lists of all eight players are cleared and rebuilt whenever the map fires slot 3 of
+are appended in a greedy nearest-neighbour order starting from the last cell of the scan (squared cell distance,
+strict `<`, so the first index wins a tie; the chosen cell is swap-removed with the last remaining one). The posts
+have no rotation and their heights depend on the position, not the index; the order shows only where two posts
+overlap with blended alpha (`border_shader.fx`: z write, alpha blend, alpha test 127, the fog-of-war alpha), where
+the one drawn later lies on top [known] S 006d8f50, S 006b2ae0. The lists of all eight players are cleared and rebuilt whenever the map fires slot 3 of
 `NMap::CallbackReceiver` (§3.2) [known] S 0067f010, S 006883c0; there is no other caller of S 006b29c0. A height
 change (slot 0) therefore leaves the stored land points as they are: after levelling under a border the land posts
 keep their old height, floating above or sunk into the new ground, until the next territory change rebuilds the
@@ -873,8 +876,12 @@ y = seaLevelHeight + 0.05 * sin(t * 2π * 0.3 + x + z)
 
 `x`, `z` are the point's world position in the original's axes; 2π is the constant at S 00882840, 0.3 the one at
 S 007e6af0, 0.05 the double at S 007e6d80; `t` is the time the render call receives [inferred: as for the route
-buoy, §3.11]. `BorderMgr::RenderWithEffect` S 006b2d80 draws the same sets with an effect passed in by the caller,
-[inferred] the shadow-map pass, so the posts cast shadows. Shader `border_shader.fx` [known, file]:
+buoy, §3.11]. `BorderMgr::RenderWithEffect` S 006b2d80 draws the same sets with an effect passed in by the caller:
+it is the shadow-map pass (`ShadowManager::RenderCasters` S 0069e2a0 → `CMapRenderer::RenderWithExternalEffect`
+S 006884a0, which calls it only while the render flags hold bit 0x20; `Scene::RenderShadowMapPass` S 006810b0
+copies the scene's shadow mask into those flags). `Scene::ApplyShadowQuality` S 0067f420 sets the mask to 0 below
+level 2, 8 at level 2, 0xC at levels 3 and 4 and 0x3FF from level 5, so the posts cast shadows only from shadow
+level 5 [known]. Shader `border_shader.fx` [known, file]:
 
 ```
 rgb = (ambient + lightColor * saturate(dot(N, -L)) * shadow) * lerp(playerColor * 1.8, tex.rgb, tex.a)
@@ -1560,7 +1567,9 @@ sub-instance `i`: `SetSeed(this + i)` (a heap address, so the scatter differs be
 `BLENDINDICES` is the batch slot, bytes 1..3 are not read by `weed_shader.fx`. `BuildInstancedIndices` S 006ddce0:
 the variant's local indices plus `i × verticesPerVariant`. A field is therefore drawn as a disc of wheat tufts about
 6 units across around its deposit, one cluster per deposit. The material is the first subset's texture
-(S 006b9690); the cull bounds are those of the unscattered mesh [inferred].
+(S 006b9690); the cull bounds are those of the unscattered mesh: `ExtendedMeshData::Load` S 006dddc0 computes the
+box before any scatter and never updates it, and `LoadMesh` S 006b9690 takes the bounding radius from that box's
+diagonal [known].
 
 **Deposits (level fade)** `MapObjLayer::AnimateMeshesAndLevelFades` S 0068d160 [inferred]: a counter 0..20 on the logic
 object (`+0x50`) lowers the instance by `level * extentY` (the pile shrinks into the ground), faded at rate 10.
@@ -1629,7 +1638,14 @@ a random draw (`Animal::ctor` S 006ce090 [known]). Definitions in `animals.xml` 
 name filename>`).
 
 **Projectiles** [known] S 006a3d90, S 006a3a40, S 006a32b0, S 006a3400, S 006a3610, S 006a3af0: launched at
-`timeInfo[1]` from the current world position toward the target box; the `projectiles.xml` record is chosen by the
+`timeInfo[1]` from the current world position toward the target box. Until the launch the projectile copies its
+owner's matrix (owner vtable slot 0) every frame (ctor S 006a3720, `Update` S 006a3400), so the start point is the
+translation of that matrix at launch. Owners: a soldier (kinds 0, 2, 3; the character's per-type logic face +0x88,
+slot 0x24, through `Scene::OnProjectileSourceSet` S 00681780), launched at once; the catapult (kind 1;
+`CatapultBuilding` +0x21c, created on animation kind 4 in `PlayOneShotAnimation` S 006d6510), launched when the arm
+reaches its limit (`CatapultBuilding::Update` S 006d6000). [TODO] which matrix the soldier face returns (bone or
+body). The `projectiles.xml` records are the `<Projectile>` children of the root in file order (`LoadProjectilesXml`
+S 006a4440; `name` only sets a type index that `AddProjectile` does not use), and the record is chosen by the
 logic type (0 → record 1, 1 → 0, 2 → 3, 3 → 2); flight time = flight ticks × 0.1 s; ballistic arc with gravity
 2.44269 for the catapult stone (type 1, S 00881a10) and 1.4715 otherwise, horizontal speed `distance / T`,
 vertical `g/2 · T + dy/T`; the flight emitter follows the arc, the impact plays `impactPFX` once and releases
@@ -1686,9 +1702,16 @@ write no fog themselves. `RenderSkydome` and the reflection view enable it too (
 reflected object is fogged over the mirrored path's length, which includes twice the camera height, and the water
 in front of it is fogged again [inferred from the states; presentation only].
 
-**Local environment** `MapEnvData::Update` S 006ae700 [inferred]: per-map spheres; weight 1 inside
-`innerRadius`, linear to 0 at `outerRadius` (2D distance from the camera's ground focus point); weights are
-divided by the number of influencing spheres; if they sum to less than 1 the map default fills the rest.
+**Local environment** `MapEnvData::Update` S 006ae700 [known]: per-map spheres (stride 0x44: the `EnvData`
++4..+0x30, centre x, z +0x34 / +0x38 in world units, inner +0x3c, outer +0x40). With `dsq` = the squared 2D distance
+from the point below (summed in x87, stored as a float): `dsq < inner²` → weight 1; `dsq > outer²` → 0 and the
+sphere does not count; else `w = 1 − (√dsq − inner) ÷ (outer − inner)`, and the sphere counts even when `w` is 0
+(`dsq = outer²`); with `outer = inner` that boundary case divides 0 by 0. Every weight is multiplied by
+`(float)(1 ÷ count)`; sphere 0 is assigned, the others are added (`AddWeighted` S 006ae170); when the sum is below
+1 the map default is added with weight `1 − sum`; with no counting sphere the default is used alone. The point is
+`Camera_GetGroundFocusPoint` S 0068ce50 (from `Scene::Update` S 006805e0): `(60 × hit + d × camera) ÷ (60 + d)` in
+x and z, where `hit` is the screen-centre ray's terrain hit (the point 1000 along the ray when there is none) and
+`d` the horizontal camera-to-hit distance. `ApplyToDevice` S 006ae3a0 applies the result.
 Source: the map's `.bin` sidecar (`docs/map-format.md` §4.17): u32 skydome index, light heading, light elevation,
 the default `EnvData` (12 floats: background, ambient and light colour interleaved per component, shadow
 intensity, fog start, fog end), u32 sphere count, the spheres S 006aea80.
@@ -1820,9 +1843,14 @@ in `[data]\gfx\`) [known, file]. The marker [known unless tagged]:
   (`PushSelectionToScene` S 00615bb0; also the cell ring of build placement, `BeginBuildPlacement` S 006176d0 /
   `SelectCell` S 00617770, [ingame-ui.md](ingame-ui.md) §3.5), and for a building the larger of the x and z
   sizes of its box (S 006b0bc0);
-- turns by `time × 0.025132744` radians, i.e. 2π / 250 per time unit (`SelectionMarker::UpdateDecal`
-  S 006b0d00); [TODO] not established: the unit of that time (a read of where its time argument is filled
-  settles it);
+- turns by `time × 0.025132744` radians, i.e. 2π / 250 per second (`SelectionMarker::UpdateDecal`
+  S 006b0d00). The time is the scene's `+0x4c` (`Scene::Update` S 006805e0 hands `&Scene +0x48` to
+  `CMapRenderer::Update` S 006888f0, which keeps it at `+0x50` for `UpdateSelectionMarkers` S 00689500), which
+  `Scene::UpdateDetailFlagsAndTime` S 0067f6b0 sets to `nGame::System`'s accumulated time while its flag is 0
+  (with the flag set, to a running high-resolution timer sum instead): simulation seconds,
+  scaled by the game speed ([logic-core.md](logic-core.md) §3.1). So the spin follows the game speed, stands
+  while the simulation stands, and its phase is the absolute game time, not the time since the marker appeared
+  [known];
 - lies 0.3 above the ground (the normal offset of the projection,
   [world-objects-rendering.md](world-objects-rendering.md) §3.9).
 
@@ -1875,12 +1903,17 @@ along the view y axis, so the icon stands on the cell's world position and faces
 added in view space (−1 on z = one unit toward the camera). Size and offset come from the `<Landscape>`
 attributes `iconSize 3.0` and `iconOffset "0 0 -1.0"` [known, file]; without them the defaults are 1.5
 (S 008814ec) and 0 (S 0088cf68). The quads are batched 50 at a time (`FlushQuads` S 006b3530) and tinted by the
-renderer's overlay colour.
+renderer's overlay colour. At shader level 0 `FlushQuads` draws one quad at a time with a billboard matrix
+through the technique `ffp`, whose stages select only the texture (colour and alpha), so that path shows the icons
+untinted and without the overlay's fading alpha [known, `infomap_shader.fx`].
 
 **Order and depth** [known] S 00688c40, S 006b36d0, S 006db220, S 006dad30, `infomap_shader.fx`: the visible block
 list is collected nearest child first ([world-objects-rendering.md](world-objects-rendering.md) §3.14), and the
-overlay walks it from its last entry to its first, so blocks are drawn far to near; inside a block cells go row by
-row in y, each row in x. Technique `Default`: depth test on (`ZFunc LessEqual`), no depth write, alpha blend. The
+overlay walks it from its last entry to its first, so blocks are drawn roughly far to near: the list is front to
+back only by quadtree level (`CullNode` S 006db220 visits the children of a node it recurses into in the order of
+the table S 007fc1b8 picked by the nearest child, S 006dad30 — nearest 0: 0,1,2,3; 1: 1,0,3,2; 2: 2,0,3,1; 3: 3,1,2,0
+— and a subtree wholly in view goes through `CollectVisible` S 006daff0 with the nearest-child bits it last stored),
+not sorted by distance; inside a block cells go row by row in y, each row in x. Technique `Default`: depth test on (`ZFunc LessEqual`), no depth write, alpha blend. The
 overlay is drawn after the whole map, water included, and before the particles (`RenderPostFxAndOverlay`
 S 00680a00, §3.1), and after the post processor's combine, so depth of field never blurs it. The icons are
 world-sized quads: they grow on screen as the camera comes closer, and nearer plants, rocks and figures cover
@@ -2314,7 +2347,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 10 | Consumer of the `FogOfWar` texture in `CEnviromentMgr +0x11c` | static: bind calls of that texture |
 | 11 | Combination of day-time keys and per-map `EnvData`. The hour does not run during a match: `CEnviromentMgr +0xfc` is written by the constructor S 00685070 (the `localtime` of the environment XML, default 10), by `Update` S 00683d50 (set to that value again every frame while the scene is not animated, untouched otherwise) and by the setter in vftable slot 8 S 00683fd0, which has no caller in the decompiled image; the time scale `+0xf8` has no reader [known]; the hour stayed 12.0 over 4,367 ticks [live, 2026-10-12] (§6.6). Open: the combination of the keys with `EnvData` | static: readers of the day-time keys and of `EnvData` |
 | 12 | Answered (§3.8): a water post's height is `seaLevelHeight + 0.05 * sin(t * 2π * 0.3 + x + z)` (disassembly of S 006b2ae0; constants S 00882840, S 007e6af0, S 007e6d80) | - |
-| 13 | Answered (§3.14): a marker takes a whole `decals.xml` texture in white (style 1 `buildingselect.dds`, 2 `catapultTarget.dds`; that the style indexes the list is [inferred]), 4 units for a cell, the larger box side for a building, 0.3 above the ground. Open: the unit of the rotation time. The build icon atlas layout is answered too (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`; the cursor cell's glowing icons from (16, 640)) | static: where the time argument of `SelectionMarker::UpdateDecal` S 006b0d00 is filled |
+| 13 | Answered (§3.14): a marker takes a whole `decals.xml` texture in white (style 1 `buildingselect.dds`, 2 `catapultTarget.dds`; that the style indexes the list is [inferred]), 4 units for a cell, the larger box side for a building, 0.3 above the ground. The rotation time is the simulation's accumulated time in seconds (§3.14). The build icon atlas layout is answered too (§3.14: `ui_ingame3.dds`, 88-pixel icons from (16, 808), table filled by S 007cad30, split by `infomap_shader.fx`; the cursor cell's glowing icons from (16, 640)) | - |
 | 14 | Answered (§6.1): rotations and phase speeds build the normal-map texture matrices, `tex0Scale`/`tex1Scale` reach only the fixed-function texture coordinates, `color` is read by nothing | - |
 | 15 | Answered (§3.5): the terrain vertices are world positions, so the caustics pass adds nothing | - |
 | 16 | Meaning of shadow level 1 (global S 0088d6bc) and of the shadow flags 0x18 / 0x1a / 0x5a | static: readers of S 0088d6bc and of `Scene +0x34` |
@@ -2387,7 +2420,7 @@ pixel rule, the stage and clip-plane formulas, animation slot rules, the palette
 | 006a93c0 | `Gfx_Water_LoadFromXml` | `<Water>` |
 | 006b29c0, 006d8f50 | `BorderMgr::BuildPlayerBorders` / `PlayerBorderPoints::BuildFromMap` | territory border points |
 | 006b2ae0 | `ai::render::BorderMgr::RenderSet` | border posts and buoys, the water posts' bob |
-| 006b3290, 006b2d80 | `BorderMgr::ctor` / `RenderWithEffect` | border mesh names; the sets drawn with a passed effect (shadow pass [inferred]) |
+| 006b3290, 006b2d80 | `BorderMgr::ctor` / `RenderWithEffect` | border mesh names; the sets drawn with a passed effect (the shadow pass, shadow level 5 and above) |
 | 006d8d00 | `Render_GetPlayerColorOrWhite` | border tint, white without a player |
 | 00687790, 00687050 | `TerrainGrid::CellToWorldPos` / `GetSeaLevelHeight` | land border point; water post height |
 | 00682ca0, 00669e60 | `S2CG::Scene::OnFlagCreated` / `NNet::Flag::LinkNavyObject` | flag model choice; flag announced again when a harbour is linked |

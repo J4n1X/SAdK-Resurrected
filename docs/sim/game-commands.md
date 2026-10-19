@@ -637,8 +637,10 @@ finding a group of the local player whose group id (+0x1c) equals it, and the sl
 executor reads the same value as a good id and maps it to a group through the good's property field +0x78
 [known].
 
-**`0x20020` GE_Good_ResetModifier** — payload +0x10: good id (class `Event1Integer` [inferred]: no sender exists in
-this build to show it). Executor S 00781f20: `FindGroupForGood` S 005c10f0, then
+**`0x20020` GE_Good_ResetModifier** — payload +0x10: good id. No code builds or sends it: the immediate 0x20020 occurs only in
+the debug name table (`NComm_InitEventTypeNameMap`, S 00423366); the executor reads only the sender slot and +0x10,
+and events are decoded by their class tag, so any integer class with an i32 at +0x10 is accepted (`Event1Integer`
+is the smallest) [known]. Executor S 00781f20: `FindGroupForGood` S 005c10f0, then
 `GoodArrangementGroup::ResetToDefaults` S 005c0d40: every entry of the sender's group for that good gets its
 default weight; the accumulators are left as they are [known].
 

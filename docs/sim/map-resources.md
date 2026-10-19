@@ -255,7 +255,10 @@ S 00532180, S 005321c0:
 list of (threshold, doodad) kept **sorted by ascending threshold** (signed; an entry with an equal threshold goes
 after the existing ones) [known] S 005574f0, S 00556df0; lookup returns the doodad of the last entry whose threshold
 is <= the amount, or -1 below the first. The lookup S 00556d70 does not handle a good without any entry (the
-map find is dereferenced unchecked) [known].
+map find is dereferenced unchecked) [known]: it reaches the CRT's `_invalid_parameter_noinfo` S 006f2702, and with no
+handler installed (only the CRT start-up writes the handler slot S 0088f5c0) the process terminates. An amount below
+the first threshold gives −1, which `AddDoodadAtCell` S 00545150 hands on to `GetDoodadProperty` S 00547620; that
+ends the same way unless the doodad table has a key −1 [known].
 
 **GameConfig** fields used here [known]: +0x08 border pattern (`cfg_setBorderPattern` S 0054c3b0), +0x1c fishing
 distance (`cfg_setFishingDistance` S 0054c300), +0x40 maximum water depth for water streets
@@ -556,7 +559,10 @@ construction flags around the cell are invalidated. The callers are the editor, 
 rectangle inflated by 16 vertices -> `ElevationRectChanged`, cliff bits re-resolved for the covered cells,
 construction flags of the covered cells recomputed; cell rectangle -> `CellRectChanged`, then the rectangle is
 extended by the points (minX-4, minY-4) and (maxX-4, maxY-4) (so it grows by 4 cells only towards the origin) and
-the construction flags inside are recomputed.
+the construction flags inside are recomputed (`ConstructionMap::RecomputeRect` S 00675880, at once, whatever the
+map-update batch nesting); the flush removes no obstructed doodads. `ExchangePatternInRect` walks x outer and y
+inner and sets each matching cell with `defer = 1` (`PUSH 1` at S 006744af), so a Lua pattern exchange makes no
+per-cell notification and recomputes exactly that rectangle [known].
 
 ### 3.5 Buildability: the construction flags
 

@@ -867,6 +867,10 @@ runs in the constructors of the worker, constructor, soldier and specialist logi
 bone, never for carriers, so a carrier holds nothing when it carries nothing. Key A starts as that item's good
 (`GetDefaultItemGoodId` S 006c72b0). The character's item switch read by attached goods
 (`CCharacter::GetItemComponentByte4` S 006903e0) is `CharacterMovement +0x04`, the fog visibility byte. **[known]**
+The attached item's own visibility (item +0x14) is set by events only: `InitAttachedItem` and `SetOverrideItem`
+S 006c7460 (without an override) write "owner visible and that byte", an override hides it, and
+`CCharacter::SetVisible` S 006919b0 overwrites it with the figure's visibility alone on every change. The item has
+byte +0x58 set, so `Item::Update` S 006d0720 returns at once for it and never refreshes it per frame. **[known]**
 
 - **Base** (`CharacterSettler::Update` S 006c7640) **[known]**: refresh the target building when asked to
   (virtual `+0x34`, only while the figure has no route spline); the request is the flag `CharacterSettler +0x18`,
@@ -981,6 +985,12 @@ visual item of the named type through `ItemMgr::CreateItemByType`, marks it exte
 (S 006b0800, S 006b0840). A sound event plays its sound unless it is a non-looping one-shot without duration more
 than 0.5 s late, and an event with a duration stops its sound at `start + duration` (`SoundEvent::Start` /
 `Update` S 006b0550, S 006b01f0; [audio.md](audio.md) §3.9). **[known]**
+
+When a slot's animation is removed (a building's one-shot clip ending in `Building::Update` S 006abcf0, or
+`PlayOneShotAnimation` S 006aa6f0 before it restarts the clip), `AnimatedVisual::RemoveAnimation` S 006d8500
+(vtable S 007fc18c slot 4) deletes and swap-removes every attachment of that animation id, then runs the base
+S 0076b460. A particle event's destructor (vtable S 007faa84, S 006b03e0 → S 006b0250) calls `Particles::Stop(true)`
+S 00696400: emission stops and the emitter is let go, so the effect fades out by itself **[known]**.
 
 When an `AnimatedVisual` starts an animation it instantiates the animation's events (§3.7). Each frame its
 callback (`Callback_OnAnimUpdate` S 006d8570) computes the event time — the slot's animation time plus the slot's
@@ -1350,8 +1360,11 @@ names `Stand1`, `Stand2`, `Walk`, `Dying`. Each type gets its own `AnimationSet`
 `Animal::UpdateLogic` S 006ce2c0, per logic tick **[known]**:
 
 - Logic animal state (`+0x88`) 5, 7, 8 or 9 → play `Dying` once on an exclusive instance; latch dying.
-- Alive and standing (move progress `+0x4c <= 0`): snap to the cell; if it was walking, play `Stand1` or `Stand2`
-  looping, chosen with a static generator seeded `0x5432ace0`.
+- Alive and standing (move progress `+0x4c < 0`; `FLDZ / FCOMP / TEST AH,0x41`, so a NaN counts as standing too):
+  snap to the cell; only on the edge from walking (`+0xbc`), play `Stand1` or `Stand2` looping, chosen with
+  `NextInRange(0, 1)` of a function-static generator seeded `0x5432ace0` on first use (S 006ce4b4), shared by all
+  animals for the life of the process and never reseeded per match.
+- A progress of 0 or more walks, also while the cell equals the next cell (direction 8: the heading is kept).
 - Alive and moving: position = cell + (next cell − cell) * progress; start `Walk` looping if not walking; target
   heading from the hex direction table S 007f9494 (degrees), reached by steps of at most 0.43982297 rad per tick
   (`Animal::StepHeading` S 006cde40), interpolated per frame (`UpdateTransform` S 006ce610, which also adds the

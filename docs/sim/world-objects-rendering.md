@@ -643,6 +643,12 @@ kind 2 makes both a `WaterStreet`.
   `RebuildPath` S 0078b510 rebuilds it through the waypoints, with the shared planner's street id at
   `points +0x28`.
 - `points1` is `RebuildPath` through the waypoints plus the cursor cell.
+- `RebuildPath(planner)` S 0078b510 re-plans from scratch: it cancels the planner's construction; takes as
+  reference street the street of the player's shared planner while its construction is active (stored at
+  `points +0x28 / +0x2c` and passed to `CanStreetStepTo` / `CanStreetPassCell`); runs full searches
+  (`PlanSegment` with `fullSearch`) from `waypoints[0]` to `waypoints[1]`, `waypoints[2]`, … until one returns
+  ≠ 1; and then `ExtendTo` for each remaining waypoint while the planner cannot complete. Neither path is copied
+  from the simulation, so both follow the current passability.
 
 So the tail is drawn red when `points1` is the shorter path, i.e. when the cursor lies on the plan: the red
 part is what a click there would cut back (`CommitPathTo`); the alpha tail is the extension a click would add.
@@ -691,8 +697,10 @@ S 006e1e30.
    depth instead of using a depth-bias render state. The offset is added to the camera's near plane of 1.0
    ([camera-input-cutscenes.md](camera-input-cutscenes.md) §3.1), so the street pass is projected with a near
    plane of 1.1. With the far plane (500) much larger than the near plane, a point at view depth `d` is then
-   depth-tested like a point at `d / 1.1` of the other passes: a pull of about 9 % of the view depth, about 3.6
-   units at 40 units, not a fixed 0.1 units [inferred, from the projection formula S 006e97e0]. This is what
+   depth-tested like a point at about `d / 1.1` of the other passes: a pull of about 9 % of the view depth, about
+   3.4 units at 40 units (3.36 with the far plane 500; `d / 1.1` alone, the infinite-far-plane value, gives 3.6),
+   not a fixed 0.1 units [known] S 006c3ab0, S 006898f0, S 006890f0, S 004d9e10, S 004d9300, S 006e97e0,
+   S 007867c0. This is what
    keeps the unclipped crossing fans (§3.6) visible where the terrain bulges through them;
 2. technique `Select(lowQuality, shadows)`; pass `RenderStreet`: kind-1 streets, kind-0 streets, then crossings
    of kind 1 and crossings of kind 0 (`DrawCrossings` S 006c3030);
@@ -766,7 +774,8 @@ the decal pass with cull mode 1 (`docs/sim/rendering.md` §3.1).
   its box); `r` defaults to 1. `r` is the full side of the square (`BuildVertices` S 004efe20); a flag, a street
   cell and a clicked cell get 4 (`PushSelectionToScene` S 00615bb0). Styles: 1 `buildingselect.dds`, 2
   `catapultTarget.dds` (an enemy building) ([rendering.md](rendering.md) §3.14). Projection straight down;
-  rotation `angle = timeInfo[1] * 0.025132744` radians (one turn per 250 time units), 0 without a time argument.
+  rotation `angle = timeInfo[1] * 0.025132744` radians (one turn per 250 s of game time: `timeInfo[1]` is the
+  scene's accumulated simulation time, [rendering.md](rendering.md) §3.14), 0 without a time argument.
 - Settler blob [known] S 00690bd0: exists only while the global S 0088d6bc is set (shadow level 1 to 3,
   `docs/sim/rendering.md` §3.13), the character is visible and its movement is active; centre = the character
   position, or the centre of the animation bounds in animation states 4..6 [inferred], projected along the terrain normal,
@@ -1225,7 +1234,7 @@ A remake may therefore change any rule of this document without affecting synchr
   lengths), the half width 1.0, `u` across, `v = 0.25` per unit, the trimmed first and last slice at flags
   with more than one street, and the six-triangle hexagon fan of radius 2.25 with its uv mapping (centre at
   the node position, each corner at the terrain height under it, not clipped to the terrain). The near-plane
-  shift is not a small offset: it pulls streets by about 9 % of the view depth (§3.8, about 3.6 units at 40
+  shift is not a small offset: it pulls streets by about 9 % of the view depth (§3.8, about 3.4 units at 40
   units). A small fixed depth offset leaves most of a flat crossing fan under the terrain wherever the ground
   bulges between its corners (the fan's radius 2.25 spans more than one terrain vertex step of 1.5), so only the
   trimmed street ends show, as hard cuts. Where the renderer cannot reproduce the shift for streets alone
