@@ -790,7 +790,12 @@ S 005e4e90), so step 7 lasts exactly one tick.
   stages 01 and 02 and by default [known: data]; read straight from the record reached through deposit
   `+0x1c`) and `MoveToFinePos(deposit fine position, +0x28)`, state 1; state 1 → clear the stop distance,
   finished. With the stop rule of 3.8 the worker therefore ends `elevationSize` fine steps short of the
-  deposit's display position.
+  deposit's display position. State 0 reads the deposit through the workplace's cached pointer (building +0x50)
+  without a test. A reserved deposit can be destroyed during the walk (Lua `map_killDeposits` S 005afc80 →
+  `KillDepositAt` S 00540e60 marks any matching deposit depleted without a reservation test; placing a chest
+  removes the resource at its cell, S 0052d110 → S 0053f790); `Deposit::dtor` S 005430a0 then clears the
+  building's reference (S 0053c530), and this read is a null dereference (a crash). Only the natural expiry in
+  `Deposit::Update` S 005431a0 waits for the reservation [known].
 
 **`Working`** (`Start` S 0077eda0, `Update` S 0077ebf0): **[known]**
 - Duration = `BuildingProperty +0xd8` (`bp_setProductionTime`, e.g. 55 for woodcutter and forester), animation
@@ -1352,7 +1357,10 @@ when it connects the two flags, else the shortest link (`NNet::Flag::FindShortes
 `ComputeRoute` clears the byte at +9, plans, and **appends** the leg's cells through the street getters S 00669900 /
 S 006699f0 / S 00669760 (each pushes back); it then sets `index = count − 1` and `valid = 1`. It never empties the
 cell vector itself: only `ReplanFromCurrentCell` S 007746a0 and `Reset` S 00774620 do. **[known]** It never writes
-`StreetPath +0x48` either; the writer of +0x48 was not found. **[TODO]**
+`StreetPath +0x48` either. **[known]** The byte is only ever written 0: by the constructor S 00774950 (at
+S 007749b7) and by the no-replan exits of `ReplanFromCurrentCell` (S 00774764); `Load` S 007748b0 restores the
+stored value. It is read by `Rough::UpdateStep` S 00773cd0 (at S 00773d37) and by `Store` S 007743c0. So it is
+always 0: a street step never reports "replan pending", and a save always holds 0 there.
 
 `StreetPath::CanAdvance` (S 007747b0): the route is valid, not finished, and the next cell still has the street
 bit (`GridStates & 0x2`); with `noReplanAtFlags` set, additionally no flag of the owner on that cell. A street

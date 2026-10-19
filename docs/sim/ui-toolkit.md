@@ -269,6 +269,9 @@ The lobby's chat bubbles use the same layout in plain mode (tags not interpreted
   own `disabledColor` (default 0.4667, `Shape::ctor` S 004aa5a0). `AlphaFanPicture` builds its fan quads with a
   white vertex colour × alpha and never uses the disabled colour (S 004cd4a0).
 - With a mask texture the quad goes through the masked path with `maskUV0`, `maskUV1`.
+- `Shape::BindTexture` S 004a86d0 (a picture bound by code, such as a render-target preview) sets the texture,
+  the mapping (0, 0, texture width, texture height) and the size; it keeps the borders and `stretch`, so a
+  nine-slice shape draws the bound picture with its corners at the border size [known].
 - The mapping is divided by the size of the texture as created, and UI textures are created with
   `D3DX_DEFAULT` sizes (`CTexture::CreateD3DTexture`, S 004e7a9e): a picture whose sides are not powers of two
   is stretched to the next powers of two, so its mapping covers the stretched image ([ingame-ui.md](ingame-ui.md)
@@ -335,6 +338,10 @@ Lua function `<name>_isPressed`. `OnClicked` → toggle (check button), sound `u
 calls are made only while the script gate is set and the function exists
 ([lua-runtime.md](lua-runtime.md) §4.4).
 
+**PictureButton draw** (vtable slot 1, S 004b3a60) [known]: the picture shape (+0x468, e.g. an action or
+sacrifice icon) is drawn first, then `Button::Draw` S 004afd10 draws the button's own shape (+0x198) with its
+state mapping, the children (`Object::Render`) and the caption. The state picture therefore lies over the icon.
+
 ### 3.5 Icon [known] S 004ce780, S 004ceaa0, S 004cf3a0
 
 `type` = display mode. Mode 0 and 2: draw `shape`, then `symbol`. Mode 1 (layered): draw `texture_not_selected`,
@@ -395,12 +402,19 @@ to the other two before they are read), `padding` (4 numbers: left, top, right, 
 
 **Focus** [known] S 00498c60, S 0049b7b0: left press while hovered focuses it (resets the caret timer, cancels
 its tooltip, clears the `Edit` focus global; `uiClick0` only when focus changed). A read-only field takes focus
-but ignores keys and characters.
+but ignores keys and characters. The focus global (S 00885ca8) is written only by `SetFocus` S 00498c60, the
+release S 004988f0 (Esc in `HandleKey`, `ClearInput` S 004abe00), the detach and parent-hidden handlers and Tab,
+so a click on another kind of widget (a list row) leaves the field focused [known].
 
 **Mouse** [known] S 0049b7b0, S 0049b9b0, S 0049bae0, S 0049a3a0: a press inside the text area sets the caret
-from the pixel (nearest glyph boundary of the hit line) and starts a selection anchor; with Shift held the old
-caret stays the anchor. While the button is down, mouse moves extend the selection; release fixes
-selection length = caret index − anchor index (signed). Double click selects the word under the cursor
+from the pixel and the selection length to 0. A plain press leaves no anchor (the anchor index ends at −1), so a
+drag selects nothing and the release only moves the caret to the release point. With Shift held the old caret
+becomes the anchor: mouse moves set caret and selection length = caret index − anchor index (signed), and the
+release does the same and clears the anchor; a release outside the text area only clears it.
+`SetCursorFromPixel` S 00499cd0 returns without a change for a point outside the widget; else with
+textX = x + horizontal scroll: textX < 1 gives column 0, textX ≥ the line width gives the line's length, otherwise
+the column of the glyph whose [x, x + advance) holds textX, plus 1 when textX − advance ÷ 2 − glyph x ≥ 0 (the
+half rounds right); a textX in no glyph (a gap) gives the line's length. Double click selects the word under the cursor
 (word start to word end) and suppresses the following release.
 
 **Characters** (`HandleChar` S 0049f100) [known]:
@@ -439,7 +453,9 @@ scroll line (one line if not `multiline`), each left-aligned in white × widget 
 per character; the selection is a white rectangle with alpha 0.33 over the selected span; the caret is a
 vertical line of the line's height in colour ARGB 0xff0000ff, drawn while the caret timer ≤ 500 of its 1000 ms
 cycle, only with focus and not read-only. The timer adds the frame time in ms, modulo 1000 (S 0049a090).
-The mapping follows the Focus state (0 / 1 / 2 → the three mappings). The horizontal scroll keeps the caret
+The mapping follows the Focus state, the mouse state (0 / 1 / 2 → the three mappings; 2 = left button pressed on
+the field), not the keyboard focus, and only while the field and its ancestors are enabled; the shipped layouts
+give all three the same rectangle. The horizontal scroll keeps the caret
 inside the text area (`ScrollToCursor` S 0049af70).
 
 **No IME**: text arrives only as `WM_CHAR` single bytes; the window procedure handles no `WM_IME_*` message
@@ -468,7 +484,12 @@ S 004d0790, S 004d0830, S 004d0770, S 004cfdf0:
 - Hover: `mapping_cursorover` while hovered, else `mapping` (S 004cf4a0, S 004cf5e0). With the `templates.xml`
   `slider` (130 px wide) the track runs from 16 to 105 px [known: data and the rule above].
 - XML (S 004d04b0): children `throttle`, `leftUp`, `rightDown`, `text`; attributes `mapping`,
-  `mapping_cursorover`, `useText`, `textValMin`, `textValMax`, `textFormat`, `value`, `snapCount`.
+  `mapping_cursorover`, `useText`, `textValMin`, `textValMax`, `textFormat`, `value`, `snapCount`. There is no
+  orientation attribute: the factory (`CreateObject` S 004c28a0, case 2) calls `Init` S 004d0040 with snapCount 0
+  and orientation 1, so every layout slider is horizontal [known].
+- The value text (`UpdateValueText` S 004cfdf0) computes the value in single precision, widens it to a double and
+  formats it with the CRT formatter S 006f6ab6 into 128 bytes, then sets it without localisation; any printf
+  conversion with one double argument works, and only `%.0f%%` is shipped (`menuoptions.xml`) [known].
 
 **Slider** (older class, kind 1) [known] S 004d1060, S 004d1390, S 004d0950, S 004d0d00: XML `type`, `speed`
 (default 0.2), `snapcount`, children `shape`, `bar`, `throttle`, `focus`. Types 0, 3, 4 are vertical, 1 and 2
@@ -507,6 +528,9 @@ type 0: y = value × (slider height − throttle height), x = 0; types 1, 2: x =
   screen fractions (0 without a range); a row is
   visible only while it overlaps the list rectangle vertically. Wheel over the list = one slider step (down for a
   negative delta).
+- Clipping: the `container` is only the rows' parent and never clips (its layout height is overwritten by the
+  row sum). A list clips only through its own `clipping` attribute, to its own rectangle
+  (`Object::ApplyClipRect` S 004a58a0); the rows' width comes from the `item` template [known].
 - Selection: a clicked row reaches `OnItemSelected`; with `markSingleItem` every row's `marked` becomes
   (row == clicked) and the "row selected" observers are called with the row (without `markSingleItem` neither
   happens); then the click bubbles to the parent. A row's double click calls the "row double-clicked"
@@ -529,9 +553,13 @@ type 0: y = value × (slider height − throttle height), x = 0; types 1, 2: x =
 - Rows stand at x 0 of the widget (S 004b29c0).
 - Click on a row while open: `DropDownMenu` notifies "item chosen" with the row index and closes;
   `ComboBoxNew` sets `selectedIndex`, writes the row text into the header caption fitted to combo width − header
-  button width − caption x pixels (ellipsis rule of §3.1), closes and notifies "selection changed" with the
+  button width − caption x pixels, each term truncated to whole pixels (ellipsis rule of §3.1; the caption x is
+  the header button's `Text` position as `LayoutCaption` leaves it: half the button's width, 32 px for button
+  styles 4 and 5) [known] S 004cb350, closes and notifies "selection changed" with the
   index. A `ComboBoxNew` then passes every child click on to its parent; a `DropDownMenu` does not.
-- A mouse-down anywhere that no part of the open menu handles closes it (S 004b2790); any key-down closes a
+- A mouse-down anywhere that no part of the open menu handles closes it and is returned unhandled (S 004b2790);
+  because the open menu holds the input capture (S 00885cb4), `Root::HandleInputEvent` S 0049141a gives that click
+  to no other widget, while the window handler feeds the game's action map regardless (S 00401f30) [known]; any key-down closes a
   `DropDownMenu` (S 004b2770). Closing hides the rows and releases the capture.
 - `ComboBox` (kind 18) is an older variant (`string%u`, `data%u`) [TODO] not read here (S 004bf090).
 
@@ -681,6 +709,13 @@ Drawing is a separate pass (`RenderRecursive` S 004a1370) [known]: nothing for a
 (the gate of step 3) returns false; else pre-render (+0x14), the widget's own draw (+4), every child's slot
 +0x1c in child-vector order (ascending z-order, so the last child is on top), then post-render (+0x18). The
 draw pass reads the live child vector, not a copy.
+
+The z-order is the sort key `+0x178` [known]: `InitAndAttachToParent` S 004a56d0 sets it to the parent's child
+count and appends the child, so the children stand in creation order; `SetSortKey` S 004a0ad0 writes it and, on a
+change, re-sorts the parent's vector (`SortChildren` S 004a0550: `qsort` ascending with `nUi_CompareBySortKey178`
+S 0049fe40; equal keys have no defined order). Events go the other way: `Object::DispatchEvent` S 004a07a0
+offers an event to the children from the last to the first and stops at the first that returns 1; a return of 0
+lets it go on to the siblings and then to the ancestors' own handlers.
 
 ## 5. Inputs and outputs
 

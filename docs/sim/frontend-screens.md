@@ -587,9 +587,13 @@ player count or picture per row [known: no such widget is bound in S 00615430].
 
 **Layout** (`menuselectmapdialog.xml`) [known: file]: the frame `Dialog` (320 × 436) holds `MapList` at
 (38, 80), size 281 × 272, whose `container` child is only 241 × 200, and a scroll slider at (250, 25), size
-18 × 220. That the list draws with the container's width and the list's height is [inferred]. The frame's last
-child is a label `text` with `!LOBBY_SELECTMAP_DIALOG` and only `anchor="top"`; placed by those values it would
-stand at the frame's corner. Whether the original draws it is not established [TODO].
+18 × 220. The container never clips and its height is replaced by the row sum; the list clips to its own
+281 × 272 rectangle, and rows wholly outside it vertically are hidden ([ui-toolkit.md](ui-toolkit.md) §3.10)
+[known] S 004a58a0, S 004b8880, S 004b8590. The frame's last child is a label `text` with
+`!LOBBY_SELECTMAP_DIALOG` and only `anchor="top"`. Neither shows that text: the frame is a `Picture`, which loads
+a shape and a tip but no text (`Picture::LoadFromXml` S 004b16f0 → S 004b5230 → S 004a76c0), and the label loads
+its text from a grandchild `text` (`Label::LoadFromXml` S 004b1d50 → S 004ab9f0), which the element does not have,
+so the label stays empty [known].
 
 **Info cache**: reading a map's `MapInfo` for the panel goes through the cache files
 `<Local AppData>\SAdK\<name>.info` and `<name>.usermapinfo` (`save-format.md` §3.11). The caches of all map types
@@ -1094,7 +1098,7 @@ simulation state while a match runs, with these boundaries:
 | 2 | Answered (§3.6): after a delete prompt the overwrite prompt's "yes" deletes the save instead of writing it [live, 2026-10-12] | — |
 | 3 | Whether a credits line's alpha factor above 1 is clamped (§3.8) | static: `nUi::Text::SetColor` S 004b3ce0 and the text draw |
 | 4 | Whether the activate-main latch (`Main +0x228`) or the `Info` gate (`Overlapped +0xbfc`) is ever set through a pointer the byte search cannot see (§2.1, §3.11). Also searched: no `LEA` forms the address of either byte in a function of the two classes (the `LEA` hits with displacement 0x228 and 0xbfc belong to other classes), and the only store to `+0xbfc` in `Overlapped` is the constructor's 0 (S 0062e5ee). Left: a store through a register computed elsewhere | running game: write watch on the two bytes while using the main menu and dragging a dialog's title bar |
-| 5 | Whether the map chooser draws the frame's label `!LOBBY_SELECTMAP_DIALOG`, which has only `anchor="top"` (§3.5), and where; and whether a negative mapping width draws mirrored (§3.9) | running game: a screenshot of the map chooser and of the loading bar |
+| 5 | Answered for the label (§3.5: it is empty). Open: whether a negative mapping width draws mirrored (§3.9) | running game: a screenshot of the map chooser and of the loading bar |
 
 ---
 

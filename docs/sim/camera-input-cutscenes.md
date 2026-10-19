@@ -930,8 +930,12 @@ Consumes:
 Produces:
 - eye position, look-at point (`eyePos + lookDir`), field of view and clip planes for the renderer; the same eye
   and look-at point feed the sound listener ([audio.md](audio.md) §3.2), and the device frustum built from them
-  is what the minimap draws as the view trapezoid (`nMenu::MiniMap::DrawCameraFrustum` S 005f2a50: the frustum
-  corners cast from the camera onto the terrain) [inferred for the minimap: summary and callees, body not read];
+  is what the minimap draws as the view trapezoid (`nMenu::MiniMap::DrawCameraFrustum` S 005f2a50 [known]: rays
+  from the camera through the frustum corners 0, 1, 7 and 6 (near pair, far pair) are cut with the plane y = 0
+  (`Terrain_RayHitGroundApprox` S 0068a610: no hit when the ray points up, and the point then stays the corner);
+  the far pair takes the hit only when it is nearer than the far-plane corner; nothing is drawn when all four
+  miss; uv = ((x − originX) ÷ extentX, 1 − (z − originZ) ÷ extentZ); the edges are clipped against the round
+  minimap (`Math_IntersectLineCircle2D`, radius = half the widget width) and drawn with the shape's alpha);
 - the local selection (`ai::game::Selection`) and, through the menus, command events
   ([game-commands.md](game-commands.md) §5.1): this is the only way input changes the simulation;
 - during a cinematic: the three switches of `BeginCinematic` (AI off, chests off, sacrifices paused), the

@@ -897,6 +897,13 @@ S 005ba250, S 005b9f30, S 005ba190 [known]; additions:
   still linked" and the state is kept [known] S 005ba250, S 005bcd10.
 - `Finish` S 005ba190: `bActive = 0`; unlink from the fight; unlink every mission soldier (last to first);
   take the ship off its route. The ship then returns to state 0 and calls `ReturnToOwnHarbor` (§3.8).
+- Unchecked reads in `Update` S 005ba250 [known]: state 0 sails to `GetEndHarborOwnedBy(route, owner)` S 005b6970
+  with no test, and `MoveToHarbor` S 005b97f0 dereferences the harbour, so a mission whose route is gone, or has no
+  end of the owner's, crashes. That can happen: a harbour exit takes a non-expedition ship off its route
+  (`UnlinkMovementsOfPlayer` S 005b70a0 → `NavyLink_UnlinkMovementRoute` S 0053c3f0) without calling `Finish`, so
+  the mission stays active. State 3 reads the fight through its cached pointer unchecked too, but that cannot
+  fail while the mission is active: the fight's destructor calls `NavyLink_UnlinkMilitaryFight` S 0053c160, which
+  runs `Finish` S 005ba190; state 3 goes to 7 when the defender has no end of the route.
 - `HarborList::FindNearestWithPlayerShipRoute` S 005b6090 writes to its `*status` the result of the **last**
   harbour it evaluated, not of the harbour it returns [known].
 - The reach test `Military_IsEnemyTerritoryInRange` S 00575850 walks only the hex ring at `R + 1` around the

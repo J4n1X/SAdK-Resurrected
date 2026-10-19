@@ -222,7 +222,12 @@ Starting an entry, `SoundManager::PlayEntry` S 005c7550 [known]: sample → `FSO
 sample, NULL, startpaused = 1)`; stream → open, `FSOUND_Stream_PlayEx(FSOUND_FREE, stream, NULL, startpaused = 1)`,
 remember `{stream, channel}`; a stream that gets no channel is closed again. Returns the channel or -1. Every
 channel therefore starts paused; the caller sets volume and position and then calls
-`FSOUND_SetPaused(channel, false)` (`Sound_SetPaused` S 005c6690).
+`FSOUND_SetPaused(channel, false)` (`Sound_SetPaused` S 005c6690). Which channel `FSOUND_FREE` takes when all 32 play is decided inside
+`fmod.dll`, which is not in the Ghidra project [TODO: import `fmod.dll` and read `FSOUND_PlaySoundEx`'s channel
+search]. The game feeds that choice: every sound that is not of type 1 gets its `sn_setPriority` value as the
+sample's default priority (`SoundManager::SetEntryPriority` S 005c6820, from `Sound_LoadSoundsFromProperties`
+S 0056b190), and channels are marked reserved (`Sound_SetReserved` S 005c6710, from the emitter manager, its
+channel stop and the voice-over) [known].
 
 ### 3.2 Listener
 
@@ -267,8 +272,10 @@ above the terrain, measured along the look direction, not at the camera eye [kno
 4. `soundId = PickRandomVariant(soundPropId)`, `channel = PlayEntry(soundId)`; give up if -1.
 5. Append `{source, channel, soundPropId, prop}` to `ActiveChannels` (grows by 1.5×).
 6. `source == null`: `FSOUND_3D_SetAttributes(channel, pos, velocity S 0088f1b0)` once. Otherwise register the
-   channel for tracking (`SoundManager::Set3DTracking` S 005c6b30): the manager polls the source for its position
-   each frame through `ActiveChannels::GetChannelPositionAndVelocity` S 0056dca0.
+   channel for tracking (`SoundManager::Set3DTracking` S 005c6b30): it appends the pair, asks the source at once
+   (`ActiveChannels::GetChannelPositionAndVelocity` S 0056dca0, vtable S 007e9984 slot 0) and sets the attributes,
+   so a tracked sound starts at its source's position; from then on the manager polls the source each frame
+   [known].
 7. Volume: `FSOUND_SetVolume(channel, trunc(prop.volume * v))` with `v = categoryVolume[prop.type]`, and
    `v *= 0.25` if `prop.type == 3` and `ducked` (S 0056d8d0; 0.25 at S 007e5df8).
 8. Unpause.
@@ -567,7 +574,7 @@ from the caller lists of `Play3D`, `PlayUiSound`, `AddEmitter`].
 | a row of the HUD message list is clicked: the rows are `nUi::Icon`s (S 005f8fa0), so a left click plays the icon click | `uiClick1` | none | `Icon::OnMouseButton0Up` S 004ce980 → `PlayClickSound` S 004cf3a0 |
 | a new player message arrives (not for a list restored from a save) | `uiMessage0` / `uiMessage1` | none | `Messages::PollNewMessages` S 005f73e0 |
 | a message row is removed | `uiRemove` | none | `Messages::Update` S 005f86a0 |
-| an `Overlapped` window opens: the requester (S 005ffef0) and the end-of-game dialog (S 0061ff20); only the cinematic screen turns this sound off (`ClearPlayOpenSound` S 0062e1b0) | `uiDialog0` | none | `Overlapped::OnShow` S 0062e750 |
+| an `Overlapped` window opens: the book (S 005fc310), the network info (S 005fd350), the message box (S 005feec0), the requester (S 005ffef0), the debug screen (S 0060a340), the end-of-game dialog (S 0061ff20) and any shown through vtable S 007f4574; only the cinematic screen (S 005fbd30) turns this sound off (`ClearPlayOpenSound` S 0062e1b0) | `uiDialog0` | none | `Overlapped::OnShow` S 0062e750 |
 | a picked slot of the settings panel is dropped back: `CancelSlotDrag` has no "silent" flag and plays whenever a slot is picked | `uiCancel` | none | `CancelSlotDrag` S 00620c90 |
 | lobby minigame and NPC actions | by id | none (`PlayUiSound`) or a fixed position (`Play3D`) | `CLobbyClient_MiniGame::PlaySound` S 00523720, `PlaySoundAt` S 00523770; both skipped while the local avatar is engaged at a different minigame table |
 
@@ -791,8 +798,10 @@ volume 0.3.
   (harmless: the playlist picks a group by tribe key and the group's entries are then the same record); and from
   the second match of one program run on, a player index whose flag was set in an earlier match does not get its
   tribe added again, so that tribe's music stays out of the rotation unless it is also the local player's tribe.
-  [TODO] not established: whether the `nMenu::Game` object is created once per program run or once per match;
-  settle with the callers of `nMenu::Game::ctor` S 005ee5d0.
+  The object lives for the whole process [known]: `nMenu::Game::ctor` S 005ee5d0 has one caller,
+  `nMenu::System::Initialize` S 005dda30, which `CApplicationEx::Initialize` S 004075d0 calls once from `WinMain`
+  S 00407cf0; the shutdown S 0078c0c0 resets the playlist and clears only byte +0x00. So the second consequence
+  holds in every run with more than one match (presentation only).
 - **User settings**: `settings.cfg`, section `UserSettings` (`formats-inventory.md` §3.11). Five consecutive f32
   after `smartCursor` [known] S 00579640 / S 00579960: master (`Sound_GetSfxVolume` S 0056a080: the manager's
   cached `savedSfxVolume / 255`, so the value from before a focus-loss mute; 1.0 when the sound system is

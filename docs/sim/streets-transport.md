@@ -1286,7 +1286,9 @@ A return building keeps the packages returning to it in `Depot+0x5c` (`returning
 `AssignReturnBuilding` S 0064fd80, unlinked on arrival or release). When that building is destroyed,
 `Depot::dtor` S 0055af70 → `ReturningGoodSystem::dtor` releases them, looping until the list is empty, and the next
 `PackageNeedSystem::Update` assigns them another building [known] (S 0055f330, S 00650120, S 0053c920,
-S 0053c950).
+S 0053c950). The loop always ends: an entry is made only by `AssignReturnBuilding` S 0064fd80 together with the
+package target's building id, and every removal clears both together (S 00650120, `RemovePackage` S 006505d0,
+`Clear` S 00650aa0, the update), so each entry is released by `ReleaseTargetsOfBuilding` [known].
 
 [inferred] Free packages therefore drift to the nearest storehouse unless a need takes them first (§3.11 prefers a
 free package whenever its path cost is not higher than the nearest supplier's).

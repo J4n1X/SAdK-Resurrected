@@ -105,6 +105,14 @@ Sizes are rounded up: low-res = `(mapW+7)/8`, resource = ceil(`mapW/4`), low-res
 [known] S 00582120, S 005872f0, S 00588aa0, S 00589220. One AI cell covers 2 x 2 low-res elements [known]
 `TerritoryMap::OnCellAdded` S 00591260.
 
+`NAI::System::ResizeForMapSize` S 00582120 sizes the grids (the cell data +0x60 zero-filled at the low-res size,
+both resource maps resized and rebuilt from the deposits, the map resource table and the continent ids, the
+eight military maps initialised). Its only caller is `Game_LoadWorldFromDescriptor` S 005ac770: after the file
+load has finished (`GameFile_FinishLoad` S 005aa1b0, which runs the whole `NLogic::System::PostLoad` S 005273d0
+and the map's environment data), only for the new-game map types (0, 1, 2, 100, 0x66), and before
+`Game_CreatePlayersFromDescriptor` S 005abb60. A loaded save does not rebuild them: `NAI::System::Load` S 005821f0
+reads them from the stream (§7) [known].
+
 `LowResPosition::GetNeighbor(dir)` numbers the 8 neighbours 0=(-1,-1) 1=(0,-1) 2=(+1,-1) 3=(-1,0) 4=(+1,0)
 5=(-1,+1) 6=(0,+1) 7=(+1,+1) [known] S 00589ad0.
 
@@ -154,6 +162,12 @@ a resource object standing on a cell (good id of its deposit property, amount = 
 (table amount 1000 is stored as 7; ids -1 and `0xA9676263` are skipped). `areaId` = continent id of the cell
 [known] S 00587e90. Special resource ids used by fixed rules are good ids [known] `Goods.lua` `gp_create`:
 `0xCD6EC133` = `wood`, `0x55E952D3` = `stone`, `0x4012E5A3` = `fish`, `0xA9676263` = `water`, `0x1D66B4AE` = `ship`.
+`ResourceMapElements::GetAmount` S 0059c240 counts an element when its area equals the asked continent, except a
+`sourceKind` 1 element of `fish`: its area indexes the continent table and it counts when that continent lists
+the asked id as a neighbour (`NMap::Continent::HasNeighbour` S 00677120, the list filled by `AddNeighbour`
+S 00677420 from `FloodFillContinent` S 00678d70); an area beyond the table faults (unchecked index).
+`ResourceMap::HasKind1ResourceInRadius` S 00587600 walks the square x outer, y inner, in-map cells only, and is
+true at the first `sourceKind` 1 element that is not `fish` [known].
 
 ### 2.3 NAI::Cell (0x160)
 
@@ -262,7 +276,15 @@ See §6.1 for all fields, offsets, defaults and the values of the shipped profil
   and `waterStreets` to the profile value.
 - **Deactivation** S 005839a0: the AI of a player is deactivated when it owns **no AI cell** at an AI tick
   (`System::Tick` S 00581a30 [known]), on `ai_disable`, and on game reset. All needs, productions, building
-  mirrors, cells, harbours and attack watches are dropped. The player's buildings stay in the world.
+  mirrors, cells, harbours and attack watches are dropped. The player's buildings stay in the world. The
+  modules are reset in this order [known] S 005839a0: after `MilitarySystem::Deactivate`,
+  `ExpansionSystem::Deactivate` S 00590bf0 clears the current and the candidate target (kind 0), the expedition's
+  active byte, the source (0) and its own active byte; after `ResourceSystem::Deactivate` the destruction system
+  and need creation lose their active byte (S 0058c1d0), LockSmith resets its tool need to the invalid id and goes
+  inactive (S 0058d0b0), the food and goods arrangements go inactive, and ProductionControl sets its current good to
+  −1, invalidates its second-carrier good and goes inactive (S 0058b9a0). `MilitaryBuildingCreation::Deactivate`
+  S 00599fa0 empties the ranking (S 005a8220), invalidates a pending order (S 005a1640), clears a remembered
+  target (S 00774b90) and clears its active byte.
 - **Headquarters lost**: when an own building whose property has depot + casern + territory-building all set
   (the headquarters/castle type) is removed, `bEnabled` is cleared: `Player::Update` does nothing from then
   on, but the player stays "active" [known] S 005836d0, S 00582af0. Nothing sets `bEnabled` again except
@@ -502,7 +524,9 @@ score(G) = (planned - existing)
 ```
 
 `averageProductivity(G)` (`GetAverageProductivity`) is the mean over the player's production units of `G`
-(§2.4), i.e. a building with an amount of 2 counts twice [known] S 00593190.
+(§2.4), i.e. a building with an amount of 2 counts twice [known] S 00593190. Each unit adds
+`Statistics::GetProductivity` of its building, which is −1.0 for a building without a statistics entry
+(S 005373b0, the float at S 007d5438), not 0 [known] S 00592fa0.
 
 `stock` = the player's stock (gamePlayer+0x34, `pStock`: goods stored in the player's buildings), `stock2` =
 the second stock object at gamePlayer+0xa0 (`pMobileStock`: goods and units outside buildings). Both are caches
@@ -582,7 +606,10 @@ slot [known]. Military owners: §3.8.
 - Otherwise `s = GameQueryHelper::ScoreSite(player, type, cell)` S 00534830. If `s` beats the best so far, the
   walking path from the search origin to the candidate is computed (map A*; with `waterStreets` the AI's
   construction path analyzer, where a cell with map state bit 2 costs 1 if it is shallow water and is blocked
-  otherwise, and a cell with bit 7 is blocked, S 005893a0); no path counts as 1000000, the origin itself as 0.
+  otherwise, and a cell with bit 7 is blocked, S 005893a0: the water bit is tested first, so a shallow cell that
+  also has bit 7 costs 1; every other step costs the base `NMap::AStar::GetStepCost` S 00676840; the depth limit
+  is `cfg_setMaxWaterStreetWaterDepth` (GameConfig +0x40), cached on the first call of `Map_IsShallowWaterCell`
+  S 0052e550) [known]; no path counts as 1000000, the origin itself as 0.
   The path length is the step count of the found path (`GetPathStepCount` S 00676a90) [known].
   With `D = maxDistance` (the radius): the candidate is kept only if `pathLength < 2 * D` and
   `s * (2D - pathLength) / (2D)` beats the best.
@@ -821,6 +848,9 @@ the queue with `placementPending` cleared whether or not a cell was found, so Ne
    if a map-table resource (sourceKind 1, not 0x4012E5A3) lies in the square of +-4 resource cells:   r += 1
    if aggressive and the nearest reachable own finished building of the village's depot list (+0x20)
       or of its casern list (+0x74) lies at hex distance <= 4 (S 005a7f60):   r += 1
+      (BuildingList_FindNearestReachable S 00557fe0, mode 1, layer 1, no distance limit: in list order, own,
+       both construction remainders <= 0, and on a continent connected by the navy or by the street net;
+       nearest by hex distance, the earlier on a tie [known])
    if stock of the LAST input of the construction good > 40:           r += 1
    if logic tick < 18000 and no enemy has been spotted yet:            r -= 1
    rank = max(r, 0) - bias
@@ -1292,7 +1322,8 @@ random, start ready ones.
   with more ready ships is more likely [known] S 0059d120.
 - **Sacrifice building** S 005a1e30 (every 389 ticks) [known]: the planner works on a **good**, the slot-0
   product `T` of the tribe's first working-mode-9 building (-1 when the tribe has none;
-  `AiTribe_GetGoodOfWorkingMode9Building` S 0059f670, S 005a1d10). With `T` set **or**
+  `AiTribe_GetGoodOfWorkingMode9Building` S 0059f670, S 005a1d10: the slot-0 good id as stored, with no amount
+  test). With `T` set **or**
   `sacrificesEnabled` (so the switch does not stop the planner of a tribe that has a sacrifice building), need
   stage 4, tool stock
   >= 10 and game time > `profile.sacrificesStartTime` (default FLT_MAX = never; 0 for Strong and the campaign

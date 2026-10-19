@@ -225,10 +225,10 @@ stone, set in code).
 | +0x34 | `shortName` | string | `gp_setShortName` | `"?"` | never set by the shipped scripts [known: data] |
 | +0x50 | `enableDeposits` | bool | `gp_enableDeposits(good, 0/1)` | false | the good is harvested from map deposits; set for wood, corn, egyptCorn and the three stone goods ([village-buildings.md](village-buildings.md) §3.9) |
 | +0x51 | `enableFields` | bool | `gp_enableFields(good, 0/1)` | false | the good exists as an underground / water resource field; 21 goods (ores, coal, salt, gemstones, stone, fish, water). Read by AI code only, through the folded byte getter `Generic_GetByte_51` S 0046b620 (`MOV AL,[ECX+0x51]; RET`, shared with unrelated classes, which is why an operand search finds only the setter S 005549e0, the ctor and the copy-assign S 0058bdc0): `NAI::ProductionControl::IsGoodControllable` S 0058bad0, `DestructionSystem::CanDemolishBuilding` S 0058dae0, `GameQueryHelper::ScoreSite` S 00534830, `NeedsArrangement::InstantiateGroupNeed` S 005943c0, `Need::ctor_ForType` S 00597010 and `Need::PostLoad` S 00596f70 (map-resources.md §10 Q5) [known] |
-| +0x54 | `value` | float | `gp_setValue` | 1.0 | never set by the shipped scripts. [inferred] not read: the only float accesses at `+0x54` inside the properties code are the setter S 00554a20, the ctor and the copy-assign, and no getter function exists for the offset |
+| +0x54 | `value` | float | `gp_setValue` | 1.0 | never set by the shipped scripts. Not read [known]: written only by the setter S 00554a20 (from `gp_setValue` S 0054e910), the ctor S 00554da0 and the copy-assign S 0058bdc0; no x87 or SSE float access at `+0x54` lies in a user of the good property, and the typed decompilation shows no reader |
 | +0x58 | `transportPriority` | map tribe → i32 | `gp_setTransportPriority(good, tribe, rank)` | empty | default rank in the player's transport priority list (`GetTransportPriority` S 00554b70). The key **must exist** for every (good, tribe) pair that is queried: a missing key is a fatal checked-iterator error |
 | +0x64 | `aiPriority` | map tribe → i32 | `gp_setAiPriority(good, tribe, weight)` | empty | AI build-score multiplier (`GetAiPriority` S 00554bc0, `NAI::NeedsConstruction::SelectConstruction`); same must-exist rule |
-| +0x70 | `plantable` | bool | `gp_setPlantable` | false | set for wood, corn, egyptCorn. [inferred] not read: no getter function exists for the offset, and the only byte accesses at `+0x70` inside the properties code are the setter S 00554a30, the ctor and the copy-assign; the placement check `CanPlaceDepositAt_TerrainCheck` reads `DepositProperty.needForPlantablePattern`, which has the same offset |
+| +0x70 | `plantable` | bool | `gp_setPlantable` | false | set for wood, corn, egyptCorn. Not read [known]: written only by `gp_setPlantable` S 0054e5c0 (setter S 00554a30), the ctor and the copy-assign; of the program's byte tests at `+0x70`, the one in `CanPlaceDepositAt_TerrainCheck` S 0052e150 reads `DepositProperty.needForPlantablePattern` and the one in S 00619ad0 a transport package |
 | +0x74 | `gfxGoodId` | good id | `gp_setGfxGoodId` | -1 | settler goods: the ware whose model the settler carries (tool, weapon) |
 | +0x78 | `arrangementGoodId` | good id | `gp_setArrangementGoodId` | **the good's own id**: the ctor writes -1, then `Properties_CreateGoodProperty` S 00549a50 stores the id at `+0x00` and at `+0x78` (S 00554a40) [known] | the group under which this good is listed in the goods-distribution panel (`NPlayer::GoodArrangement::FindGroupForGood` S 005c10f0); e.g. bread, fishScots, sheepHam → `foodScots`. A good that never calls the setter is its own group |
 | +0x7c | `settlerType` | i32 | `gp_setSettlerType` | -1 | see above; `Settler::GetSettlerType` S 00656820 |
@@ -301,8 +301,8 @@ Ctor S 00553cf0, dtor S 00553b90 [known]. Field use is specified in [village-bui
 | +0xec | `producedSettler` | good or animal id | `bp_setProducedSettler` | -1 | modes 4 and 10 |
 | +0xf0 | `ignoreGoodCosts` | bool | `bp_setIgnoreGoodCosts` | false | the product's recipe is not requested as input (hunter, stone pit, temples, barracks, ship yard) |
 | +0xf1 | `casern` | bool | `bp_setCasern` | false | trains soldiers (castle, barracks) |
-| +0xf2 | `arrangementLocked` | bool | `bp_setArrangementLocked` | false | distribution weight not user-adjustable (temples) [inferred from the name] |
-| +0xf3 | `gfxBreeding` | bool | `bp_setGfxBreeding` | false | graphics: show breeding animals (sauerey, oxenBreeding, goatBreeder) [inferred] |
+| +0xf2 | `arrangementLocked` | bool | `bp_setArrangementLocked` | false | UI only (temples): the type gets no row in the goods-distribution panel (`IsEntryUnlocked` S 005c0fd0 ← `ShowGoodDistribution` S 006413c0) and does not count toward the "more than one adjustable consumer" rule of a group button (`CountUnlockedEntries` S 005c1000 ← `RefreshWaregroupButtons` S 006410e0); its weight stays in the distribution; no simulation reader [known] |
+| +0xf3 | `gfxBreeding` | bool | `bp_setGfxBreeding` | false | graphics only: selects the render class `S2CG::FarmBuilding` (`BuildingRenderer::AddBuilding` S 006a2bf0, test at S 006a2ea6; ctor S 006d59e0), which shows the gfx definition's `<Production>` models (e.g. `FarmOx.KEX` × 5 on the bone links, idle animation at a random time offset); the sacrifice working mode 9 and the catapult take precedence; its only reader [known] |
 | +0xf4 | `productivity` | bool | `bp_setNoProductivity(b)` clears it | true | no productivity statistic when false. The binding takes no value |
 | +0xf5 | `territoryBuilding` | bool | `bp_setTerritoryBuilding` | false | owns territory; listed with the military buildings |
 
@@ -459,7 +459,7 @@ that interprets the record's effect list is given in §3.9 because no other docu
 | +0x84 | `category` | i32 | `sf_setCategory` | 0 | AI trigger class, below |
 | +0x88 | vector&lt;i32&gt; | | (`sf_addBuildingDependence`) | empty | never filled: the binding S 0054f7e0 reads its arguments and calls an empty function, so building dependences are discarded in this build [known] |
 | +0x98 | `researchDuration` | i32, ticks | `sf_setResearchDuration` | 0 | 0 = no research needed; e.g. 9000 |
-| +0x9c | `regenerationDelay` | i32, ticks | `sf_setRegenerationDelay` | 1 | cool-down before the same sacrifice can be ordered again [inferred from the name]; data 100..10800, and 20000000 / 200000000 on campaign records |
+| +0x9c | `regenerationDelay` | i32, ticks | `sf_setRegenerationDelay` | 1 | cool-down in ticks counted from the **end** of a sacrifice (`RemoveSacrifice` S 006620a0 stores the tick, `SacrificeRegenerations_Add` S 00662860): while `(u32)(tick − end) < (u32)delay` the owner can neither order (`CheckCanOrder` S 00561240, code 7) nor start (`CheckCanStart` S 00560f20) that definition at any building; expired entries go each tick (S 00662720) [known]; data 100..10800, and 20000000 / 200000000 on campaign records |
 | +0xa0 | `forCampaign` | bool | `sf_setForCampaign` | false | 3 records |
 
 `SacrificeEffect` (16 bytes) = `{ i32 type; i32 arg1; i32 arg2; i32 threshold }` filled by
@@ -626,7 +626,7 @@ S 00553f40 (tier 0 far 0.1, 1 medium 0.3, 2 near 1.0, else 0) and `ComputeRatioB
 | Offset | Field | Type | Lua key | Default | `ship.lua` |
 |---|---|---|---|---|---|
 | +0x00 | flag byte | | – | 0 | set by the library registration |
-| +0x04 | `speed` | map tribe → float ([inferred] cells per tick, like `settlerSpeed`) | `sh_setSpeed(tribe, v)` | empty | bavarians 0.06, egyptians 0.09, scots 0.12 |
+| +0x04 | `speed` | map tribe → float: hex cells per simulation tick, times the owner's sacrifice ship-speed factor (`SacrificeModifiers::GetShipSpeed` S 006632d0); the step rate is 1 ÷ (hex distance ÷ speed) (`BeginStep` S 007728d0), advanced once per tick; the key is the owner's tribe (player +0x44), a missing key is fatal (`GetSpeed` S 005554d0) [known] | `sh_setSpeed(tribe, v)` | empty | bavarians 0.06, egyptians 0.09, scots 0.12 |
 | +0x10 | `size` | i32 | `sh_setSize` | 1 | 1 |
 | +0x14 | `constructTime` | float | `sh_setConstructTime` | 50.0 | 30 |
 | +0x18 | `stockLimit` | i32 | `sh_setStockLimit` | 12 | 12 |

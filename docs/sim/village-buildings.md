@@ -1065,7 +1065,13 @@ as the site's builder; carrier → the street (reference at street +0x98 when th
 building's garrison; specialist → the flag.
 
 `OrderSystem::GetSupplyStatus` (S 00562820): 0 = a supplier exists, 2 = none but some building is reachable,
-1 = nothing reachable ("not connected") [known].
+1 = nothing reachable ("not connected") [known]. The supplier step is `OrderSystem_FindSupplierBuilding`
+S 00562280. The fallback always searches the **depot** list (+0x20), for soldier goods too
+(`FindNearestReachable_ListDef54_AnyDist` S 005586d0 → `BuildingList_FindNearestReachable` S 00557fe0, mode 0,
+layer 1): it needs a flag of the player at the position (none → 1), and then a finished depot (both construction
+remainders ≤ 0) whose flag (+0xa0) lies in the same layer-1 net component (`FindNearestConnected` S 00557ef0);
+there is no owner test besides the flag [known]. Callers: `Expedition::GatherCargo` S 005b8470 (1 →
+`!Harbor is not Connected`, 2 → `!No Soldier for Expedition found`) and the military update S 005609b0.
 
 ### 3.13 Upgrade [known]
 

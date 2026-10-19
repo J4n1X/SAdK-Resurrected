@@ -530,10 +530,12 @@ Structure and the confirm sequence are in [ingame-ui.md](ingame-ui.md) §3.8.2. 
   plays `uiCancel`, hides the drag widget and resets it. Its one caller S 00620d60 is the panel's override of
   the event-face handler that `nMenu::Dialog` fills with `OnMouseButton1Down` S 0060e440: while a rank is
   picked up it cancels the drag and reports the event handled, otherwise it runs the dialog's handler
-  [known]. The dialog's handler calls the panel's virtual slot +0x8c unless the dialog's lock value (+0x13c)
-  is set [known] S 0060e440. [inferred] Button 1 is the right mouse button (event-face slot 15,
+  [known]. The dialog's handler S 0060e440 first writes a dump of the widget tree to `C:\test.txt`
+  (`Object::DumpToFile` S 004a2770, a debug leftover); then, while the dialog has a running animation (the list
+  size at +0x13c), it sets `buttonPressed[1]` and returns 0 without closing; otherwise it calls slot +0x8c
+  (S 0060e390: fade out over 0.2 s) [known]. Button 1 is the right mouse button (event-face slot 15,
   [ui-toolkit.md](ui-toolkit.md) §2), so a right click drops a picked-up good back, and a right click with
-  nothing picked up closes the panel like any unlocked dialog (slot +0x8c read as "hide").
+  nothing picked up closes the panel unless its fade-in or fade-out is still running.
 - The "not used" slot picture is texture `ui_ingame.dds`, rectangle 688, 856, 40 × 40 [inferred: the
   constructor's plate comment; the constants were not read in the code].
 - Nothing reaches the simulation until `btConfirm`; closing the panel otherwise discards the local copy
@@ -574,7 +576,8 @@ visibility slot reports false while it is attached [known].
 slot `i` (0 ≤ i < `count`) is the child named `<prefix><i>` (`costs0`, `needs4`, `good2`, …; widget kind 0xe)
 and its amount label is that child's own child `goodnum` (kind 9). For `i` < min(`count`, list length) the
 slot is shown, gets the good's icon from `IconConfig` (a good without icon entry gets the source rectangle
-0, 0, 1024, 1024 of the current texture) and `goodnum` shows the amount as a plain integer. The remaining
+0, 0, 1024, 1024 of the current texture, which on the shared popup of its kind (`TooltipCache_GetOrCreate`
+S 0062bfd0) is the icon texture a previous good left) and `goodnum` shows the amount as a plain integer. The remaining
 slots are hidden; list entries beyond `count` are dropped.
 
 **Kind 0, building** `TooltipBuilding::ShowFor` S 00647150 [known]:
