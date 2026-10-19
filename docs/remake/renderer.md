@@ -748,7 +748,7 @@ animals, ships and animated building parts use one skinning path of their own in
     flag (the look-at cell, S 006c7640), after the ship it waits for (S 006c7140); a carrier turns to the stack it
     puts down on or picks from; a standing soldier faces its opponent (`FaceEntity` S 006c7b10, through
     `ISoldierView.Opponent`) [implemented, sadk-remake 9fb619f]. Measured on Steinfjord: a builder's yaw is on the
-    entrance in 214 of 240 ticks, where before all 8 strokes were drawn more than 30° off. `se_NPCLookAt`
+    entrance in 214 of 240 ticks of a construction. `se_NPCLookAt`
     (S 005ae660) waits for the NPC component; the facing along a street's spline came with the route splines.
   - *Trees fall* [implemented, sadk-remake 1fd328c]: `DepositGrowth.StartFalling` starts the fall once the work has
     run more than 3.0 s: 24 ticks at `globalSpeed` 1.8, speeding up ×1.2 per tick, ending at a quarter turn (the tree
@@ -872,7 +872,8 @@ show the 1.5-unit facets.
     and animal height snapping, picking;
   - ground decals, streets, crossings and selection markers are draped in their vertex shaders through the same
     include, with meshes dense enough to follow the curve, instead of being clipped against flat triangles;
-  - the water's shore fade reads the smooth height; the border skirt joins the smooth edge.
+  - the water's shore fade reads the smooth height; the border skirt keeps the original's one map-wide edge height
+    (§11), which does not depend on the surface.
 - **The simulation is untouched**: it keeps the fine height grid and its rules; the smooth surface never reaches it.
   It is a presentation switch like per-pixel lighting ([binding] RR §2.3, faithful look plus a refinement).
 - **Cost**: Smooth draws four times the terrain triangles (the viewer's close view: about 236 thousand → 0.95 million),
@@ -963,7 +964,7 @@ show the 1.5-unit facets.
   no longer keeps its light there.
 - Everything on the ground uses the same surface: MapGeometry.HeightAt follows the drawn surface (HeightMode set by the
   terrain layer), so object placement, picking and the camera use it; objects are placed again when the surface
-  changes; the border skirt's wall top follows it (four pieces per fine step) and is rebuilt with it.
+  changes. The border skirt does not follow it: it keeps the original's one edge height from the stored samples (§11).
 - No height or gradient texture is read per vertex: the vertex shader only blends (§10.3).
 
 **Levels by distance.**
@@ -1008,7 +1009,7 @@ Low 348k → 717k (vertex buffers 22.0 → 38.6 MB), Faithful 317k → 408k, Ver
 **The setting** (§19): <Terrain detail="Faithful|Low|Moderate|High|VeryHigh">, default Low (the maintainer's decision of
 2026-10-16: the finer levels change the picture little, since the samples are already smooth at the game's distances
 and the fine bands cover only the area around the focus; all levels stay selectable); Options (Graphics) and the map
-view's quick switches; changing it rebuilds the terrain, the objects' placement and the skirt.
+view's quick switches; changing it rebuilds the terrain and the objects' placement.
 
 **GPU cost**: per vertex the refined vertex shader does one distance, two mixes and a normalize; per pixel one RG8 texture read
 and two cross products for the baked normal. Faithful: no blend, no texture read.
@@ -1091,9 +1092,13 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   is the main camera's in every view: the mirror view casts its rays from the mirrored eye into the main camera's
   layer, as the original draws the main camera's dome in its mirror (RE §3.13).
 - **Environment**: `EnvironmentService` reads the map's environment (the `.bin` contents in the map package) and
-  blends its spheres per frame by the camera's ground focus point (RE §3.13: weight 1 inside the inner radius,
-  linear to 0 at the outer, divided by the count of influencing spheres, the rest from the map's default); sets the
-  light, fog and colour globals and the sun's direction and shadow factor.
+  blends its spheres per frame by the original's focus point, `(60 × hit + d × camera) ÷ (60 + d)` of the screen-centre
+  ray's ground hit and the camera (`Camera_GetGroundFocusPoint` S 0068ce50, ported with `Terrain_RayHitGroundApprox`
+  S 0068a610), not the look-at point (RE §3.13: squared distances compared, weight 1 inside the inner radius, linear
+  to 0 at the outer, a sphere exactly at the outer radius counted with weight 0, every weight multiplied by
+  `(float)(1 ÷ count)`, the rest from the map's default); with inner = outer the remake gives weight 1 where the
+  original divides 0 by 0 (a stated presentation-only deviation). It sets the light, fog and colour globals and the
+  sun's direction and shadow factor.
 
 ### 11.1 Fog that follows the zoom
 
@@ -1250,7 +1255,8 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   truncation), the mesh clipped at its authored height, each vertex then at `SampleHeightAndNormal`'s height at its
   3D point plus the float 0.01, float arithmetic in the original's order, the lists walked last-first; laid on worker
   threads (`DecalMeshes.LayOnWorker`, shared with every decal owner, `HouseDecalSet` for owners that are not
-  buildings) and again when the terrain detail changes. After a height change a building's decal is laid with the
+  buildings) and again when the terrain detail changes; the options panel's ground detail only scales the LOD band
+  distances, which the decal does not read, so it re-lays nothing. After a height change a building's decal is laid with the
   matrix from before that change (`RefreshGroundPlacement` S 006ab420 uses the last frame's), a ruin's with the new one
   (S 006d4f90). The exact clip shows the original's notches and holes on slopes (on the Ship Ahoi harbour plot 6.8 %
   of the plot under the terrain); clipping with vertical planes (edge-plane normals (0, 1, 0), one line in
@@ -1351,7 +1357,8 @@ changes under it. Street previews of the placement mode come from `IQueries` and
   (`CrossingPieces`, the remake's own density), positions, normals and uv interpolated from the original's seven
   vertices, and only the points below the drawn surface are raised onto it; with one piece the mesh is the
   original's fan. A harbour flag reached only by sea routes has no crossing, as in the original (`AttachFlagNodes`
-  S 0069eeb0 runs on "street added", which a sea route never raises).
+  S 0069eeb0 runs on "street added", which a sea route never raises); the stone circle at a harbour flag is not a
+  crossing but the harbour place's ground plot (§13.1).
 - **Differences from the original**: the strip is a grid sampled from the heights, not the strip clipped against
   the terrain triangles; every flag node gets a crossing; the other streets at a node are rebuilt when its street
   count changes [inferred]; water streets and sea routes are not drawn yet; the normal map's
@@ -1366,7 +1373,9 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 
 - **Rule** as the original's (RE §3.8): every owned cell with grid bit 0x20, a land post where bit 0x4 is clear, a
   water post where it is set; land posts at the cell's sample vertex, water posts at the sea level with the bob
-  `0.05 · sin(t · 2π · 0.3 + x + z)`; the order of the points has no visible effect. Models and the
+  `0.05 · sin(t · 2π · 0.3 + x + z)`. The remake builds per region and keeps the scan order, not the original's
+  greedy nearest-neighbour order (RE §3.8); the order shows only where two posts overlap with blended alpha
+  (`border_shader.fx`: z write, alpha blend, alpha test 127, fog-of-war alpha), presentation only. Models and the
   shader's colour rule `lerp(colour × 1.8, texture, texture alpha) × light` as the original's; the colour is the
   owner's, white without a player.
 - **Layer**: map layer order 460; one `MultiMesh` per region and set (land, water); the colour goes in
@@ -1374,8 +1383,9 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   `visuals/map-objects.xml`.
 - **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the posts are laid
   again on a height change (the original keeps the old height until the next territory change, so its posts float or
-  sink; presentation only); the posts cast shadows (the original's `RenderWithEffect` S 006b2d80 is [inferred] its
-  shadow pass).
+  sink; presentation only). The posts cast shadows only from shadow level 5, as in the original (§10: the border bit
+  0x20 of `Scene::ApplyShadowQuality` S 0067f420; `BorderMgr::RenderWithEffect` S 006b2d80 is the shadow-map pass,
+  RE §3.8 [known]).
 
 ### 15.3 Build overlay and selection
 
@@ -1389,8 +1399,12 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 
 - **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `Renderer/BuildMode/`) keeps one rendering-server MultiMesh per
   4 × 4-cell terrain block (sadk-remake d515744), one instance per cell with an icon at the cell's point on the drawn
-  terrain surface, so Godot's back-to-front sort of the blocks follows the original's far-to-near walk
-  (`AddCellsInRect` S 006b36d0 walks the visible block list backwards, and that list is collected nearest first). The
+  terrain surface, and Godot sorts the blocks back to front by distance. The original's order is the reversed
+  quadtree collection order (`RenderBuildPlacementOverlay` S 00688c40 walks the visible block list backwards and
+  calls `AddCellsInRect` S 006b36d0 per block; the list is collected nearest child first only per quadtree level,
+  by the table S 007fc1b8, and wholly visible subtrees use stale nearest-child bits, S 006db220, S 006dad30,
+  S 006daff0; RE §3.14), so the two orders differ wherever that order and the true distance disagree: a
+  presentation-only deviation, visible only where icons overlap (no depth write). The
   icons are world-sized, depth-tested quads in the original too: nearer plants and rocks cover them, water never does
   (`water_shader.fx` writes no depth), and they grow only as close as the camera comes: with the original's match
   camera, now the default (§8.1), no closer than in the original; the free camera, a setting, still comes much
@@ -1425,6 +1439,12 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   and the confirmation box (ingame-ui §3.5 to §3.7). **Esc** cancels the street placement, the remake's own (the
   original's Esc reaches only a visible box's close button); the action panel closes only after the cursor has been
   over it and left.
+- **The game selection apart from the menu's** (ingame-ui §3.5) [implemented, sadk-remake 942f608]: the game's
+  selection is kept on its own (`MenuSelection.GameTarget`); the sacrifice bar's click sets it, then resets and
+  refreshes, then sets the cell, in the order of `SacrificePanel::OnItemClicked` S 00624bd0; a ship resolves through
+  it and the route actions read it. [TODO] its other readers: `btBack` / `btForward` (S 005eb850 → S 005354c0 /
+  S 00535300, in every menu-selection mode, so also in modes 2 and 3; the remake draws both buttons disabled) and
+  `RemoveBuilding` S 00559e00 (through S 005350e0, S 00535220).
 - **Street preview** (WO §3.6): the accepted plan and the plan through the cursor cell, as the original's two paths;
   the red part is the tail a click would cut back. The preview is extended click by click and replaced by the
   simulation's path on its event (the original re-plans the whole chain [inferred]); the first segment's pre-tests
@@ -1443,7 +1463,10 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   S 00697db0); the ship box and the route box, the expedition actions 1–3, the markers (a ship's size-11 marker and
   the route ends) and the hover tip; ingame-ui §3.5. The pick list holds only kinds 6 and 8, so removals of other map
   objects do not reorder it as in the original (S 0068cff0).
-- **Open**: a building's own mesh test (S 006aae60) and hidden flag in the pick (S 00787cc0); selection kind 3's third button (always 14);
+- **Open**: a building's own mesh test (S 006aae60) and hidden flag in the pick (S 00787cc0); the good buttons' click
+  in every box (close the action panel and focus the camera on the unit: `GoodButton::OnClicked` S 0062fe50 →
+  `nMenu_FocusCameraOnUnique` S 00648de0), so the ship boxes' lists are partial; the tab pages' fade (`fadetime`,
+  `TabControl::LoadFromXml` S 004bad00) and the shared frame's move and zoom; selection kind 3's third button (always 14);
   the sacrifice states and destroy block reason 2; `menu.allowActions`; action 30 until `0x20010`. Decisions to
   review: [sim-boundary.md](sim-boundary.md) §11 item 4.
 
@@ -1486,7 +1509,9 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - **Minimap**: the map picture is each cell's pattern average colour lit by the map's light, water in the map's
   water colour, one pixel per cell; the territory and building overlays and the click as the original's
   (S 005f3fc0, S 005f4390, S 005f1520; hud-panels §3.7); the symbol lifetimes from `mapSymbols.xml`; unexplored
-  cells transparent.
+  cells transparent. The camera's view frame ports `MiniMap::DrawCameraFrustum` S 005f2a50 (frustum corners 0, 1,
+  7, 6 cut with y = 0, the far pair only when nearer than the far corner, nothing when all four miss, edges clipped
+  against the round minimap; [camera-input-cutscenes.md](../sim/camera-input-cutscenes.md) §5).
 - **Statistics panel**: the curves, coloured from `menu.cfg`. The original's UI player colours (S 0087f8c8) are
   iconconfig.xml's `<PlayerColors>` (`IconConfig::LoadFromXml` S 00611320) and differ from `menu.cfg`'s.
 - `debug=true` shows the developer panel.
@@ -1575,10 +1600,13 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
   of every building each second. Tests: the shipped movies, the keyframe timing, the back-dating, the buff rules.
 - **Scene effects, decisions to review** ([sim-boundary.md](sim-boundary.md) §11 item 4): the effect and movie names
   (`sacrificeWaitForGoodsGfx`, `sacrificeResearchGfx`, `HitDamage`, `ShipSpeedUp`, `BuildingArmor`, `WorkerPause`)
-  are constants citing the exe strings (could move to `visuals/particles.xml`); movie effects are placed once per
-  keyframe at the bone [inferred]; the research back-dating quirk is kept; the projectile launch point is
-  approximated by the source's box centre or position [inferred]; the buffs ignore `showEffects` (its meaning is
-  open).
+  are constants citing the exe strings (could move to `visuals/particles.xml`); the research back-dating quirk is
+  kept; the projectile launch point is the source building's box centre, the shooter's position or the fine
+  position, a deviation: the original starts at the translation of the owner's matrix at launch and the projectile
+  follows that matrix until it is launched (RE [rendering.md](../sim/rendering.md), `Projectile::ctor` /
+  `Update` / `Launch` S 006a3720 / S 006a3400 / S 006a3a40 [known]), and the catapult's stone is launched only when
+  the arm reaches its limit (`CatapultBuilding::Update` S 006d6000), not at `ProjectileAdded` ([TODO] S 006a3a40);
+  the buffs ignore `showEffects` (its meaning is open).
 - **Emitters turn with their links** [implemented, sadk-remake d8f9737]: a movie element takes the link bone's matrix
   times the owner's (`MoviePlay.Place`, `EffectMovieElement::Start` S 006c6bc0 / `GetWorldRotationAndPosition`
   S 006c6a60), and `FollowLinks` moves and turns the emitter as `EffectList::UpdateEmitterTransforms` S 006c6da0 does

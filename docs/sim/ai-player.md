@@ -523,8 +523,8 @@ score(G) = (planned - existing)
          * max(averageProductivity(G), 0.1)                   -- statistics, 1.0 when no producer exists
 ```
 
-`averageProductivity(G)` (`GetAverageProductivity`) is the mean over the player's production units of `G`
-(§2.4), i.e. a building with an amount of 2 counts twice [known] S 00593190. Each unit adds
+`averageProductivity(G)` (`GetAverageProductivity` S 00592fa0, called from S 00593190) is the mean over the
+player's production units of `G` (§2.4), i.e. a building with an amount of 2 counts twice [known]. Each unit adds
 `Statistics::GetProductivity` of its building, which is −1.0 for a building without a statistics entry
 (S 005373b0, the float at S 007d5438), not 0 [known] S 00592fa0.
 
@@ -577,7 +577,8 @@ ForesterConstruction 4, CellClearing 6, ShipConstruction 7, ConstructionHunter 8
   [known] S 005a1ac0 for the state bodies and S 00592210 for the dispatch; [inferred] that the lists +0x58 / +0x68
   are the frame cost and the cost (`bp_addFrameCost`, `bp_addCost`).
 
-`backoffCounter` is not reset by a placement, only every 600 ticks. `backoffLimit` is 2, 6, 14, 30 ... after the
+`backoffCounter` (+0x270) is not reset by a placement, only every 600 ticks. The pair (+0x270 counter, +0x26c
+`backoffLimit`) is neither stored nor loaded (`Store` S 00591f70, `Load` S 00592860 touch neither) [known]. `backoffLimit` is 2, 6, 14, 30 ... after the
 1st, 2nd, 3rd ... placement of a window, so the AI skips `2, 4, 8, 16, ...` polls of 50 ticks before it looks at
 requests again: at most 3 placements per 600 ticks (one minute at speed 1) [inferred from the constants]. Orders
 that end in state 4 or 5 do not raise the limit.
@@ -624,8 +625,10 @@ slot [known]. Military owners: §3.8.
   candidate (so origin + r x dir 4 comes last); it ends after the last ring. A candidate
   replaces the best only with a strictly higher weighted score, so the first of equal sites wins.
 
-**`ScoreSite(player, type, pos)`** [known] S 00534830 (the body; the helper terms are [inferred] from one read
-of each helper). `bp` = the building property, `R` = `bp.workingRadius` (+0x78). It has two callers: the site
+**`ScoreSite(player, type, pos)`** [known] S 00534830 and its helpers S 00532640, S 00532540, S 0052cae0,
+S 00539060, S 005326e0, S 005345d0, S 00533760, S 00534230, S 00540940 / S 00542890 / S 00542900, S 005409f0 /
+S 00542870 / S 00542d00, S 00557830, S 00557fe0 (each read in full). The original indexes the map without a
+bounds test before `GetCellFlags` and does not test the good or the planting deposit for null. `bp` = the building property, `R` = `bp.workingRadius` (+0x78). It has two callers: the site
 search above and the demolition rule (§3.9). Steps, in this order; "=" replaces the score, "+=" adds, "x"
 multiplies:
 
@@ -765,7 +768,14 @@ No partner left: the building is done and the key advances. With a partner, `Opt
 S 005a4f30 compares the two buildings' flags; flags not in the same road network: done, nothing built.
 Otherwise with `oldCost` = road path cost between them:
 - `oldCost > 4 x hex distance`: plan along the direct map path (no random draws, §8) and build a street
-  towards flags found near it (`OptimizeViaMapPath` S 005a4cc0 [known]);
+  towards flags found near it (`OptimizeViaMapPath` S 005a4cc0 [known]): the search is the map's own A*
+  (`map->pAStar`, a base `NMap::AStar` created by `NMap::System::ctor` S 00672180, so the step cost is
+  `NMap::AStar::GetStepCost` S 00676840); `FindPath(a, b, 0)` must end in state 2 and the path is built with
+  `randomize = false`; no path, or a step index past the path's end, means done. Otherwise one step per call:
+  `FindFlagNear` on `path[step]` with nothing excluded; no flag found, or the kept position is the found flag's
+  cell → only `step++`; else, when a flag stands at the kept position and its road cost to the new flag is more
+  than `4 x` their hex distance, a street is built from the new flag to the kept position and the optimisation
+  ends; otherwise the new flag's cell replaces the kept one, then `step++`;
 - otherwise walk the cells of the road path; at path index `i` take an own flag near the cell (`FindFlagNear`
   S 005a4b60, the street flood fill of above; its continent test can never match [known]); if it is in the same road network, plan a street from it to the cell and
   build it if `cost(flag -> partner flag) + len(new) + cost(cell flag -> building flag) < oldCost - 2`.
@@ -847,7 +857,8 @@ the queue with `placementPending` cleared whether or not a cell was found, so Ne
    if aggressive and stocked soldiers (both kinds) > 30:               r += 1
    if a map-table resource (sourceKind 1, not 0x4012E5A3) lies in the square of +-4 resource cells:   r += 1
    if aggressive and the nearest reachable own finished building of the village's depot list (+0x20)
-      or of its casern list (+0x74) lies at hex distance <= 4 (S 005a7f60):   r += 1
+      or of its casern list (+0x74) lies at hex distance <= 4 (depot first, S 005586d0; then the casern list,
+      S 005a7f60 → S 00558700):   r += 1
       (BuildingList_FindNearestReachable S 00557fe0, mode 1, layer 1, no distance limit: in list order, own,
        both construction remainders <= 0, and on a continent connected by the navy or by the street net;
        nearest by hex distance, the earlier on a tie [known])
@@ -1624,7 +1635,9 @@ registers six order owners with the construction system again [known] S 00582e10
 
 **Looked up again by the modules' `Load`** [known, each read in the named function]: CellDepotCreation the depot
 type (S 0059e380); CellClearing both producers (S 0059d680); ForesterConstruction the forester type (S 005a4080);
-ShipConstruction the shipyard type (S 005a58a0); ConstructionHunter the hunter type (S 005a5f60); the sacrifice site
+ShipConstruction the shipyard type (S 005a58a0); ConstructionHunter the hunter type (S 005a5f60, also in `Activate`
+S 005a5ec0: `AiTribe_FindProducerWithWorkingMode7` S 0059f5f0 returns the id of the first tribe building, in tribe
+order, with a slot-0 good (`HasGoods(0)` S 00552f40: good id ≠ −1) and working mode +0x80 = 7, else −1); the sacrifice site
 its planner's building type (S 005a1d60); MilitaryBuildingCreation the military ranking (S 0059a030); Casern its
 building (S 00597da0). Only when the module is active: FoodArrangement (S 0058cc80), GoodsArrangement (S 0058c430),
 ProductionControl (S 0058c030; their goods lists) and CatapultConstruction (S 00599340). `ResourceMapElements::Load`
@@ -1650,7 +1663,7 @@ which are the stream slots called: bool = `WriteBool`, int = `WriteInt`, u32 = `
 | ConstructionOrder | S 005a1690 | `Ai ConstructionOrder` [0] | int mode; AI-cell position (+0x08, a `CellPosition`, ctor S 005a17a0); map position; int search argument (radius); int building type; int priority; float timestamp |
 | BuildingConstruction | S 005a1900 | `AI BuildingConstruction` [0] | bool active; int state; ConstructionOrder (+0x10); SearchConstructionPlace (+0x3c) (both constructed there by the ctor S 005a19d0); result map position |
 | SearchConstructionPlace | S 005a9270 | `AI SearchConstructionPlace` [0] | int building type; bool cell mode; cell iterator (a `CellPositionItertator`, row below); u32 ring index; u32 ring; int ring parameter; u32; three map positions (struct names: ring cursor, best cell, path origin); u32 last fully evaluated ring; float best score; int max distance |
-| StreetConstruction | S 005a2280 | `AI StreetConstruction` [2] | bool; u32; two dwords written with one call (stream method +0x54); int retry count; vector of tried target positions; u32 count + per map entry {int, reference}; map position (struct name: via position); int best cost; int second cost; int best variant; int variant step; map position (struct name: last target) |
+| StreetConstruction | S 005a2280 | `AI StreetConstruction` [2] | bool; u32; two dwords written with one call (stream method +0x54); int retry count; vector of tried target positions; u32 count + per map entry {int, reference} (the int→Unique map at +0x34: only `Load` S 005a3bd0 inserts into it, through S 005a2ce0; the ctor S 005a33b0 creates it empty and `Update` S 005a3ed0 clears it, so a save written by the original always holds count 0 [known]); map position (struct name: via position); int best cost; int second cost; int best variant; int variant step; map position (struct name: last target) |
 | CellPositionItertator | S 005a8b00 | `AI CellPositionItertator` [0] | centre (a `CellPosition`); map position; int column; int row |
 | MinMaxCellIterator | S 005a7df0 | `AI MinMaxCellIterator` [0] | two `CellPosition` objects, +0x00 (starts at 0, 0) and +0x0c (set by the ctor S 005a7ec0 to the AI cell of map position (width + 15, height + 15), the end of the range) |
 | ForesterConstruction | S 005a4030 | `AI ForesterConstruction` [0] | bool active; ConstructionOrder; u32 cell cursor |
@@ -1704,7 +1717,7 @@ which are the stream slots called: bool = `WriteBool`, int = `WriteInt`, u32 = `
 | LowResResourceMap | S 00588d90 | `Ai LowResResourceMap` [0] | bool initialized; int width; int height; every cell's element list (no count); the update cursor |
 | resource element list | S 0059c1a0 | `AI ResourceMapElements` [0] | u32 count; the elements |
 | resource element | S 0059c040 | `AI ResourceMapElement` [0] | int resource id; int source kind; int amount; int area id |
-| ResourceMapAdds | S 0058f130 | `Ai ResourceMapAdds` [0] | bool initialized; u32 count; per element: tag `Ai ResourceMapAddsElement` [0], a Unique (struct name: the claim), bool (S 0058ec60) |
+| ResourceMapAdds | S 0058f130 | `Ai ResourceMapAdds` [0] | bool initialized; u32 count; per element: tag `Ai ResourceMapAddsElement` [0], a Unique (struct name: the claim), bool (S 0058ec60; byte +0x18, always 0: the fill templates of `Initialize` (at S 005901ab) and `Load` (at S 00590243) write 0, `ClaimCell` S 0058f030 and `UnclaimCell` S 0058efc0 never touch it, the element `Load` S 0058eca0 restores only what was stored [known]) |
 | LowResResourceMapAdds | S 0058e3a0 | `Ai LowResResourceMapAdds` [0] | bool initialized; u32 count; per element: tag `Ai LowResResourceMapAddsElement` [1], u32 constant 2, two u32 values (S 0058e200) |
 
 **Encodings of the shared value types** (stream slots: `save-format.md` §2.2; the 12-byte section tag: §2.4;
@@ -1907,7 +1920,7 @@ through the owner pointer from another module is not excluded].
 | S 007767c0 / S 00776690 | `PropertyGroupIter` | members of a group good (§3.4) |
 | S 00593190 | `NeedsConstruction::SelectConstruction` | what to build next |
 | S 00593070 / S 00592b30 / S 00592b10 | `NeedsConstruction` request / `OnOrderFinished` / `OnPlaced` | order owner 2 (§3.5) |
-| S 00592df0 / S 00592fa0 / S 005936e0 / S 00592c40 | `CanStaffProducer` / `NeedsConstruction` helper / `RebuildTypeMaps` / `FindProducerBuilding` | producer choice (§3.5) |
+| S 00592df0 / S 00592fa0 / S 005936e0 / S 00592c40 | `CanStaffProducer` / `NeedsConstruction::GetAverageProductivity` / `RebuildTypeMaps` / `FindProducerBuilding` | producer choice (§3.5) |
 | S 00592210 / S 00592070 | `ConstructionSystem::Tick` / `ConsiderNeedRequest` | order arbitration and back-off |
 | S 005a1ac0 | `BuildingConstruction::Update` | order state machine |
 | S 005a17e0 / S 005a1650 | `ConstructionOrder::InitAtCell` / `InitAtPos` | order target; other fields untouched |

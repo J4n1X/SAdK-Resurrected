@@ -245,7 +245,8 @@ name is a text key (`<tribe>_AI_<level>_<slot>`), so the simulation does not dep
 also emits `WorldBuildBegin` and `WorldBuildEnd`.
 
 Settlers as built (sadk-remake a2bd808): `SettlerPathChanged` is emitted at the start of a walk and at a step on a
-changed path, where the original calls callback slot +0x5c; `ActionTimerStarted`, `EntityStateChanged` and
+changed path, where the original calls callback slot +0x5c (a street step never reports one: `StreetPath +0x48` is
+always 0 in the original, SJ §3.8.5, so a replan raises no event either); `ActionTimerStarted`, `EntityStateChanged` and
 `CarriedPackageChanged` replace the scene's per-tick polling of timers, states and carried goods. `EntityRemoved`
 carries a `RemoveReason` (`Entered`, `Died`) and, for a settler that entered a building, `Into` (that building). A
 settler's `EntityAdded` comes before the `LeaveBuilding` walk its constructor starts, with no step between. `Died` is
@@ -454,7 +455,9 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Views for the attack menu and the music** [implemented, sadk-remake 8f20eb9, cc0b7e4]: `IFightView` has `Active`,
   `StartCountdown` and `CountByKind` (the fight box and actions 11 / 12); `IAttackQueries.AvailableAttackers`
   (`GetAvailableAttackers` S 00575dc0, with its transient cache) and the per-kind count of
-  `Military_CountAttackersByKind` S 00575fd0 feed the attack slider's labels; the engine view `IFightListView`
+  `Military_CountAttackersByKind` S 00575fd0 (with `GetAttackAvailability` S 005759f0; military §3.5) feed the attack
+  slider's labels; the remake's callers all use the transient cache, and the persistent one the computer player's
+  caller passes (S 0059e930) is forwarded once the AI's attack half is built ([TODO] S 005a0dd0); the engine view `IFightListView`
   answers `FightList::IsPlayerInvolved` S 00573ad0 for the battle music. Compatibility mode needs the original's x87
   rounding of the attack count in the slider and in both dispatches, `(int)(float)((float)(n·f) + 0.5f)`, not a
   double-precision product ([military.md](../sim/military.md)): the two differ at some fractions.
@@ -477,7 +480,11 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **`!DEFEAT`** [implemented, sadk-remake 2509f83]: posted only in a network match, as the original's
   `VictoryConditions::CheckPlayerEliminated` S 00535b90 does through `NComm_Manager_IsRole0` S 004083d0, and only for
   an eliminated player of kind 3 (PV). The session's mode is `MatchSetup.Network` (setup form 3, `CommandLog`
-  format 3; forms 1 and 2 are still read); offline campaign maps post no `!DEFEAT`.
+  format 3; forms 1 and 2 are still read); offline campaign maps post no `!DEFEAT`. The original saves the letter
+  as its composed, localised text (S 00535b90, S 005c05b0; PV §3.6.1), so the message carries
+  `MessagePosted.TextFormat` (`VictorySystem.DefeatLetterFormat`, `"{0}: {1} ({2})"`): the message store composes
+  the text in the local language and keeps the result as the message's key with an empty argument, so a save holds
+  the composed string as the original's does.
 - **Victory mode 5 and the quest-0 slot** are built with the map-script host (§6.18).
 - **Open**: the lock maps (PV §3.10); `FinishGame` and the profile write. `Player::Update` is in §6.15.
 
@@ -708,7 +715,7 @@ Remake-only (no original id): a debug feature put together from three paths of t
   or a territory building's first soldier. Ship sites (size 0x10) are left out and built normally, the constructor
   making the ship from the god's stores [the remake's own, sadk-remake cc12218]: the batch branch has no ship-site
   case (S 0055d980, S 0055efa0), so it completes the site without a constructor and no ship is ever made, as the
-  original's debug tool leaves it ([navy.md](../sim/navy.md) §3.3).
+  original's debug tool leaves it ([navy.md](../sim/navy.md) §3.2).
 - **Scope**: god mode is infinite resources (the stock below), instant building (above) and full sight, nothing
   else; work, transport, production, training and garrisons run as for any player, so the god's buildings need
   streets. A god's hunter, for example, keeps the original's first wait of the lodge's `restTime` (1500 ticks),
@@ -721,7 +728,10 @@ Remake-only (no original id): a debug feature put together from three paths of t
 - **Removal**: the original's `RemoveBuilding` S 00559db0 asks the same batch-editing query and then spills nothing,
   leaves no remains and plays no collapse; god mode answers the query for placement only, so a god's destroyed
   building refunds its full cost halved onto its flag, which then stays (a finished building's normal rule).
-- **Setup**: the gods are a field of the match setup, ignored in a network match; the debug command
+- **Setup**: the gods are a field of the match setup, ignored in a network match (in the free-game screen a
+  `GodMode` combo of the remake's own at y 202 of `GameSettingsPanel`, the next 48-px slot after the original's
+  three options at 58 / 106 / 154; the original has no such element, [frontend-screens.md](../sim/frontend-screens.md)
+  §2.2); the debug command
   `core.game.debug.godmode` is refused in network matches; the system has its own save section.
 
 ## 7. The way back: commands [draft]
@@ -904,9 +914,9 @@ These matter more in the remake than in the original, because Harmony patches ca
      [presentation]; the good flag `GroundResourceOnWater` replaces the hard-coded fish id.
    - **The map changes in the presentation** ([renderer.md](renderer.md) §10.5, §12, §15.2): the border posts are
      laid again on a height change (the original keeps their old height until the next territory change, so its posts
-     float or sink, RE §3.8; presentation only); the border posts cast shadows (the original's `RenderWithEffect`
-     S 006b2d80 is [inferred] its shadow pass); `IFlagView.Harbour` added for the harbour flag model; a pattern new
-     to the map is drawn after all others [inferred].
+     float or sink, RE §3.8; presentation only); `IFlagView.Harbour` added for the harbour flag model. A pattern new
+     to the map is not a deviation: it keeps the record and draw order it has had since the map was shown, since the
+     original makes records for every pattern property in `CTerrainPatternManager::Init` S 006bb3a0 (RE §3.3).
    - **Transport** (§6.7): the original's good rules attached by their literal ids in the data stage
      (`GoodRulesDef.AttachOriginalRules`; registry fingerprint 22926df0 → 142868c8); the checksum layout of
      `CarrierMovies` and the three subsystem bytes is the remake's own; a claimed package that is not carried is
@@ -974,10 +984,7 @@ These matter more in the remake than in the original, because Harmony patches ca
      remake's own form; the `initialized` byte only in `WriteState`, as in the original, so the net-tick checksums
      changed; a cargo package keeps the ship's cell at loading while it sails. Part 2: the crash guards of §6.14
      (`ChooseStartHarbor` null, a range ≤ 0, `TransferShipsOfPlayer(from == to)`, mission states 0 and 3,
-     `SendSoldiersBySea` without a landing harbour, an attack origin without a building); `GetSupplyStatus` at a
-     position mirrors the building form [inferred]; one `NeedGoods` object (the original has two); the attack
-     availability codes mapped with "0 or 8" approximated (`Military_CountAttackersByKind` S 00575fd0 not read);
-     the ships share one swell phase (the original's per-ship start value at `+0x74` not read), sample their height
+     `SendSoldiersBySea` without a landing harbour, an attack origin without a building); one `NeedGoods` object (the original has two); the ships share one swell phase (the original's per-ship start value at `+0x74` not read), sample their height
      at the water plane and add the original's +π/2 to the heading (AM §3.17).
    - **Fog of war** ([renderer.md](renderer.md) §4.5): no left-over-texel quirk; no separate black `Unexplored`
      pass; the overlay clamped in every shader (the original wraps it, except in `water_shader.fx`); a border post is
@@ -1021,13 +1028,13 @@ These matter more in the remake than in the original, because Harmony patches ca
      restored);
      references are `Int64` (the original's are 20-byte `Unique`s); crash guards (a profile ticker of 0, a group
      weight total of 0, stage-1 needs without a depot, the production control's endless loop without a controllable
-     good); the grids are sized in `Build(PostLoad)` [inferred]; the average productivity counts a building without a
-     statistic as 0 [inferred].
+     good). The grids are sized as the original's `Game_LoadWorldFromDescriptor` S 005ac770 does: in
+     `WorldBuildPhase.NewGame` before `core.game.players`, for new-game map types only; a save restores them from
+     the AI section (`NAI::System::Load` S 005821f0).
    - **The map-script host** (§6.18): `logic` and `gfx` are registered in every match state (the original only
      offline; the network rule is open, [lua.md](lua.md) §4.5); a cinematic ends in one step (the original's steps are
      at least 1.5 s apart); the vocabulary replay covers `core.game` only; page and tutorial messages are type 7,
-     letters type 8 [inferred]; `createBuildingWithSettler` puts the soldiers on the call's cell in `IdleOutside`
-     [inferred]; `pl_changePlayer` skips a street it cannot rebuild (the original crashes).
+     letters type 8 [inferred]; `pl_changePlayer` skips a street it cannot rebuild (the original crashes).
    - **The script switches and the defeat letter** (§6.10, §6.18): removing a harbour position or an enemy exclusion
      that is not listed does nothing (the original runs past the vector's end); offline campaign maps post no
      `!DEFEAT`.

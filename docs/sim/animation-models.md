@@ -757,7 +757,10 @@ every entry. **[known]** The value handed to `Update` is the entry's accumulated
    sets it while the settler references a ship, has no wait-flag reference and its wait state (`SettlerMovement
    +0x1cc`) is 4, and `CharacterSettler::Update` clears it while the figure moves; `CCharacter::IsInFrustum`
    S 00690f80 hides a figure while it is set. **[known]**
-6. If `req` is still -1: below the water level (`CharacterMovement::IsBelowWaterLevel` S 006c4820) →
+6. If `req` is still -1: below the water level (`CharacterMovement::IsBelowWaterLevel` S 006c4820: render y
+   `+0x5c` + the current height offset `+0x128` + 0.5 × the movement's figure height `+0x24` ≤ the sea level,
+   `GetSeaLevelHeight` S 00687050; that the height field comes from the model's box set up by `CCharacter::Init`
+   S 00690760 is [inferred]) →
    `2 + moving` (`SwimIdle` / `SwimFwd`); else → `moving ? 1 : 0`. **[known]**
 7. Queue `(req, loopMode)`; it is applied in the next frame update.
 
@@ -898,11 +901,13 @@ byte +0x58 set, so `Item::Update` S 006d0720 returns at once for it and never re
   S 006c8ee0, and cleared by `OnBuildingRemoved` S 006c7040.
 - **Worker** (`CharacterWorker::Update` S 006c8ab0) **[known]**: while the action timer kind is 4 or 5,
   `workElapsed = (total - remaining) * dt` and `workDuration = total * dt` (timer fields at `settler +0x24` /
-  `+0x20`, `dt` = the third float of the time record). Then by the workplace's working mode: mode 1 on a tree
-  (map object property `0xCD6EC133`) → `UpdateFellingObject` S 006c87d0: take the job's tree unless it is
+  `+0x20`, `dt` = the third float of the time record). Then by the workplace's working mode (property `+0x80`, 8 without a
+  valid workplace): mode 1 when the `miningGood` of the workplace's product slot 0 good is `wood` `0xCD6EC133`
+  (`Global552c30_GetFieldBC` S 00553070 on the `BuildingProperty`, compared at S 006c8bae; the test is on the
+  workplace's good, not on the object worked) → `UpdateFellingObject` S 006c87d0: take the job's tree unless it is
   falling or fallen (state 3 or 4), face it, forget it once fallen, and when `workElapsed > 3.0` start its fall
   with the negated worker-to-tree direction (`TreeInstance::StartFalling` S 006dd050, [rendering.md](rendering.md)
-  §3.11); mode 1 on another object → `FaceWorkObject` S 006c86d0 (the faced point is the object instance's
+  §3.11); mode 1 with another good → `FaceWorkObject` S 006c86d0 (the faced point is the object instance's
   matrix translation, that is its vertex plus the element's `offset`: S 006c86d0 → S 0048ac80, S 0068dd40,
   S 00690240); otherwise `UpdateWorkplaceWork`
   S 006c88c0: if the worker is at its
@@ -914,13 +919,18 @@ byte +0x58 set, so `Item::Update` S 006d0720 returns at once for it and never re
   `Building::TriggerWorkCycle` on the render logic's target building. The type and key are those of the clip
   already playing: this tick's request is only queued (§3.9 step 7, applied in S 00690bd0), so on the first work
   tick it is the previous clip; an endless loop never opens the door, since its remaining time is negative
-  (S 0076ad40, S 00730020). At the workplace the
+  (S 0076ad40, S 00730020: `GetTotalDuration` gives −1.0 when `maxLoops <= 0`). The previous clip can also be a
+  one-shot with time left (an idle variation, played by `CharacterAnimation::UpdateLogic` S 006c6590 with
+  `PlayAnimation(id, 1)`, or the work clip of a timer that just ended): then the door opens in that first tick
+  when the previous type has a keyB/keyC override, which is data (`settler_animations.xml`). At the workplace the
   figure takes the building's yaw at once (movement target yaw `+0xe8`, snap flag `+0x108` = 1). After that,
   for working modes 0 and 2 (the job's
   target object, cell at its `+0x20`), 3 (the cell at `job +0x94`) and 7 (the hunted animal's cell) the figure
   is turned towards that cell. Workers with an animated tool create the tool's `AnimatedItem` while working
   (hiding the static tool) and destroy it afterwards.
-- **Constructor** (S 006c8480): while timer kind 4, face the construction site. **[known]**
+- **Constructor** (S 006c8480): while timer kind 4 (hammering) and the site reference (`+0x188`) is valid, face
+  (`FaceTowards` S 006c4b50, not snapped) the ship's cell when the ship reference (`+0x120`, id hi `+0x134`) is
+  valid, else the site's entrance cell (`building +0xf8`); the byte `bConstructing` is set meanwhile. **[known]**
 - **Soldier** (S 006c7f80): while not moving and with a valid fight reference, face the fight target
   (`soldier +0x278`, `FaceEntity` S 006c7b10); show buff particle effects: `SoldierDamage` at the right-hand bone matrix while the
   sacrifice-scaled hit damage exceeds the property's `hitDamage`, `SoldierDefense` at the figure's render
@@ -990,7 +1000,10 @@ When a slot's animation is removed (a building's one-shot clip ending in `Buildi
 `PlayOneShotAnimation` S 006aa6f0 before it restarts the clip), `AnimatedVisual::RemoveAnimation` S 006d8500
 (vtable S 007fc18c slot 4) deletes and swap-removes every attachment of that animation id, then runs the base
 S 0076b460. A particle event's destructor (vtable S 007faa84, S 006b03e0 → S 006b0250) calls `Particles::Stop(true)`
-S 00696400: emission stops and the emitter is let go, so the effect fades out by itself **[known]**.
+S 00696400: emission stops and the emitter is let go, so the effect fades out by itself **[known]**. The same
+removal deletes the clip's sound events; their destructor calls `SoundSystem::RemoveSource` (S 006b0180 →
+S 00569f60), which stops their looping sounds and lets one-shots play to their end ([audio.md](audio.md) §3.3)
+**[known]**.
 
 When an `AnimatedVisual` starts an animation it instantiates the animation's events (§3.7). Each frame its
 callback (`Callback_OnAnimUpdate` S 006d8570) computes the event time — the slot's animation time plus the slot's
@@ -1279,13 +1292,20 @@ The virtual `+0x04` test is the hidden flag: `SetHidden` S 006aa320, written onl
 S 006b4f80 from the main view's cull ([rendering.md](rendering.md) §3.7). The clips' event flag (model `+0x50`)
 is set by `SetHidden` while the building is neither hidden nor out of the fog (`+0xc4`). **[known]**
 
-The catapult turns two bones procedurally (`CatapultBuilding::ApplyBoneRotations` S 006d5e50) **[known]**: both
-bones are first reset to their bind key; the first gets a rotation about the axis constant S 00882864 by
+The catapult turns two bones procedurally (`CatapultBuilding::ApplyBoneRotations` S 006d5e50, slot 17 of the
+`CatapultBuilding` vftable S 007fc0d4, called every frame by `Building::UpdateTransform` S 006aaab0 through
+`vftable + 0x44`; slot 17 of the other building classes is an empty stub S 005657b0) **[known]**: both bones are
+first reset to their bind key; the first gets a rotation about the axis constant S 00882864 by
 `yawRender * π/180 + π - building.+0x28` radians, the second a rotation about the X axis by `-armRender`
 radians; each through `CAnimatedObject::ApplyBoneOffset` S 0076a8e0 (multiply the bone's pose quaternion by
-the rotation, add a zero translation, set flags 1 and 2). The bone names (`ROTATE`, `ARM_ROTATE` per the plate)
-and the meaning of `building +0x28` are **[TODO]** (the function that resolves the two bone indices was not
-read).
+the rotation, add a zero translation, set flags 1 and 2). The constructor S 006d65c0 resolves the bones by name
+with `CAnimatedObject::GetBoneIndex`: `ROTATE` (+0x220), `ARM_ROTATE` (+0x224) and `BULLET_POS` (+0x228), -1
+without a model; it starts `yaw` and `yawRender` at `Map_GetHexDirectionYawDegrees` of the logic building's
+direction (logic building `+0xf4` → `+0x20`) and the arm interval at 10.0. `building +0x28` is the building's
+heading in radians: `Building::ctor` S 006ac810 stores `BuildingDesc +0x98` (integer degrees, §"Placement" in
+[rendering.md](rendering.md) §3.9) × float π S 007fccfc / double 180.0 S 007db6a0 there (S 006ac878..006ac8b2),
+and `UpdateTransform` turns the world matrix by it (`SetRotationY`, S 006aab4c). So the `ROTATE` bone is set to
+the world yaw `yawRender` minus the heading the whole model already has, plus a half turn **[known]**.
 
 Buildings are skinned on the CPU by the building renderer: `BuildingRenderer::DrawInstance` S 0069fb10 calls
 `CpuSkinVertices` for the mesh it draws. **[known]** (the call; the routine itself was not read)
@@ -1379,8 +1399,8 @@ All of this is render state in `ai::render::CharacterMovement` (0x160 bytes; lay
 
 **Path** `CharacterMovement::SetPath` S 006c5160, from `CCharacter::SetPath` S 006905e0 on the scene's "settler
 path changed" callback (`Scene::OnSettlerPathChanged` S 00681690) **[known]**: the old spline is released; for a
-rough street walk (path mode 2, not a fine step) the street under the current or requested cell
-(`GetStreetAtEitherPos`) is looked up in the street set, and the figure walks on that street's own route spline
+rough street walk (path mode 2, not a fine step) the street at the logic movement's current cell, else at its
+requested cell (`NNet::System::GetStreetAtEitherPos` S 00665160, the logic street set) is looked up in the street set, and the figure walks on that street's own route spline
 (shared with `CStreet::BuildSpline` S 006cd320, not owned) and is registered on the street for evasion (below);
 otherwise, while the walk progresses, a walk over more than two cells gets a `RouteSpline` built over its own path
 cells (owned). The first and last segment of the path are looked up among the spline's points. The position
@@ -1433,8 +1453,10 @@ until its first logic update. The constructor S 006c5540 clamps the start height
 position-valid byte (`+0x28`) are set; false while `CCharacter +0xa0` is set (the render logic's byte `+0x2a`,
 §3.9 step 5); false for a figure flagged inside its building (render logic `+0x29`, set by
 `UpdateInsideBuildingFlag` S 006c7590 while it stands on its target building's entrance cell, not in a fine step)
-that plays type 0; for one inside that plays a type 4..6 with time left the bounding sphere's radius is multiplied
-by 10. Otherwise the bounding sphere around the render position is tested against the frustum.
+unless it plays a type 4..6 with time left (`GetCurrentAnimRemainingTime` > 0): such a figure is tested with the
+bounding sphere's radius multiplied by 10, every other figure inside (type 0, 1..3, 7..9, or a work clip that has
+run out) is hidden. A figure not inside is tested with its bounding sphere around the render position against the
+frustum.
 
 **Street evasion** (presentation only) **[known, disassembly]**. Carriers and the transport ox step aside for
 each other on a street:

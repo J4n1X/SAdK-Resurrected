@@ -313,7 +313,9 @@ is deleted (§3.8).
       (`Building+0x20`); otherwise to street B (`StreetNet_AssignCarrierToSplitStreet` S 00664fb0). His current
       cell is the rough movement's requested cell (`SettlerMovement+0x28`, the cell he is stepping to) when the
       interpolator progress (`+0x04`, float) is > 0 and the path mode (`+0x44`) is 2 (street walk), else his cell
-      (`+0x128`) [known] S 00664fb0.
+      (`+0x128`) [known] S 00664fb0. Neither half is tested for null: A's start flag is dereferenced and B is
+      linked as it is, while `BuildStreet` S 00666d00 returns null when the start or end flag is not the
+      placing player's or both are the same flag (a crash in the original) [known].
 3. **No split.** If there is a street but it is not attached (a street under construction): remove it from the map
    registration, create and register the flag, register the street again (so cell ownership is recomputed). With
    no street: create and register the flag.
@@ -1116,6 +1118,12 @@ just served; if no element is open, the **last** element of that good with a pac
 released to the free packages (`ReleasePackageAndRemoveNeed`). `ClearAll` and the destructor work front to back;
 the destructor cancels an open front element and releases a served one, until the list is empty [known]
 (S 0064e3a0, S 0064e5d0, S 0064e6d0, S 0064e900, S 00651980, S 00651a30, S 00651b00).
+The destructor's loop always ends: `ReleaseAssignedPackage` S 00651980 frees a served element only through the
+need whose `servingPackage` is its package, and the two are set together (`TransportLink_LinkPackageToOrder`
+S 0053c8c0 from `DispatchPackageFromBuilding` S 00651770 and `NeedSystem::Update` at 006522b6, each followed by
+the need's assignment) and cleared together (`TransportLink_UnlinkPackageFromOrder` S 0053c8f0 is called only by
+need-system functions that first find the need by its package) [known; the bodies of `DeliverPackage` and
+`DiscardAssignedPackage` were read only at their unlink calls].
 The callers (production, construction, sacrifice, training, expedition, catapult) are in `village-buildings.md`.
 
 **`NeedSystem::Update`** S 00652170, every 11th tick (§4) [known]:

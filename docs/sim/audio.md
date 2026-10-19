@@ -282,7 +282,12 @@ above the terrain, measured along the look direction, not at the camera eye [kno
 
 All [known]. Distance attenuation and panning of 3D sounds are FMOD's: minimum distance `minDistance3D`, maximum
 1e9, roll-off factor 4.0. In FMOD 3 the gain beyond the minimum distance follows the inverse-distance model
-`min / (min + rolloff * (d − min))` [inferred from the FMOD 3 documentation, not from this binary]. A sound with
+`min / (min + rolloff * (d − min))` [inferred from the FMOD 3 documentation, not from this binary]: `SADK.exe` only
+sets the parameters (`Sound_Set3DRolloffFactor` S 005c67a8 → `FSOUND_3D_SetRolloffFactor`, the minimum and maximum
+distance through `FSOUND_Sample_SetMinMaxDistance`, call at 005c67ec); the curve is computed inside `fmod.dll` or,
+with hardware 3D voices, by the DirectSound3D driver of the output `SoundManager::Init` chooses at run time
+(`FSOUND_SetOutput`, calls at 005c6601 / 005c6626) [TODO: import `fmod.dll` and read its software-mixer 3D gain;
+the hardware path stays runtime-only]. A sound with
 `is3D == false` (e.g. the UI and minigame sounds played through `Play3D` by the lobby) plays at its set volume
 without attenuation [inferred from `FSOUND_2D`]. The steps 2 and 3 apply to such sounds as well [known]: a 2D
 sound played through `Play3D` still needs a position within `30 * minDistance3D` of the listener (1 world unit
@@ -553,7 +558,8 @@ Effective FMOD volume per channel kind [known]:
 - `Update(dt)` S 0056e070: idle with a pending path and not paused → count `startDelay` down; when it is
   `<= 0`, `SoundManager::PlayOneShotFile(path)` S 005c7510 (`FSOUND_Sample_Load` with mode `0x2021` = 2D, mono,
   no loop; the sample is freed when the channel is stopped), set the volume, unpause, reserve the channel.
-  Playing and FMOD reports the end → `Stop`.
+  Playing and FMOD reports the end → `Stop`. A file that does not load (`PlayOneShotFile` returns −1) leaves the
+  path set and the channel −1, so it is tried again every frame [known] S 0056e070.
 - `Stop` S 0056e030: unreserve and stop the channel, clear the path and the delay.
 
 One voice at a time. Callers: the cinematic screen (one voice file per text page, S 005fb3e0) and the campaign
@@ -607,7 +613,9 @@ vftable S 007fa79c is S 006ab260, which returns the `hidden` integer at `Buildin
 accordingly [known]. So a hidden building makes none of the three sounds. Slot 0's only caller is
 `TerrainCell::SetVisible` S 006b4f80, driven every frame by the main view's quadtree cull (S 006db440 → S 006db220 →
 S 006daff0 / S 006da740): a building is hidden unless its anchor's terrain block is both revealed and in the view
-frustum [known]. [TODO] not established: whether a subclass overrides slot 1. The catapult shot has no such test.
+frustum [known]. No subclass overrides slot 1: `SacrificeBuilding` S 007fa85c, `FarmBuilding` S 007fc06c and
+`CatapultBuilding` S 007fc0d4 all keep S 006ab260; the first two override slot 0 and call `Building::SetHidden` from
+it [known: the four vftables, [rendering.md](rendering.md) §3.9 "Building vftables"]. The catapult shot has no such test.
 
 `SetHidden` also sets the model's event `enabled` flag (model +0x50): not hidden and fog-visible (+0xc4). Every active
 building's model is updated every frame, in view or not (`BuildingRenderer::Update` S 0069ff70 → `UpdateTransform`
@@ -641,7 +649,9 @@ of a looping clip fires once per play.
 
 - `Start(time, localTime)` S 006b0550: play unless the sound is non-looping, the event has no duration and
   `localTime > start + 0.5` (a one-shot more than half a second late is dropped, e.g. after scrolling into view
-  mid-animation).
+  mid-animation). Exactly: it plays when `prop.looping` (+0x30), or `desc.duration != 0` (also NaN), or
+  `localTime <= (float)(desc.start + 0.5)`, the 0.5 a double at S 007d4a90 and the sum rounded to float; the
+  source is `event + 0x24` (`Play3D(desc + 0x28, pos, this + 0x24)` after `GetWorldTransform` S 006b0480).
 - `Update(localTime)` S 006b01f0: an event with `duration > 0` lives until `localTime >= start + duration`, then
   calls `StopSourceSound(soundId, this)`; an event without duration ends at once (its sound plays on).
 - The destructor calls `RemoveSource` (S 006b0180).
@@ -660,7 +670,9 @@ It is called by `Ambients::Add` S 00536f40 (map editor and debug tool only), `Am
 for every record, by `Ambients::PostLoad` S 005366f0 after a map or save game is loaded [known]. The observer
 pointer (`Ambients + 0x18`) is set to the `nGame::Sound` member at the end of `nGame::System::BuildScene`
 S 007842e0 (called from `BuildWorld`) and cleared in `nGame::System::ShutdownAndDestroyGameSystem` S 00781cb0
-[known]. `Add` and `PostLoad` skip a null observer; `RemoveAt` calls it unchecked.
+[known]. `Add` and `PostLoad` skip a null observer; `RemoveAt` calls it unchecked. 14 of the 20 installed
+free-game maps carry ambient records (MP_2P_thick_grove 6, MP_6P_ship_ahoi 8); MP_2P_steinfjord has none
+(`../map-format.md` §4.14).
 
 The lobby world places its emitters from `lobby\scene\scene_ambient_sounds.xml` (`<obj type="sound:<hex id>"
 scene="<zone>" pos="x y z">`); on a camera zone change all started emitters are removed and, if the lobby is in
@@ -939,10 +951,10 @@ Converter output:
 | 3 | Answered (§3.6): `music_won` and `music_lost` (menu indices 2, 3) are never played: the five callers of `nMenu::System::PlayMusic` pass only the constants 0, 1, 4, 5, 6 [known], and no `PlayMusic` call followed a won or a lost free game [live, 2026-10-12] | — |
 | 4 | Answered (§3.1): `FSOUND_LOOP_BIDI` on the music streams loops forward; `maintheme.ogg` restarts cleanly [live, maintainer, 2026-10-14] | — |
 | 5 | What reads the `nGame::Sound` byte +4 (`nGame::System + 0x614`; set by `BuildWorld`, cleared by `nGame::System::Shutdown`). The two observer slots do not test it: they test `SoundSystem.enabled` only [known] | static: accesses to `nGame::System + 0x614` |
-| 6 | Answered in part (§3.9): `SetHidden`'s only caller is `TerrainCell::SetVisible` S 006b4f80 (the view's block cull). Open: subclass overrides of slot 1 | static: the slot 1 entries of the `S2CG::Building` subclass vftables |
+| 6 | Answered (§3.9): `SetHidden`'s only caller is `TerrainCell::SetVisible` S 006b4f80 (the view's block cull), directly or through the slot-0 overrides of `SacrificeBuilding` / `FarmBuilding`; no subclass overrides slot 1 | - |
 | 7 | Answered (§3.9): event objects are made once per play of an animation (`PlayAnimationWithEffects` S 006d8670), so a looping clip's `<Sound>` fires once per play | — |
 | 8 | Which position `CCharacterMgr::Update` hands to `UpdateCameraDistance` for the footstep range (§3.9) | static: the argument set-up in S 00692a30 |
-| 9 | Whether `nMenu::Game` (and with it `GameMusicState`) is constructed once per program run (§7) | static: callers of `nMenu::Game::ctor` S 005ee5d0 |
+| 9 | Answered (§7): `nMenu::Game` (and with it `GameMusicState`) is constructed once per program run; `nMenu::Game::ctor` S 005ee5d0 has the one caller `nMenu::System::Initialize` S 005dda30 | — |
 | 10 | FMOD 3 attenuation curve and hardware-3D fallback as actually mixed | live: record the output at known distances; or the FMOD 3.7x documentation |
 | 11 | Whether Godot's WAV loader accepts the IMA ADPCM and IEEE float `.wav` files of the install (§6, §9) | test load of `ambients\Beach.wav` and `miniGamePoker\cards_mixing.wav` |
 

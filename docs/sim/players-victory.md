@@ -508,7 +508,11 @@ and territoryBuilding all set — the castle. If none exists `[known]`:
   mode given to `NComm_Manager::StartUpNetwork` S 0040a9a0: 0 offline, 1 / 2 LAN client / host, 3 / 4 Internet
   client / host (`docs/sim/logic-core.md`), so the test means "a network game" `[inferred]`;
   `player[i].kind == 3` (remote human). The notice is a letter
-  (message type 8) with the text `<localised "!DEFEAT">: <name of i> (<i>)`.
+  (message type 8) with the text `<localised "!DEFEAT">: <name of i> (<i>)`, composed in a string stream
+  (`GetTextCStr("!DEFEAT")`, `": "`, the name, `" ("`, the decimal index, `")"`) and handed to
+  `PlayerMessages_SendLetterToPlayer` S 005c05b0, which adds it with `AddWithText2` S 005c2440 (second text `""`,
+  no cell). The message store (`Store` S 005c1900 / `Load` S 005c2520) therefore saves the composed, already
+  localised string, not a key with arguments `[known]`.
   Consequence: an offline game (network mode 0) never posts `!DEFEAT`, and neither does a network game for an
   eliminated computer player (`kind` 1); the campaign maps, which run offline, get no defeat letter when a
   computer opponent loses its castle `[inferred]` (from the two `[known]` tests).
@@ -775,10 +779,10 @@ which calls `menu.lockBuilding(player0, casernHalCross)`) `[known]` data.
 - `Statistics::RegisterProductionEvent(building)` S 00538460 (building productivity: first event 0.5, each later
   event +0.25, capped at 1.0) belongs to the economy; listed because series 6 samples it `[known]`.
 
-**Schedule** — `Statistics::Update` S 00537ba0, once per tick while `initialized` `[known]`. Both tests use the
-tick converted to a float: `(float)tickCounter == 0` and `(uint)(float)tickCounter % 600` `[known]`. Below 2^24
-ticks (about 466 hours at 10 ticks per second) this equals the integer form; above it the float rounds the tick,
-so phases repeat or are skipped `[inferred]` (float32 arithmetic).
+**Schedule** — `Statistics::Update` S 00537ba0, once per tick while `initialized` `[known]`. Both tests are
+integer tests on the tick counter (`g_pGameSystem +0x88`): `tickCounter == 0` (`CMP ECX,EBP` at 00537bbc) and
+`tickCounter % 600` (unsigned, `MUL 0x1b4e81b5; SHR EDX,6; IMUL EDX,EDX,0x258` at 00537c10..00537c20); the float
+the decompiler shows is not in the code `[known]`.
 
 - If the tick is 0: for every active player slot: `PlayerStatistics.active = 1`, the three counters = 0,
   and `InitGoodAndJobHistories` S 0053b8f0. It walks the tribe's goods (`TribeProperty +0x20`) first, then its

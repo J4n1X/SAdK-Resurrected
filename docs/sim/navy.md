@@ -319,8 +319,12 @@ calls `NVillage::System::PlaceBuilding` or `RemoveBuilding`, and sets it back to
 way). A ship is created only when the constructor later reaches the site (§3.3), on a later tick. A
 ship-building site placed with that tool is not built at all: with the batch flag set,
 `Construction::StartWithType` S 0055efa0 completes the site at placement (its `constructionTime` 500 > 0, but
-batch editing wins), and neither S 0055efa0 nor `Building::ctor_Place` S 0055d980 has a ship-site case, so no
-constructor comes, no ship is created and the site stands as a finished building [known]. The zeroing in
+batch editing wins), and neither S 0055efa0 nor `Building::ctor_Place` S 0055d980 has a ship-site case:
+`Construction::Complete` S 0055ef00 finds no ship reference and sets both remaining values to 0,
+`Construction::Update` S 0055ea90 requests a builder (`RequestBuilder` S 0055e970, its only caller) only while
+work remains, and a ship is made only by `Constructor::UpdateShipConstruction` S 0065e770 through
+`FindShipPlacement` S 005b4370 (its only caller). So no constructor comes, no ship is created and the site stands
+as a finished building [known]. The zeroing in
 `SetBuildPosition` is therefore not reached by the shipped callers. In a free game with ships `SetBatchEditing` was not called and `Edit +4..+7` read 0
 [live, 2026-10-12].
 
@@ -908,7 +912,8 @@ S 005ba250, S 005b9f30, S 005ba190 [known]; additions:
   (`UnlinkMovementsOfPlayer` S 005b70a0 → `NavyLink_UnlinkMovementRoute` S 0053c3f0) without calling `Finish`, so
   the mission stays active. State 3 reads the fight through its cached pointer unchecked too, but that cannot
   fail while the mission is active: the fight's destructor calls `NavyLink_UnlinkMilitaryFight` S 0053c160, which
-  runs `Finish` S 005ba190; state 3 goes to 7 when the defender has no end of the route.
+  runs `Finish` S 005ba190; state 3 goes to 7 when the defender has no end of the route. State 3 resolves the
+  route unchecked as well, so a route lost through a harbour exit crashes there too.
 - `HarborList::FindNearestWithPlayerShipRoute` S 005b6090 writes to its `*status` the result of the **last**
   harbour it evaluated, not of the harbour it returns [known].
 - The reach test `Military_IsEnemyTerritoryInRange` S 00575850 walks only the hex ring at `R + 1` around the

@@ -92,8 +92,8 @@ S 007f8f08), `NLogic::CallbackReceiver` (+0xc, vtable S 007f8e24), `S2CE::IDevic
 |---|---|---|---|---|
 | +0x14 | u32 | `passMask` | scene passes drawn in the main view (§3.1); 0x1ff, one bit per `SceneDetail` debug CVar | [known] S 0067fb40, S 0067f6b0 |
 | +0x18 | u32 | `passMaskDefault` | pass mask of the reflection view, rebuilt every frame from the detail level (§3.1) | [known] S 0067f6b0, S 00680ab0 |
-| +0x1c | float | detail setting | 0..1 (settings virtual +0x3c); `toInt(v*4 + 0.5)` is the scene detail level | [known] S 0067f500; conversion [inferred] S 0067f6b0 |
-| +0x20 | float | shadow setting | 0..1 (settings virtual +0x24); `toInt(v*6 + 0.5)` is the shadow level (§3.13) | [known] S 0067f500; conversion [inferred] S 0067f6b0 |
+| +0x1c | float | detail setting | 0..1 (settings virtual +0x3c); `trunc(v*4 + 0.5)` is the scene detail level | [known] S 0067f500; conversion [known] S 0067f6b0 (at 0067f76e: `FMUL 4.0`, `FADD 0.5`, `__ftol2_sse`) |
+| +0x20 | float | shadow setting | 0..1 (settings virtual +0x24); `trunc(v*6 + 0.5)` is the shadow level (§3.13) | [known] S 0067f500; conversion [known] S 0067f6b0 (at 0067f7ca: `FMUL 6.0`, `FADD 0.5`, ftol, passed to S 0067f420) |
 | +0x24 | u32 | `renderFlagsA` | map layer flags of the main view (§3.1); 0x3ff at construction | [known] S 0067eb20, S 0067fb40 |
 | +0x28 | u32 | `renderFlagsB` | map layer flags of the reflection view, rebuilt every frame (§3.1) | [known] S 0067eb20, S 0067f6b0 |
 | +0x2c | float | shadow map quality | settings virtual +0x1c; 0 disables the shadow map; passed to `S2CE::ShadowManager::SetQuality` | [known] S 0067f500, S 0067f420, S 006810b0 |
@@ -185,9 +185,9 @@ S 006aabe0, S 006aaab0.
 `CTerrainPatternManager +0x84`):
 `patternIdx` (+0, index into `g_TerrainPatterns`), `mapPatternId` (+4, the id stored in the map's pattern grid),
 `baseRecordIdx` (+8; for an alias: the record of the aliased pattern, else -1), `texture0` (+0xc), `texture1`
-(+0x10), ground cover layer index (+0x14) [known] S 006bb3a0, S 006bbb60; the field offsets are those of the
-mapped struct [inferred]. A pattern name of the map that has no `<Pattern>` definition gets no record
-[known] S 006bb3a0.
+(+0x10), ground cover layer index (+0x14) [known] S 006bb3a0 (writes at S 006bb521..006bb552), S 006bbb60. One
+record per pattern property whose `gfxName` has a `<Pattern>` definition (for an alias: whose target has a record);
+any other pattern id gets no record and is not drawn [known] S 006bb3a0.
 
 **`ai::render::TerrainCell`** (0xb4 bytes; `CTerrainCellMgr +0x14`, grid of `ceil(W/4) x ceil(H/4)`):
 
@@ -233,11 +233,11 @@ vector [known] S 006c0410.
 
 | Structure | Size | Content | Evidence |
 |---|---|---|---|
-| `S2CG::Building` | 0x218 | logic building (+0x18), gfx desc (+0x34), world position (+0x9c), hidden (+0xc0), fog visible (+0xc4), construction progress previous / current / fade end time / rate (+0xc8..+0xd4), under construction (+0xd8), the same four for the upgrade (+0xdc..+0xe8), upgrading (+0xec), upgrade gfx desc (+0xf0), demolish progress (+0xfc, negative = none), entrance street `pEntranceStreet` (+0x100, the door path, [world-objects-rendering.md](world-objects-rendering.md) §3.6), ground decal (+0x104), scaffold (+0x1fc), fire point count (+0x200), fire points (+0x208, 0x5c each) | [known] S 006aa1b0, S 006aabe0, S 006abbb0, S 006ab840; [inferred] S 006ac810 |
+| `S2CG::Building` | 0x218 | kind 6 (+0x04), logic building (+0x18), heading in radians (+0x28, [known] S 006ac8b2, read by S 006aab4c), type index (+0x30), gfx desc (+0x34), world position (+0x9c), hidden (+0xc0), fog visible (+0xc4), construction progress previous / current / fade end time / rate (+0xc8..+0xd4), under construction (+0xd8), the same four for the upgrade (+0xdc..+0xe8), upgrading (+0xec), upgrade gfx desc (+0xf0), demolish progress (+0xfc, negative = none), entrance street `pEntranceStreet` (+0x100, the door path, [world-objects-rendering.md](world-objects-rendering.md) §3.6), ground decal (+0x104), scaffold (+0x1fc), fire point count (+0x200), fire points (+0x208, 0x5c each) | [known] S 006aa1b0, S 006aabe0, S 006abbb0, S 006ab840; [inferred] S 006ac810 |
 | `S2CG::BuildingDesc` | 0xc0 | name, mesh path, frame path; LOD mesh parts (+0x54), animated visual (+0x5c), bounds (+0x68 min.y, +0x74 max.y), door and work animations (+0x80..+0x88), production sub-desc (+0x8c), stage count (+0xa4), stage subset table (+0xa8), frame render object (+0xac) | [known] S 006aabe0 for bounds, [inferred] S 006d3880, S 006a15a0 |
 | `S2CG::CCharacter` | 0xbc [inferred, mapped struct] | animation (+0x80), movement (+0x84), per-type logic face (+0x88), queued animation (+0xa4), effects (+0xb0) | [known] S 006909f0 |
 | `S2CG::CharacterAnimation` | 0x6c [inferred, mapped struct] | model cache (+8), current track (+0xc), instance handle (+0x30), selection keys (+0x38, +0x3c, +0x40, +0x44), requested slot (+0x54), loop mode (+0x58), owner face (+0x60), one-shot playing (+0x64), idle sequencer (+0x68) | [known] S 006c64c0, S 006c6590 |
-| `ai::render::CharacterMovement` | 0x160 | fog visibility byte (+0x04, §3.7; [known]), previous and target position (+0x2c, +0x38), inverse duration (+0x48), logic position (+0x4c), render position (+0x58), world matrix (+0x64, copied by `CCharacter::Update`), rotation matrix (+0xa4), yaw / target yaw (+0xe4 / +0xe8), forward vector (+0xec), yaw previous / current / time (+0xf8 / +0xfc / +0x100), snap-yaw flag (+0x108), lateral offset (+0x10c, with its previous / current / time record up to +0x11c), height offset (+0x120, the death sink and the carrier's boat), route spline | [known] S 006c48c0 (disassembly), S 006c4f40, S 006909f0, S 00690bd0; [inferred] S 006c57b0 for the rest |
+| `ai::render::CharacterMovement` | 0x160 | fog visibility byte (+0x04, §3.7; [known]), previous and target position (+0x2c, +0x38), inverse duration (+0x48), logic position (+0x4c), render position (+0x58), world matrix (+0x64, copied by `CCharacter::Update`), rotation matrix (+0xa4), yaw / target yaw (+0xe4 / +0xe8), forward vector (+0xec), yaw previous / current / time (+0xf8 / +0xfc / +0x100), snap-yaw flag (+0x108), lateral offset (+0x10c, with its previous / current / time record up to +0x11c), height target (+0x120, the death sink and the carrier's boat) with its interpolated previous / current pair (+0x124 / +0x128, [animation-models.md](animation-models.md) §3.19), figure height (+0x24, read by `IsBelowWaterLevel` S 006c4820), the spline-step flag (+0x135, read only by the carrier's boat S 006c934d), route spline | [known] S 006c48c0 (disassembly), S 006c4f40, S 006909f0, S 00690bd0; [inferred] S 006c57b0 for the rest |
 | `S2CG::InstanceMesh` | 0x7c | object type (+4), id (+0xc), cell (+0x10), bounds, world matrix (+0x1c), colour (+0x5c), visibility byte (+0x6c; [TODO] not established: whether 1 means hidden or shown, read the constructor and the block's hide call S 006b4f80), handle (+0x70) | [inferred] mapped struct and ctor comment |
 | `ai::render::MapObjDef` | 0xbc | one `<LandscapeElement>` (§6.4) | [inferred] S 0068f200 |
 | `S2CG::EnvData` | 0x34 | background rgb, ambient rgb, light rgb, shadow intensity (+0x28), fog start and end (+0x2c, +0x30) | [inferred] S 006ae2e0 |
@@ -468,11 +468,23 @@ record ("transition layers", alpha blend `SrcAlpha / InvSrcAlpha`, no depth writ
 [known, file]. Only revealed blocks contribute to (a) and (c) [known] S 006bbde0, S 006bbeb0. Records are
 ordered: non-alias patterns by rank ascending (a swap sort on `def+0`), then alias patterns in the order of the
 pattern source, each linked to the first record whose pattern name equals its `alias` [known] S 006bb3a0. The
-source is the object `CLandscape::Init` S 00689c90 passes (`patternInitArg`; slot 0 count, slot 1 entry with the
-name at +4, slot 2 its id). [TODO] not established: whether that source is the map's pattern list or the table of
-all defined patterns in id order; the remake's port takes the latter (records for every defined pattern, aliases by
-ascending signed id), and a read of the object behind `CLandscape +0xc` (set by the constructor called from
-S 006890f0) settles it.
+pattern source is **every pattern property, not the patterns the map uses** [known]: `Scene::Init` S 00682685
+passes `&PropertiesDb.staticAccess` (`PropertiesDb +0x60`) to `CMapRenderer::CreateInstance` S 00689450, the
+`CMapRenderer` constructor S 006890f0 hands it to `CLandscape::ctor` S 0068ad40 (stored as `patternInitArg`,
+`CLandscape +0xc`), and `CLandscape::Init` S 00689c90 passes it on. Its vftable S 007e8030 gives slot 0
+S 00556910 the size of the pattern map `PropertiesDb +0x28`, slot 1 S 00556a00 the n-th property's `gfxName`
+(property `+0x20`, `pa_setGfxName`), slot 2 S 00556a10 its id; the n-th is an in-order walk of that `std::map<int>`
+(`GetNthValueMap28` S 00556950), whose key compare is signed (`JGE`, S 00549040), so the source runs in **ascending
+signed id** order. A property is matched to the first `<Pattern>` whose name equals its `gfxName` (exact byte
+compare, S 00408080): pass 1 adds a record per matched non-alias pattern (`def+0x20 == 0`), the swap sort follows,
+and pass 2 walks the source again and adds a record per matched alias whose target names a record present at that
+moment. A property without a matching `<Pattern>`, and an alias whose target has no record, get no record; a map
+cell whose id has no record is not drawn. The record writes are `[rec+0] = patternIdx`, `[rec+4] = id` (S 006bb521,
+S 006bb524). The second argument (the ground cover renderer, `CLandscape +0x24`) is the `this` of
+`GroundCover_FindLayerIndexByName` S 006be460 for a pattern with a ground cover; only afterwards is its stack slot
+reused as the mask-texture loop counter. The per-record visible-cell lists (`+0x144`) are allocated for the number
+of pattern properties, not of records. Quirk [known] S 006bb5b6: when pass 1 made no record, the sort's step count
+`count − 1` wraps and the sort runs 2^32 − 1 empty steps (never with the shipped data, which has 114 properties).
 
 **Transition mask coordinates** [known] S 006bd940; with `b` = blend vertex, `s = 1 / (4 * stepX)` (one over the
 cell width) [known] S 006bd560:
@@ -734,11 +746,19 @@ vertex positions are world positions (`TerrainMesh::UpdateVertexPositions` S 006
   (double S 007e2a78) beyond the map edge. The extents are coded per case: the corner with edge flags 0xc has an
   inverted z range, corner 6 an extra step, left blocks `+3·step`, right blocks `−4·step` (doubles 3.0 S 007e5358,
   4.0 S 007e5b38, 1.0 S 007d8a08). A segment (`MapBorderSegment`, §2.6) carries its edge flags at +0x29.
-- *Drawing*: two passes, both flat black (`RenderMapBorderGround`, texture factor 0), no depth write, no culling.
-  Pass 1 is sloped: the corners on the map side sit at the edge height, the outward corners at the water level − 1,
-  chosen by the edge flags. Pass 2 is flat at the water level. The skirt is drawn after the map's own passes and
-  before the water (`CMapRenderer::RenderObjectsAndWater` S 006889d0), so the water over the outermost blocks lies
-  on black and looks darker there.
+- *Drawing*: two passes with the water effect's pass `RenderMapBorderGround` (`WorldRenderer +0x54`, looked up in
+  S 006a8a20), no depth write, no culling. Pass 1 is sloped: the corners on the map side sit at the edge height, the
+  outward corners at the water level − 1, chosen by the edge flags. Pass 2 is flat at the water level. The skirt is
+  drawn after the map's own passes and before the water (`CMapRenderer::RenderObjectsAndWater` S 006889d0), so the
+  water over the outermost blocks lies on black and looks darker there.
+- *Colour*: black, set by the technique, not by code [known, file `gfx/fx_20/water_shader.fx`, the same pass in
+  all five techniques `Default`, `NoShadow`, `LowDefault`, `LowNoShadow`, `ffp`]: fixed function (no vertex or pixel
+  shader), `TextureFactor = 0`, `ColorOp[0] = SelectArg1` with `ColorArg1[0] = TFactor`, stage 1 disabled, no
+  alpha blend, `ZWriteEnable = False`, `ZFunc = LessEqual`. `RenderMapBorder` S 006a7400 binds the two water
+  normal maps to stages 0 and 1 (`WorldRenderer +0x58`, `+0x5c`), but the stage setup never samples them. The pass
+  sets no fog state, so the device's per-pixel linear fog (§3.13) applies as the scene left it: `RenderObjectsAndWater`
+  is called with the scene's fog flag and switches fog only around the underwater surface, so with fog on the skirt
+  turns from black to the background colour over the fog range [known] S 006889d0, S 004d3a80.
 - *No water beyond the map.* Water is drawn only as the per-block quads above. The two border-water techniques
   `RenderMapBorder` / `RenderMapBorderNoMirror` (`WorldRenderer +0x4c` / `+0x50`) are looked up in S 006a8a20 and
   used by none of the water renderer's methods; beyond the edge the player sees black.
@@ -777,8 +797,12 @@ Three mechanisms:
    of their cell divided by 4 (`CTerrainCellMgr::AddObject` S 006b7070): map objects, goods piles, flags and
    buildings. They are hidden unless the block is both in view and revealed (`TerrainCell::SetVisible`
    S 006b4f80, which calls slot 0 of the object's vtable), except map objects whose type virtual returns 2
-   [known] S 006b4f80, S 006b7070. For a building (vftable S 007fc0d4) slot 0 is `SetHidden` S 006aa320, which
-   writes `hidden` (+0xc0), and slot 1 returns that byte [known]. `TerrainCell::SetVisible` is its only writer,
+   [known] S 006b4f80, S 006b7070. For a building (`S2CG::Building` vftable S 007fa79c, §3.9 "When a building
+   updates") slot 0 is `SetHidden` S 006aa320, which writes `hidden` (+0xc0), and slot 1 S 006ab260 returns that
+   integer [known]. Of the three subclasses, `SacrificeBuilding` (S 007fa85c) and `FarmBuilding` (S 007fc06c)
+   override slot 0 and call `Building::SetHidden` from it (S 006accd0 also shows or hides the sacrifice effect
+   list; S 006d55b0 shows the first `visibleModelCount` production props or hides all of them), and
+   `CatapultBuilding` (S 007fc0d4) keeps it; none overrides slot 1 [known: RTTI and slots of the four vftables]. `TerrainCell::SetVisible` is its only writer,
    driven every frame by the main view's quadtree cull (`GridQuadTree::Cull` S 006db440 → S 006db220 →
    S 006daff0 / `HideSubtree` S 006da740), so a building is hidden unless its anchor's block is both revealed and
    in the view frustum [known]. Hiding does not stop the building's per-frame model update (§3.9), but it gates
@@ -892,9 +916,13 @@ player-tinted objects [known, `shared.inc`].
 
 ### 3.9 Buildings
 
-**Type lookup** [inferred] S 006a2bf0: key `"<tribe resource name>_<building property name>"` against
-`buildings.xml` `<Building name=..>`. Instance class by description: sacrifice building, catapult, farm
-(a `<Production>` child), else plain `Building`.
+**Type lookup** [known] `BuildingRenderer::AddBuilding` S 006a2bf0: key = the `TribeProperty` name of the
+building's placement tribe (`NVillage::Building +0x34`, through `ResourceDb_GetNameCStr` S 00687340) + `"_"` +
+`BuildingProperty.gfxName` (+0x20, `bp_setGfxName` S 0054d160), matched against `buildings.xml`
+`<Building name=..>` exactly (equal length and bytes, case-sensitive); on a miss no instance is made. Instance
+class by the building property, tested in this order: working mode (+0x80) 9 → `SacrificeBuilding`, catapult
+(+0xb0) → `CatapultBuilding`, `gfxBreeding` (+0xf3, test at 006a2ea6) → `FarmBuilding` S 006d59e0 (which shows the
+description's `<Production>` models), else plain `Building` [known] S 006a2bf0.
 
 **Assets per type** `BuildingDesc::LoadResources` S 006d4060, `BuildingDesc::LoadFromXml` S 006d3880 [known
 unless tagged]:
@@ -937,8 +965,10 @@ unless tagged]:
   and `lodScale` from the root. In the install only `Bavarian_Castle` sets `enterDistance` (0.2) and only
   `Bavarian_Bakery` sets `lodBias` / `lodScale` (to the root values) [known, data].
 
-**Placement** S 006ac810, S 006aaab0 [known]: world matrix = rotation about Y by `heading` degrees
-(`* 0.017453292`) with translation `worldPos` = the centre vertex of the building's cell at its height
+**Placement** S 006ac810, S 006aaab0 [known]: world matrix = rotation about Y by `heading` (`BuildingDesc +0x98`,
+integer degrees, passed by `AddBuilding` S 006a2bf0 to every building constructor; the constructor stores
+`heading × π / 180` in radians at `Building +0x28`, float π S 007fccfc over double 180.0 S 007db6a0, and
+`UpdateTransform` calls `SetRotationY` with it every frame) with translation `worldPos` = the centre vertex of the building's cell at its height
 (`TerrainGrid::CellToWorldPos` S 00687790). No type sets `heading`, so every building is turned by -30°.
 
 **Passes** `BuildingRenderer::Render` S 006a0ad0 [known for the order], all with `house_shader.fx` and the
@@ -1124,9 +1154,11 @@ are loaded once per file (`GetOrLoadMesh` S 006b4240) and removed with `RemoveDe
 5. *Normals.* The decal vertices carry the `GROUND` mesh's own normals (`g_DefaultMeshNormal` S 00882864 when it has
    none), turned by the upper 3 × 3 of the world matrix without renormalising (`TriangleList::AddMeshTransformed`
    S 0076e530) and interpolated by the clip like the positions; the terrain normal is never fetched
-   (`SampleHeightAndNormal` is called with a null normal at 006da414). In `ClipByPlanes` the second interpolation
-   factor is clamped to 0, not 1, when it is ≥ 1, and a vertex counts as behind a plane when its distance is
-   ≤ −0.0001.
+   (`SampleHeightAndNormal` is called with a null normal at 006da414). In `ClipByPlanes` the first interpolation
+   factor is clamped to 0..1, while the second is set to 0 below 0 and also to 0, not 1, when it is > 1 (exactly 1
+   is kept; disassembly at 006ed882 and 006eddbf), and a vertex counts as behind a plane when its distance is
+   < −0.0001 (the float at S 007fcd00, negated; `FCOMPP` / `TEST AH,0x41` / `JP` at 006ed771), so a distance of
+   exactly −0.0001 is in front [known] S 006ed6e0.
 
 Consequence [known: the algorithm; measured on a port of it]: a decal on a slope, and any decal mesh above or below
 the local ground, does not tile: pieces spanning a crease dip below the terrain and pieces overlap, so the original
@@ -1145,6 +1177,21 @@ in the decal renderer's constructor) [inferred].
 **Door and work animations** S 006aa640, S 006aa3b0, S 006aa6f0, S 006abcf0 [known]: two playback slots on the
 building's instance of the type's animated model (created from `BuildingDesc +0x5c` in S 006ac810): slot 0 for
 the door clips, slot 1 for `Working`; neither clip starts while the building is under construction.
+
+**Building vftables** [known: RTTI type descriptors behind each vftable's complete-object locator, slots read
+from memory]. `S2CG::Building` S 007fa79c (offset 0; a second vftable S 007fa78c at `+0xc`, two empty slots
+S 00472360): 0 `SetHidden` S 006aa320, 1 `IsHidden` S 006ab260 (`+0xc0`), 2 `GetWorldBounds` S 006ab270, 3 `GetCell`
+S 006ab2b0, 4 `GetFineCellPosition` S 006ab310, 5 `RefreshGroundPlacement` S 006ab420, 6 S 006aa180, 7
+`SetTransform` S 006ab2d0, 8 S 0046b610 (returns `this + 0x54`), 9 `Render` S 006aae60, 10 the deleting destructor
+S 006ab360, 11 `Update` S 006abcf0, 12 `UpdateTransform` S 006aaab0, 13 `DebugDraw` S 006aa4a0, 14
+`PlayOneShotAnimation` S 006aa6f0, 15 returns false S 0041ecc0, 16 returns 0 S 0072db80, 17 an empty stub
+S 005657b0 that `UpdateTransform` calls every frame (`vftable + 0x44`); 18 slots (the string "GROUND" follows). The
+subclasses keep slots 1–4 and 6–9 and override: `SacrificeBuilding` S 007fa85c slots 0 (S 006accd0), 10, 11
+(S 006acd90), 12 (S 006acc80) and 15 (returns true, S 005e4e90); `FarmBuilding` S 007fc06c slots 0 (S 006d55b0), 5
+(S 006d59c0), 10, 11 (S 006d5760), 12 (S 006d5530) and 13; `CatapultBuilding` S 007fc0d4 slots 10, 11 (S 006d6000),
+12 (S 006d61a0), 13, 14 (S 006d6510), 16 (S 006d5db0, returns its sub-object at `+0x21c`) and 17
+(`ApplyBoneRotations` S 006d5e50, [animation-models.md](animation-models.md) "catapult").
+`Building::ctor` S 006ac810 writes the kind 6 at `+4` that the cursor pick tests ([ingame-ui.md](ingame-ui.md)).
 
 **When a building updates** [known]. Primary vftable S 007fa79c: slot 11 `Building::Update` S 006abcf0 runs
 **per logic tick** (`Scene::SyncLogicTick` S 00680550 → `CMapRenderer::SyncLogicTick` S 006882c0), slot 12
@@ -1542,8 +1589,10 @@ constructor at S 006dca49, the destructor at S 006dc908; every `+0x124` store an
 to the tree, horizontal only. The tree turns about that line itself, so it falls sideways across the line from the
 worker through the tree rather than straight away from the worker; on a scaled tree the axis is not normalised,
 which skews the fall slightly [known] S 006dcfd0. `RotationAxis` S 006e8fa0 builds the standard Rodrigues matrix
-but the engine applies it to row vectors, which is the opposite rotation sense to D3DX's [known]. Each
-`UpdateFalling` S 006dcd40 call adds `speed × tick length` (`speed / timeRecord[3]`) to the angle (with the previous
+but the engine applies it to row vectors, which is the opposite rotation sense to D3DX's [known].
+`UpdateFalling` S 006dcd40 runs once per logic tick: its only caller is `TreeInstance::Tick` S 006dcf00 (slot 11,
+`+0x2c`, of the tree vftable S 007fc440), the per-tick update that `MapObjLayer::Update` gives map objects from
+`CMapRenderer::SyncLogicTick` S 006882c0 (§4.2) [known]. Each call adds `speed × tick length` (`speed / timeRecord[3]`) to the angle (with the previous
 value kept for the fade) and multiplies the speed by 1.2000000476837158 (the double S 007fc478); once the angle is
 `≥ (float)(π/180 · 90)` the state becomes 4, and the tree lies until its deposit is removed; the deposit level fade
 below then sinks it lying down, since `AnimateMeshesAndLevelFades` lowers only the translation y of the current
@@ -1569,7 +1618,10 @@ S 006dd7e0: one instance is a cluster of 300 sub-instances. `ExtendedMeshData::L
 tufts `RS_Wheat07..02`, 36 vertices and 54 indices each); each sub-instance gets the variant
 `Rng_ParkMillerNext % n` from the generator S 0088e118, which only this code uses and which is seeded `0x5432ace0`
 at program start (S 007cb190; [engine-core.md](engine-core.md)). `BuildInstancedVertices` S 006dd8e0, per
-sub-instance `i`: `SetSeed(this + i)` (a heap address, so the scatter differs between runs), `r = NextUnit × 3.0`,
+sub-instance `i`: `SetSeed(this + i)` (`LEA ECX,[EDI+ESI]` at 006dd960, `this` the `ExtendedMeshData`; a heap
+address, so the scatter differs between runs and its exact value is runtime-only; `SetSeed` S 006ec2a0 leaves a seed
+with 8..24 set bits unchanged, which a heap address plus `i` < 300 normally has, while seeds with fewer bits are
+balanced with bits from S 007fd528 and small bases collapse onto each other), `r = NextUnit × 3.0`,
 `a = NextUnit × 2π` (S 00882840), the variant's vertices scaled, then moved by `(cos a × r, 0, sin a × r)`; byte 0 of
 `BLENDINDICES` is the batch slot, bytes 1..3 are not read by `weed_shader.fx`. `BuildInstancedIndices` S 006ddce0:
 the variant's local indices plus `i × verticesPerVariant`. A field is therefore drawn as a disc of wheat tufts about
@@ -1636,9 +1688,10 @@ for a half turn); sine bobbing; a status overlay mesh
 triangle by triangle with the frame's progress before the hulls, and a hull that rises through a user clip plane
 with its fade ([animation-models.md](animation-models.md) §3.17) [known].
 
-**Animals** [inferred] S 006ce2c0: logic states 5, 7, 8, 9 play the death animation once, after which the model
-sinks at `0.4 * dt`; standing animals play one of two idles chosen with a private generator (static seed
-0x5432ace0); moving animals interpolate between cell and next cell and turn by at most 0.43982297 rad per logic
+**Animals** [known] S 006ce2c0 ([animation-models.md](animation-models.md) §3.18): logic states 5, 7, 8, 9 play
+the death animation once, after which the model sinks at `0.4 * dt`; an animal stands while its move progress is
+< 0 and, only on the edge from walking, plays one of two idles chosen with a function-static generator (seed
+0x5432ace0 on first use, shared by all animals for the life of the process); moving animals interpolate between cell and next cell and turn by at most 0.43982297 rad per logic
 tick (`Animal::StepHeading` S 006cde40 [known]); a new animal starts with `Stand1` looping and heading 0, without
 a random draw (`Animal::ctor` S 006ce090 [known]). Definitions in `animals.xml` (`model`,
 `mesh`, `scale`, `<Animation
@@ -1655,8 +1708,8 @@ body). The `projectiles.xml` records are the `<Projectile>` children of the root
 S 006a4440; `name` only sets a type index that `AddProjectile` does not use), and the record is chosen by the
 logic type (0 → record 1, 1 → 0, 2 → 3, 3 → 2); flight time = flight ticks × 0.1 s; ballistic arc with gravity
 2.44269 for the catapult stone (type 1, S 00881a10) and 1.4715 otherwise, horizontal speed `distance / T`,
-vertical `g/2 · T + dy/T`; the flight emitter follows the arc, the impact plays `impactPFX` once and releases
-the flight emitter; model and tumble `rotation` from the same record. Details: `particles.md` §3.13.
+vertical `g/2 · T + dy/T`; the flight emitter follows the arc, the impact plays `impactPFX` once and its
+`impactSound` (+0xac, when not −1) with `SoundSystem::Play3D` at the target point, and releases the flight emitter; model and tumble `rotation` from the same record. Details: `particles.md` §3.13.
 
 **Particles** [known] S 00685bb0, S 004dfdc0: an effect name
 maps to `[data]\scripts\effects\<name>.pfx`; emitters are culled, sorted back to front in depth buckets and drawn
@@ -1687,9 +1740,12 @@ direct term.
 
 **Environment values** [inferred] S 006ae3a0: an `EnvData` gives clear colour, ambient, light colour, fog start
 and end (linear distance fog) and shadow intensity; the light direction comes from `lightheading` and
-`lightelevation` (degrees): `Matrix44::RotationYawPitchRoll(heading, |elevation|, 0)` applied to the unit Z vector
-[known] S 006ae3a0, which with the Direct3D convention of that function gives the direction the light travels,
-`(cos e * sin h, -sin e, cos e * cos h)`, pointing down for a positive elevation [inferred]; the shadow intensity is
+`lightelevation` (degrees): `Matrix44::RotationYawPitchRoll(heading · 0.017453292, |elevation · 0.017453292|, 0)`
+(the factor a float) applied to the unit Z vector (S 00882870) as a row vector, which gives row 2 of the matrix,
+`(cos e * sin h, -sin e, cos e * cos h)` (the D3DX layout of S 006e90c0, [engine-core.md](engine-core.md) §3.8); it is
+passed unchanged as the direction of the `D3DLIGHT_DIRECTIONAL` (`SetDirectionalLight` S 004d5340), so it is the
+direction the light travels, pointing down for a positive elevation [known] S 006ae3a0, S 006e90c0, S 004d5340;
+the shadow intensity is
 scaled by `clamp((|elevation| - 20°) / 20°, 0, 1)`. The device stores the result through `SetInverseClampedFloat_15c` S 004f5120, which clamps its argument to
 0..1 and keeps **one minus** it (`CGraphicDevice +0x15c`) [known, disassembly]; that this value is the shaders'
 `g_ShadowIntensity` (`SHADOW_INTENSITY`), the factor of the direct light in shadow (`doShadow` in `shared.inc`:
@@ -1717,8 +1773,10 @@ sphere does not count; else `w = 1 − (√dsq − inner) ÷ (outer − inner)`,
 `(float)(1 ÷ count)`; sphere 0 is assigned, the others are added (`AddWeighted` S 006ae170); when the sum is below
 1 the map default is added with weight `1 − sum`; with no counting sphere the default is used alone. The point is
 `Camera_GetGroundFocusPoint` S 0068ce50 (from `Scene::Update` S 006805e0): `(60 × hit + d × camera) ÷ (60 + d)` in
-x and z, where `hit` is the screen-centre ray's terrain hit (the point 1000 along the ray when there is none) and
-`d` the horizontal camera-to-hit distance. `ApplyToDevice` S 006ae3a0 applies the result.
+x and z, where `hit` is the screen-centre ray (`Camera_BuildScreenCenterRay` S 0068cdc0) cut with the plane
+y = 0 and lifted to the nearest vertex's height (`Terrain_RayHitGroundApprox` S 0068a610), or the point 1000 along
+the ray when `t < 0` or `t > 1000` (S 007d3e58), and `d` the horizontal camera-to-hit distance (60.0 at S 007dc9c8).
+`ApplyToDevice` S 006ae3a0 applies the result.
 Source: the map's `.bin` sidecar (`docs/map-format.md` §4.17): u32 skydome index, light heading, light elevation,
 the default `EnvData` (12 floats: background, ambient and light colour interleaved per component, shadow
 intensity, fog start, fog end), u32 sphere count, the spheres S 006aea80.
@@ -2053,7 +2111,7 @@ Without a post processor the first call masks the bit out (`passMask & ~0x100`) 
 - the frame; picking for the cursor and commands: `CGraphicAccess::PickAtScreenPos` S 006a9830 (terrain cell
   and hexagon under a back-buffer pixel, through `ScreenPickHelper::PickCell` S 0068c8d0 and `PickHex`
   S 0068cc10) [known]; `CLandscape::PickRayCell` S 0068a0d0 / `PickRayHex` S 0068a080,
-  `CCharacterMgr::PickCharacterByRay` S 00692fc0, `ShipMgr::PickShip` S 00697db0 [inferred, mapped names];
+  `CCharacterMgr::PickCharacterByRay` S 00692fc0, `ShipMgr::PickShip` S 00697db0 ([known]: nearest bounding-sphere entry with a mesh hit, [ingame-ui.md](ingame-ui.md) §3.4) [inferred, mapped names for the others];
 - the overview texture `RenderOverviewTexture` S 00680d90 (a top-down view of the whole map through a camera
   fitted to the grid, water and terrain pass only) [inferred] and the preview textures `RenderPreviewTexture`
   S 00681300, whose callers are the object and ship previews of the pick helper S 0068cae0, S 0068cb60

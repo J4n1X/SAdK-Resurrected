@@ -651,8 +651,9 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
 4. If finished with remains and the type is `depot` or `casern`: when `spill` is false skip step 5;
    otherwise release every stored settler (`SettlerSpawn::ReleaseAllStockedSettlers` S 00564f40: first
    `FillDefaultSettlers`, §3.11, then spawn one settler per unit of every settler good at the entrance).
-5. If `spill`, and (type has `remains` or it is a ship site), and the type is not a headquarters type: spill
-   goods (below).
+5. If `spill`, and (type has `remains` or it is a ship site: the construction's ship reference has a non-negative
+   high id word), and the type is not a headquarters type (`depot == false || casern == false ||
+   territoryBuilding == false`, the same three flags as reason 1 below): spill goods (below).
 6. Remove from indexes, map and vector; destroy the object (its components cancel orders, requests and links). The
    spill of step 5 therefore happens before the destructor. `Building::dtor` S 0055ce70 runs in this order [known]:
    raise "building removed"; set the outside-territory mark; `DetachAllSettlers`; when the sacrifice research
@@ -667,7 +668,8 @@ type building, `spill = true`); the ship-building job (S 0065e770); the AI's dem
    [military.md](military.md) §3.10 step 6).
 7. If `leaveRemains && spill`: create `Remains` at the position (blocks the same footprint; burn time from
    the remains property; its tribe key is the building's `variantKey`).
-8. Remove the flag at anchor + direction 1 when all three hold: `Flag::GetRemoveBlockReason()` is 0
+8. Remove the flag at anchor + direction 1 (`GetFlagAtPos`, no owner test; `NNet::System::RemoveFlag` S 00665c10)
+   when all three hold: `Flag::CanBeRemoved` S 0066a350, i.e. `Flag::GetRemoveBlockReason()` is 0
    (S 00669f70; with the building gone only its reason 1 can still apply: the flag's harbour reference,
    flag +0x168, is valid and the cell is the owner's territory), all its package stacks are empty (flag +0x74),
    and the vector at flag +0x64 is empty (the flag's street links, `linksFirst` at +0x68,
@@ -787,8 +789,8 @@ catapult the same field (25) is the length of the shoot animation ([military.md]
   link is reset to (−1, −1) and nothing is delivered (§3.8);
 - otherwise `DeliverProducts` (S 00565990): register a production event (productivity statistic,
   S 00538460: a new entry starts at 0.5, each event adds 0.25 up to 1.0. `Statistics::Update` S 00537ba0, on
-  every tick with `tick mod 600 == 0`, subtracts 0.05, not below 0, from the entry of every finished building
-  and erases the entries of buildings that no longer exist); for product slot 0 and 1 that are set, compute
+  every tick with `tick mod 600 == 0` (an integer test), subtracts 0.05, not below 0, from the entry of every
+  finished building, raises that entry's counter (+0x2c) by 1, and erases the entries of buildings that no longer exist); for product slot 0 and 1 that are set, compute
   {good, amount} through
   `GetEntryWithModifiers` (the amount of `goodAmountN`; for the single good id 0x17626a03, `corn`, the amount
   is doubled while the owner's sacrifice modifier flag 12, `Effect_CornDoubleProduction`, is above 0;
@@ -945,6 +947,12 @@ building: `Settler_LinkDestinationReference` S 0053bf50 adds them (category-3 or
 `Settler_UnlinkHomeBuilding` S 0053bf80 (the settler's home reference cleared, the first matching id erased);
 the settler destructor S 006568b0 unlinks its home too (after the package discard, before the ship unlink and the
 movement) [known]. A settler whose home is gone takes the invalid-home branch of `MoveToHome` S 007776f0.
+A settler never holds two home links and a home list never holds a dead settler [known]: the link's only path is
+S 0053bf50 ← `VillageOrder_LinkSettlerToDestination` S 00561e20 (category 3, S 005686a0: the target is not under
+construction and is a depot, def +0x54, or a casern, def +0xf1, with a soldier good) ← `AssignOrderToSettler`
+S 00562580, called by `OrderSystem::Update` S 005626c0 with a freshly spawned settler (S 005624f0) and by
+`Soldier::TryCompleteOrderAtCurrentPos` S 0065a340 only from `MoveToHome::Start` S 007776f0 when the home reference
+is invalid; the settler destructor and `Destroy` above unlink both sides.
 
 Suppliers: when a requester asks for goods, storage buildings whose `goodFlags` has the good **enabled** are
 skipped as suppliers unless the search ignores flags [known] S 00557da0 — a store that collects a good does

@@ -127,7 +127,8 @@ f = 0x3effffff gives a sum that rounds to 1.0, so the game sends 1 (double: 0). 
 slider's labels: over the attacker's territory-building list it adds `ftol(available · scale + 0.5)` (as above)
 to `outCounts[building.military.soldierKind]` (`military+0x68`), unchecked and without clearing the counts first
 (its callers clear them); with `checkAvailability` set nothing is counted unless `GetAttackAvailability` is 0
-[known]. Small wrappers: `Military_IsAttackAvailable` `00575b50` = `GetAttackAvailability == 0`;
+[known]. It forwards its `persistentCache` argument to `GetAvailableAttackers`; the menu passes 0 to it, to
+`GetAttackAvailability` and to `GetMinAttackerFraction` (S 00623f37, S 00623f50, S 0062473f) [known]. Small wrappers: `Military_IsAttackAvailable` `00575b50` = `GetAttackAvailability == 0`;
 `Military_IsField8A0Zero` `00570d10` = fight phase == 0; `Military_IsField24Zero` `00570700` = `startCountdown == 0`
 [known].
 

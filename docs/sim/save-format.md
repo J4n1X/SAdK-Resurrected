@@ -668,12 +668,17 @@ unique id into containers filled during `Load`, so they do not depend on the oth
   text item each. **Type-10 `.sav` files are not listed.** The first ten items get the hotkeys `0`..`9`.
   The order is the order in which `FindFirstFileA` / `FindNextFileA` return the files: the scan appends each hit
   to a string vector and neither it nor the panel sorts [known] S 006e4f00, S 006e4310, S 0060da50. That is
-  name order on NTFS and creation-slot order on FAT [inferred] (file-system behaviour, not game code).
+  NTFS's directory-index order, which collates names through the volume's upcase table (case-insensitive:
+  `a.aav` before `B.aav`; `_`, `[`, `]`, `^` and the backquote sort unlike in an ordinal compare), and creation-slot order on FAT
+  [inferred] (file-system behaviour, runtime-only, not game code).
   No date, map name, player or picture is shown.
 - Save mode: the edit box is pre-filled with the default name (§2.6). Confirm: if an item's name equals the text
   ignoring case, a message box asks `!Overwrite file?` (title `!Save`), and on yes the save runs; otherwise the
   panel fades out (0.2 s) and `GameFile_Save(110, text)` runs at once. The text is not checked for being empty:
-  an empty edit box saves a file named `.aav` [inferred] (no length test in S 0060d000).
+  an empty edit box saves a file named `.aav` [inferred] (no length test in S 0060d000). The call of
+  `nMenu_GetActiveScreenField_ffe8` S 00780d10 before the save (0060d295..0060d2a3) only forms
+  `GameFile_Save`'s `this` (result + 0x618), which `GameFile_Save` S 005aa260 overwrites (at 005aa2a0) before it
+  reads it; it has no other effect [known].
 - Load mode: confirm copies the marked item's name into the panel; the panel's next `Update` fades out and hands the
   name to `nMenu::System::pendingMapPath`; the menu system's next `Update` calls `StartPendingMap` (§3.8).
 - Delete (button `btDelete`, after a message box): `DeleteFileA("<save dir><name>.aav")`, then the list is rebuilt.

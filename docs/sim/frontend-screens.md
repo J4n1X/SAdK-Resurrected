@@ -131,7 +131,10 @@ A child whose widget kind differs from the expected one is stored as NULL [known
 kind 0x13, the three overlay buttons kind 0xd; `avatar` is stored without a kind test. The other widgets of the
 panel are looked up below `GameSettingsPanel` (a picture, kind 0xe) with kinds 0xe (`MapPreview`), 0xc
 (`SelectMapButton`), 9 (the three labels) and 0x13 (the three option combos); `LeaveButton` and `ReadyButton`
-(kind 0xc) are looked up from the panel root [known] S 005e8820.
+(kind 0xc) are looked up from the panel root [known] S 005e8820. In `menufreegame.xml` `GameSettingsPanel` is
+460 × 232; `StartResources`, `WinCondition` and `FogOfWar` stand at offset (−16, 58), (−16, 106) and (−16, 154),
+128 × 18, right-aligned, template `MatchmakingCombobox`, each with a `Descriptor` description; the panel has no
+fourth option and the free game has no god-mode option [known: data].
 
 ### 2.3 `nMenu::SelectMapDialog` (0x2d8 bytes) and `MapListEntry` [known] S 00614410, S 00615430, S 00613000
 
@@ -626,7 +629,9 @@ Additional rules of the panel:
 - **Load hand-over** (S 0060dd30) [known]: a non-empty chosen name → fade out (0.2 s), `System::SetPendingMapPath`,
   clear the name.
 - **Stale list** [known] S 0060ce40, S 0060dd30: the file list is read when the panel object is made and again
-  only after a delete (`listDirty`). The panel objects live on (one per mode on the game screen, created at
+  only after a delete (`listDirty`). `RefreshFileList` S 0060da50 has exactly two calls: in `LoadFromXml`
+  S 0060e0e0 (at S 0060e2ff), which the constructor runs once through `XMLHandler::LoadFromFile`, and in `Update`
+  S 0060dd30 (at S 0060dd7d) while `listDirty` is set. The panel objects live on (one per mode on the game screen, created at
   their first opening, [ingame-ui.md](ingame-ui.md) §3.8.8; one load panel on `Main`), so a save written after
   a load panel was first opened is missing from it until a delete in that panel. Presentation only.
 - **Edit field** ([ui-toolkit.md](ui-toolkit.md) §3.7): Enter is not consumed by a single-line `EditEx`, so

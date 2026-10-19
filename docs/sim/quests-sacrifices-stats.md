@@ -180,6 +180,9 @@ kills), a map good-or-job id → cumulative history of at most 960 elements, the
 
 The **productivity map** `Statistics +0x0c` is a `std::map<Unique building id, ProductivityItem>`; the item has
 a float `productivity` (tree node +0x28) and an i32 idle counter (node +0x2c) `[known]` S 00537ba0, S 005373b0.
+A new item (`operator[]` S 00538290, used by `ResetBuildingProductivity` S 00538440 and `RegisterProductionEvent`
+S 00538460) is zero-initialised (node +0x24, +0x28 and +0x2c = 0); `Statistics::Update` raises the counter by 1 on
+each decay of a finished building (`ADD dword ptr [ESI+0x2c],1` at 00537cc0) `[known]`.
 
 ### 2.4 Chests
 
@@ -928,8 +931,9 @@ to this system: it is a Lua routine that places goods into depots on a tick coun
   arg), `LookForDeposit::Start` / `LookForAnimal::Start` (calls at S 00778e09 / S 00778eff) and
   `LookForFishing::Start` S 0077f670; `PlayerMessages_FindNearWithArgForPlayer` S 005c01f0 from `OnCatapultHit`
   S 0055e080 (maxDist 1) and the geologist's `GoDigging::PlaceResourceSignAndNotify` S 0077b2f0 (maxDist 7, the
-  `PUSH 0x7` at 0077b430); `NotifyLostTerritory` S 006797f0 uses `FindMatching` (distance `< 1`, arg not
-  compared) and refreshes nothing. There is no other memory of what was reported: no per-cell bits, no flood
+  `PUSH 0x7` at 0077b430); `PlayerMessages_FindNearForPlayer` S 005c01b0 (`FindMatching`, arg not compared) from
+  the mine's `Building::UpdateResourceSearch` S 0055ded0 (call at S 0055dff4, maxDist 1; a match is refreshed, else
+  `SendToPlayer`) and from `NotifyLostTerritory` S 006797f0 (distance `< 1`), which refreshes nothing. There is no other memory of what was reported: no per-cell bits, no flood
   fill; a geologist's find posts a new message once it is 7 or more cells from every listed message of that good,
   or after the matching message expired or was removed.
 - `SendLetterToPlayer(player, text)`: a message of type 8 made with the two-text constructor, `text2` empty
@@ -1002,7 +1006,8 @@ There is no tutorial or hint logic in the simulation `[inferred]` (no function o
 
 - `menu.addTutorialPage(key)` S 005daa30 adds a page with title key `key` and description key `key .. "_desc"`
   to the HUD panel `nMenu::Tutorial` and, when the panel's virtual query at slot +0x2c returns false, shows the
-  newest page `[known]`; the HUD button `btTutorial` (hotkey `t`) is hidden until a page exists
+  newest page `[known]`; it posts nothing to the message list, and neither does `menu.openBookDialog` S 005dd5e0
+  (game screen 2, [lua-runtime.md](lua-runtime.md) §3.7) `[known]`; the HUD button `btTutorial` (hotkey `t`) is hidden until a page exists
   (ingame-ui.md §3.4).
 - The helper `mapTools\tutorial.lua` keeps a Lua table `tutorial_data` of `{name, info}` pairs filled by the
   map's `setupTutorial()`, shows a page by name (`tutorial_show`, also wired to quests as
@@ -1401,7 +1406,7 @@ start tick and target, cool-downs, research, chests with owner and progress); th
 | 005aeda0, 005aec70, 005b0210, 005b0340, 005b0430, 005b0970, 005b1000 | Lua `vi_orderSacrifice`, `vi_startSacrifice`, `pl_getSacrificeState`, `pl_sacrificeStarted`, `pl_sacrificeStartedOnContinent`, `vi_isSacrificeBuildingAtContinent`, `pl_sendOrderSacrificeMessage` | bindings |
 | 005dac60, 005dab40, 005dabd0, 005d9550, 005b2410 | Lua `menu.addSacrifice`, `lockSacrifice`, `unlockSacrifice`, `showSacrificeEffect`; `sacrifice_execute` call | bindings |
 | **Statistics** | | |
-| 00537a60 / 00537b50 / 00537ba0 | `Statistics::Init` / `Reset` / `Update` | life cycle, schedule (tick tested as a float) |
+| 00537a60 / 00537b50 / 00537ba0 | `Statistics::Init` / `Reset` / `Update` | life cycle, schedule (integer tick tests) |
 | 00537230 / 0053af40 | `Statistics::AddGoodAmount` / `PlayerStatistics::AddGoodAmount` | production counts, coin counter |
 | 0065d7f0 / 0077a8e0 | worker state 0x24 (working mode 4) / `NMovie::PutDownPackage::Update` | `AddGoodAmount` callers: produced settler (1 per spawn), gatherer's harvest (full count) |
 | 00538460 / 00538440 / 005373b0 | `RegisterProductionEvent` / `ResetBuildingProductivity` / `GetProductivity` | building productivity |

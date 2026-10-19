@@ -663,7 +663,9 @@ build.
 #### Ship routes (details in `docs/navy-and-military.md` §5)
 
 All three: `EventInt64_1Integer`: ship route id, player index (the local player's). Sent only when the selection
-is a ship route (kind 6) with a valid id (S 00782d80, S 00782e40, S 00782f00; actions 1, 2, 3).
+is a ship route (kind 6) with a valid id (S 00782d80, S 00782e40, S 00782f00; actions 1, 2, 3). The route is
+read from the game's selection (`GameSystem +0x18`), not from the menu's, so a route selected by clicking its ship
+([ingame-ui.md](ingame-ui.md) §3.5) is sent the same way [known].
 
 **`0x2001A` GE_Expedition_Start** — executor S 00781ad0: route found and `CanAssignShip(player)` →
 `AssignNearestIdleShip(player)`.
@@ -993,7 +995,11 @@ net ticks; 6 session slots; 8 street planners.
   the running flag, three timing floats and the tick counter, and no subsystem `Store` takes a planner
   [known for S 005275c0; `docs/sim/save-format.md` lists the sections]. On load,
   `NLogic::System::PostLoad` S 005273d0 first goes through the 8 planners — one that is active is cancelled as
-  in §3.4 (`0x20007`), then each is stopped — and then starts all 8 again on the loaded map [known]. A freshly
+  in §3.4 (`0x20007`, `CancelConstruction` S 00663740), then each is stopped (`Stop` S 006638c0) — and then
+  starts all 8 again on the loaded map with their street constructors (`Start` S 00663790) [known]. The game
+  file's logic part (`GameFile_SaveLogic` S 005a9ec0) stores no planner either. `Stop` and `Start` do not touch
+  the planner state (+8), so after a load a planner that was not cancelled keeps the state value it held in the
+  running process before the load [known: bodies S 006638c0, S 00663790]. A freshly
   loaded planner object is not active, so the unfinished street that a save may contain (it is an object of the
   street net) has no planner after the load and cannot be extended, completed or cancelled by a street command
   [inferred]. The planner pass runs before any subsystem's post-load; later in the same function the street

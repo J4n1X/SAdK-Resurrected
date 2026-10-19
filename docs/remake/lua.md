@@ -404,7 +404,7 @@ function without calls is implemented with the same guards and results, but test
 |---|---|---|---|
 | `map_getTerritoryPlayerId` | Q | the owner of the cell | 3 |
 | `map_exploreArea` | SIM | reveals for `p` and its allies; never column 0, the last two columns, row 0, the last two rows | 4 |
-| `map_exchangePatternType` | SIM | pattern `from` → `to` in the bounding rectangle; construction flags and obstructed doodads follow | 6 |
+| `map_exchangePatternType` | SIM | pattern `from` → `to` in the bounding rectangle (x outer, y inner), set deferred; then one pattern change for the dirty rectangle and the construction flags recomputed at once on that rectangle grown by 4 cells towards the origin only, whatever the batch nesting; no obstructed-doodad removal ([map-resources.md](../sim/map-resources.md) §3.4, S 00674470, S 006730e0); the elevation half of the flush is not run there [TODO] S 006730e0 | 6 |
 | `map_createDoodad`, `map_removeDoodads`, `map_forEachDoodad` | SIM | a blocking doodad rebuilds continents and refreshes the AI; the spiral order of LR §3.6.1; a negative radius is a Lua error (the original hangs) [binary] | 4, 10, 0 |
 | `map_searchConstructionPlace` | Q | first spiral cell matching the size mask (LR §3.6.2) | 2 |
 | `map_createDeposit` | SIM, RNG | one draw; growth 1.0 when `full`, else the deposit's start size [binary, confirming LR §3.6] | 2 |

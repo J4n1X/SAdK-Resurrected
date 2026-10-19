@@ -801,8 +801,13 @@ or `rand`]:
   `D3DXMatrixRotationAxis` for the same angle (the falling tree, [rendering.md](rendering.md) §3.11).
 - Approximations of the presentation [known]: `Math_FastSqrt` S 006e8a20 (256-entry table S 007fd118 on the
   float's bit pattern; used by effects, by the sea-route strip, `RouteDecal::BuildFromSpline` S 006e2450,
-  [world-objects-rendering.md](world-objects-rendering.md) §3.7, and by the ship pick `PickShip` S 00697db0, where it
-  only decides which of two ships is nearer), `Math_FastCosLut` S 006e8a50 (256-entry table S 007fcd10), `ai::math::SinTable1024`
+  [world-objects-rendering.md](world-objects-rendering.md) §3.7, and by `Ray::IntersectSphere` S 006ec570, which
+  the ship pick `PickShip` S 00697db0 reaches through `Ship::IntersectRayBoundingSphere` S 006a5020: with `b` the
+  ray direction dotted with `origin − centre` and `disc = b² − (|origin − centre|² − r²)`, a `disc ≤ 0` (tangent
+  included) is a miss, else `tNear = −b − FastSqrt(disc)`, `tFar = FastSqrt(disc) − b`; the pick keeps the ship
+  with the smallest `tNear ≥ 0` whose mesh the ray also crosses. The approximation shifts `tNear` by a fraction
+  of the root, so it can only change which of two almost equally distant ships wins, or the `≥ 0` test with the
+  eye on the sphere's surface; the other caller is the character pick `CCharacter::RayHitTest` S 00691220), `Math_FastCosLut` S 006e8a50 (256-entry table S 007fcd10), `ai::math::SinTable1024`
   S 004ccb90 (1024 scaled sine entries; that they span one full turn and that the one instance S 00885dc8
   serves `AlphaFanPicture` is [inferred]: the sine argument is lost in the decompile and the user of the
   instance was not read),

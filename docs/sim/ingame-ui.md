@@ -277,8 +277,10 @@ S 007f9030) ÷ tan(fov), fov = 50° (the full horizontal angle), near 0.1, far 2
 maps the 256 px picture into the 244 × 244 `selectionPicture` through the mask `ui_mask.tga`.
 `MenuSelection::Update` S 006163f0 re-renders it every frame while `+0x2c` is set and once while `+0x49` is set
 (then clears it). The constructor sets both to 0; `+0x49` is set only by `Game::OnDeviceReset` (through
-`Object_SetFlag49` S 00615640), so the picture is redrawn once after a device reset [known]; no writer of `+0x2c`
-other than the constructor was found [inferred]. `LoadFromXml` and `RefreshFromGameSelection` render it directly.
+`Object_SetFlag49` S 00615640, its only caller at 005eabbf), so the picture is redrawn once after a device reset
+[known] (presentation only); no writer of `+0x2c` other than the constructor's 0 (S 00617ce9) was found by an
+instruction search for constant byte stores, but register-valued stores through other base registers were not
+ruled out one by one [inferred: never set]. `LoadFromXml` and `RefreshFromGameSelection` render it directly.
 
 The object that is selected lives in `nGame::System` (`Selection`, [game-commands.md](game-commands.md) §2.4:
 kind 0 None, 1 Building, 2 Flag, 3 Settler, 4 Street, 5 Ship, 6 ShipRoute). `MenuSelection` derives the
@@ -416,7 +418,8 @@ back-buffer width or height). An attribute with another token count or an unpars
   | right | parent width − own width + offset.x | offset.y | own | parent height |
   | center | offset.x | offset.y | parent width | parent height |
 
-- `alignx` (`none left center right`) and `aligny` (`none top center bottom`), each axis independently:
+- `alignx` (`none left center right`) and `aligny` (`none top center bottom`), each axis independently and with
+  its own words only (case-insensitive, `__stricmp`; `top` on `alignx` is unrecognised):
   left/top → offset; center → (parent − own) × 0.5 + offset; right/bottom → (parent − own) + offset. With `none`
   on an axis that axis keeps `pos`.
 - Priority when the layout is re-applied (parent resized, size changed): dock, else alignment, else the plain
@@ -546,8 +549,11 @@ popup clamped to the screen). Only one widget is hovered at a time: `UpdateMouse
 visible widgets under the cursor whose `canReceiveFocus` is set, and entering a higher one makes the lower one
 leave (`OnMouseEnter` S 004a3b30 sets +0x144). So the tip shown is that of the topmost focusable widget; a
 `Picture` (its constructor S 004b1590 clears `canReceiveFocus`) never shows its tip, and an ancestor's tip shows
-only when no focusable descendant is hit [known]. It closes with a 0.2 s eased fade-out when any mouse button is down or the cursor
-leaves the owner (`UiHoverTooltip_Cancel` S 004b5a20). A new provider (`Tip::SetProvider` S 004b5960) closes the
+only when no focusable descendant is hit [known]. The delay test is strict (0.07f at S 007e0724 < hover time),
+and the popup does not open while a mouse button is down (`Ui_IsAnyMouseButtonDown` S 004b5450); hover time is
+reset to 0 while the owner is not hovered or the cursor moves. `Tip::Update` closes the popup with a 0.2 s eased
+fade-out when any mouse button is down or, in state 1, when the cursor moves with the owner not hovered;
+`UiHoverTooltip_Cancel` S 004b5a20 resets the hover time and closes a popup in any state but 0 and 3. A new provider (`Tip::SetProvider` S 004b5960) closes the
 popup but keeps the hover time; `HidePopup` S 004b5910 closes it when the owner goes away, in state 1 only: it
 starts the eased fade-out and then hides the popup at once (vtable +0x28), so no fade is seen, and it keeps the
 hover time [known].
@@ -558,7 +564,8 @@ when the text changes or it is not shown, never while a mouse button is down, an
 keeps the first one's tip, because the description `!Soldier` does not change (§3.4).
 
 The default popup (template `tipDefault`, `TipListenerDefault::CreatePopup` S 004c5e30, S 004c6320) sizes a
-text block of 200 px width to the text and the background to max(`minsize`, text + 2 × `border`); one popup
+text block of 200 × 10000 px to the text and the background to max(`minsize`, text + 2 × `border`) per axis,
+then resizes the text block to the text + 1 px; with an empty description it makes no popup; one popup
 object serves the world tip and every widget tip. `nMenu` adds
 five rich popups selected per widget: 0 Building (`tipBuilding`: name, 4 cost slots, 4 product slots, 5 input
 slots), 1 Sacrifice (`tipSacrifice`: name, description, 4 cost slots, running and research time), 2 Good
@@ -674,7 +681,7 @@ Hotkeys set in the shipped `menuingame.xml` [known: data]:
 | Esc (27) | `closeButton` of the info box and of the quest log | close |
 
 Other files: `menuLoadSave.xml` `btLoad` 13 (Enter), `btDelete` `d`; the load/save list gives its first ten
-rows the hotkeys `0`..`9` in code [inferred] S 0060da50; message box buttons get Enter / Esc / `i` by mode
+rows the hotkeys `0`..`9` in code ('0' + index into item +0x17c) [known] S 0060da50; message box buttons get Enter / Esc / `i` by mode
 (§3.8.7).
 
 No key opens the build menu: it opens only by a left click on a buildable cell (§3.5, §3.8.10) [known].
@@ -731,7 +738,9 @@ goods bar, quest lines, minimap, quest log and tutorial [inferred]. `DestroyHudW
 on leaving and deletes the panels at +0xcc70..+0xcc84.
 
 The parents `SetupHud` gives the fixed members [known: disassembly of S 005ed700]: `selectionBorder` →
-`selectionPicture`; `btBack`, `btForward`, `btSettings`, `btStatistics` → `selectionBorder`; `miniMapBorder` →
+`selectionPicture`; `btBack`, `btForward`, `btSettings`, `btStatistics` → `selectionBorder` (005ee2c6..005ee322;
+`selectionBorder`'s `<deployment anchor="center"/>` without offset or size is dock 5, which takes the parent's
+rectangle, §3.1.5, so it covers `selectionPicture` [inferred]); `miniMapBorder` →
 `miniMap`; `btInfoMap1`, `btInfoMap2`, `btInfoMap3`, `btSpeed`, `btOptions` → `miniMapBorder`; the pause panel
 (`pause`) → the desktop (Game +0x20); every other member → the HUD root (Game +0x968). So the `pos` values of
 these buttons in `menuingame.xml` are relative to the selection frame and the minimap frame [inferred: §3.1.5,
@@ -764,7 +773,9 @@ the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTi
 
 1. a flag of the local player on the cursor cell (`FindLocalPlayerFlagAtCell` S 00787bf0) → Flag;
 2. the entity under the mouse (`PickVisibleEntityAtMouse` S 00787cc0) → Building: the ray tests the map-object
-   layer's objects of kinds 6 and 8 and counts a hit of kind 6 only, a building; it drops a building whose anchor
+   layer's objects of kinds 6 and 8 in list order (box, then the object's own ray test, slot 9), the first hit
+   ends the search, and it counts only when it is kind 6 (a building) and its slot 1 (+4) returns 0, so a ship
+   route buoy (kind 8) in front of a building hides it; it drops a building whose anchor
    cell is unexplored, testing the exploration of the building's owner (`+8`), not the local player's
    [known] S 00787cc0 ([camera-input-cutscenes.md](camera-input-cutscenes.md), click selection; [rendering.md](rendering.md)
    §3.7);
@@ -777,11 +788,14 @@ the NComm manager is drawn at the screen centre in `Subline_Garamond` on a `uiTi
 
 **The ray picks** [known]: the map-object pick (`Pick_MapObjectAtScreenPos` S 0068c920) walks one object list in its
 order and takes the first object of kind 6 (`S2CG::Building`, its constructor S 006ac810 writes 6) or kind 8 (a
-`RouteBuoy` S 006dbb90, map-object type `routeBuoy` → kind 8 at S 0068f4b2) whose box the ray meets; a buoy's own
+`RouteBuoy` S 006dbb90, map-object type `routeBuoy` → kind 8 at S 0068f4b2) whose box (slot 2, +8) the ray meets
+and whose own ray test (slot 9, +0x24) then passes; a buoy's own
 ray test, vftable slot 9, is `return true` (S 0041eca0). Removing any map object can move a later building or buoy
 earlier in that list (S 0068cff0), which decides only which one wins when the ray meets both. A route's start buoy
 is placed by S 00683040; its end buoy only once both harbours are set. The ship pick (`PickShip` S 00697db0) takes
-the nearest ship whose bounding sphere the ray enters at a distance ≥ 0 and whose mesh it crosses: the sphere is
+the nearest ship whose bounding sphere the ray enters at a distance ≥ 0 and whose mesh it crosses (nearest by the
+sphere's entry distance, `Ray::IntersectSphere` S 006ec570 with the table root `Math_FastSqrt`; a tangent ray
+misses; the mesh test runs only for a ship nearer than the best so far; [engine-core.md](engine-core.md)): the sphere is
 the mean of the scaled vertices, placed at the ship's ground point and not turned (S 006a5020); the mesh test
 (S 0076ff90 → S 006ec8a0) does not test the distance along the ray.
 
@@ -858,7 +872,8 @@ S 0078b1d0, S 0078b220, S 0078be80; the two planners and their point recorders a
   `CanStreetPassCell(target)` passes (the land search tests every entered cell, the target included, with the
   same function, `AStarStreet::CanSearch` S 00776180). With both, both are planned and land wins only if its path is strictly
   shorter (a failed water plan counts as endless). Neither → 1. The chosen kind is planned
-  (`BuildStreet`, `ExtendTo`); a failed water plan is retried as land from the first waypoint; result 0 when a
+  (`BuildStreet`, `ExtendTo`); a failed water plan is retried as land from the first waypoint, also when
+`CanStreetPassCell(target)` failed; result 0 when a
   path was found, else 1. Later segments: 4 when the planner can already complete, else `ExtendTo(target)`
   and 1 when the planner's state (+8) is 1 (no route), else 0 [known].
 - `OnPlannerCommand` S 0078be80, after a street command of the player: when the player's shared planner is
@@ -885,8 +900,11 @@ which recomputes the selection kind from the game selection and opens its box (t
 when their object stops fitting the box (§3.6), the sacrifice bar after selecting a building (§3.8.9), the attack
 slider after sending an attack (§3.7).
 
-**Cycling** (`btBack` / `btForward`): the game selection moves to the previous / next object of the same type
-and the selection is refreshed with the camera focused on it [inferred] S 005eb850 (→ S 00535300 / S 005354c0).
+**Cycling** (`btBack` / `btForward`): `Game::OnButtonClick` S 005eb850 calls S 005354c0 (step back) for `btBack`
+and `Selection::CycleSameTypeBuilding` S 00535300 for `btForward` (when the game selection is a building, it selects
+the next building of the same owner and type), then `Selection::GetMapPosition` and
+`RefreshFromGameSelection(0, focusCell = 1)` S 00617800, so the camera is focused on the new object [known]. It
+checks no menu-selection mode: the buttons cycle from the game selection in every mode, also in modes 2 and 3.
 
 The game selection is held apart from the menu selection: the sacrifice bar's `SacrificePanel::OnItemClicked`
 S 00624bd0 sets the game selection, then calls `ResetAndRefresh(true)`, then sets the cell, in that order [known].
@@ -974,7 +992,12 @@ action panel is opened (fade 0.2 s) and positioned at the cursor (§3.7).
 **Info box frame** (`nMenu::InfoBox`, a `Picture`) [inferred] S 00631820, S 00631310, S 00631a50, S 00631bc0:
 children `headline` (label), `closeButton`, `helpButton` (its tip is the rich tooltip kind 4 for the selected
 object's type, or a fixed help text); attributes `focusedActionButton`, `zoomTime` (default 0.3), `zoomInAngle`
-/ `zoomOutAngle` (±40), `moveInTime` / `moveOutTime` (0.3), `fadeInTime` / `fadeOutTime` (0.2). The element
+/ `zoomOutAngle` (+40 / −40), `moveInTime` / `moveOutTime` (0.3), `fadeInTime` / `fadeOutTime` (0.2). The
+defaults are the constructor's [known] S 00631820 (disassembly 006318cd..00631938: 0.3 the float at S 007e2a70,
+0.2 at S 007d7090, +40 at S 007e2a4c, −40 at S 007f4ef0; obj +0x4c4 zoomTime, +0x4c8 / +0x4cc the angles, +0x4d0 /
++0x4d4 fadeIn / fadeOut, +0x4d8 / +0x4dc moveIn / moveOut), and `LoadFromXml` S 00631310 reads each attribute
+with `XmlDoc::GetAttrFloat` S 006e7bd0, which keeps the field when the attribute is absent, so a layout that leaves
+one out keeps the default (the shipped `<infoboxes>` gives the same values). The element
 `infoboxes` is loaded into every box first (common frame), then the box's own element. Show: move in from the
 deployment offset, fade in, scale in; hide (`InfoBox::Hide` S 00631bc0): z-order −1 (the old key is saved; `Object::SetSortKey` S 004a0ad0 re-sorts the
 parent's children ascending by +0x178 and they draw first to last, so the hidden box draws behind its siblings,
@@ -1036,7 +1059,15 @@ therefore pulses about its centre [known].
 **Sacrifice buttons** (`SacrificeButton::SetSacrifice` S 0062f4e0) [known]: the button's enabled state, its
 question mark and the rules of its fans; icon and tooltip are keyed by the sacrifice's `sf_setName`. The fan
 (`AlphaFanPicture`) takes a value 0..1024 in 5 segments. The running time is shown as
-`trunc(remaining ÷ 10.0)` seconds while `remaining` ≤ 100000. `MenuSelection::ResetAndRefresh` S 00617db0
+`trunc(remaining ÷ 10.0)` seconds while `remaining` ≤ 100000. Enabled (disassembly 0062f756..0062f7b6): always
+when the button's `focus.canReceiveFocus` (+0x100) is off; else when `CanOrder` S 00561380, else when
+`CanStartResearch` S 00561130, else, when the definition's dependency list (+0x8c) is non-empty,
+`SacrificeDependencies::IsSet` S 00662970, else when the sacrifice is regenerating. Fans (from 0062f7b8, reverse
+0): research running at this building for this sacrifice → the research fan at the research progress
+(S 0065fb40), alpha `questionmarkAlpha`; else regenerating and the button enabled (+0xe4) with every ancestor
+enabled (`IsFlagE4SetInHierarchy` S 0042e330) → the regeneration progress (S 006626a0); else state 1 (running,
+S 005352e0) → the progress of the building's running sacrifice (S 00660090), reversed. When either fan is
+visible the icon shape's disabled colour is set to 1, so the icon is not greyed (0062f878). `MenuSelection::ResetAndRefresh` S 00617db0
 recomputes the selection kind. The question mark is shown when the sacrifice needs research (S 00556510), is
 not researched (S 00662660) and its research does not run at this building (S 00561210 → S 0065fb80); it is
 attached last, over the icon (`Create` S 0062f8e0), at the alpha `questionmarkalpha` (`LoadFromXml` S 0062f310,
@@ -1051,10 +1082,15 @@ replaces it only with a `timedtexture` attribute (the shipped `alphafan` has non
 `ui_buffs 4 268 41 41`). Their `<deployment anchor="center"/>` is dock 5, the same as Fill: the fan takes the
 button's whole rectangle and follows it on every resize (`Deployment::LoadFromXml` S 004bcb80, `ApplyDock`
 S 004bc570). `BuildFanVertices` S 004cd4a0 centres the fan in that rectangle with radius max(width, height) in
-pixels, so it covers the corners. The button's state pictures lie over the icon: the `PictureButton` draw S 004b3a60
+pixels, so it covers the corners; the centre is the widget position + 0.5 × size (disassembly 004cd5c1..004cd5de:
+the larger of the two full sizes, not the half). The texture coordinate per unit of direction is
+(half the mapping in pixels) ÷ (texture size ÷ 2) on each axis (004cd79e..004cd7ef), so the texture is scaled
+with the radius max(w, h) on both axes; on a non-square widget it is not stretched per axis [known]. The button's
+state pictures lie over the icon: the `PictureButton` draw S 004b3a60
 renders the icon shape (+0x468, set by `SetSacrifice`) and then `Button::Draw` S 004afd10 the button's own shape
 (+0x198), whose mapping `Button::UpdateMapping` S 004af080 picks per state (style 0xc: marked > pressed > hovered >
-normal). [TODO] the order of the child objects (fans, question mark) against that state shape.
+normal). The fans and the question mark are child objects, drawn after the whole draw slot (state shape and
+caption included) by `Object::RenderRecursive` S 004a1370, so they lie over the state picture [known].
 
 Good buttons everywhere: a click on one that carries a unit id closes the action panel (unless confirming) and
 focuses the camera on that unit [inferred] S 0062fe50.
@@ -1233,7 +1269,8 @@ No command is sent. When the panel was opened from the game-ended popup with "en
 #### 3.8.2 In-game settings (`menuIngameSettings.xml`, `nMenu::IngameSettingsPanel`) [inferred] S 00621480, S 00620970, S 00641ab0, S 006412f0
 
 Opened by `btSettings`. Two tabs. A new panel object is made at every opening (`OpenIngameSettingsPanel`
-S 005eaf00; ctor S 00620df0, `OnXmlLoaded` S 00621480): the layout's `defaultTab`, no group selected, the
+S 005eaf00; ctor S 00620df0, `OnXmlLoaded` S 00621480): the layout's `defaultTab`, the first goods group
+selected (below), the
 sliders set from the player's values and a fresh copy of the priority list; it fades in over 0.2 s (linear) and
 closes with a 0.2 s linear fade-out (S 0060e390) [known]. The layout has no reset buttons.
 
@@ -1312,7 +1349,8 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   difficulty (0..3, Player +0xec [known] S 005ea3e0) is shown. Rows are `ListBox2` items (S 004b8880); the
   normal picture of `questitemtemplate`, `ui_menus 10 10 11 11`, is an opaque navy cell with a light left column,
   drawn stretched [known: data]. The log fades in and out over 0.2 s (S 0060e350, S 0060e390) and a right click
-  closes it like any dialog (S 0060e440).
+  closes it like any dialog (S 0060e440: not while one of its animations, such as that fade, still runs; the
+  click is then returned unhandled, [hud-panels.md](hud-panels.md) §3.3).
 - **Quest log button** `btQuests` (template `bt_bag`, its background the `!` icon at `912 624 44 45`, hotkey `q`
   [known: data]): `Game::OnButtonClick` S 005eb850 hides the quest log (Game +0xb328) when it is visible, else
   shows it [known]. No code that changes the button's look on a quest event was found [inferred].
@@ -1565,27 +1603,39 @@ update.
   defaults to 0.5; the shipped `questionmarkalpha="0.6"` sits on `alphafanResearch`, where it is not read. The
   regeneration fan has no `timedtexture`, so it gets `timedGoodButton.png` (`AlphaFanPicture` slot 2,
   S 004cdbe0). `ApplyGoodIconToButton` S 0060f120 puts the icon on all four button states, so there is no hover
-  look. A fresh button's progress bar and both fans start visible (bar 0, fans 0): `Object::ctor` S 004a3cc0 sets
+  look. A fresh button's progress bar and both fans start visible (fans 0): `Object::ctor` S 004a3cc0 sets
   visible, nothing in the constructors or the layout hides them, and the first `UpdateSacrificeButtons` (from
-  `LoadFromXml`) hides only the buttons, whose `OnParentHidden` S 004a11c0 leaves the children's flags alone. Code 4
+  `LoadFromXml`) hides only the buttons, whose `OnParentHidden` S 004a11c0 leaves the children's flags alone.
+  The bar's value is 0 from `ProgressBar::ctor` S 004bd280, but its fill is computed only by `UpdateFill`
+  S 004bd580, which in this panel is reached only through `SacrificePanelButton::SetProgress` S 00645b50 (called
+  from `UpdateSacrificeButtons` at S 0062556c, its only call), so until then the bar keeps its layout width
+  ([ui-toolkit.md](ui-toolkit.md) §3.13). Code 4
   cannot occur for an ordered site (`CheckCanStart` S 00560f20 returns it only in state 0) [known].
 - **Row-2 buttons** (antibuffs) [known]: their primary vtable S 007f3414 differs from the normal button's
   S 007f77ec only in slot 34, the empty S 005657b0 in place of `Button::OnClicked` S 004b12d0, so a click on an
   incoming sacrifice does nothing at all: no `uiClick0`, no `OnItemClicked`, no observers, no Lua event.
-- **Click** (`OnItemClicked` S 00624bd0) [known]: find the building by the button's id (any owner);
+- **Click** (`OnItemClicked` S 00624bd0, slot 25 of the panel's vtable S 007ee6d0) [known]: find the building by
+  the button's id (any owner; the low dword at button +0x28 with the high dword taken as its sign, the button's
+  +0x2c is ignored);
   `Selection::ResetHandles` and `SelectBuilding`; `MenuSelection::ResetAndRefresh(1)` (§3.5: the box of the
   building's kind opens, the camera does not move); then the selection cell is set to the building's cell
   (+0x20 / +0x24). `ResetAndRefresh` runs `RefreshFromGameSelection` S 00617800 only in mode 1, so in placement
   modes 2 and 3 only the reset and the cell take effect on the menu side, while the game selection holds the
   building in every mode [known]. It is read later by `InfoBox::UpdateHelpText` S 006316e0,
-  `RefreshFromGameSelection`, `SendStartAttack` S 00781a00 and `SendToggleGoodFlag` S 00781720; whether any of them
-  reads it in modes 2 and 3 before a world click replaces it is [TODO].
+  `RefreshFromGameSelection`, `SendStartAttack` S 00781a00 and `SendToggleGoodFlag` S 00781720. A world left
+  click replaces it first (`nGame::Cursor::SelectAtCursor` S 00788370 starts with `ResetHandles`), but
+  `MenuSelection::Cancel` S 006162e0 (right click, back to mode 1) does not, so the building stays selected
+  until the next refresh path; whether any reader sees it in modes 2 and 3 before it is replaced is [TODO]
+  (a read of the paths from those modes to the four readers).
 - **Start effect** (`sacrificestartedeffect`, `Game::OnSacrificeStarted` S 005eae20) [known]: plays when the
   event's owner or target is the local player, or always when Lua `menu.showSacrificeEffect` (S 005d9550) asks;
   the picture is brought to the front, set to alpha 1, shown, and faded out over 1.1 s (linear). The callback
   S 005eb2e0 updates the minimap first (§3.8.5). A loaded game plays no start effect for the sacrifices its
   `PostLoad` restarts: the event (`ReattachSacrifices` S 00661e60 → `NotifySacrificeStarted` S 00531620) is raised
-  inside `BuildWorld` S 00784d40, before `Game::OnEnter` S 005eed00 sets the local player entry (Game +0xfff4),
+  inside `BuildWorld` S 00784d40 (`GameFile_FinishLoad` S 005aa1b0 → `PostLoad` S 005273d0 → S 0065f540), after
+  `BuildScene` S 007842e0 has registered the Game's callback face (Game +0x1c8, disassembly 0078432b..0078434e)
+  but before `Game::OnEnter` S 005eed00 sets the local player entry (Game +0xfff4; the constructor S 005ee5d0 and
+  `OnLeave` S 005eb030 null it),
   and `OnSacrificeStarted` returns while that entry is null; the minimap still receives it [known].
 - **Target chooser** (`sacrificetargetpanel`): opened by action 22 when the sacrifice needs a target. One
   button (clone of `entry`) per enemy player that is active, eligible and not yet eliminated
@@ -1620,7 +1670,9 @@ update.
   identical layouts needs at most two rows per tab.
 - **Opening**: a left click on an empty cell where something can be built (§3.5); the box is opened in
   "direct" mode with the clicked cell remembered. Help text: `!Infobox_Anchor_Help` (filter bit 0x10),
-  `!Infobox_Mine_Help` (bit 0x8), else `!Infobox_CreateBuilding_Help`.
+  `!Infobox_Mine_Help` (bit 0x8), else `!Infobox_CreateBuilding_Help` [known] `UpdateHelpText` S 00634a90. The
+  filter +0x1638 is the clicked cell's build flags, written only by `MenuSelection::BeginBuildPlacement` S 006176d0,
+  and 0 from the constructor (at 00634d6c), which gives the general key.
 - **Choosing** [known] S 006340b0: a click on a building button stores the type (+0x1630); a type id of 0 is
   ignored. In direct mode with the remembered cell (`MenuSelection +0x8c`) inside the map it sends **`0x20002`
   GE_Building_Create** (type, cell) immediately, sets mode 1 and resets the selection. With the direct flag clear
@@ -1707,7 +1759,8 @@ named only by code or not at all [known: string references]: `system` by `GetSys
 debug and editor overlays (for example S 006066d0, `InitWithFont` S 00763960) and the legacy `Edit` (S 00497710,
 which replaces it with `Subline_Garamond` at once); `editor` by `nMenu::Debug::OnShow` S 0060a340; `light_system`
 and `dark_system` by the preloads of S 005dda30 and the lobby (S 0042ac13); `gamertags_garamond` by the lobby
-avatars (`CGfxObjAvatar` S 005084b0); `mini` and `font_big_white` appear nowhere in `SADK.exe`; `title` occurs
+avatars (`CGfxObjAvatar` S 005084b0; only as the lower-case path `[data]\language\de\fonts\gamertags_garamond`,
+S 007e63dc, so a case-sensitive search for `Gamertags_Garamond` finds nothing); `mini` and `font_big_white` appear nowhere in `SADK.exe`; `title` occurs
 only as an object name. The page `title_00.tga` is the only
 24-bit page (no alpha); the other font pages are 32-bit [known: data].
 
@@ -1857,7 +1910,8 @@ with the lobby.
 | `menugameend.xml` | `menuGameEnd` (`wonTitle="!TitleWon"`, `wonDesc`, `reportTitle`, `reportDesc`, `defeatTitle`, `defeatDesc`) | end dialogs |
 | `menuLoading.xml`, `menucinematic.xml`, `menunetinfo.xml` | `menuLoading` (`tipOfTheDayCount="51"`, `loadingScreenCount="1"`, `loadingScreen0="ui_loadingscreen"`), `menucinematic`, `menuNetInfo` | loading panel, cinematic, net info |
 | `menumain.xml`, `menufreegame.xml`, `menuselectmapdialog.xml`, `menucampaign.xml`, `campaigns.xml`, `menusplash.xml`, `menusplash_dev.xml` | | front end (out of scope) |
-| `iconconfig.xml` | `IconConfig` | every icon is `<Name texture pos="x y" size="w h"/>`, e.g. `<Wood texture="ui_ingame" pos="8 712" size="40 40"/>`. Top-level groups read by S 00611320 [known]: `Goods`, `SmallGoods`, `SmallRedGoods` (for every good of the property database the child named like the good, spaces as `_`; 93 / 62 / 39 children shipped, the surplus ones such as `Food_Bav`, `Halberd0`, `Woodcutter` are not goods names; the name is not lower-cased, and `XmlDoc::FindChild` S 006e7980 takes the first child of equal length whose bytes match (`Mem_Compare3Way` S 00408080), so the lookup is case-sensitive [known]); `Goods/EmptyGood` and `Goods/ForesterTree` (fixed icons); `Sacrifices` (one child per sacrifice name, 47 shipped, e.g. `carrierSpeed`, texture `ui_buffs`; stored in the same map as the large good icons [inferred]); `Tactic/tactic0..2`; `BorderDist/dist0..2`; `Buildings` (one group for all tribes, 50 children: for every building of every tribe the child named like the building in lower case, spaces as `_`, e.g. `claymore_smithy`, texture `ui_buildings2008`, 56 × 56; a missing child prints `no building config for '<name>' found` and a default icon is stored); `GoodColors` (per good `color="r g b"`, 0..255, 36 shipped); `PlayerColors` (attributes `blue`, `red`, `green`, `yellow`, `white`, `black`, `magenta`, `grey`, each `r g b a` 0..1; the eight global player colours). In the data but not named in S 00611320: `Good_NotAvailable`, `Good_MovingToConstructionSite` ([TODO] reader not established; a string search for the two names settles it) |
+| `iconconfig.xml` | `IconConfig` | every icon is `<Name texture pos="x y" size="w h"/>`, e.g. `<Wood texture="ui_ingame" pos="8 712" size="40 40"/>`. Top-level groups read by S 00611320 [known]: `Goods`, `SmallGoods`, `SmallRedGoods` (for every good of the property database the child named like the good, spaces as `_`; 93 / 62 / 39 children shipped, the surplus ones such as `Food_Bav`, `Halberd0`, `Woodcutter` are not goods names; the name is not lower-cased, and `XmlDoc::FindChild` S 006e7980 takes the first child of equal length whose bytes match (`Mem_Compare3Way` S 00408080), so the lookup is case-sensitive [known]; the `Sacrifices` group uses the same
+`FindChild`; only the `Buildings` group lower-cases its names, `_strlwr_s`); `Goods/EmptyGood` and `Goods/ForesterTree` (fixed icons); `Sacrifices` (one child per sacrifice name, 47 shipped, e.g. `carrierSpeed`, texture `ui_buffs`; stored in the same map as the large good icons [inferred]); `Tactic/tactic0..2`; `BorderDist/dist0..2`; `Buildings` (one group for all tribes, 50 children: for every building of every tribe the child named like the building in lower case, spaces as `_`, e.g. `claymore_smithy`, texture `ui_buildings2008`, 56 × 56; a missing child prints `no building config for '<name>' found` and a default icon is stored); `GoodColors` (per good `color="r g b"`, 0..255, 36 shipped); `PlayerColors` (attributes `blue`, `red`, `green`, `yellow`, `white`, `black`, `magenta`, `grey`, each `r g b a` 0..1; the eight global player colours). In the data but not named in S 00611320: `Good_NotAvailable`, `Good_MovingToConstructionSite` ([TODO] reader not established; a string search for the two names settles it) |
 | `goodinfosets.xml` | `GoodSets` | `<Set name="constructionWares" tribe="Bavarian"><Good name="Wood"/>…`: four goods per set; five sets (`constructionWares`, `foodWares`, `minerWares`, `militaryWares`, `miscWares`) for each of `Bavarian`, `Egyptian`, `Scots`; only children named `Set` (any case) are read [known: data, S 0062a820] |
 | `mapSymbols.xml` | `mapSymbols` | `<symbol type="N" name texture mapping lifetime center>`: 0 Message, 1 Military, 2 Quest, 3 Ship, 4 Fight, 5 Chest; `lifetime` 100 for 0, 1, 5 and −1 (permanent) for 2, 3, 4, counted in menu updates, i.e. frames (§4); `center` (`2 3` everywhere) is in the data but not read by S 005f4c90, which reads `texture`, `name`, `mapping`, `lifetime` [known: data, S 005f5400, S 005f4c90] |
 | `cursors.xml` | `cursors` | §3.2.4 |

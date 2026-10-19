@@ -359,7 +359,10 @@ calls are made only while the script gate is set and the function exists
 
 **PictureButton draw** (vtable slot 1, S 004b3a60) [known]: the picture shape (+0x468, e.g. an action or
 sacrifice icon) is drawn first, then `Button::Draw` S 004afd10 draws the button's own shape (+0x198) with its
-state mapping, the children (`Object::Render`) and the caption. The state picture therefore lies over the icon.
+state mapping and then the caption. The state picture therefore lies over the icon. `Button::Draw` does not draw
+the children: `Object::RenderRecursive` S 004a1370 calls the draw slot (vtable slot 1) and only then each child's
+render in child order, so a button's child objects (the sacrifice button's fans and question mark) lie over its
+state picture and its caption.
 
 ### 3.5 Icon [known] S 004ce780, S 004ceaa0, S 004cf3a0
 
@@ -430,6 +433,13 @@ its tooltip, clears the `Edit` focus global; `uiClick0` only when focus changed)
 but ignores keys and characters. The focus global (S 00885ca8) is written only by `SetFocus` S 00498c60, the
 release S 004988f0 (Esc in `HandleKey`, `ClearInput` S 004abe00), the detach and parent-hidden handlers and Tab,
 so a click on another kind of widget (a list row) leaves the field focused [known].
+
+**Look** [known] `EditEx::Update` S 0049a090: the sprite's mapping follows the mouse state of the object's Focus
+(+0xf8), not the keyboard focus: state 0 → `mapping` (+0x268), 1 (hovered) → `mapping_cursorover` (+0x288),
+2 (left press, set by `Object::OnMouseButton0Down` S 004a0020) → `mapping_cursoroverandpressed` (+0x2a8); any
+other state keeps the last mapping. The copy runs only while the field is enabled and its parents pass
+`IsFlagE4SetInHierarchy`. `EditEx::Draw` S 0049ad00 only draws that sprite. In the shipped layouts the three
+mappings are equal, so nothing changes on screen.
 
 **Mouse** [known] S 0049b7b0, S 0049b9b0, S 0049bae0, S 0049a3a0: a press inside the text area sets the caret
 from the pixel and the selection length to 0. A plain press leaves no anchor (the anchor index ends at −1), so a
@@ -743,7 +753,8 @@ draw pass reads the live child vector, not a copy.
 The z-order is the sort key `+0x178` [known]: `InitAndAttachToParent` S 004a56d0 sets it to the parent's child
 count and appends the child, so the children stand in creation order; `SetSortKey` S 004a0ad0 writes it and, on a
 change, re-sorts the parent's vector (`SortChildren` S 004a0550: `qsort` ascending with `nUi_CompareBySortKey178`
-S 0049fe40; equal keys have no defined order). Events go the other way: `Object::DispatchEvent` S 004a07a0
+S 0049fe40; `qsort` is not stable, so siblings with equal keys need not keep their vector order: their order
+follows from the sort's code and the vector's order before the sort, not from the keys). Events go the other way: `Object::DispatchEvent` S 004a07a0
 offers an event to the children from the last to the first and stops at the first that returns 1; a return of 0
 lets it go on to the siblings and then to the ancestors' own handlers.
 
@@ -849,7 +860,7 @@ call [inferred]. A remake should give the flicker its own presentation-side gene
 | # | Question | Settled by |
 |---|---|---|
 | 1 | Answered (§3.4): yes, on every button whose owner handles clicks through `OnChildClicked` or an observer and never polls the latch. Example: the confirm and delete buttons of `nMenu::LoadSavePanel` (handler S 0060d430; its `Update` S 0060dd30 does not call the poll S 0049fdb0): after one click, a press on the button released outside it runs the click again. To see once: delete prompt answered No, then press Delete and release beside it | static: S 004aecf0, S 0049ff60, S 0049ff40, S 0049fdb0 (54 callers), S 0060d430 |
-| 2 | Classes not read here: `Listbox`, `Item`, `ComboBox`, `StackedSlider`, `Scroller`, `TextScroller`, `AlphaFanPicture`, `Bar`, `Chart`, `Dialog`, `Video`, `OverlayButton` hover fade | static read from the function reference of each (names index, namespace `nUi`) |
+| 2 | Classes not read here: `Listbox`, `Item`, `ComboBox`, `StackedSlider`, `Scroller`, `TextScroller`, `Bar`, `Chart`, `Dialog`, `Video`, `OverlayButton` hover fade | static read from the function reference of each (names index, namespace `nUi`) |
 | 3 | Who implements the inventory drag (ghost, drop) | cross-references to the `InventoryButton` observer lists |
 | 4 | Whether the last partial tile of a tiled nine-slice is squeezed or cropped; caret colour as seen | observation in the running game |
 | 5 | Stale glyph quad when a break candidate itself overflows a boxed line (§3.1) | observation in the running game with a narrow `wrapSize` |

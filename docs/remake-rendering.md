@@ -109,9 +109,10 @@ What the viewer had to get right beyond the formulas of the `sim/` documents:
   are lit with the mesh's own normal.
 - **Placement draws.** Yaw and scale of map objects come from one random generator in a fixed creation order
   (`rendering.md` §3.11); the viewer reproduces the first map after a start exactly.
-- **Map border.** Beyond the map the water's height overlay clamps to its edge column and stripes the water; the
-  reflection view draws neither the border skirt nor the water. The viewer gives the border water no mirror and the
-  opacity of deep water in every mode, so the border reads as black ground under a faint sheen.
+- **Map border.** The original draws no water beyond the map: water is only the per-block quads, the two
+  border-water techniques are never used, and beyond the edge lies the black skirt, under which the water of the
+  outermost blocks looks darker (`rendering.md` §3.5); the reflection view leaves the skirt out. Water drawn past the
+  edge would also stripe, since the height overlay clamps to its edge column there.
 - **The reflection view** is drawn only while a terrain block at or below the water level or with ice is in view.
   The ice adds its bump offset before the projective divide, so it grows as one over depth and, near the camera,
   reads past the picture's edge (the original's sampler clamps and smears). The viewer caps the offset below depth 20,

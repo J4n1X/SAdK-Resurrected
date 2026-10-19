@@ -258,7 +258,8 @@ is <= the amount, or -1 below the first. The lookup S 00556d70 does not handle a
 map find is dereferenced unchecked) [known]: it reaches the CRT's `_invalid_parameter_noinfo` S 006f2702, and with no
 handler installed (only the CRT start-up writes the handler slot S 0088f5c0) the process terminates. An amount below
 the first threshold gives −1, which `AddDoodadAtCell` S 00545150 hands on to `GetDoodadProperty` S 00547620; that
-ends the same way unless the doodad table has a key −1 [known].
+ends the same way unless the doodad table has a key −1 [known]; the shipped `doodads.lua` has no id `ffffffff`
+[known: data].
 
 **GameConfig** fields used here [known]: +0x08 border pattern (`cfg_setBorderPattern` S 0054c3b0), +0x1c fishing
 distance (`cfg_setFishingDistance` S 0054c300), +0x40 maximum water depth for water streets

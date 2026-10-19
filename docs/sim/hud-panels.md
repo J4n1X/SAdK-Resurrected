@@ -348,7 +348,7 @@ drawn.
    - colour = the entry of the RGBA table at S 0087f8c8 (16 bytes per entry) selected by the player's
      `colorIndex` (`Table_0087f8c8_GetEntryForPlayer` S 0060ee20), written to all four colour floats; the table
      is the UI player colour table that `IconConfig::LoadFromXml` S 00611320 fills from `iconconfig.xml`
-     `<PlayerColors>`, not the `menu.cfg` table `g_PlayerColors` of the flags and the minimap, and its values
+     `<PlayerColors>`, not the `menu.cfg` table `g_PlayerColors` S 0087ead8 of the flags and the minimap, and its values
      differ from those [known]; it
      replaces the colours of the XML children `graph0..7`.
 3. `yScale = 1 / max`, with `max = 1` when it is 0. One maximum is shared by all shown players.
@@ -473,7 +473,9 @@ means nearest to the map origin.
   returns the tribe's set with that index and falls back to the first set.
 - Per frame (`GoodInfo::Refresh` S 006460d0), for an entry with a good: the icon from the `IconConfig` group
   `SmallGoods` of `iconconfig.xml` (the map at `IconConfig +0x28`, filled by `IconConfig::LoadFromXml`
-  S 00611320; the picture is hidden when the map has no entry for the good); the text
+  S 00611320, keyed by good id; the element is the good's name with spaces as `_`, not lower-cased, found by
+  `XmlDoc::FindChild` S 006e7980, a case-sensitive exact-length byte compare, [ingame-ui.md](ingame-ui.md) §5;
+  the picture is hidden (vtable +0x28) when the map has no entry for the good); the text
   `"<amount> / <delta>"` with `+` before a positive delta; the colour
   `textColRed` when `amount < -delta`, else `textColGreen` (`textColOrange` is loaded but not used); the
   tooltip is kind 2 with the good's `name` as description and the good id as source (§3.4, S 00645e90). An
@@ -491,7 +493,9 @@ if good == tribe.workerToolGoodId:                       # TribeProperty +0xbc
             delta -= 1
 for each entry of the transport system's list (+0x448 .. +0x44c) owned by the player with entry[+0x48] == good:
     if the entry's target id (+0x18 / +0x1c) is negative, or the target building's property is not a depot:
-        delta -= 1
+        delta -= 1          # disassembly 00533d7b..00533da2: the need's building reference (+0x08 handle at
+                            # +0x18/+0x1c) is invalid (a ship need), or BuildingProperty +0x54 == 0; +0x54 is
+                            # `depot`, written only by the Lua binding bp_setDepot S 0054d320
 for each building of the player:
     if property.HasGoods(0) and property.GetGoods(0)[0] == good and building.workers.count > 0
        and worker 0's IsInWorkCycle() (virtual slot +0x28, S 0065c7d0):
@@ -748,7 +752,10 @@ is negative ([inferred] no delivery assigned) and whose good is not in the input
 `SmallRedGoods` icon (map at +0x34), fallback the empty-good icon. Placement: `SetRelativePosition(StartPos)`,
 `SetOffset(StartPos + i × Offset)`, `SetAlignX(AlignX)`, with the construction layout while under
 construction, else the production layout (not a casern) or the casern layout; `Offset` and `StartPos` are XML
-pixels converted to fractions at load.
+pixels converted to fractions at load. `AlignX` is a deployment alignment (none, left, center, right = 0..3,
+[ingame-ui.md](ingame-ui.md) §2.2): x follows it (`ApplyAlignment` S 004bc0b0: left = offset, center =
+(parent width − width) × 0.5 + offset, right = parent width − width + offset), while `goodIcon` has no `aligny`,
+so y stays `StartPos.y`; the icons' parent is `labelBG` (S 0063f550) [known] S 0063fd10, S 004bcb80.
 
 **Pulse** (S 0063f550, `AnimationAlphaPulse::Update` S 00763510): each `goodIcon` owns an alpha pulse with
 min 0.8 and max 1.0, not recursive, frequency `1 + ((rand() & 63) − 32) × 0.03125 × 0.1` (0.9 to about

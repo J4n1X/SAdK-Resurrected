@@ -411,7 +411,9 @@ else. Otherwise [known]:
       order container `Building+0xcc`, the orders §3.2 counts as `pending`): `unconnectedTicks += 1`; whenever the
       counter is a multiple of 600 (it starts at 500 and is never reset, so first after 100 such ticks, then
       every 600), if `OrderSystem::GetSupplyStatus` for the first open order says 1 ("nothing reachable",
-      S 00562820, `village-buildings.md` §3.12 [known]), post or refresh the message `!Building is not connected` to the owner.
+      S 00562820, `village-buildings.md` §3.12 [known]; asked for the order's good, order +0x48, at the cell one
+      step in direction 1 from the building's cell, `MapPos_StepDir1` S 0052d8e0 at 00560b51, i.e. the
+      entrance flag cell [known]), post or refresh the message `!Building is not connected` to the owner.
 
 A soldier is **idle in the building** (`IsIdleInBuilding` S 00659060) when it has a home, is not moving, stands
 on the home's door cell (`Building+0xf8`), is in no fight, and has no order building, no paired soldier and no
@@ -612,6 +614,25 @@ re-read for this document; the statements there hold. Additions and corrections:
 S 00576500); it is passed to every harbour lookup below and lets a ship with an active mission count as ready
 (`../navy-and-military.md` §5.1) [known].
 
+**Attack availability** (`Attack::GetAttackAvailability(target, player, persistentCache)` S 005759f0) [known]:
+7 while the player is in peace time; else by the target state (`GetAttackTargetState` S 0055fd90) 1 → 5, 2 → 1,
+3 → 6, 4 → 3, 5 → 7; else, with enemy territory in range (`Military_IsEnemyTerritoryInRange`), 0 when
+`Military_CountAttackersByKind` at scale 1.0 without the availability test counts any soldier, else 8; otherwise
+the harbour test (`Military_IsHarborWithinBuildingRange` S 00574f70, reason preset 4): in range → 1, else reason
+1 → 2, 3 → 4, 2 and 4 → 1, any other → 0. `Military_IsAttackAvailable` S 00575b50 is this value = 0.
+
+**Attackers per soldier kind** (`Military_CountAttackersByKind(target, player, persistentCache, scale, out,
+checkAvailability)` S 00575fd0) [known]: with `checkAvailability`, a non-zero availability returns at once and
+leaves `out` untouched (the callers zero it). Otherwise, for every territory building of the village in list order
+whose owner is the player, `trunc(GetAvailableAttackers(target, building, persistentCache) × scale + 0.5)`
+(S 00576060, the same single-precision sequence as the dispatch of step 3, so the attack slider shows what an
+attack sends) is added to `out[kind]`, the kind being the building's military component `+0x68`; the index is not
+checked (S 0057607c). Callers: `GetAttackAvailability` (at S 00575b06, scale 1.0, no availability test, its own
+`persistentCache`), the attack slider's `UpdateLabels` S 006247a0 (twice, `persistentCache = 0`, with the test; the
+menu's other military queries pass 0 as well, S 00623f37, S 00623f50, S 0062473f) and the computer player's
+`AiAttack_ScoreAttackersVsFightHistory` S 0059e930 (at S 0059e99d: `persistentCache = 1`, scale 1.0, with the test;
+[ai-player.md](ai-player.md)), so the computer player's counts go through the persistent path cache.
+
 **Soldiers one building can send** (`GetAvailableAttackers(target, building, persistentCache)` S 00575dc0)
 [known]:
 
@@ -777,7 +798,12 @@ this runs from the military component's destructor inside `Building::dtor` S 005
 S 005606f0, after the territory updater's), while the building object still exists, so the phase is still
 Fighting [known]. The component destructors that run between the AI notification and the military one (depot,
 construction, workers, production, settler spawn, territory updater, bulldozing) read no military, fight or
-garrison state [known] S 0055af70, S 0055e8c0, S 0055b620, S 00565270.
+garrison state [known] S 0055af70, S 0055e8c0, S 0055b620, S 00565270; the AI's `OnBuildingRemoved` S 005836d0
+reads no projectile state, and the military destructor reads none of their state either: it unlinks the fight
+(S 0053cf80), the attackers and defenders (S 0053d1e0 / S 0053d180, references only), clears the order slots
+(S 005689f0) and releases the garrison (`Soldiers::dtor` S 005666c0 → `ReleaseAll` S 005665f0), so the order of
+these destructors is not observable [known]. Under batch editing `ReleaseAll` removes the garrison soldiers
+(`NSettlers::System::RemoveSettler`) instead of unlinking them (`map-editor-devtools.md`) [known] S 005665f0.
 
 **Gathering positions** (S 00576fb0, S 00576d00) [known; summary in `../navy-and-military.md` §4]: `r` =
 smallest `bowRange` among the bow soldiers of both sides (0x7fffffff if none). Every distance below is measured

@@ -277,6 +277,11 @@ How the presentation uses these facilities [draft; suggestions forwarded by the 
     resumes a paused game's effects as `nMenu::Game::OnLeave` S 005eb030 does and changes only the match that holds
     the audio. `PlaceEmitters` takes the ambient emitters as data; core.game converts the map's ambient records
     (`Ambients::PostLoad` S 005366f0) into it and keeps its own data (`audio/music.xml`) and world-sound code.
+    `GameMusicState` is made per match, so its `TribeTracksAdded` flags start clear in every match; the original's
+    object lives for the whole process and never clears them (RE [audio.md](../sim/audio.md) §7 [known]), so from
+    a second match on it keeps a tribe seen earlier out of the rotation. The per-match reset is a fix of that
+    presentation-only bug; a faithful mode keeps the flags for the process (`GameMusic_Init` S 0078c2b0 still adds
+    the local tribe every match).
   - **World sounds** [implemented, sadk-remake b4dbe0c]: the effect API `IEffectSounds` (`Play3D`, `StopSourceSound`,
     sources released with their owner); the sounds the original names as code constants (doors, collapse, steps,
     catapult shot, tree fall) are a moddable document (`audio/world.xml`) keyed by registry key; clip `<Sound>`

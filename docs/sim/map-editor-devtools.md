@@ -318,8 +318,9 @@ flag is set [known]:
   S 006662f0); a destroyed street deletes its carrier instead of releasing it (`Street` destructor S 00669210);
   a flag placed on an existing street starts the two halves with an empty carrier reference instead of the
   old street's carrier (`NNet::System::PlaceFlag` S 00666900) [inferred for the last];
-- `NNavy::Construction::SetBuildPosition` S 005ba640 zeroes both remaining-work values, so a ship-building site
-  yields a finished ship at once ([navy.md](navy.md) §3.2);
+- `NNavy::Construction::SetBuildPosition` S 005ba640 would zero both remaining-work values of a ship, but no
+  shipped caller reaches it under the flag: a ship-building site placed with the flag set is completed at
+  placement, no constructor comes and no ship is ever made ([navy.md](navy.md) §3.2) [known];
 - `NResources::System::Update` S 00540340 skips its animal pass and `S2CG::Scene::Update` S 006805e0 passes no
   local player to its visibility step [inferred: one layer read; neither runs a tick while the flag is set].
 

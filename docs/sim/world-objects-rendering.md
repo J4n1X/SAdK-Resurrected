@@ -354,7 +354,10 @@ attribute whose name starts with `offset` gives the next offset (3 floats, in at
 whose name starts with `good` binds every good whose property name equals the value to this layout. The table
 holds `count + 1` layouts (`count` attribute of `<StackLayouts>`); the loader does not compare the number of
 children with `count`. `distance` is the `distance` attribute. Install: `count="2" distance="0.5"` [known]
-`items.xml`.
+`items.xml`. Every entry of the table is constructed by `ItemPileSlotOffsets_ctor` S 006d0c70 (vector-constructed
+for all `count + 1` entries), which stores 0.0 in all 18 floats (`FLDZ`, then `FST` / `FSTP` to +0x00..+0x44); so
+the offsets a child does not give, and layouts announced by `count` that no child fills, stay `(0, 0, 0)` [known]
+S 006d0c70, S 006d0eb0.
 
 Limits of the loaders [known] S 0069d650, S 006d0eb0, S 006d0d80: the offsets of a layout are written without
 a bound check, so a seventh and later `offset*` attribute overwrites the next layout's offsets (a layout is
@@ -410,8 +413,9 @@ returned by the pile in `Item +0x70` and, when the item has a carrying character
 S 006d0950), write it to the character (`CCharacter +0x98`, with the flag `+0x94` = true); an item added
 without a carrier takes its slot matrix at once; `UpdateCarrierAttachment` S 006d09b0 hands the direction over
 the same way when a carrier claims a lying item (§3.3) [known]. `CCharacter::UpdateLogic` S 006909f0 copies
-that direction into the character's yaw only while the character plays a clip of type 7 or 8 [known]: so the
-carrier faces the stack it picks from or puts on during those clips. Presentation only.
+that direction into the movement's target yaw (`+0xe8`, snap flag `+0x108` cleared) only while the character plays
+a clip of type 7 or 8, and clears the latch [known]: so the carrier turns toward the stack it picks from or puts on
+at the turn rate of [animation-models.md](animation-models.md) §3.19 during those clips. Presentation only.
 
 ### 3.3 Goods in hands, on ships, on building sites
 
@@ -776,7 +780,12 @@ the decal pass with cull mode 1 (`docs/sim/rendering.md` §3.1).
   the building's bounds (`Bounds_GetCenterAndMaxXZExtent` S 006b0bc0: `r` = the larger of the x and z sizes of
   its box); `r` defaults to 1. `r` is the full side of the square (`BuildVertices` S 004efe20); a flag, a street
   cell and a clicked cell get 4 (`PushSelectionToScene` S 00615bb0). Styles: 1 `buildingselect.dds`, 2
-  `catapultTarget.dds` (an enemy building) ([rendering.md](rendering.md) §3.14). Projection straight down;
+  `catapultTarget.dds` (an enemy building) ([rendering.md](rendering.md) §3.14). Projection straight down: the
+  normal is `g_DefaultMeshNormal` (0, 1, 0) (S 00882864) and the start axis `g_Vec3_UnitX` (S 00882858), so
+  `SetOrientation` takes the rotation-about-Y branch (S 004efa20): uAxis = (cos θ, 0, −sin θ), vAxis = uAxis × normal
+  = (sin θ, 0, cos θ); u = dot(p − c, uAxis) / r + 0.5, v = 0.5 − dot(p − c, vAxis) / r, so at θ = 0 the texture's
+  v grows toward −z. The footprint is the turned square, cut by the four side planes (clip = 1) [known] S 004efb60,
+  S 004efa20, S 004efe20;
   rotation `angle = timeInfo[1] * 0.025132744` radians (one turn per 250 s of game time: `timeInfo[1]` is the
   scene's accumulated simulation time, [rendering.md](rendering.md) §3.14), 0 without a time argument.
 - Settler blob [known] S 00690bd0: exists only while the global S 0088d6bc is set (shadow level 1 to 3,

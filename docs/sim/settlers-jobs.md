@@ -504,6 +504,9 @@ ship's cargo list; then the movies and the base); `Worker` removes itself from i
 S 0065afb0). A `Constructor` unlinks the ship it builds through `NavyLink_UnlinkShipConstructor` S 0053c360 (clears
 `ship->construction +8` and `constructor +0x120`) from its destructor S 0065e600 and from `Constructor::Update`
 S 0065ea20 when it has no site; `Construction::dtor` and `UpdateShipConstruction` call it too. **[known]**
+S 0053c360 resolves the ship without a null test, but a builder's ship reference never outlives the ship: the
+ship's construction destructor `NNavy::Construction::dtor` S 005ba590 calls it for a valid constructor reference
+and so clears the builder's +0x120. **[known]**
 
 ### 3.4 Going home (`NMovie::LeaveMap`, state 3)
 
@@ -809,7 +812,9 @@ S 005e4e90), so step 7 lasts exactly one tick.
   searchers is in [`map-resources.md`](map-resources.md).
 - When the animation ends, by working mode:
   - 0: if the deposit property has a product pattern list (`+0x5c`), set the cell pattern at the deposit position
-    to entry `LogicRandom % count`; then reset the deposit amount from its property.
+    to entry `LogicRandom % count` (a signed `IDIV`, at 0077ec58 and 0077ecbf; `LogicRandom_Next` stays below
+    2^31, so it equals the unsigned remainder), set without deferral (`deferNotify = 0` pushed at 0077ec6c and
+    0077ecd3, `map-resources.md` §3.4); then reset the deposit amount from its property.
   - 1: unlink the deposit from the building and harvest it (`NResources::System::HarvestDepositAt`).
   - 2: if the deposit `IsAvailable()`: unlink and harvest it; otherwise as mode 0.
   - 3: if the building holds a field connection (`building +0x90`, cell `+0x94/+0x98`, `+0x94 != -1`):
@@ -984,7 +989,11 @@ finished.
 
 `Worker::GetWorkProgress` (S 0065ce80) derives a 0..1 UI value from state and step (gather step 8/9/10 → 0.1 /
 0.2 / 0.5, times 0.75; bringing home adds the last quarter; production = elapsed / total). Presentation only.
-**[known]**
+**[known]** It reads the workplace without a test, but a worker without a workplace never reaches it: its only
+caller chain is `InfoBoxProduction::Update` S 00635c50 → `Production::IsWorkerInWorkCycle` S 00565740 (needs
+`HasWorkers`) → `Production::GetWorkProgress` S 00565770 with `workers[0]`, and a worker's list entry and its
+workplace reference are set and cleared together (`VillageLink_LinkWorker` S 0053c410, `UnlinkWorker`
+S 0053c440). **[known]**
 
 ### 3.6 Carrier
 

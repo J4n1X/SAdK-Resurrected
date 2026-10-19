@@ -551,8 +551,11 @@ count × { i32 type ; Cell cell }          24 bytes each, no per-element header
 
 `NLogic::Ambient::Store` 00536460. ship_ahoi: 8 entries, e.g. type 0x623437d3 at (41,72) (bytes at
 0x21bc3b). All 167 ambient types in the samples are `ambient_*` sound ids from `sounds.lua`
-(`sn_create`). Meaning "ambient sound emitter" is `[inferred]`; the consumer was not traced past
-`Ambients::PostLoad` 005366f0.
+(`sn_create`). Each record is an ambient sound emitter at the cell's centre, height 0: `Ambients::PostLoad`
+005366f0 hands every record to the `nGame::Sound` observer, whose slot 0 `Sound_AddEmitterAtCell` 0078c320
+calls `SoundEmitterManager::AddEmitter` `[known]` (`sim/audio.md` §3.10). 14 of the 20 installed free-game maps
+carry records (MP_2P_thick_grove 6); MP_2P_steinfjord has none `[known]` (the maps' sections as read by the
+remake's map loader).
 
 ### 4.15 Navy System (v3) — ship_ahoi 0x21bcfb
 
@@ -754,7 +757,7 @@ stale cells, §8).
 |---|---|
 | A harbor in a map is **not a building**. It is a *harbor place*: a record in `Navy System` → `Navy Harbors`. No sample contains a `VillageBuilding`, and `buildings.lua` defines no harbor building. | tag scan; `hb_buildings.lua` |
 | The harbor becomes active when a player places a **flag exactly on the harbor cell**: `Logic_PlaceFlag` 00538cd0 → `ai::navy::HarborList::FindAtPos` 005b5d20 (exact x,y match) → `ai::navy::Harbor::AttachFlag` 005b49f0. | code |
-| The visible harbor model `z_harbor_00` is spawned from the Navy record at PostLoad (`S2CG::Scene::OnHarborCreated` 00682ec0 via `NotifyNavy_Slot88`). A correct record is what makes the harbor visible. | code |
+| The harbor place's map object `z_harbor_00` (`type="harbor"`, `meshType="none"`: no model) is spawned from the Navy record at PostLoad (`S2CG::Scene::OnHarborCreated` 00682ec0 via `NotifyNavy_Slot88`); what shows is its ground plot, the `GROUND` decal of `Harbour_decal.KEX` that `Harborplace::ctor` 006db7a0 lays at every harbor place, owned or not (`docs/sim/rendering.md` §3.11). A correct record is what makes the harbor visible. | code |
 | **Ship routes are stored in the map, never computed by the game.** The only creator is the built-in editor tool (`DebugShipRouteTool_*` 0078d7c0..0078d960 → `ai::navy::ShipRouteList::Create` 005b7990). | code |
 | **Nothing about harbors is recomputed at load**: no exits, no grid bits, no validation (`NNavy::System::Load` 005b4650 uses default ctors; `ai::navy::Harbor::CreateExits` is not called). | code |
 | Ships are built only at the shipyard, which needs **ship ground** (pattern 0xdecade01 → bit 0x20000) (§6.6). | code + data |

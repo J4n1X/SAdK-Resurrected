@@ -614,7 +614,7 @@ minimised or the device is lost. The graphics device sees every message first. T
 | Message | UI event (type, arg) | Notes |
 |---|---|---|
 | `WM_MOUSEMOVE` | 3 (x, y) | updates `nUi::Cursor` from pixels |
-| `WM_L/R/MBUTTONDOWN` | 0, button 0 / 1 / 2 | the cursor position is set from the message first |
+| `WM_L/R/MBUTTONDOWN` | 0, button 0 / 1 / 2 | the cursor position is set from the message first; the UI's result is discarded and the active `nUi::GameAction` map always receives the button (e.g. `WM_RBUTTONDOWN` 0x204: vtable +0x18 (2, 1) → `BaseAction::OnKeyEvent` S 00490f50 sets `keyState[VK_RBUTTON]`), so a press on a widget still reaches the action map [known] |
 | `WM_L/R/MBUTTONUP` | 2, button | |
 | `WM_L/R/MBUTTONDBLCLK` | 1, button | |
 | `WM_XBUTTONDOWN/UP` | 0 / 2, button 3 or 4 | `WM_XBUTTONDBLCLK` is handled like the up message |
