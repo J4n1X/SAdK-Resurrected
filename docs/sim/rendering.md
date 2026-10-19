@@ -994,7 +994,8 @@ colorMapOffset = (instanceId mod numVariations) * (1 / numVariations)      // un
 (`Building +0x10`): a removed building's slot goes to a free list, and a new building takes the slot freed last,
 else a new slot at the end (S 006a2bf0, S 006a17a0). The index thus follows the creation order of the session
 and is no logic value. An upgrade's completion removes and re-adds the building (§3.2) and so keeps the slot and
-the variation [inferred: LIFO free list, `HandlePool_Free` not read]. (The object created in S 006ac810 and
+the variation [known: `HandlePool_Free` S 0076b180 pushes the freed slot on top of the free stack, and
+`AddBuilding` S 006a2bf0 pops the top, else appends `count + 1`]. (The object created in S 006ac810 and
 named "variant" is the LOD mesh's bone binding, rebuilt by S 006aa9d0 when the LOD changes; the LOD index at
 `Building +0x38`.)
 
@@ -1120,6 +1121,12 @@ are loaded once per file (`GetOrLoadMesh` S 006b4240) and removed with `RemoveDe
    takes part, and `FindTriangleAt` S 00687a70 tests only the wedge of the vertex's fan (tables S 00881478,
    S 008814b0), not the far edge; `VertexToWorldPos` S 00687500.
 4. All of it runs at the x87's 24-bit precision (S 0057b9b0).
+5. *Normals.* The decal vertices carry the `GROUND` mesh's own normals (`g_DefaultMeshNormal` S 00882864 when it has
+   none), turned by the upper 3 × 3 of the world matrix without renormalising (`TriangleList::AddMeshTransformed`
+   S 0076e530) and interpolated by the clip like the positions; the terrain normal is never fetched
+   (`SampleHeightAndNormal` is called with a null normal at 006da414). In `ClipByPlanes` the second interpolation
+   factor is clamped to 0, not 1, when it is ≥ 1, and a vertex counts as behind a plane when its distance is
+   ≤ −0.0001.
 
 Consequence [known: the algorithm; measured on a port of it]: a decal on a slope, and any decal mesh above or below
 the local ground, does not tile: pieces spanning a crease dip below the terrain and pieces overlap, so the original

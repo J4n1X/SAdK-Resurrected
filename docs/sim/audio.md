@@ -381,7 +381,8 @@ system test S 00711028 succeeds. Not read: what FMOD does with a negative volume
 `UiSoundPlayer::Play(soundPropId)` S 0056f700 [known]:
 
 1. For each channel in the player's list whose FMOD play position (`FSOUND_GetCurrentPosition`) is still 0
-   (started and not yet mixed; in practice started in the same frame [inferred]) and that maps back to a sample
+   (started and not yet mixed; in practice started in the same frame [inferred]; the position is FMOD's, decided
+   inside fmod.dll, so only a running game settles it) and that maps back to a sample
    entry: if that channel's sound has
    `priority >= ` the new sound's priority, **return without playing**; otherwise stop that channel and remove
    it from the list.

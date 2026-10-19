@@ -577,7 +577,10 @@ position, normal up, uv (0.5, 0.5). Vertices 1..6 = the node's corners `k` = 0..
 `corner[k] = position + crossingRadius * (sin a, 0, cos a)`, `a` = 60, 120, 180, 240, 300, 360 degrees
 [known] S 006d1670, initialiser S 007cafc0 with its constants; each corner is snapped to the terrain height
 with the terrain normal, except in a direction that holds a water street, where the corner keeps the centre's
-height [known] S 006d1310 (`StreetFlagNode::GetCornerPoint`);
+height [known] S 006d1310 (`StreetFlagNode::GetCornerPoint`). The water corner returns before the sample, so its
+normal slot is not written: it keeps the previous land corner's normal, and a water corner before the first land
+corner keeps whatever the stack holds [known] S 006de590, S 006d1310; a land corner's normal is the plane normal of
+the terrain triangle under it (S 00687e60);
 `uv = ((corner.x - centre.x) / radius * 0.5 + 0.5, (corner.z - centre.z) / radius * 0.5 + 0.5)`. All tangents are
 unit X, all colours white. Triangles: (0,2,1) (0,3,2) (0,4,3) (0,5,4) (0,6,5) (0,1,6). The crossing is a flat
 hexagon fan, not clipped to the terrain triangles. It is rebuilt when a street is attached or detached and when

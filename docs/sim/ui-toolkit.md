@@ -204,8 +204,9 @@ which is transparent in the shipped pages; a clamping sampler would repeat the e
   new line and its advance is not added to lineWidth. Otherwise lineWidth = lineWidth'.
 - Layout stops, without writing the results back, when the line top is below draw y + maxHeight × sy.
 - **A line feed does not force a new line** in `nUi::Text`; it is only a break candidate.
-- Horizontal alignment uses the width of the whole string, not of each line, so wrapped text is positioned
-  correctly only with `align="left"` [inferred from step 2].
+- Horizontal alignment uses the width of the whole string, not of each line: a centred or right-aligned wrapped
+  text starts every line at draw x − whole width × 0.5 (or × 1), so wrapped text is positioned correctly only with
+  `align="left"` [known] S 004e2c60.
 - Results written back: the widest line, max over placed glyphs of trunc(lineWidth + 0.5), and the total
   height, which starts at the unscaled lineHeight.
 
