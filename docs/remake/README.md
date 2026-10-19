@@ -68,16 +68,17 @@ Sadk.Game (the executable)          Sadk.Headless (conversion, validation, repla
 
 The proposals that change direction or cost real work, bundled:
 
-1. **No unloading of mods.** A different simulation mod set restarts the game into it, landing back in the lobby
-   room, match or save; today's sadkmod design unloads per match ([mods.md](mods.md) §9.3).
+1. **Changing the mod set** — decided 2026-10-15: the set is unloaded in the process, with a leak check, instead of
+   restarting the game into the new set ([mods.md](mods.md) §9.3).
 2. **The Lua package** — decided 2026-10-15: MoonSharp in a fork of our own ([lua.md](lua.md) §2.1).
 3. **Scripted maps in compatibility-mode matches with original clients**: run them without `logic` as a fresh
    original process does, or refuse them ([lua.md](lua.md) §4.5).
 4. **End of a cinematic in a remake multiplayer match**: when every peer has finished it, or for everyone when the
    first does ([sim-boundary.md](sim-boundary.md) §11).
-5. **`refined` as a simulation mod shipped with the game**: refined mode = `{core.game, refined}`, compatibility mode
-   = `{core.game}`
-   ([mods.md](mods.md) §9.4).
+5. **`refined` as a simulation mod shipped with the game** — decided 2026-10-18: `refined` is a simulation mod shipped
+   with the game and enabled on the mods screen. Its fixes are game rules wrapping core.game's, each switchable as a
+   mod setting. Compatibility mode = `{core.game}`, or refined with every fix off ([mods.md](mods.md) §9.4, §14
+   item 7).
 6. **Data-stage formats**: C# and Lua only in the first version ([mods.md](mods.md) §6.3).
 7. **DXT1 textures with one-bit alpha** — decided 2026-10-15: transcoded to BC3 (twice the size of BC1) instead of
    decoded to RGBA8 (eight times) ([assets.md](assets.md) §6.2).

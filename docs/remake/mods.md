@@ -64,7 +64,7 @@ The core mods (§11a) are ordinary mods with this layout that ship with the game
 [implemented 2026-10-15]. `core.game`'s
 `assets/` will hold the remake's own files (shaders, the remake's layouts and UI parts); the content converted from
 the player's installation is mounted below all mods as a layer of its own (assets.md §5.1). `refined`, a mod that
-ships with the game as well, carries the refined mode's simulation fixes (§9.4).
+ships with the game as well, carries the refined mode's simulation fixes as game rules (§9.4, §14 item 7).
 
 ## 3. Manifest (`mod.xml`) [draft]
 
@@ -126,8 +126,8 @@ problem on the mods screen; the other mods stay usable.
 2. Sort topologically: every `Requires` and every present `Optional` dependency comes before the dependent mod.
    Ties are broken by the ordinal order of the ids, so every machine computes the same order from the same set. A
    cycle stops with a message listing it.
-3. `refined`, when active, comes before every mod that is not one of its own dependencies (so right after
-   `core.game`). [implemented]
+3. No mod is ordered by its id; a mod that builds on another's rules (§14 item 7) names it as a dependency.
+   [implemented]
 
 This one order is used everywhere a mod's position matters: the data stages, the order in which Harmony patches are
 applied, the virtual file system's layers (a later mod's file shadows an earlier one's), the merge and patch order
@@ -165,8 +165,55 @@ Each mod declares its settings in C# (`ISettingsStage`) or in `data/settings.lua
 | `user` | presentation and input only | local; never read by simulation code |
 
 `user` settings may change while the game runs and announce the change; their values are kept in the profile as
-`<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The Options screen's Mods tab shows
-them, labelled by the text key `!<mod id>.<name>`.
+`<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The options panel shows them in one
+group per mod (below), labelled by the text key `!<mod id>.<name>`. Startup settings are shown in the same group
+after the user settings, under the note `!engine.options.mods.startup`; a change is kept in the profile and applies
+when the mods load again (Apply on the mods screen, or a restart). Game rules may be switched by a bool startup
+setting (§14 item 7). [implemented, sadk-remake cc7eb02]
+
+Declarations are validated: `Choice(...)` and ranged `Int`/`Float`; `SetPending`/`NextValue` hold a startup
+setting's next value; `TitleOf` gives the owning mod's title for the panel's group. [implemented with the options
+panel]
+
+**Engine settings and mod settings** [rule, implemented with the options panel]. A setting lives with the code that
+reads it. What is not specific to the game is an engine setting, stored in its own element of `settings.xml`; what
+only a core mod's code reads is that mod's setting, stored in the profile like any mod's:
+
+| Setting | Lives in | Why |
+|---|---|---|
+| resolution, display mode, screen, V-Sync, frame limit | engine `WindowSettings` | not game-specific |
+| the original's eight graphics values and every renderer setting | engine `RenderSettings` | the renderer is engine code ([renderer.md](renderer.md) §19) |
+| the four volumes, ambience, voice, mute in background | engine `AudioSettings` | audio buses (the match's audio is engine code) |
+| language, interface font | engine (`settings.xml` language, `InterfaceSettings`) | generic UI |
+| key bindings | engine `InputSettings` | generic input |
+| connection type | engine `NetworkSettings` | the session code is the engine's |
+| scroll speed, invert scrolling, edge scrolling, invert mouse, camera style | `core.game` | the match camera is core.game's |
+| smart cursor, pause band | `core.game` | only core.game's action panel, message boxes and pause panel read them |
+| autosave interval | `core.game` | core.game's match saving |
+| the six lobby options | `core.game` | the original's 3D lobby belongs to this game; stored only |
+| `refined.fieldBlessing`, `refined.groupedGoods` | `refined`, startup scope | that mod's rules |
+
+**The options panel** is `core.game.options` (`engine.options` is routed to it), built from the original's
+`menuoptions.xml`. The original's six groups keep their order, controls and places; each of the remake's groups sits
+right after the original group it belongs with:
+
+| Order | Group | Origin |
+|---|---|---|
+| 1 | VIDEO | original |
+| 2–5 | WINDOW, GRAPHICS, SHADOWS, QUALITY | remake |
+| 6 | VIDEO LOBBY | original |
+| 7 | AUDIO: the original's four sliders, then ambience, voice and mute in background | original + remake |
+| 8 | INPUT | original |
+| 9 | KEYS | remake |
+| 10 | GAME | original |
+| 11 | INTERFACE (language, font) | remake |
+| 12 | NETWORK | original |
+| 13 | one group per mod in load order: user settings, then startup settings | remake |
+
+A setting an original control already shows is not repeated. The content scrolls inside the frame; scrolled to the
+top it is the original's page. Every change applies at once, with no apply or cancel button; showing a value never
+writes it back (the original's `LoadOptionValue` S 005e55b0 snaps slider values when the panel opens, a menu bug
+not reproduced). Refined or faithful is not an option: it is the mod set (§9.4).
 
 ### 6.3 Data stage [draft]
 
@@ -480,9 +527,14 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   the original's tick by tick. Talking to original clients additionally needs the original's build checksum of the
   installation's `scripts\**\*.lua` and `settings\**\*.xml` (`../data-loading.md` §3), which the remake computes
   from the same installation.
-- **Refined mode** is `{core.game, refined}`: `refined` is a simulation mod shipped with the game, holding the fixes of the original's
-  simulation bugs (the navalcombatfix rules and their successors). Presentation refinements are not part of it:
-  they are switches ([binding] rendering §2.3).
+- **Refined mode** is `{core.game, refined}`. `refined` is a code mod shipped with the game, off by default and
+  enabled on the mods screen. Its fixes are implementations of game rules (§14 item 7) that wrap core.game's, each
+  switched by a startup setting of its own (on by default, in refined's group of the options panel, §6.2):
+  `refined.fieldBlessing` (the Blessing of the bountiful fields doubles every farm's grain, not only `corn`) and
+  `refined.groupedGoods` (a need whose building type is no entry of the good's group is admitted, so olympic flames
+  receive grouped goods). With every switch off
+  the rule set is core.game's and the match hashes as compatibility mode. Presentation refinements are not part of
+  it: they stay switches ([binding] rendering §2.3). [implemented, sadk-remake cc7eb02]
 - Further simulation mods turn a match into a modded match; it can still be refined or not.
 
 ## 10. Saves and mods [draft]
@@ -710,7 +762,8 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
 2. Decided 2026-10-15: C# and Lua (the original `properties.*` API and a `registry` view) for registry entries,
    no XML/JSON definitions in the first version (§6.3); answers [binding] §13 item 1.
 3. XML for manifests and every patchable presentation document; JSON only for machine-written files (§3).
-4. `refined` as a built-in simulation mod (§9.4).
+4. Decided 2026-10-18: `refined` is a simulation mod shipped with the game; its fixes are game rules switched by
+   mod settings (§9.4, §14 item 7).
 5. Consent per content hash for received code mods; data-only mods automatic (§7.4).
 6. Command ids of mod commands from a name hash (§6.7) versus a registry assigned at match start.
 7. Confirm that the original's simulation reads no value from the settings XML (§8.3).
@@ -748,6 +801,35 @@ Work, in this order:
    becomes a registry or stays, with the reason written down.
 6. **Move the mechanisms into the engine.** The frameworks of 1 to 4 live in `Sadk.Engine` (simulation side) and
    `Sadk.Presentation` (panels, build-mode display); core.game keeps the original's content and behaviours.
+
+7. **Game rules** [implemented, sadk-remake cc7eb02]. The engine (`Sadk.Engine.Simulation`) declares decisions of
+   the simulation as rules: `[GameRule("area.decision")]` on a small interface whose query is a readonly record
+   struct of engine vocabulary. Implementations are `[Rule]` classes in simulation assemblies, found like systems. A
+   parameterless constructor replaces the layer below; a constructor taking the rule interface wraps it. The mod load
+   order stacks them, within a mod by class full name. `[Rule(Setting = "x")]` names a bool startup setting that
+   switches an implementation off. Wrong shapes are load errors naming the mod (no rule interface or two, a bad
+   constructor, a wrapper with nothing below it, one rule name used twice).
+   - The set is resolved once per mod set, after the settings stage (`SimulationCatalog.Rules`, `World.Rules`,
+     `IWorldView.Rules`); systems take each rule once, so a call costs one interface call.
+   - Rules are pure functions of their query: no match state, no randomness, no state of their own. So the
+     presentation may evaluate them, and the simulation thread needs no lock. Numeric parameters read from settings
+     are a later extension.
+   - core.game implements every base rule as the original, with addresses (`Core.Game.Rules`,
+     `Simulation/Rules/OriginalRules.cs`).
+   - Saves (remake part v2) and command logs (format 5) record each rule's layers; a load or replay with other rules
+     warns. The rule set's fingerprint enters the world checksum and state hash only when a rule has more than one
+     layer, so compatibility mode's checksum is the original's.
+   - Mods may declare rules of their own under their id.
+   - First rules: `production.productAmount` (`GetEntryWithModifiers` S 00661c50 with its literal-`corn` compare at
+     S 00661c6f, `ApplyAmountDoubling` S 00663450; read by `DeliverProducts` S 00565990, `PutDownPackage::Update`
+     S 0077a8e0 and the buff in `Building::Update` S 006abcf0) and `transport.groupMembership` (`SelectByArrangement`
+     S 00652b70 → `ReleaseId` S 005c3220, from `SelectOrderForNode` S 00652e00; groups from `InitFromTribe`
+     S 005c1370, entries by `AddEntry` S 005c38a0).
+   - Further seams in core.game, candidates for rules: the work behaviours' `switch (WorkingMode)` (item 3); the
+     sacrifice effects (`ApplyOwnEffect` S 006630b0); which production modes are speed-scaled (S 00565ed0); the
+     initial group membership (`InitFromTribe`) and `ArrangementGroup.PickNext` S 005c30c0; the stock-and-age score
+     (S 00651330, factor 10); `DefaultBuildingType` S 00533b20; the literal-id good rules in `GoodRulesDef`
+     (TimedWhileWorked, FreeDepositNeedsNoTimer, StreetCarrier, GroundResourceOnWater, FoundOnBuildableGround).
 
 Constraint: in compatibility mode the registered original behaviours run in exactly the original's order with the
 original's random draws, so the checksum against the original holds; a mod that adds a behaviour makes the match

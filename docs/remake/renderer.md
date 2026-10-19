@@ -257,11 +257,12 @@ everything by the exploration overlay (`CalcFOW`) (RE §3.7). The renderer does 
   20); at most one R8 upload per frame (26.5 KB); no CPU work per frame.
 - **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): no left-over-texel
   quirk (RE §3.7 item 2); no separate black `Unexplored` pass; the overlay clamped in every shader (the original
-  wraps it except in `water_shader.fx`); a character uses the cell of the sample vertex nearest its interpolated
-  position (the original tests its logic cell); a border post is kept or hidden whole (the original fades it per
-  pixel with `CalcFOWWithAlpha` and the alpha test); flags and carried goods follow the block rule (the original
-  hides carried goods with their carrier, S 006919b0); hiding a building's node hides its decal and flag; the
-  water of the border skirt is opaque black; no refined variant.
+  wraps it except in `water_shader.fx`); a border post is kept or hidden whole (the original fades it per
+  pixel with `CalcFOWWithAlpha` and the alpha test); flags follow the block rule; hiding a building's node hides
+  its decal and flag; no refined variant. A character and its carried good test the settler's logic cell, as the
+  original's `CharacterMovement::Update` S 006c57b0 does (`MotionSample.Cell`, the engine field published by the
+  settler system from `SettlerMovement +0x128`, and the record's `Explored` flag) [implemented, sadk-remake
+  9fb619f].
 - **Open**: selection and hover still ignore unexplored cells (the original's ray pick S 00787cc0 and hover
   tooltip S 005efd60, RE §3.7); the resource particles (S 0068b220); the consumer of the second "FogOfWar" texture
   (`CEnviromentMgr +0x11c`, RE §10 Q10); the map objects exempt from block hiding (type virtual returning 2).
@@ -366,6 +367,8 @@ Optional attributes the remake understands on every descriptor element; without 
 | `mesh`, `model`, `frame`, `texture`, ... | any logical path of the right kind; the extension is a hint ([assets.md](assets.md) §5.2) | the original's paths |
 | `shadowCast`, `shadowReceive`, `forceShadowPass` | as the original (the viewer ignores `forceShadowPass`; the game reads it) | the original's |
 | `lodRanges`, `scale` | for kinds whose original values were code constants | the original's constants (settler scale 1.2 and LOD ranges 30/40/60 are in `settler_config.xml` and are read from there) |
+| `groundDecal` (core.game's `visuals/map-objects.xml` `<Type>`) [implemented, sadk-remake c8f44a0] | a ground decal file for every element of that type: laid at the object's transform, mesh or not, laid again when a height change touches its terrain block (the original's 4 × 4-cell block rule, `UpdateCellHeightsInRegion` S 006b7220) or the terrain detail changes, removed with the object; drawn by the shared house-decal code (`HouseDecalSet`) | none; the `harbor` type names `buildings/Harbour_decal.KEX`, the original's code constant (`Harborplace::ctor` S 006db7a0) |
+| `fells="true"` (same file, on tree types) [implemented, sadk-remake 1fd328c] | the object falls when worked (§13 "Trees fall") | the original picks the felling path by the workplace's good, wood (hash 0xCD6EC133, `UpdateFellingObject` S 006c87d0); in the shipped data both select the same objects |
 
 ### 5.3 Resolution [draft]
 
@@ -530,6 +533,14 @@ depends on them.
 - The camera controller (zoom steps, tilt, yaw offsets, smoothing, border clamp, cutscene splines) is presentation
   code outside the renderer (CI §3.2, §3.7); the renderer only takes the pose and is told the ground focus point and
   the eye distance (`MapRenderer.SetView`), which the environment blend and the fog are measured from.
+- **The match camera** [implemented, sadk-remake 726a5b1]: the original's camera is the default in a match
+  (core.game `Camera/CameraRules.cs`, `MatchCamera.cs`): standard and look-around modes, zoom steps 0..4 with the
+  tilt per step, the ±1.5 turn on Insert / Delete, H to go home, the nearest vertex (S 00687570) and the focus
+  clamp; it reads scroll speed, edge scrolling, invert scrolling and invert mouse. The free orbit camera is a setting
+  (core.game's camera style, Options → the core.game group), and a run given a yaw, pitch or distance uses it. The
+  minimap and the message list focus whichever camera is active. Free-fly, cinematic and cutscene modes 2–5 are
+  `[TODO]`. Because the original camera never comes closer than its first zoom step, world-sized quads such as the
+  build icons (§15.3) no longer grow huge up close by default.
 - **Controls are input actions** (Godot's `InputMap`): whoever owns a control declares the action with its default
   keys and buttons, unless an action of that name exists already (a player's own binding wins); a mod erases the
   actions it declared when it unloads. Every control can therefore be rebound. The engine's orbit camera
@@ -611,6 +622,18 @@ shader (the shadow pass runs the same vertex code). **Default: a light preset** 
 at most 2048 × 2048 (one or two cascades, 2048 to 4096, the lightest soft filter). The viewer's 8192 atlas with four
 cascades costs far more and, as the maintainer found (2026-10-15), improves the picture very little; the heavier
 presets stay as options, not defaults. The GPU time saved goes to the smooth terrain (§10.2).
+
+**Which parts cast** [implemented, sadk-remake d8f9737, e94cc01]: `ShadowCasters.Mask` follows the original's
+`Scene::ApplyShadowQuality` S 0067f420 per shadow level: nothing below 2, buildings (0x8) at 2, buildings and map
+objects (0xC) at 3 and 4, everything (0x3FF) from 5; the parts gated by `RenderWithExternalEffect` S 006884a0 /
+S 006a0cc0 are the terrain (0x1), the buoys (0x2), the map-object batches (0x4), the buildings (0x8: parts, an
+upgrade's target parts, frames, ruins, military flags) and the borders (0x20). The terrain therefore casts only from
+level 5; each layer reads its bit through `ShadowCasters.CastSetting`, and a change applies live. The options map onto
+it as the original's panel does (§19): `cShadowDetail` → level `trunc(v × 6 + 0.5)` (S 0067f6b0), `cShadowQuality`
+→ a map of `128 << trunc(q × 4)`, none at 0 (`ShadowManager::SetQuality` S 00769600; 512 and 1024 were added as
+allowed sizes). The original's step down at 32 MB of free texture memory and its shadow flags and technique
+(Scene +0x30 / +0x34, S 0088d6bc) are not carried. The default level stays 6; the original's default slider value
+was not traced.
 
 ### 8.5 Minimap and previews [draft]
 
@@ -714,10 +737,48 @@ animals, ships and animated building parts use one skinning path of their own in
   from the pictures]: with the stored quarter-turn inverse bind, a settler turned by `RotationY(h)` faces (sin h, 0, cos
   h) in the original's axes. Data: the Bavarian ship's idle file holds no animation (the original plays none either);
   three ramp tables written without the `[data]` prefix resolve below `[data]`.
-- **Not built yet**: attachments (goods in hands, tools, boats), animation events, idle variations, the death sink,
-  turning by fixed steps, route splines, the evade offset, boat bobbing, the two-bone Low technique (Q16). The fog
+- **Built since**:
+  - *Facing* [implemented, sadk-remake d42fb7c]: the turn toward a target yaw by at most 0.43982297 rad per tick with
+    the original's wrap and snap (`UpdateFacing` S 006c48c0, `WrapYaw` S 006c4a40) for settlers and the ox
+    (`CharacterTurn`, in `CharacterEvasion`), animals (S 006cde40 / S 006cdee0, the step direction taken between
+    cells, no turn while dying) and ships (S 006a4eb0 / S 006a4f50). A new figure takes a random hex direction
+    (`RandomizeInitialFacing` S 006c53f0, its own generator seeded 0x7c0); a hammering builder faces its site's
+    entrance or its ship (`CharacterConstructor::Update` S 006c8480); a worker idling outside faces its workplace's
+    flag (the look-at cell, S 006c7640), after the ship it waits for (S 006c7140); a carrier turns to the stack it
+    puts down on or picks from; a standing soldier faces its opponent (`FaceEntity` S 006c7b10, through
+    `ISoldierView.Opponent`) [implemented, sadk-remake 9fb619f]. Measured on Steinfjord: a builder's yaw is on the
+    entrance in 214 of 240 ticks, where before all 8 strokes were drawn more than 30° off. `se_NPCLookAt`
+    (S 005ae660) waits for the NPC component; the facing along a street's spline came with the route splines.
+  - *Trees fall* [implemented, sadk-remake 1fd328c]: `DepositGrowth.StartFalling` starts the fall once the work has
+    run more than 3.0 s: 24 ticks at `globalSpeed` 1.8, speeding up ×1.2 per tick, ending at a quarter turn (the tree
+    lies at about 81.6° with the previous tick's angle, [inferred]), then sinking lying down; the axis as the
+    original's (RE §3.11). Which objects fall is data (`fells`, §5.2). It raises `DepositGrowth.FallStarted(deposit,
+    position)`, which the world sounds use. The angle steps once per tick; interpolating it per frame through
+    `INSTANCE_CUSTOM.y` (§7.4) is `[TODO]`.
+  - *Hidden figures* [implemented, sadk-remake 9fb619f]: a figure is drawn only while its logic cell is explored or
+    the fog of war is off, it is not aboard a ship, and it is not inside a building unless it plays a work type 4..6
+    with time left (`CCharacter::IsInFrustum` S 00690f80; the inside flag of `UpdateInsideBuildingFlag` S 006c7590,
+    the soldier's `IsPresentInBuilding(true)`, cleared for carriers and when the building goes, S 006c7040); an
+    inside work clip stands at the terrain height under the centre of its posed box (this frame's box; the original's
+    is the previous frame's); leaving a ship collapses the interpolation (S 006c4870). The proxy shows Explored /
+    Inside / Aboard / LogicVisible and the report counts the hidden. The notifier box is the look's bounds, not the
+    original's 10× radius for inside work.
+  - *Death sinks*: settlers 0.35 per second once the clip has no time left, through the movement's height pair
+    (S 006c7640, S 006c4f40, S 006c57b0; the render logic is skipped in state 6); animals 0.4 per tick-second after
+    `Dying`, added after the terrain snap (S 006ce2c0, S 006ce610).
+  - *Route splines*: each street's spline at `StreetAdded` (sea level for water streets), `SetPath` S 006c5160 with
+    its street or own spline for free walks of more than two cells, `StepAlongSpline` S 006c4d90 forward and
+    backward with the tangent's yaw, `RouteSpline::EvaluatePosAndTangent` S 006d7280 with its extrapolation; the
+    straight step runs in the logic update after the latch, as the original. A segment past the end falls back to the
+    straight step (the original would read out of range).
+  - *First work tick and the door* (`SettlerFeed`): the door test uses the clip and key the figure played before
+    (`HasSlotOverrideForCurrent` S 006c61a0), an endless loop opens no door, and the animated building is the render
+    logic's target building (S 006c88c0).
+- **Not built yet**: idle variations (§3.11 of AM; the data is read), tools in hands (the animated tool and `bWorking`, S 006c8ab0), boats and boat bobbing (render
+  logic slot `+0x1c`, movement `+0x135`), swim types (`IsBelowWaterLevel` S 006c4820), the soldier buff emitters
+  (S 006c7f80), the `SettlerSpeed` effect (S 006c4f40 / S 006c57b0), the two-bone Low technique (Q16). The fog
   of war came with §4.5 (as built). Open: the atlas's untouched texels (Q15; the remake starts them transparent
-  black); where swimming settlers stand in height.
+  black).
 - **Gallery**: `core.game.charactergallery {map, tribe (Bavarian by default), clip, owner, walkers, field, view=grid|
   first|walker|animals|ship|lod|field, lod, level, notifiers, ownPhase, stats, …}`.
 
@@ -873,6 +934,8 @@ show the 1.5-unit facets.
   (vertex buffers / normal texture / CPU at rest):
   Faithful 10.9 MB / – / 0; Low 22.0 / 8.6 / 0; Moderate 27.7 / 8.6 / 20 MB (36 MB while turning);
   High 29.8 / 8.6 / ≈25 MB; Very High 35.9 / 8.6 / 48 MB (83 MB while turning). Icebound similar (normals 6.5 MB).
+  Measured again with the threaded rebuilds (sadk-remake 8f4adb3): Faithful 10.8 / – / 0, Low 22.0 / 8.6 / 0, Very
+  High 35.0 / 8.6 / 49 MB.
   Triangles: Faithful 320k (the whole map at the fine grid would be 866k), Low 350k, Moderate 492k, High 551k,
   Very High 710k.
 
@@ -891,7 +954,12 @@ show the 1.5-unit facets.
   over the map's extent, RG8 (x and z; y follows), with mipmaps, baked on the CPU on a worker when a map is shown
   (Steinfjord 115 × 115: 1843² texels, 8.6 MB with mipmaps; Icebound 6.5 MB). The terrain passes read it once per pixel
   in place of the interpolated vertex normal (tangent made from it as the vertices' is); globals sadk_terrain_normals,
-  _normal_rect, _normal_on (core.game's).
+  _normal_rect, _normal_on (core.game's). **Per level** [implemented, sadk-remake e94cc01]: the original lights each
+  level with the stored normals of the height samples that level keeps, interpolated over its triangles (RE §3.3), so
+  the texture lights only the levels that keep every height sample (global `sadk_terrain_fine_levels` gives their
+  count; the vertex's level goes in `UV.x`); the last such level fades over to its vertex normals while it blends
+  into the coarser one, and coarser levels use their vertex normals only. A rock needle that a coarser level drops
+  no longer keeps its light there.
 - Everything on the ground uses the same surface: MapGeometry.HeightAt follows the drawn surface (HeightMode set by the
   terrain layer), so object placement, picking and the camera use it; objects are placed again when the surface
   changes; the border skirt's wall top follows it (four pieces per fine step) and is rebuilt with it.
@@ -900,8 +968,9 @@ show the 1.5-unit facets.
 **Levels by distance.**
 - Chains: Faithful 4/2/1; Low 4/2/1 (smooth); Moderate 8/4/2/1; High 12/4/2/1; Very High 16/8/4/2/1. The original's
   lodDistance L = <Landscape lodDistance> (graphics.xml, 50; read into GameSettings.LandscapeLodDistance, 0 if absent as
-  the exe) · (groundDetail · 5 + 0.25) + 1.15 · √((4 stepX)² + (4 stepZ)²) = 271.6 at the top preset (groundDetail 1,
-  the remake's faithful). Band ends: N = 4 at 0.5 L (135.8), N = 2 at 1.5 L (407.4), N = 1 beyond; the refined finer
+  the exe) · (groundDetail · 5 + 0.25) + 1.15 · √((4 stepX)² + (4 stepZ)²) = 271.6 at the top preset (groundDetail 1).
+  `groundDetail` is the options panel's ground detail (`SetDetailFactor` S 00688220, §19) [implemented, sadk-remake
+  726a5b1]; a change rebuilds the terrain. Band ends: N = 4 at 0.5 L (135.8), N = 2 at 1.5 L (407.4), N = 1 beyond; the refined finer
   levels at 0.5 L · 4 / N (N = 8: 67.9, 12: 45.3, 16: 34.0).
 - Faithful selection = the original's: from eye = camera + 0.7 (target − camera), XZ distance to the block's box
   centre, lod = min(2, trunc(d / L + 0.5)), every frame for every block, no hysteresis, hard switch (the batch makes the
@@ -920,6 +989,20 @@ show the 1.5-unit facets.
 - Not used: Godot's visibility ranges for the far band (regions already batch it; no draw-call gain) and HLOD.
 - Map view: levels=true colours the levels, wire=true shows Godot's wireframe, stats=true adds the terrain's numbers to
   the STATS line, switchTo / switchAt change the setting while running.
+
+**Levels that keep the shape** [implemented, sadk-remake 8f4adb3, 4c535b5]. The original chooses a block's level by
+distance only (`TerrainCell::UpdateLOD` S 006b55e0: `min(2, trunc(d / L + 0.5))` from the box centre, no shape or
+error term), so a rock needle on a vertex that level 1 drops (every second fine vertex) vanishes once its block is
+past 0.5 L (135.8 units at the top preset), and the stitching averages an odd edge vertex next to a coarser block.
+In Faithful this is a hard switch; in Low the shape blends from 60 % of the band, so the rock's height changes as the
+camera moves. This is the original's behaviour and stays the default (`lod="Distance"`). The setting
+`<Terrain lod="Distance|Shape">` (Options → Graphics, en/de texts) keeps each level of a block until what the coarser
+level would remove is under 0.01 rad of height seen from the eye point (about 20 px at 1080p); the band then ends at
+the larger of its usual end and `error / 0.01`. Vertices on shared edges blend with the larger scale of the blocks that
+hold them, so no crack opens; Faithful + Shape keeps neighbours within one level. Its band data is measured again on
+the main thread after a height change, marking the blocks it affects. Cost (triangles, Distance → Shape): Steinfjord
+Low 348k → 717k (vertex buffers 22.0 → 38.6 MB), Faithful 317k → 408k, Very High 686k → 1055k; Icebound Low 325k →
+554k. Whether Shape becomes the refined details' default is open (§24).
 
 **The setting** (§19): <Terrain detail="Faithful|Low|Moderate|High|VeryHigh">, default Low (the maintainer's decision of
 2026-10-16: the finer levels change the picture little, since the samples are already smooth at the game's distances
@@ -949,19 +1032,59 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   (`MapChanged(Patterns)` over the cell; the sowing passes `defer = 0`, `../sim/map-resources.md` §3.4) and the
   relay copies the patterns; `TerrainMesher.PatternsChanged(rect)` makes the patches of every block holding a
   changed cell again (records and patches are replaced whole, so workers building the old ones stay consistent), and
-  a pattern new to the map gets a record drawn after all others [inferred] and its materials.
+  a pattern new to the map keeps the record it had from the start, so its draw order does not change.
   `MapData.Blocks.PatternIds` is not refreshed yet.
+- **Pattern records** [implemented, sadk-remake e94cc01]: `TerrainMesher.BuildRecords` builds the records from every
+  pattern property of the registry through `TerrainPatternRecords.Build` (`CTerrainPatternManager::Init` S 006bb3a0),
+  shared with the viewer: non-aliases first in the original's swap-sort order by rank (`def+0` =
+  `g_TerrainPatternNextId`, S 006bade0), then the aliases by ascending signed id, each linked to the first record of
+  its target; an alias whose target has no record gets none and is not drawn, and an id without a pattern property
+  gets an empty record. Materials are made only for the patterns the map uses (`UsedPatterns`), and the blend layers'
+  render priorities are numbered densely over the used records (with 114 records `Order − 64` would have passed the
+  water's priority). The ground-cover layer index of a record (+0x14) is not carried ([TODO] S 006bb3a0).
+- **Off the main thread** [implemented, sadk-remake 8f4adb3]: rebuilds run on Godot's `WorkerThreadPool` at low
+  priority; only the first picture is built at high priority and waited for. A batch region holding a block whose
+  ground changed after the batch was planned is dropped and planned again, so a stale batch is never shown. Readers of
+  the smooth normals take no lock: every result that overlaps a height change is versioned and discarded (the mesher,
+  the normal patch, the first bake, which the pending patch follows, and the building decals, which are laid again).
+  The water is recomputed only where heights change (a test checks it equals a full recomputation). Worst frame per
+  2-second window while orbiting at 40°/s on Steinfjord (headless, CPU only; p50 / p90 / p99 / max): Low
+  12.4 / 17.6 / 45.5 / 87.4 ms before, 10.7 / 14.7 / 34.9 / 53.4 ms after; Very High 12.7 / 17.9 / 29.9 / 51.1 →
+  10.2 / 11.6 / 15.4 / 18.7 ms; the terrain's main-thread share at Very High 4.10 / 7.01 / 15.9 / 27.4 →
+  2.76 / 3.38 / 4.07 / 4.41 ms. A building placement costs the terrain 2–5 ms of main thread per height change and
+  the water under 0.5 ms (3.7–15 ms before); the rest of the placement hitch (frames of 35–74 ms) is the simulation
+  tick on the main thread (driver advance and publish, 30–65 ms), which the simulation thread removes
+  ([sim-boundary.md](sim-boundary.md) §4.3).
+- **Garbage**: while orbiting at Low the rebuilds allocate about 257 MB/s (3 MB/s with a still camera), about 46
+  collections a second with the longest pause per window around 5.5 ms (p50) and up to 25 ms; the remaining terrain
+  spikes coincide with them. Exact-size arrays passed as spans halve the allocation but made the worst frame about
+  1.5 ms worse at p50 and were not kept. The lever is caching the original's levels (below). `MapViewStats`
+  (`stats=true`) reports the longest collector pause per frame, collections per generation and MB allocated per
+  second.
 - **Gaps**: the simulation never emits `MapChanged` for `GroundResources`; terrain levels are not cached, so a dirty
-  region rebuilds all its blocks; the normal texture's mipmaps are regenerated whole; a standing character is placed
+  region rebuilds all its blocks (caching them at Low would cost about 30 MB of CPU memory; open, §24); the normal texture's mipmaps are regenerated whole; a standing character is placed
   on the new ground only with its next motion sample.
 
 ## 11. Water, border, sky, environment [draft]
 
-- **Water**: one quad per block at or below the water level, at `sadk_water_level`, batched per region (the viewer
-  builds one mesh for the whole map); the original's water shader with its scrolling normal maps, the shore fade
-  from the overlay, planar reflection (default), screen-space (option) or none; border water without mirror.
-- **Border skirt**: the original's 200-unit black ground with water over it, not drawn in the mirror (RE §3.5,
-  RR §3).
+- **Water**: one quad per block whose lowest vertex lies strictly below the water level (`AddWaterTileQuad`
+  S 006a7de0 with `IsMinHeightAtOrBelowSeaLevel` S 006b4f60), at `sadk_water_level`, batched per region (the viewer
+  builds one mesh for the whole map); the quad spans the block's box and ends two vertex steps before its end
+  (`EmitWaterQuad` S 006a6a40), the box's z ending at the block's last row (`TerrainCell::Init` S 006b61f0 adds the
+  row overhang to y, not z); the original's water shader with its scrolling normal maps, the shore fade from the
+  overlay, planar reflection (default), screen-space (option) or none. No water beyond the map: the original's two
+  border-water techniques are never used (RE §3.5). [implemented, sadk-remake e94cc01: `WaterMesher`; block counts
+  Icebound 423 → 419, Ship Ahoi 544 → 529.] The mirror request still uses the at-or-below test, a harmless superset.
+- **Border skirt** [implemented, sadk-remake e94cc01, `Renderer/Water/BorderSkirt.cs`]: the original's skirt
+  (RE §3.5: `BuildMapBorderSegments` S 006a7fa0, `ComputeMapEdgeExtents` S 006a77d0, `RenderMapBorder` S 006a7400):
+  one edge height for the map (the lowest edge cell), one segment per edge block plus the four corners with the
+  original's coded extents, 200 units out; two black passes without depth writes or culling, the first sloped from
+  the edge height down to the water level − 1, the second flat at the water level; drawn after the map's passes and
+  before the water (render priority 9 in the transparent pass, `depth_draw_never`); rebuilt after a height change
+  only when the edge height changes; not drawn in the mirror. Beyond the map the player sees black, and the water
+  over the outermost three vertex steps looks darker where the flat pass lies under it, as in the original
+  (`water_border.gdshader` and the `border` attribute of `water.xml` are gone). Whether the old look (water past the
+  edge) or a lighter seam should come back as switches is open (§24).
 - **Sky**: the remake's cloud layer to the horizon by default, the original's 633-unit dome as a switch; both driven
   by globals only (a sky shader reading `TIME` or `POSITION` re-renders the radiance every frame). The cloud layer
   is the main camera's in every view: the mirror view casts its rays from the mirrored eye into the main camera's
@@ -1095,7 +1218,7 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Military flags**: their own small kind (`MILFLAG` bone, mesh by soldier count and kind, texture by proximity
   zone, owner colour, wave in the vertex shader).
 - **Demolition**: dust effect, then `y = terrain − height × progress²` with `progress += dt × 0.35`, then removal;
-  **ruins** with their own decal until the remains are removed (`burnTicks`).
+  **ruins** with the dead building's ground decal until the remains are removed (`burnTicks`).
 - **Building sites and farms**: goods on the site (§14) and farm animals at `boneLink<i>` bones by productivity.
 
 ### 13.1 As built [implemented, sadk-remake 6885d9e]
@@ -1120,9 +1243,43 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Construction and upgrade**: frame stages from a per-vertex stage index; the cut in model space, interpolated within
   the tick; during an upgrade the old building keeps the part above the plane and the target the part below (one
   plane serves both: they share the model space); the target's frame and decal replace the old ones.
-- **Ground decal**: clipped against the drawn terrain triangles on worker threads, laid again when the terrain detail
-  changes (at Faithful and Low it lies on the triangle planes, at Moderate and above on the split surface). Lit with
-  the ground's normal [inferred: the original's decal normal is not documented].
+- **Ground decal** [implemented, sadk-remake 451e0e3, de9e001]: an exact port of `GroundDecalMesh::Build`
+  S 006da2a0 (RE §3.9): the terrain triangles collected once under the transformed model box, edge planes through
+  the packed vertex normals (`TerrainGrid.PackedNormal`: same-column row neighbours, the `2·step` border divisor,
+  truncation), the mesh clipped at its authored height, each vertex then at `SampleHeightAndNormal`'s height at its
+  3D point plus the float 0.01, float arithmetic in the original's order, the lists walked last-first; laid on worker
+  threads (`DecalMeshes.LayOnWorker`, shared with every decal owner, `HouseDecalSet` for owners that are not
+  buildings) and again when the terrain detail changes. After a height change a building's decal is laid with the
+  matrix from before that change (`RefreshGroundPlacement` S 006ab420 uses the last frame's), a ruin's with the new one
+  (S 006d4f90). The exact clip shows the original's notches and holes on slopes (on the Ship Ahoi harbour plot 6.8 %
+  of the plot under the terrain); clipping with vertical planes (edge-plane normals (0, 1, 0), one line in
+  `LayOnWorker`) removes them entirely, presentation only. Whether to offer it as a switch
+  (`<Terrain decalClip="Original|Vertical">`, the original the default) is open (§24). Not reproduced: the
+  512-triangle pool crash, the read past the grid's last row ([TODO]), `Matrix44_TransformCoord`'s rounding order.
+  `TerrainSurface.ComputeNormals` (the Faithful terrain's lighting) does not use the formula of S 00687810 yet.
+- **Harbour plot** [implemented, sadk-remake c8f44a0]: every harbour place gets the `GROUND` decal of
+  `Harbour_decal.KEX` through the `groundDecal` attribute of its type (§5.2), owned or not, flag or not (RE §3.11);
+  `ObjectLayer` lays it, relays it by the 4 × 4 block rule and on detail changes, and removes it with the object.
+  `ObjectLayer.MapChanged` still re-grounds objects by "origin inside the changed box" and raises `alignOnWater`
+  objects only when they lie below the water, where the original sets them to the water level always (S 006db520).
+- **Ruins** [implemented, sadk-remake d8f9737]: the engine event `RemainsAdded(BuildingType, Tribe)` (`Remains`
+  keeps its tribe, also through a load) feeds `BuildingLayer.AddRemains` as `AddRuin` S 006a19b0 / `Ruin::ctor`
+  S 006d4e00 do: the descriptor `<tribe>_<remains gfx>` turned by its heading, LOD part 0, the dead building's
+  `GROUND` decal laid with the ruin's matrix (a missing descriptor gives no decal and a report, where the original
+  reads before its table); removed with the remains (50 ticks in the shipped `remains.lua`); re-placed with its decal
+  after height changes (slot 5, S 006d4f90).
+- **Hidden gate** [implemented, sadk-remake d8f9737]: `BuildingLayer.Hidden` ports `SetHidden` S 006aa320 as fed by
+  `TerrainCell::SetVisible` S 006b4f80: hidden unless the anchor's block is revealed and in the view frustum. It gates
+  the door-open, door-close and collapse sounds and the start of the clips' events (model `+0x50`). Not ported: the
+  cull's horizon occlusion, budget and other objects' boxes (S 006db220); drawing is left to Godot and the fog layer.
+- **Doors and work on the logic clock** [implemented, sadk-remake b4dbe0c, d8f9737]: `DoorCycle` holds the 0.6 s door
+  timing of `TriggerWorkCycle` S 006aa640 and the close of `Building::Update` S 006abcf0 per logic tick;
+  `EntrancePasses` opens doors as `CharacterSettler::Update` does (the target building per class, the pass across the
+  entrance, RE §3.9), reading only the published tick records; `BuildingLayer.LogicTick(tickLength)` runs once per
+  record before the trees and the settlers (the original's order) and counts the one-shot down by the tick length
+  (`PlayOneShotAnimation` S 006aa6f0 in full: the flag is set even without a clip or under construction). The gallery
+  counts by frame time. Building attachments (the sacrifice movies) still advance per frame, the original's per tick
+  ([TODO]).
 - **Clips**: door and work in two `AnimationPlayer`s; a visibility notifier switches them off while unseen and seeks
   them to the clock's time on entering view (§4.7). Two types move the same bones from both clips (Bavarian_Fisher
   `DOOR`, Scots_Smeltery 12 bones): the original averages them while both play, Godot lets the later one win; only the
@@ -1136,8 +1293,7 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   Godot rejects duplicates, so the second gets a `#<index>` suffix and indices stay the file's.
 - **Alpha test**: `ATEST127` is AlphaFunc Greater, AlphaRef 127 (`shared.inc:668`), so Godot's threshold is 128/255;
   this settles §24 item 6 (the map-object shaders used 127/255 and let alpha 127 through; now 128/255 as well).
-- **Not drawn yet**: the ruin decal (the ruin models have no `GROUND` mesh; S 006d4e00 [inferred]), farm animals at
-  `boneLink` bones. The fire and demolition particles came with the particle layer (§16.1).
+- **Not drawn yet**: farm animals at `boneLink` bones. The fire and demolition particles came with the particle layer (§16.1).
 - **Gallery**: `core.game.buildinggallery {map, tribe, progress, upgrade, health, lod, flags, ruins, door, work,
   demolish, …}` places a tribe's types on the flattest dry ground of a map.
 
@@ -1235,10 +1391,19 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   terrain surface, so Godot's back-to-front sort of the blocks follows the original's far-to-near walk
   (`AddCellsInRect` S 006b36d0 walks the visible block list backwards, and that list is collected nearest first). The
   icons are world-sized, depth-tested quads in the original too: nearer plants and rocks cover them, water never does
-  (`water_shader.fx` writes no depth), and they grow only as close as the camera comes (§8.1, the remake's free
-  camera comes much closer than the original's; whether to cap it is open). A region is
-  asked again only when a `MapChanged(ConstructionFlags)` event marks it; the original asks every visible cell every
-  frame. Icon index, atlas cell and quad follow RE §3.14 (`ConstructionIcons`, shader
+  (`water_shader.fx` writes no depth), and they grow only as close as the camera comes: with the original's match
+  camera, now the default (§8.1), no closer than in the original; the free camera, a setting, still comes much
+  closer. A block is asked again only when a `MapChanged(ConstructionFlags)` event marks it; the original asks every
+  visible cell every frame.
+- **The block cache's rule** [implemented, sadk-remake da4ce8f]: since the original keeps no picture
+  (`RenderBuildPlacementOverlay` S 00688c40 draws only cells whose flags are not 0, every frame), a cached block must
+  look the same: `BuildOverlayBlocks` (no Godot) decides each block's buffer, its visible instance count (0 without
+  icons) and its visibility, which is "alpha above 0 **and** the block has icons" through every fade (an emptied block
+  had shown its old icons again after the info map was toggled); it notes `MapChanged` (construction flags,
+  re-initialised) for the local player and re-places the icons after height changes (the original places them at
+  `CellToWorldPos` S 00687790 every frame). The flag source answers 0 while the local player's active byte (+0x50) is
+  clear, as `AddCellsInRect` S 006b36d0 does. A block is read one frame after the change reaches the presentation
+  (the original reads in the same frame). Icon index, atlas cell and quad follow RE §3.14 (`ConstructionIcons`, shader
   `shaders/overlay/buildicons.gdshader`); the cell under the cursor gets no icon; nothing draws while the info-map
   fade's alpha is 0.
 - **Menu**: built at run time from `menuingame.xml`, `templates.xml` and `iconconfig.xml`: the original's tabs, grid,
@@ -1271,7 +1436,13 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   S 006156a0). Kind 6 binds the attack slider (`attackslider`, S 005ebd30 and its methods) and actions 11 / 12
   (`RefreshAvailability` S 00623da0, `ExecuteAction` S 00623730) send `StartAttack` 0x2000D and `Retreat` 0x2000E;
   kind 7 opens the fight box (`infoboxFight`) with its count pulse (`nMenu::Flash`).
-- **Open**: the ray pick of buildings, ships and routes (S 00787cc0); selection kind 3's third button (always 14);
+- **Ships and routes** [implemented, sadk-remake dd389da]: the click in the original's full order with its ray hits
+  (`SelectAtCursor` S 00788370); buildings (kind 6) and route buoys (kind 8) in one pick list in the original's
+  order (`Pick_MapObjectAtScreenPos` S 0068c920), the ship pick with the swell's tilt and lift (`PickShip`
+  S 00697db0); the ship box and the route box, the expedition actions 1–3, the markers (a ship's size-11 marker and
+  the route ends) and the hover tip; ingame-ui §3.5. The pick list holds only kinds 6 and 8, so removals of other map
+  objects do not reorder it as in the original (S 0068cff0).
+- **Open**: a building's own mesh test (S 006aae60) and hidden flag in the pick (S 00787cc0); selection kind 3's third button (always 14);
   the sacrifice states and destroy block reason 2; `menu.allowActions`; action 30 until `0x20010`. Decisions to
   review: [sim-boundary.md](sim-boundary.md) §11 item 4.
 
@@ -1407,7 +1578,23 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
   keyframe at the bone [inferred]; the research back-dating quirk is kept; the projectile launch point is
   approximated by the source's box centre or position [inferred]; the buffs ignore `showEffects` (its meaning is
   open).
-- **Open**: `ShipFX` and `BoatFX` (S 006a4a20, S 006a5bf0), the effects' sounds, the projectile model, the meaning
+- **Emitters turn with their links** [implemented, sadk-remake d8f9737]: a movie element takes the link bone's matrix
+  times the owner's (`MoviePlay.Place`, `EffectMovieElement::Start` S 006c6bc0 / `GetWorldRotationAndPosition`
+  S 006c6a60), and `FollowLinks` moves and turns the emitter as `EffectList::UpdateEmitterTransforms` S 006c6da0 does
+  (rotation without scale; a scaled link gives the original a non-unit quaternion [inferred]; in the original that
+  call comes only from `CCharacter::Update` S 00690bd0 and `Ship::UpdateVisuals` S 006a5cc0, so only characters' and
+  ships' effects follow their link after the start, while a building's keep the transform they started with,
+  slot bone's rotation included); character clip events
+  (S 006b05e0 / S 006b0710) and building clip events take the bone's rotation too. `pfx_process.gdshader` turns the
+  start point and the velocity by the emitter's rotation at the start of each cycle (USERDATA1/2), as
+  `Particle::Update` draws through R(q), so a later turn does not swing particles in flight. Fires (S 006abbb0),
+  buffs (S 006abcf0), dust and one-shots pass the identity quaternion S 008828d4 and stay upright in world space.
+  The heal movie therefore follows the "Bip01 Spine" bone's rotation (not yet seen in a match).
+- **Sounds** [implemented, sadk-remake b4dbe0c]: keyframe sounds of effect movies follow their element
+  (`GetSoundPositionAndVelocity` S 006c6910, stopped with the keyframe, S 006c6790); `impactSound` plays with
+  `impactPFX`, and only the catapult stone reaches the impact (`Scene::OnShipFxEnded` S 0067f340 removes other types
+  at once).
+- **Open**: `ShipFX` and `BoatFX` (S 006a4a20, S 006a5bf0), the projectile model, the meaning
   of `showEffects`; besides `SettlerSpeed`, the soldier buffs, resource hints, buoy and gate fires and Lua
   `createParticel` (the `StoneDust` event of `WorkLoop0Forester` now plays through the character clip particles).
 
@@ -1439,6 +1626,10 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
 - The original's priority (CI §3.10): the local player's flag on the cell, a building hit by the ray (explored), a
   building on or next to the cell, a ship, a sea-route marker, the player's street; settlers are hover-only. The
   results are checked against the views (exploration, ownership, existence) before a command is built.
+- As built (sadk-remake dd389da, `Selection/WorldPicks.cs`): that order with buildings and buoys in one list, the ship
+  pick by bounding sphere (at distance ≥ 0, the mean of the scaled vertices at the ship's ground point, not turned)
+  then mesh (S 006a5020, S 0076ff90 / S 006ec8a0, which ignore the distance along the ray), the exact square root in
+  place of `Math_FastSqrt` (it only decides which of two ships is nearer); §15.3.
 
 ## 19. Settings and switches [draft]
 
@@ -1462,14 +1653,32 @@ Settings apply at once where they are globals; those that change batches (LOD, r
 match load.
 
 **In the game** [implemented 2026-10-15]: one shared `RenderSettings.Current` (a map view reaches it as
-`rc.Settings`), stored as `<Graphics>` in `settings.xml` ([assets.md](assets.md) §3) and changed in the Options screen
-(`engine.options`, tabs Graphics, Shadows, Quality) or the map view's quick switches, which are a form over the same
-object. Every change applies at once, including the region size and blended foliage, which rebuild the shown world.
+`rc.Settings`), stored as `<Graphics>` in `settings.xml` ([assets.md](assets.md) §3) and changed in the options
+panel or the map view's quick switches, which are a form over the same object. Every change applies at once,
+including the region size and blended foliage, which rebuild the shown world.
+
+**The options panel** [implemented, sadk-remake 726a5b1]: core.game's `core.game.options`, built from the original's
+`menuoptions.xml` (`engine.options` is routed to it), opened from the main menu, the match's `cbMenu`, `btOptions`
+and O. The original's six groups keep their order, controls and places; the remake's groups (WINDOW, GRAPHICS,
+SHADOWS, QUALITY after VIDEO; KEYS after INPUT; INTERFACE after GAME; one group per mod at the end) sit after the
+original group they belong with; every change applies at once, with no apply or cancel. Which settings are the
+engine's and which a mod's: [mods.md](mods.md) §6.2. The original's eight graphics values live in the engine's
+`RenderSettings` with the original's mappings (`ApplyOptionValue` S 005e5bd0, `LoadOptionValue` S 005e55b0):
+
+| Option | Effect in the remake | Original |
+|---|---|---|
+| ground detail | the terrain's LOD distance (§10.4) | `CMapRenderer::SetDetailFactor` S 00688220 |
+| object details | the buildings' distance switch (§13) | `BuildingRenderer::Update` S 0069ff70 |
+| `cMirrorStrength` | the mirror's detail level 0..4 (new render layers `Buildings` and `Characters` split from the object layer) | scene detail, settings +0x38 |
+| mirror quality | the mirror's width capped at `128 << trunc(q × 4)` (it keeps the screen's shape) | `SetReflectionQuality` S 006a64c0 |
+| `cShadowQuality` | shadow map `128 << trunc(q × 4)`, none at 0 (512 and 1024 added as sizes) | `ShadowManager::SetQuality` S 00769600, settings +0x28 |
+| `cShadowDetail` | shadow level `trunc(v × 6 + 0.5)` (§8.4) | S 0067f6b0 → S 0067f420, settings +0x2c |
+| `cDetail`, `cTextureQuality` | stored, no effect (every element is drawn, maintainer 2026-10-15; the texture loader lacks the flags) | the priority gate S 0068d360; the reduction S 004e79f0 |
 
 | Element | Attributes |
 |---|---|
 | `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
-| `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4) |
+| `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4), `lod` (Distance — the default, the original's —, Shape; §10.4) |
 | `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed, Off), `curve` (Smooth, Linear); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
 | `FogOfWar` | `enabled` (§4.5) |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
@@ -1544,7 +1753,8 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 4. The building and settler descriptor keys ([assets.md](assets.md) §9 item 1).
 5. The remaining picture-affecting reverse engineering: selection marker styles and the build icon atlas (RE §10
    Q13), ship player-colour values, the loader of building-level particle elements (PA
-   §10 Q3), the texture particle passes 1 and 2 sample (Q1), what drives the tree sway and fall states.
+   §10 Q3), the texture particle passes 1 and 2 sample (Q1). The tree states are settled: the sway never runs and the
+   fall is the woodcutter's (RE §3.11).
 6. Settled 2026-10-16: `ATEST127` is AlphaFunc Greater with AlphaRef 127, so alpha 127 is rejected; the house and
    map-object shaders keep alpha ≥ 128/255 (sadk-remake 328c30c).
 7. The smooth terrain's density default: **Low** (maintainer, 2026-10-16). Measured in the game (compat, Icebound near
@@ -1552,6 +1762,14 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
    3.9; only 14 of 625 blocks lie in the 16× band (to 34 units from the eye point), most of the view in the original's
    band, and where the surface does refine, the samples (one every 1.5 units) already describe hills far larger than a
    facet. The extra triangles pay off only with detail the heightmap does not have (§25).
+8. Decisions for the maintainer from the terrain and decal work (2026-10-18):
+   - whether `lod="Shape"` becomes the default of the refined details (it roughly doubles the triangles at Low, §10.4);
+   - whether to cache the original's terrain levels to cut the rebuild garbage, for about 30 MB of CPU memory at Low
+     (§10.5);
+   - whether the vertical decal clip becomes a switch (`<Terrain decalClip="Original|Vertical">`, the original's
+     clip the default; presentation only, §13.1);
+   - whether water past the map's edge (the remake's old look) or a lighter seam over the skirt should return as
+     switches (§11).
 
 ## 25. Graphics improvements to do [the maintainer's list, 2026-10-16]
 

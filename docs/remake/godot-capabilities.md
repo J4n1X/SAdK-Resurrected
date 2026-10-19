@@ -265,6 +265,25 @@ How the presentation uses these facilities [draft; suggestions forwarded by the 
   `interfaceVol`, so turning the notifications down never silences the campaign speech. The sound table is the
   registry's `sound` records, file references resolve through the virtual file system, and the menu tracks and the
   battle record are data (`audio/music.xml`).
+  - **Channels** [implemented, sadk-remake bed9379]: the original's interface player never stops its channels
+    (`UiSoundPlayer::PruneChannels` S 0056f550 only drops ended ones from its list); FMOD frees a channel when its
+    sound ends. Godot does not, so the output keeps its own channel table (`MixerChannels`) and frees ended channels
+    every frame and before it refuses a new one; without that, about 31 clicks hold every channel and the music
+    rotation and all effects stop. The only mute is the original's focus mute (`SetMuted` S 005c6730 from
+    `WM_ACTIVATE` in S 00401f30).
+  - **The match's audio is engine code** [implemented, sadk-remake bed9379]: `MatchAudio` (listener, game speed,
+    pause, the menu/match hand-over) and `GameMusicState` (the tribe and battle music) live in
+    `Sadk.Presentation/Audio` and read players through the engine view `IPlayerContactsView`; `MatchAudio.Close`
+    resumes a paused game's effects as `nMenu::Game::OnLeave` S 005eb030 does and changes only the match that holds
+    the audio. `PlaceEmitters` takes the ambient emitters as data; core.game converts the map's ambient records
+    (`Ambients::PostLoad` S 005366f0) into it and keeps its own data (`audio/music.xml`) and world-sound code.
+  - **World sounds** [implemented, sadk-remake b4dbe0c]: the effect API `IEffectSounds` (`Play3D`, `StopSourceSound`,
+    sources released with their owner); the sounds the original names as code constants (doors, collapse, steps,
+    catapult shot, tree fall) are a moddable document (`audio/world.xml`) keyed by registry key; clip `<Sound>`
+    events are ported from `SoundEvent` (created once per play of a clip, a duration stops the sound, the 0.5 s
+    late-drop rule); footsteps and the proximity level per character; doors run on the logic clock; a building's
+    door, collapse and clip sounds start only while it is not hidden (`Building::SetHidden` S 006aa320, set from the
+    view's terrain-block cull, [../sim/audio.md](../sim/audio.md)).
 - **Tips** [implemented, sadk-remake e06b183]: Godot's tooltips are replaced by a tip host of the remake's own (a
   `CanvasLayer` made by every layout builder), a port of the original's `Tip::Update` S 004b5a70: it opens after more
   than 0.07 s of still hover, follows the cursor, closes with the original's 0.2 s eased fade on any mouse button or on

@@ -195,6 +195,8 @@ What changes against §4.1 and §4.2:
   gap and order as before, so a replay is the same with or without the thread.
 - **Views.** `IWorldView` is no longer "valid between Advance calls": the presentation reads a snapshot published at
   a tick boundary, or takes a tick-boundary lock for rare queries (picking, info boxes). It never reads live state.
+  Game rules are pure functions of their query ([mods.md](mods.md) §14 item 7), so the presentation evaluates one
+  (the farm's product buff) without the lock.
 - **Godot state.** `Engine.TimeScale` and `SceneTree.Paused` are set on the main thread from published records; the
   simulation thread touches no Godot API (godot-capabilities §6).
 - **Clock.** `SimClock` is published with each record, so `Alpha` (and faithful mode's stall saw-tooth) is computed
@@ -205,7 +207,9 @@ What changes against §4.1 and §4.2:
   wall time each frame (offline only, `../sim/lua-runtime.md`) need a decision on which thread they run.
 
 CPU-heavy presentation work (terrain region rebuilds, decal clipping, particle simulation) runs on worker threads
-and is applied on the main thread.
+and is applied on the main thread. Measured on the main thread today (sadk-remake 4c535b5, a god-mode building
+placement): the terrain costs 2 to 5 ms per height change, the simulation tick (driver advance plus publish) 30 to
+65 ms; the latter is the hitch this thread removes ([renderer.md](renderer.md) §10.5).
 
 **Refined mode** [TODO, later]: parallel work *inside* a tick (path searches, AI evaluation, territory and
 visibility maps computed against a read-only view, applied in a fixed order; deadline jobs started at tick N and
@@ -300,8 +304,10 @@ public interface IWorldView
 
 As built (sadk-remake, 2026-10-16): `IWorldView` has `Map` (`IMapView`: sizes, water level, spans of heights,
 patterns, grid states and territory, per-cell resources, exploration, continents, construction flags and the five
-object layers), `TryGet` and `Query` (ordered by id). The players stay core.game's view (`PlayerTable`), not an
-engine interface; `IQueries` is not built yet.
+object layers), `TryGet` and `Query` (ordered by id), and `Rules` (the resolved game rules, [mods.md](mods.md) §14
+item 7). The players stay core.game's view (`PlayerTable`); the engine reads them only through small interfaces it
+declares, such as `IPlayerContactsView` (`Sadk.Engine/Simulation/PlayerViews.cs`), which the engine's match audio
+uses for the tribe music and the battle music [implemented, sadk-remake bed9379]. `IQueries` is not built yet.
 
 Entity views are component-shaped (`IConstructionView`, `IHitpointsView`, `IProductionView`, `IMovementView`,
 `IActionTimerView`, `IMilitaryFlagView`, `IGrowthView`, ...), so a mod's component adds its own view interface and
@@ -336,7 +342,11 @@ As built (sadk-remake a2bd808): `TickRecord.Motion` holds the samples taken afte
 implement `IMotionSource`, in tick order (`World.CollectMotion`). A `MotionSample` carries the from and to fine
 positions, the progress, the street, the heading and the flags `FineMode`, `Queued`, `Aboard` and `Dying`. `Street` is
 the street the settler serves (`CurrentStreet`), not the street of the leg it walks; which one the route spline needs
-is open (§11 item 4). Animals publish the same types: `MotionSample`, `MotionFlags` and `EntityStateChanged` are
+is open (§11 item 4). A sample also carries the settler's logic `Cell` (`SettlerMovement +0x128`; the original's
+movement +0x04 explored test, S 006c57b0, reads it) [implemented, sadk-remake 9fb619f]; other sources leave it None.
+The presentation builds each street's route spline itself and walks a step along it as `StepAlongSpline` S 006c4d90
+does ([animation-models.md](../sim/animation-models.md) §3.19). Animals publish the same types: `MotionSample`,
+`MotionFlags` and `EntityStateChanged` are
 defined once in the engine (`Motion.cs`, `EntityStateEvents.cs`) for settlers and animals (sadk-remake 514d96c).
 
 The simulation publishes **logic** values only: what it stores and saves. The presentation turns them into world
@@ -448,6 +458,10 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   answers `FightList::IsPlayerInvolved` S 00573ad0 for the battle music. Compatibility mode needs the original's x87
   rounding of the attack count in the slider and in both dispatches, `(int)(float)((float)(n·f) + 0.5f)`, not a
   double-precision product ([military.md](../sim/military.md)): the two differ at some fractions.
+- **Views for the presentation** [implemented, sadk-remake 9fb619f, b4dbe0c]: `ISoldierView.Opponent` (a standing
+  soldier faces it, `CharacterSoldier::Update` S 006c7f80 / `FaceEntity` S 006c7b10) and `IsPresentInBuilding`
+  (S 00658f90, the soldier's inside flag); `IMilitaryBuildingView.CatapultFireStamp` (`NVillage::Catapult +0x18`, the
+  shot sound).
 - **Open**: capture (built, not yet exercised in a run); `FindOrderForSoldier`; the AI hooks; the hook of the heal
   sacrifice 1003. The catapult is in §6.15; the sea branches, the soldiers' ship states and order category 6 are
   in §6.14.
@@ -480,6 +494,16 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   sacrifice yet.
 - **Effects** ([renderer.md](renderer.md) §16.1): the sacrifice movies and the building buffs [implemented,
   sadk-remake 5281ab9].
+- **The blessing of the fields** (QS): the original doubles only the good `corn` (the literal compare at S 00661c6f in
+  `GetEntryWithModifiers` S 00661c50, `ApplyAmountDoubling` S 00663450 while flag 12 is above 0), so the Bavarian
+  `farmBav` gives 4 instead of 2 per harvest and the Egyptian `farmClay` (`egyptCorn`) stays at 1. core.game keeps
+  that; the decision is the game rule `production.productAmount` ([mods.md](mods.md) §14 item 7), which the refined
+  mod wraps to double every farm's grain. Measured on `MP_2P_fata_morgana`: Bavarian 2 → 4, Egyptian 1 → 1
+  (compatibility) or 2 (refined).
+- **Grouped goods**: sacrifice sites receive grouped goods only as entries of `InitFromTribe` S 005c1370 groups; a
+  temple's product `sacrificeGood` collects every sacrifice cost, the olympic flame's `sacrificeGoodOlympicFlame`
+  lists six goods, so a flame never receives milk and never starts such a sacrifice, in the original as in
+  compatibility mode. The refined mod's `transport.groupMembership` rule admits the need.
 - **Open**: the heal for stocked soldiers; border contact; the navy and script effects.
 
 ### 6.12 Upgrades as built [implemented, sadk-remake 8225872]
@@ -547,6 +571,15 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   `from == to` does nothing (the original's loop never ends, navy §3.2); mission state 0 without an own route end
   → state 1; state 3 without a fight or a defender end → 7; `SendSoldiersBySea` without a landing harbour sends
   nobody; an attack origin with a harbour and no building → the soldier's cell (MI §3.5).
+- **Views for the selection** [implemented, sadk-remake dd389da]: `IShipView` gained `Route`, `Shipyard`,
+  `LyingStill`, `ExpeditionActive`, `ExpeditionState`, `MilitaryActive`, `Packages`, `CargoSettlers`,
+  `MilitarySoldiers`, `ExpeditionUnits` and `ExpeditionOrders`; `IShipRouteView`; `INavyQueries` (the block reasons of
+  `GetAssignShipBlockReason` S 005ba970 and `GetFoundColonyBlockReason` S 005baa50, a ship's requests, its name key);
+  `ISettlerView.AboardShip`. The route actions read the game's selection and send the route commands as the
+  original does ([ingame-ui.md](../sim/ingame-ui.md) §3.5, [game-commands.md](../sim/game-commands.md) §5.1).
+- **Measured** (`MP_6P_ship_ahoi`, god mode): an expedition reaches state 5 at the far harbour with 3 packages and
+  1 soldier; without a street from the stores to the harbour flag it waits in state 3 with its soldier order open,
+  the original's rule ([navy.md](../sim/navy.md) §3.10).
 - **Open**: why player 5's harbour on `MP_6P_ship_ahoi` does not link; the soldiers' ship states are not tested
   end to end; `TryCompleteOrderAtCurrentPos` is a stub; the unfinished ship's look, the cargo and expedition
   overlays, `ShipFX`.
@@ -619,9 +652,24 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Tests**: the mechanic tests run with `MatchKit.WithoutComputers` (computer slots played as remote humans).
 - **Script switches** [implemented, sadk-remake 2509f83]: the scripts' `ai_*` functions drive the computer players
   (§6.18, LR §3.6).
-- **Open**: the military half (AP §3.10 to §3.16), the expedition, `RemoveHarbor`,
-  `RefreshPlayersAndResourceMap` S 00581960; the AI's own load and post-load (a save writes every computer player
-  inactive, §9.1).
+- **Save and load** [implemented, sadk-remake 8db0d0a]: `NAI::System::Store` S 00581ad0 and `Load` S 005821f0 in
+  the original's layout, with every section name, version and version gate (AP §7). References are resolved after
+  everything is read, as `Player::PostLoad` S 00582e10 does; the values the original does not save are looked up
+  again where its Load functions look them up (AP §7). State the original lacks (the construction back-off pair, the
+  street builder's source cell) goes into the extension of the tick-less system `core.game.ai.remakestate`, placed
+  after the AI and before the sacrifices. A remake save without that extension (written before the AI was saved) is
+  repaired at its first tick: the shared grids are rebuilt and each computer slot of the setup is activated again
+  (S 00581c40, profile = level + 1). `World.BuiltTick` holds the tick the build ends at, so the AI's game time no
+  longer lags one tick in a new game; `ConstructionOrder` starts in mode 1 (S 005a17a0).
+- **Measured** (`MP_6P_ship_ahoi`, five medium Bavarian computers): first placements at ticks 210, 229, 236, 271 and
+  414; after 20 000 ticks 30 to 38 buildings each. A save at tick 2500 re-saves byte for byte and every system stays
+  identical for 144 ticks; at 2644 the village part differs (a castle releases a constructor in the loaded game, a
+  carrier in the uninterrupted one), because the load rebuilds the village order index from the order vector as the
+  original does (S 005625c0, [village-buildings.md](../sim/village-buildings.md) §7) [inferred as the only cause].
+- **Open**: the military half (AP §3.10 to §3.16): its records are written in their activated state and dropped on
+  load ([TODO] S 00585280 / S 00585d60), and CatapultConstruction and Casern are not registered as order owners
+  after a load ([TODO] S 00582e10); the expedition; `AddHarbor` / `RemoveHarbor` when a navy object links to a flag;
+  `RefreshPlayersAndResourceMap` S 00581960.
 
 ### 6.18 The map-script host as built [implemented, sadk-remake fcee142]
 
@@ -670,6 +718,9 @@ Remake-only (no original id): a debug feature put together from three paths of t
   village, the system `core.game.godmode` tops every completed depot of a god up to 100 of each good of the
   tribe's goods and jobs lists.
 - **Sight**: `WhatCanEyeSee` (S 005ec340) once at the start.
+- **Removal**: the original's `RemoveBuilding` S 00559db0 asks the same batch-editing query and then spills nothing,
+  leaves no remains and plays no collapse; god mode answers the query for placement only, so a god's destroyed
+  building refunds its full cost halved onto its flag, which then stays (a finished building's normal rule).
 - **Setup**: the gods are a field of the match setup, ignored in a network match; the debug command
   `core.game.debug.godmode` is refused in network matches; the system has its own save section.
 
@@ -765,9 +816,13 @@ since program start); refined mode gives every peer, every load and every sessio
   time stamps (the original's post-load clamp changes later checksums on `sp02_perpetual_ice`), the victory state,
   the ship sinking timer, the open-need index and a few appended fields. Ships go into an extension (the map part's
   navy writes 0 ships). The messages are written as the original writes them, from the presentation's list (§7);
-  the AI, the chests and the quests are written in empty or default form into the original's sections. The military's transient path cache is empty with stamp 0 after a load (the original
+  the AI is written in the original's layout (§6.17); the chests and the quests are written in empty or default form
+  into the original's sections. The remake part (v2) records each game rule's layers, and the command log (format 5)
+  records the rules; a load or replay with other rules warns ([mods.md](mods.md) §14 item 7). The military's transient
+  path cache is empty with stamp 0 after a load (the original
   stamps it with the load tick, `Attack::PostLoad` S 00575800, MI §7). The saved next-tick time is the float32 sum.
-- **Open**: the AI state is not saved (computer players stop after a load); reading the original's saves of older
+- **Open**: the AI's military half (§6.17); a loaded game parts from the uninterrupted one where the village order
+  index is rebuilt (§6.17, as the original); reading the original's saves of older
   versions (the shipped `C02.sav` is plaintext from an older build, SF); ships, expeditions, the catapult, the
   specialists, fishing, hunting and sacrifices are not yet exercised in a whole-world round trip.
 
@@ -824,7 +879,9 @@ These matter more in the remake than in the original, because Harmony patches ca
      result); computer slots draw their AI ids through the computer player (§6.17), so the ids follow the
      original's in free games with computer slots; the refined-mode check of 0x20002 waits for a mode switch.
    - **The settler core** (§6.4): the motion sample's `Street` is the street the settler serves, not the street of
-     the leg it walks (open whether the route spline needs the leg's); settler services and job interfaces resolve to
+     the leg it walks; the route spline does not read it: the presentation takes the leg's street from the map's
+     object layer 2 at the step's cell or its target cell, as `CharacterMovement::SetPath` S 006c5160 does
+     (S 00665160); settler services and job interfaces resolve to
      the first system implementing them; the debug command `core.game.debug.spawnsettlers` has no original id and is
      refused in a session with a game seed.
    - **The build mode** ([renderer.md](renderer.md) §15.3): **B** opens the build menu without a cell, the
@@ -869,6 +926,15 @@ These matter more in the remake than in the original, because Harmony patches ca
      the searches; after a street is completed an extra `0x20007` can go out and is refused (as in the original's
      network flow; harmless); no separate water-street mode, the water preview is a plain strip; the marker's look and
      the tints are the remake's own.
+   - **Characters** ([renderer.md](renderer.md) §9): the height of a figure doing inside work uses this frame's
+     posed box (the original's the previous frame's); its notifier box is the look's bounds, not the original's 10×
+     radius; a spline segment past the street's end falls back to the straight step (the original reads out of
+     range); a work object whose deposit is gone is let go (the original keeps the pointer); a zero-length direction
+     causes no turn and no fall (the original produces not-a-number).
+   - **Ships in the selection** ([ingame-ui.md](../sim/ingame-ui.md) §3.5): the pick list holds only buildings and
+     route buoys, so removing another map object does not reorder it (in the original it can, S 0068cff0, which
+     decides only a tie between a buoy and a building on one ray); `Math_FastSqrt` is not used in the ship pick
+     (only which of two ships is nearer can differ).
    - **Goods** ([renderer.md](renderer.md) §14): the spill quirk and the `MergeStacks` transform are reproduced, with
      the refined switch `ItemPile.PlaceMergedItems` (off); carried goods keep their own size (the character scale 1.2
      is in the skeleton and taken out of the attachment rotation); the holder rule runs once per frame (the original's
@@ -914,11 +980,10 @@ These matter more in the remake than in the original, because Harmony patches ca
      the ships share one swell phase (the original's per-ship start value at `+0x74` not read), sample their height
      at the water plane and add the original's +π/2 to the heading (AM §3.17).
    - **Fog of war** ([renderer.md](renderer.md) §4.5): no left-over-texel quirk; no separate black `Unexplored`
-     pass; the overlay clamped in every shader (the original wraps it, except in `water_shader.fx`); a character
-     uses the cell of the sample vertex nearest its interpolated position (the original its logic cell); a border
-     post is kept or hidden whole; flags and carried goods follow the block rule (the original hides carried goods
-     with their carrier, S 006919b0); hiding a building's node hides its decal and flag; the water of the border
-     skirt is opaque black; no refined variant.
+     pass; the overlay clamped in every shader (the original wraps it, except in `water_shader.fx`); a border post is
+     kept or hidden whole; flags follow the block rule; hiding a building's node hides its decal and flag; no refined
+     variant. Characters and their carried goods use the settler's logic cell, as the original (`MotionSample.Cell`,
+     S 006c57b0, S 006919b0).
    - **HUD frame, minimap and messages** ([renderer.md](renderer.md) §15.5): a message's remaining time falls by
      the tick's simulated time (the original subtracts the frame time once per logic tick, so its lifetime
      depends on the frame rate); the minimap picture is each cell's pattern average colour lit by the map's light,
@@ -939,7 +1004,10 @@ These matter more in the remake than in the original, because Harmony patches ca
      (PA §8 allows it); caps of 192 emitters per effect and 24,000 particles in all at Faithful, 64 and 8,000 at
      Low, a refused start retried at the next state change; `sadk_time` wraps every hour; pass 2's volume uses the
      box fixed at the start; work-clip emitters fade out when the clip stops [inferred]; a one-shot of an endless
-     effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide).
+     effect stops it at once; one fallback fire-point stream per building layer (the original's is process-wide);
+     building attachments (the sacrifice movies) advance per frame, the original's per logic tick (`EffectList::Update`
+     inside `Building::Update` S 006abcf0); an emitter takes its link's rotation without scale (a scaled link gives
+     the original a non-unit quaternion [inferred]).
      The effects follow-up (5281ab9): the effect and movie names (`sacrificeWaitForGoodsGfx`,
      `sacrificeResearchGfx`, `HitDamage`, `ShipSpeedUp`, `BuildingArmor`, `WorkerPause`) are constants citing the
      exe's strings (they could move to `visuals/particles.xml`); a movie's effects are placed once per keyframe at
@@ -947,7 +1015,10 @@ These matter more in the remake than in the original, because Harmony patches ca
      source box's centre; the buffs ignore `showEffects` (its meaning is open).
    - **The computer player** (§6.17): mechanic tests use `MatchKit.WithoutComputers` (computer slots as remote
      humans); the literal good ids are handled two ways (`AiGoodRolesDef` role flags and `GoodRulesDef` flags), to
-     be unified; the construction back-off pair is written into the state (the original's `Store` lacks it);
+     be unified; the construction back-off pair and the street builder's source cell go into the extension of
+     `core.game.ai.remakestate` (the original's `Store` lacks them); a remake save written before the AI was saved is
+     repaired at its first tick (the computer slots activated anew; script-enabled campaign AI profiles are not
+     restored);
      references are `Int64` (the original's are 20-byte `Unique`s); crash guards (a profile ticker of 0, a group
      weight total of 0, stage-1 needs without a depot, the production control's endless loop without a controllable
      good); the grids are sized in `Build(PostLoad)` [inferred]; the average productivity counts a building without a
@@ -962,8 +1033,8 @@ These matter more in the remake than in the original, because Harmony patches ca
      `!DEFEAT`.
    - **Save and load** (§9.1): the remake keeps state the original loses on load (the active deposit order, the
      animal time stamps, the victory state, the ship sinking timer, the open-need index, a few appended fields); the
-     game speed is not restored (as the original); ships go into an extension; the AI, the messages, the chests and
-     the quests are written in empty or default form into the original's sections; a load checks section names and
+     game speed is not restored (as the original); ships go into an extension; the chests and the quests are written
+     in empty or default form into the original's sections; a load checks section names and
      versions; strings are Latin-1; the original's rebuilds are kept (construction flags, object layers, indexes,
      cancelled street planners, the stock running total); the military's path cache is empty with stamp 0 after a
      load (the original stamps the load tick); the saved next-tick time is the float32 sum.
