@@ -6,7 +6,7 @@ C function registered for Lua, every place the engine calls into Lua, and the ho
 - Binary: the DRM-free `SADK.exe` (Ghidra `/sadk_noav.exe`, image base `0x400000`; static addresses are runtime
   addresses). Declarations are named as in `sadkmod/build/include/sadkmod/game/sadk_noav/fn/*.hpp`, written here
   without the `sadk::game::` prefix: `fn::X` is `sadk::game::fn::X`. "address only" means the header has an
-  `Addr<>` (no signature yet), not a callable `Fn<>`.
+  `Addr` (no signature yet), not a callable `Fn<>`.
 - Status tags: **[known]** = read in the binary at the given address (decompile, disassembly, data or string);
   **[inferred]** = follows from what was read plus Lua 5.0.2 library semantics or the shipped scripts, not
   observed at run time; **[TODO]** = not established. Nothing here has been checked in the running game.
