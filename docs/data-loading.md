@@ -79,6 +79,8 @@ from `ConnectAndJoin` `0040ad60` (the joiner's `UserInformation 0x30001`) and fr
 host comparing it) [known].
 
 The files are found by listing the disk (`FindFilesInDirectory` `006e4310`: `FindFirstFileA` / `FindNextFileA`)
-and each one is then opened by name [known]. With the mod host's file redirect (`mods/README.md`), a mod's
-**replacement** of an existing file is opened and counted; a file that exists **only** in a mod is never listed, so
-it is not counted [inferred from the two facts above].
+and each one is then opened by name [known]. The mod host's file redirect (`mods/README.md`) would open a mod's
+**replacement** of an existing file instead; a file that exists **only** in a mod is never listed [inferred from the
+two facts above]. assetshare (`lobby/mods/assetshare`), which every lobby match needs, hooks the function and switches
+the redirect off for every mod while it runs (`sadk::mods::redirect_mods`), so the checksum is the one of the game's
+original files whatever mods a player runs; server mods, which change the match, are matched by assetshare itself.

@@ -78,8 +78,10 @@ and load order: `writing-mods.md`, "Data files".
 
 - A property script with a new name in `scripts\properties\` runs after the game's own; for a few changed values
   that is better than replacing the game's file (example: `mods/foresterfix`).
-- Changed `scripts\**\*.lua` or `settings\**\*.xml` change the build checksum: the game can then play matches only
-  with players who have the same files ([data-loading.md](data-loading.md) §3; server mods in `writing-mods.md`).
+- Changed `scripts\**\*.lua` or `settings\**\*.xml` in the game's own folder change the build checksum: the game
+  can then play matches only with players who have the same files. A mod's replacements are left out of it
+  (assetshare, [data-loading.md](data-loading.md) §3), so the files of a mod that changes the match belong in a
+  server mod, which every player gets from the host (`writing-mods.md`).
 - The game caches converted meshes as `%LOCALAPPDATA%\SAdK\*.mshraw`; the mesh of a mod is cached apart from the
   game's. The `nomeshcache` mod loads every model from its `.KEX` while models are being changed. The repository
   has no `.KEX` writer: `kex.py` reads and splits.

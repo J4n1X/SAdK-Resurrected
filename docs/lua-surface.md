@@ -156,8 +156,10 @@ The chunk name passed to `luaL_loadbuffer` is the path string itself (no `@` pre
 strings belong to the effect system, not Lua [TODO: not checked].
 
 **Checksum:** `GameData_ComputeBuildChecksum` `005ab800` covers every `[data]\scripts\**\*.lua` (and
-`settings\**\*.xml`); `menu.cfg` is not matched by `*.lua`. A mod that changes a `.lua` changes the build checksum
-that multiplayer peers compare [known: strings `[data]\scripts`, `*.lua` at `005ab880`/`005ab89a`].
+`settings\**\*.xml`); `menu.cfg` is not matched by `*.lua` [known: strings `[data]\scripts`, `*.lua` at
+`005ab880`/`005ab89a`]. A changed file in the game's own folder changes the build checksum that multiplayer peers
+compare; a mod's replacement does not, since assetshare takes the checksum with every mod's files left out
+(`docs/data-loading.md` §3).
 
 ### 2.3 Map-script lifecycle
 
@@ -836,7 +838,7 @@ so every hook below sees the first call [inferred].
 | Add functions only while a map is loaded, next to `logic` | `fn::GameScript_RegisterLuaLibraries` (`005b2990`) | after `original()`, `fn::ai::script::LuaScriptHost::RegisterLib(host, *var::g_GameScript_ThreadId, &name, regs)` (name is an `msvc::string`). Note the role-0 condition (§2.3) | [inferred] |
 | See or rewrite **every** registration (incl. replacing a game function's entry) | `fn::luaL_openlib` (`005cd430`) | inspect `libname` / `regs`; for a table built on the stack, pass a modified copy to `original` | [inferred] |
 | Replace one Lua-visible function | the C function itself (tables in §3) | `Hook<fn::…>` on that address; same `int(lua_State *)` signature | [inferred] |
-| **Replace a script file** | none needed | `mods\<name>\data\<path>` in plain text (`scripts\…\*.lua`, `menu.cfg`); goes through the redirect + plain-file pass-through (§2.1). Changes the MP build checksum for `.lua` | [inferred]; host tested under Wine only |
+| **Replace a script file** | none needed | `mods\<name>\data\<path>` in plain text (`scripts\…\*.lua`, `menu.cfg`); goes through the redirect + plain-file pass-through (§2.1). Left out of the MP build checksum (assetshare); a change to the match belongs in a server mod | [inferred]; host tested under Wine only |
 | **Add a script / run code after a script** | `fn::ai::script::LuaScriptHost::RunFile` (`005c9690`, thiscall `(host, threadId, msvc::string *path)`) | after `original`, match the path (e.g. `data.lua`, the map `.lua`, `menu.cfg`) and run an extra file with `RunFile(host, threadId, &extra)` in the same thread. Without code: a data-only mod can replace an existing script that calls `Default.CallScript` (e.g. `scripts\properties\data.lua`) to pull in a new file | [inferred] |
 | Observe every script load with its decrypted source | `fn::LuaDebugger_NewFile` (`005cdc40`, stdcall) or a `LuaDebugger.dll` next to `SADK.exe` exporting `_AddLuaState@4`, `_RemoveLuaState@4`, `_NewFile@16`, `_Break@4`, `_Hide@0` | the DLL route needs no hook at all; the game loads it by name on first use | thunks [known]; DLL route [inferred], untested |
 | **Observe events** (all C++ → Lua calls by name) | `fn::ai::script::LuaScriptHost::CallGlobal`, `CallGlobal_Number`, `CallGlobal_XY` (`005c9780`, `005c9840`, `005c9920`) | log `funcName` / args before `original`; or hook the named wrappers in §4.1 (`fn::GameScript_CallOnLogicTick`, …) | [inferred] (call paths [known]) |
