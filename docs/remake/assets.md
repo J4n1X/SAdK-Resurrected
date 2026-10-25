@@ -13,7 +13,8 @@ AM = `../sim/animation-models.md`.
 
 ## 1. What is fixed [binding]
 
-- No original data is shipped; the remake reads the player's installation.
+- No original data is shipped; the remake reads the player's installation. The one exception is KonradAr's English
+  fan translation (§8), shipped with the maintainer's permission, its pictures included.
 - Assets are converted **once, at the first start**, into formats the engine loads directly; again only when their
   sources change. Every start compares the recorded file list (size and modification time, no hashing); a changed
   file is hashed and converted again; a missing installation stops the game.
@@ -504,6 +505,20 @@ label.
   switched with the intent `engine.language { code }`. When the base language cannot be told, it is the
   installation's only language folder. `Locale.LanguageFile("fonts/X.fnt")` finds a file of the chosen language (with
   the same fallback).
+- **Localised pictures**: a file outside the language folder, `game/<path>`, gives way to the chosen language's
+  `game/language/<lang>/<path>` when a layer has it, in any format of its kind (`TextService.LocalizedPath`, used by
+  the renderer's file lookup `RenderContext.Find`). Pictures with words on them (the tech trees, the logo) follow the
+  language as fonts do, and a translation adds its pictures beside the base language's. The original has no such
+  lookup: a translation of it replaces `game/gfx/` in place.
+- **English** ships with the game [implemented, sadk-remake 2026-10-25]: KonradAr's English fan translation (v0.11,
+  October 2026, <https://www.moddb.com/games/the-settlers-rise-of-cultures/downloads/english-fan-translation-sadk>),
+  with the maintainer's permission, in the engine's assets: `game/language/en/` holds `ui`, `briefings`, `credits`
+  and `lobby_ui.txt` (the translation's `de` files, converted as an installation is), its fonts and its pictures
+  (`gfx/techtree_*.png`, `gfx/ui_siedler2008logo.png`), and `credits/english-translation-readme.txt` keeps the
+  translator's notes. The credit is the language's `!engine.language.credit` (empty in `de`): the tip of core.game's
+  language box while English is chosen, and a line under English on the engine's own options screen.
+  The installation's layer lies above the engine's, so an installation with its own `en` folder keeps its texts.
+  `lobby_items.txt` is not translated and falls back to the base language.
 
 ## 9. Open points
 
