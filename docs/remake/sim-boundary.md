@@ -631,13 +631,17 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   from each package's `locale/<lang>/map.txt`, with its `preview.png`, in `MapListEntry::Less` order S 00612ec0
   and the row colours of S 00614ec0.
 - **Start**: emits `core.game.match` with the slots, start resources, win condition, reveal and `loading=true`;
-  the match shows the loading panel of `menuLoading.xml` for a frame before the build and fades it out over 2 s
-  (FS §3.9).
+  the match shows the loading panel of `menuLoading.xml` and loads in steps [implemented, sadk-remake 2026-10-25]: the
+  bar moves by the original's stages and weights (`EmitTick` S 00683b50, 600 in all: scene 50, map renderer 50, config
+  50, characters 100, building configs 100, rest 50, elevation map 100, finalizing 10 × 10; FS §3.9), a frame is drawn
+  whenever the status text changes and while the world is built on a worker thread, then `!completed` at the full bar
+  and a 2 s fade-out. The remake's work stands at the original's stages by counterpart [inferred] (`LoadStages`,
+  `src/Sadk.Client/MatchLoad.cs`); an unattended start runs the same steps without frames.
 - **End**: `GameEndDialog` from `menuGameEnd.xml` (FS §3.10): `!Continue Game` goes on, `!Quit` leaves through
   the statistics to the main menu, as the back button does.
 - **UI**: `UiBuilder.Kinds` lets a screen own widget kinds (`UiCombo` for `comboboxnew`, `UiList` for
   `listbox2`); shapes take borders per side.
-- **Not built**: the row portraits, the player previews, the picture slider, a stepped loading progress.
+- **Not built**: the row portraits, the player previews, the picture slider.
 
 ### 6.17 The computer player's economy as built [implemented, sadk-remake 8ba0948]
 

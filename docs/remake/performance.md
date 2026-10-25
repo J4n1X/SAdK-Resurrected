@@ -134,7 +134,7 @@ interface, which then keeps the periods as a table for the original's staggered 
 | a bloom term computed and never shown | R §3.13 | dropped |
 | every sound sample decoded at start-up | AU §3.1 | loaded per match, on first use |
 | the build checksum recomputed (every script and settings file decrypted) on every call | `../data-loading.md` §3 | once per mod set |
-| one synchronous present per loading step, waiting for the vertical sync (about 230 per match) | `../sim/frontend-screens.md` §3.9 | loading on worker threads, the loading screen drawn at its own rate |
+| one synchronous present per loading step, waiting for the vertical sync (about 230 per match) | `../sim/frontend-screens.md` §3.9 | the panel drawn once per change of status text and while the world is built on a worker thread; the layers' `Show` and the HUD stay on the main thread [implemented, sadk-remake 2026-10-25] |
 | all scene data and models reloaded for every match | `../data-loading.md` §2 | resident across matches, reloaded only when the mod set changes |
 | street geometry streamed into a dynamic buffer every frame, for each view | WO §3.8 | static meshes per street |
 | all eight players' border lists rebuilt on any territory change | R §3.8 | the changed rectangle only |
