@@ -1218,6 +1218,28 @@ the building is not hidden and fog-visible (+0xc4) (§3.7). Building attachments
   last cell reached, +0x30, or the fine position fields +0xe0 / +0xe8 on fine walks; positive → `enterDistance`,
   read as going in [inferred]). A worker at its workplace also triggers it while its current clip still has time
   left and has a slot override (`CharacterWorker::UpdateWorkplaceWork` S 006c88c0, call at S 006c89d4).
+- *The door rule* [known, x87 disassembly of S 006c70c0, S 006c73a0, S 006c7510, S 006c7640]: `FindTargetBuilding`,
+  `GetDoorPassDirection` and `UpdateBuildingEntrancePass` treat the figure as moving when the logic interpolator's
+  progress (movement +4) is `>= 0` (`FLDZ; FCOMP [p+4]; FNSTSW; TEST AH,0x41; JP/JNP` at S 006c70d0..006c70dc,
+  S 006c73d0..006c73e1, S 006c7526..006c752e; the decompiler's `!NAN(f) && 0.0 < f != (f == 0.0)` hides this). Not moving
+  is -1.0. A walk that has just started has progress exactly 0.0 and counts as moving. Only the final threshold test is
+  strict: `TriggerWorkCycle` is called when `enterDistance` (+0x90) or `leaveDistance` (+0x94) `< progress` (FCOMPP /
+  TEST AH,5, S 006c756c..006c7573); with `leaveDistance` 0 a leaving settler opens the door from its second sample on.
+- *Target refresh* [known]: the refresh in `CharacterSettler::Update` S 006c7640 runs in the tick in which `SetPath` set
+  the flag (+0x18): the callback fires inside `StartRoughMove` S 00657480 (also `MoveToFinePos` S 006574d0, a completed
+  step in `SettlerMovement::Update` S 00658140), and the render hook (`SyncLogicTick` step 22 -> `UpdateLogicAll`
+  S 006929e0 -> `CCharacter::UpdateLogic` S 006909f0 -> `CharacterSettler::Update`) is the last step of the tick, so the
+  first refresh sees the step's progress as the logic left it (0.0 right after a start). The flag is cleared
+  unconditionally right after the `UpdateTargetBuilding` call (S 006c768d; the else branch at S 006c766d is dead code),
+  only while no route spline is active (`CharacterMovement +0 == 0`); on a spline it stays set and the lookup is retried
+  every tick. The target is not recomputed per tick: a target survives a state change that starts no new walk (a
+  carrier's 0x13 -> 0x14 keeps the building until the next `SetPath`). `CharacterSettler::Update` runs once per logic
+  tick; the progress is the logic interpolator's, not a frame-interpolated one.
+- *Worked example, the carrier's delivery* [known]: 0x12 street walk -> 0x13 `EnterBuilding` (target by the step's
+  destination cell, `FindTargetBuilding(false)`; the door opens past `enterDistance`) -> 0x14 inside (`DeliverPackage`,
+  no door call, target kept) -> 0x15 leave (target by own cell, `FindTargetBuilding(true)`; the door is held open from
+  `leaveDistance`). The carrier never calls a door function itself; the door and the building's Working clip use separate
+  animation slots (0 and 1) and neither reads the other's latch.
 - *Work*: `Building::PlayOneShotAnimation` S 006aa6f0 (vftable +0x38), called by `UpdateWorkplaceWork` while the
   worker is at its workplace and no one-shot runs (a building whose property byte +0xb0 is set, the catapult,
   restarts it at each new work start): `Working` on slot 1, started `workElapsed` into the clip [inferred: the

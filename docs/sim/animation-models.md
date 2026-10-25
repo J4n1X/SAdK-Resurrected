@@ -882,7 +882,7 @@ byte +0x58 set, so `Item::Update` S 006d0720 returns at once for it and never re
   carrier S 006c8df0, specialist S 006c8300 (shared with the constructor and the NPC logic; classes from
   `CCharacter::Init` S 00690760), each looked up in the building renderer's grid, which is keyed by the
   **entrance** cell (`AddBuilding` S 006a2bf0 → `GetInstanceIdAtTile` S 0069f790). `OnBuildingRemoved` S 006c7040
-  clears the target and the inside flag when the building goes. While the figure is **not** moving, first
+  clears the target and the inside flag when the building goes. While the figure is **not** moving (progress `< 0`; a walk that has just started has progress 0.0 and is moving, see [rendering.md](rendering.md) §3.9 "The door rule"), first
   `UpdateShipRideFacing` S 006c7140 (a settler that references a ship faces the ship's current cell; once aboard,
   wait state 4, it is marked as riding, byte `+0x2a`, and hidden), then face the cell at `settler +0x70` when it is not -1 (`FaceTowards` S 006c4b50, not
   snapped); run the door trigger of the target building when there is one (`UpdateBuildingEntrancePass`

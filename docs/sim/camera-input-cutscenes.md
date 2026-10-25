@@ -641,6 +641,15 @@ The in-game screen `nMenu::Game` (event face vftable S 007eec1c) [known]:
 | key up | `OnKeyUp` S 005eb230 | Shift clears the team-chat byte; `Camera::HandleKeyUp` |
 | character | `OnChar` S 005eb180 | below |
 
+The left click on the world is the PRESS: `nMenu::Game::OnMouseButton0Down` S 005eaae0 (swallowed while `IsGameHanging`)
+calls `Cursor::SelectAtCursor` S 00788370 and `MenuSelection::HandleClick` S 00617910. The release is the stock
+`nUi::Object::OnMouseButton0Up` S 005f1150 (click latch, focus state, `buttonPressed[0]`), and the Game desktop has no
+mouse-move handler (S 0072db80 returns 0), so there is no drag threshold, no selection rectangle and no left-button
+scroll (`UpdateStandardMode` S 00786e70). The second press of a double click arrives as `WM_LBUTTONDBLCLK` (event 1) and
+reaches Game's slot 14 = S 005eab30, which only sets focus state 2: it clicks nothing [known: decompile]. The remake
+clicks on the press with the original camera (`BuildController.LeftClickFires`); with its free camera (left drag pans) on
+a release within 4 px of the press [the remake's own].
+
 `OnChar` [known]: every character except `p` is swallowed while the network game hangs. Then the AI debug keys
 (§3.13). Then: `h` → camera home (§3.5); `p` → `nMenu::System::TogglePause` (no effect in network modes 1..4,
 [logic-core.md](logic-core.md) §3.1); `x` → in network modes 1..4, toggles menu screen 7. Other characters are

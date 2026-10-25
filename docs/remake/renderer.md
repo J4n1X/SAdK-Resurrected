@@ -932,7 +932,15 @@ show the 1.5-unit facets.
 - Rebuilds: each frame the selection's changes go out as one batch (the regions and near meshes whose blocks changed
   level, stitch or neighbour level); its CPU work runs in parallel on workers, the Godot meshes are made after, and the
   whole batch is swapped in in one frame. The first picture is built synchronously in the layer's first frame
-  (Steinfjord, 6 cores, Compatibility renderer: Faithful 279 ms, Moderate 572-733 ms, Very High 0.9-1.0 s).
+  (Steinfjord, 6 cores, Compatibility renderer: Faithful 279 ms, Moderate 572-733 ms, Very High 0.9-1.0 s). A jump of the
+  selection point (it moves more than a region's side, `TerrainRebuilds.JumpDistance`, in one frame: a minimap click, a
+  good button, the message list) is stepped the same way: the levels of the new place are built on the workers and waited
+  for, and the batch is swapped in before the frame is drawn. Only the regions whose signature changes are built (the
+  place left and the place reached), not the map. The geomorph is a function of the eye alone (§10.2), so on meshes made
+  for the new eye it shows the steady state and nothing reshapes after the jump. Scrolling and orbiting keep the
+  asynchronous path. The cost of a jump is logged (`terrain: camera jump, levels of the new place built in N ms`);
+  measured on the real GPU machine: 95-139 ms per jump (at Low, Compatibility renderer, 6 cores, MP_6P_ship_ahoi:
+  115-180 ms).
 - Memory: only the dense levels (finer than the fine grid) are kept on the CPU (the wanted level and one either side,
   prefetched one hysteresis ahead); the original's levels are built again with each batch. Measured on Steinfjord
   (vertex buffers / normal texture / CPU at rest):
