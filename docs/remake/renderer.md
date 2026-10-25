@@ -1715,6 +1715,7 @@ The table of RR §2.3 stands. Added here:
 | Far plane, zoom range | 500, original steps | extended |
 | Fog | the map's fixed distances, linear on the view depth | scaled with the eye distance beyond the original's 84 units (§11.1); far plane, shadow range and LOD bands follow it; smooth curve (the default) |
 | Terrain detail | Faithful: flat triangles of the fine grid | Smooth (4×), Smoother (9×), Smoothest (16×) triangles on cubic patches (§10.2) |
+| Ground shading (`Terrain occlusion`) | none (the original's light) | baked ambient occlusion of the terrain, or of the terrain and the objects standing on it (§25 item 1) |
 | Shadow preset | one map, 2048, 2 × 2 taps; the default is a light preset close to it (§8.4) | cascades, larger maps, softer filter |
 | Shader animation clock | as the original's timer (open, §7.3) | simulation-scaled |
 
@@ -1726,13 +1727,17 @@ match load.
 panel or the map view's quick switches, which are a form over the same object. Every change applies at once,
 including the region size and blended foliage, which rebuild the shown world.
 
-**The options panel** [implemented, sadk-remake 726a5b1]: core.game's `core.game.options`, built from the original's
-`menuoptions.xml` (`engine.options` is routed to it), opened from the main menu, the match's `cbMenu`, `btOptions`
-and O. The original's six groups keep their order, controls and places; the remake's groups (WINDOW, GRAPHICS,
-SHADOWS, QUALITY after VIDEO; KEYS after INPUT; INTERFACE after GAME; one group per mod at the end) sit after the
-original group they belong with; every change applies at once, with no apply or cancel. Which settings are the
-engine's and which a mod's: [mods.md](mods.md) §6.2. The original's eight graphics values live in the engine's
-`RenderSettings` with the original's mappings (`ApplyOptionValue` S 005e5bd0, `LoadOptionValue` S 005e55b0):
+**The options panel** [implemented, sadk-remake 726a5b1, tabs from the registry 2026-10-25]: core.game's
+`core.game.options`, built from the original's `menuoptions.xml` frame and `menuIngameSettings.xml`'s tab control
+(`engine.options` is routed to it), opened from the main menu, the match's `cbMenu`, `btOptions` and O. Its tabs and
+groups come from the options registry ([mods.md](mods.md) §6.2): the engine's tabs GRAPHICS (display, the graphics
+preset and, with the advanced graphics, the original's VIDEO group with the world settings), SHADOWS and QUALITY
+(advanced only), SOUND (the original's AUDIO group), CONTROLS (`keys`: the key bindings, then core.game's INPUT group),
+INTERFACE (language, font, the advanced graphics switch), then the mods' places (core.game's GAME tab with its GAME
+group, refined's switches after it). The original's groups keep their controls, titles and look where a section has
+their name; every change applies at once, with no apply or cancel. Which settings are the engine's and which a mod's:
+[mods.md](mods.md) §6.2. The original's eight graphics values live in the engine's `RenderSettings` with the
+original's mappings (`ApplyOptionValue` S 005e5bd0, `LoadOptionValue` S 005e55b0):
 
 | Option | Effect in the remake | Original |
 |---|---|---|
@@ -1747,7 +1752,7 @@ engine's and which a mod's: [mods.md](mods.md) §6.2. The original's eight graph
 | Element | Attributes |
 |---|---|
 | `Reflections` | `mode` (Off, ScreenSpace, Planar), `strength`, `resolution`, `range`, `rate`, `objects`, `shadows`, `minDepth`, `fog` (the mirror fogged as the original's, §11.1) |
-| `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4), `lod` (Distance — the default, the original's —, Shape; §10.4) |
+| `Terrain` | `detail` (Faithful, Low — the default —, Moderate, High, VeryHigh; §10.4), `lod` (Distance — the default, the original's —, Shape; §10.4), `occlusion` (Off — the default, the original's light —, Terrain, Objects; §25 item 1), `occlusionStrength` (0..3, 1) |
 | `Fog`, `Sky`, `Light`, `Foliage`, `Batching` | `mode` (Dynamic, Fixed, Off), `curve` (Smooth, Linear); `style` (Clouds, Dome); `perPixel`; `blended`; `regionBlocks` |
 | `FogOfWar` | `enabled` (§4.5) |
 | `Shadows` | `enabled`, `mapSize`, `splits`, `filter`, `range`, `darkness`, `softness`, `blur` |
@@ -1760,6 +1765,64 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 **Anti-aliasing defaults** (maintainer, 2026-10-25): `RenderSettings.Msaa` is Off and FXAA is on; MSAA is too expensive
 as a default (the integrated graphics target, principle 6). The cutouts' alpha to coverage (§12) only has an effect
 once MSAA is switched on; FXAA is the cheap setting that also smooths their edges.
+
+**Simple and advanced graphics** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19]: by default the
+options show the graphics as five presets; the switch *Advanced graphics* in INTERFACE (`<Interface
+advancedGraphics>`, off by default) shows every graphics control listed above (the VIDEO group on the graphics tab,
+the SHADOWS and QUALITY tabs, and mod sections marked advanced). The simple view keeps the display group (resolution,
+display mode, screen, V-Sync, frame limit) and the preset; everything else of the options is the same in both views.
+
+The presets (`GraphicsPresets`) are the original's quality presets 0..4 (`Settings::ApplyQualityPreset` S 00695860,
+`../sim/app-shell.md` §3.10) through the original's conversions, extended to the remake's settings that cost. A preset
+never chooses another look than the original's (water, terrain at the original density) and never turns on MSAA,
+SSAO, depth of field or TAA (principle 6). Presets change performance only, never the look. MSAA is in no preset and
+never a default (too expensive); FXAA is the cheap default anti-aliasing [the maintainer, 2026-10-25]. The look choices that cost nothing (sky,
+fog mode and curve, decals, blended foliage, the baked ambient occlusion `<Terrain occlusion occlusionStrength>`, the characters' LOD and phase, shadow range, darkness, softness and blur,
+mirror resolution, range, rate, objects, fog and distortion limit, the render scale and upscaler, mipmap bias, terrain
+levels and cache, batching) are the player's: no preset sets them. A value another value of the preset makes
+meaningless is not set either (the shadow map without shadows, the mirror quality without a mirror, the object
+details at `Part0`).
+
+| Setting | 0 Lowest | 1 Low | 2 Medium | 3 High | 4 Highest (default) | Source |
+|---|---|---|---|---|---|---|
+| GroundDetail | 0 | 0.25 | 0.5 | 0.75 | 1 | original +0x20 |
+| Shadows | off | off | on | on | on | original: shadow detail > 1/6 |
+| ShadowQuality (level) | — | — | 2 | 4 | 6 | `trunc(d · 6 + 0.5)` of +0x2c |
+| ShadowMapSize | — | — | 1024 | 2048 | 4096 | twice the original's `128 << trunc(q · 4)` (512, 1024, 2048): the remake's map is shared by its cascades [remake] |
+| ShadowSplits | — | — | None | Two | Two | remake |
+| ShadowFilter | — | — | Hard | Hard | Hard | remake |
+| Reflections | Off | Planar | Planar | Planar | Planar | original: mirror quality > 0 |
+| MirrorQuality | — | 0.25 | 0.5 | 0.75 | 1 | original +0x34 |
+| ReflectionDetail | 0 | 1 | 2 | 3 | 4 | `trunc(s · 4 + 0.5)` of +0x38 |
+| ReflectionShadows | off | off | off | off | off | remake |
+| Detail (stored only) | 0 | 1/3 | 2/3 | 1 | 1 | original +0x40 |
+| BuildingLod / ObjectDetails | ByDistance 0 | ByDistance 0.25 | ByDistance 0.5 | ByDistance 0.75 | Part0 | original +0x44 (1 = part 0 everywhere) |
+| TextureQuality (stored only) | 0 | 1/3 | 2/3 | 1 | 1 | original +0x10 |
+| TerrainDetail | Low | Low | Low | Low | Low | remake (the original's density) |
+| WaterLook | Original | Original | Original | Original | Original | remake |
+| Msaa | Off | Off | Off | Off | Off | maintainer 2026-10-25 |
+| ScreenSpaceAA | Off | FXAA | FXAA | FXAA | FXAA | remake |
+| Taa, Ssao, DepthOfField | off | off | off | off | off | remake |
+| Anisotropy | 0 | 2 | 4 | 8 | 16 | remake |
+| Particles | Low | Low | Faithful | Faithful | Faithful | remake |
+| PixelLight | off (the original's per-vertex light) | on | on | on | on | remake |
+
+The original's shader level +0x3c (2 for presets 0 and 1, 3 above) has no remake setting [TODO, app-shell.md §2.7:
+what reads the scene's copy is not established].
+
+**First start** [the maintainer, 2026-10-25]: as the original picks its preset on its first run from the fill rate it
+measured (preset 0 below 500 Mpixel/s, 1 below 700, 2 below 1000, 3 below 1500, 4 above; S 00695fc0, S 005798a0,
+`../sim/app-shell.md` §3.10), the remake's first start chooses one from the adapter kind Godot reports
+(`RenderingServer.GetVideoAdapterType`, `GraphicsPresets.Detected`) [inferred mapping]: a discrete GPU → 4 Highest;
+integrated graphics → 1 Low; another or unknown kind → 1 Low (the Compatibility renderer reports no kind, whatever the
+adapter); a virtual GPU or the CPU → 0 Lowest. The first start is the settings file holding no `<Graphics>` element
+(no file yet; every save writes the element of each bound section, `GameFolderSettings.Holds`). The preset is applied,
+logged once (`graphics: first start, adapter <name> (<kind>): preset <n>`) and saved at once, so later starts keep the
+player's choice. A new `RenderSettings` (the settings' defaults, and Defaults in the options) stays the highest preset.
+
+**Custom.** Nothing is stored for the preset: the simple view shows the preset whose values the settings hold, or
+*Custom* (an extra last entry, only while no preset matches) after a change in the advanced view; choosing a preset
+sets its values. Choosing *Custom* changes nothing.
 
 ## 20. Performance [draft]
 
@@ -1849,9 +1912,39 @@ once MSAA is switched on; FXAA is the cheap setting that also smooths their edge
 The terrain looks like the original's because its information is the original's (§24 item 7). What would change the
 picture, by effect per cost, all as refined-look switches beside the faithful look:
 
-1. **Shading baked from the heightmap**: ambient occlusion or horizon shading of the terrain (valleys, creases and the
-   foot of slopes darker), computed once on the CPU per map and on height edits, read as one texture per pixel
-   (principle 14). The largest gain in depth for the least GPU.
+1. **Shading baked from the heightmap** [implemented, sadk-remake bakedao]: ambient occlusion of the ground, baked on the
+   CPU when a map is shown and where its heights or objects change, read as one texture per pixel (principle 14); the
+   setting `<Terrain occlusion="Off|Terrain|Objects" occlusionStrength>` (Off, the original's light, is the default).
+   - **Texture**: RG8 with mipmaps over the map's extent, 2 texels per fine vertex step (0.75 units; Steinfjord 921 × 797,
+     1.9 MB with mipmaps); R the sky a ground point sees with the map objects, G without them. Globals
+     `sadk_ground_occlusion`, `_map`, `_strength` (core.game's), read through `shaders/terrain/occlusion.gdshaderinc`.
+   - **Terrain** (HBAO): the drawn surface (`MapGeometry.HeightAt`, so it follows the terrain detail) sampled at every
+     second texel (one point per vertex step), smoothed by a 9-tap binomial (the ripple between vertex rows would alias
+     into stripes), then from each point 16 directions walked out to 24 units (a terrain block) in 12 quadratically spaced
+     steps; per direction the rise of the highest elevation above the tangent plane's, weighted by `1 − (r/R)²`. Planes,
+     sloped or not, stay open; valleys, creases and slope feet darken. The texels between the points are interpolated.
+   - **Objects** (level Objects): every map object that casts a shadow (its element's `shadowCast`, never an additive one:
+     the highland and lava fog hide no sky) and every building reports an occluder: the sphere over its world box (radius
+     of the footprint's area circle, at most ¾ of the height; centre at half the height above its ground; nothing below
+     0.75 units), its cosine-weighted share of the sky `c r² / d³` taken from the ground around it out to where it falls
+     under 2 %, at an opacity of 0.35 (the remake's own, by eye: a sphere overstates a tapering tree, crowns let sky
+     through), multiplied over all occluders. A building site occludes by its progress in quarters. Objects report at
+     every level, so a switch needs nothing from them.
+   - **Receivers**: the terrain (both passes), the streets and the ground decals multiply their albedo by R (in the
+     original's gamma space: `R^(2.2·strength)` on the linear albedo; not the emission of lava and ice). Trees, rocks,
+     stones, doodads and crops read G per vertex (one float varying) and fade it out over their lowest 3 units, so an
+     object is darkened at its foot as the ground around it and never by itself. Buildings, characters, carried goods,
+     flags, buoys and water plants receive nothing (their light maps and their own light stay the original's).
+   - **Updates**: the layer `core.game.occlusion` gathers changes on the main thread and runs one job at a time on a worker
+     that owns the bake's arrays; its image is uploaded whole. A height change samples its texels at once (where the surface
+     is current) and recomputes the terrain within 24 units plus the smoothing; an object that comes, goes or moves
+     composes only its reach. A window equals a whole bake (tested).
+   - **Cost** (Steinfjord, 6 cores, Release build, processor time; wall time on a loaded machine in brackets): the whole
+     bake 0.95 s (200–550 ms): heights 0.2 s, terrain walk 0.65 s, 3000 occluders 0.06 s; in the game (Debug build) the
+     first bake with its mipmaps 0.46–0.9 s on workers and 1.5 ms upload. A building plot's height change: 0.4 ms of
+     sampling on the main thread, 20 ms (7–10 ms) on a worker for 16.8k texels; an object 3 ms (2 ms). The objects of a
+     match arrive after the first bake: one more compose of the whole map (60–140 ms on workers). GPU: one RG8 read per
+     ground pixel, one vertex read per object vertex; Off skips both (a uniform branch).
 2. **Texture on steep slopes**: the original projects every pattern from above, so cliffs and steep slopes show
    stretched streaks; triplanar (or slope-aligned) mapping only where the slope is steep.
 3. **Displacement per pattern** (§10.2): the detail the fine terrain levels need to pay off. Not painted by hand

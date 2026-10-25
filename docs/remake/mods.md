@@ -171,15 +171,38 @@ Each mod declares its settings in C# (`ISettingsStage`) or in `data/settings.lua
 | `user` | presentation and input only | local; never read by simulation code |
 
 `user` settings may change while the game runs and announce the change; their values are kept in the profile as
-`<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The options panel shows them in one
-group per mod (below), labelled by the text key `!<mod id>.<name>`. Startup settings are shown in the same group
-after the user settings, under the note `!engine.options.mods.startup`; a change is kept in the profile and applies
-when the mods load again (Apply on the mods screen, or a restart). Game rules may be switched by a bool startup
-setting (§14 item 7). [implemented, sadk-remake cc7eb02]
+`<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The options show them in the mod's
+sections (below), labelled by the text key `!<mod id>.<name>`. Startup settings are shown in the same section after
+the user settings, under the note `!engine.options.mods.startup`; a change is kept in the profile and applies when the
+mods load again (Apply on the mods screen, or a restart). Match settings are not listed (the host sets them in the
+pre-game room). Game rules may be switched by a bool startup setting (§14 item 7). [implemented, sadk-remake cc7eb02]
+
+**Where a mod's settings show** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19]: a mod chooses where
+its settings go, a tab of its own or a section of its own inside an existing tab, named by the tab's id. Only the
+placement changes: who owns a setting, where it is stored and its scope stay as above.
+- The tabs are an entirely open registry (`OptionsRegistry`, `EngineOptions.Build`): the engine's tabs (`graphics`,
+  `shadows`, `quality`, `audio`, `keys`, `interface`) and every tab a mod adds are equal, and any mod may put a section
+  into any of them. Tabs stand in the order they are added: the engine's, then the mods' in load order (all mods' tabs
+  before any mod's sections, so a mod may name the tab of a mod loaded after it).
+- Sections stand in insertion order (the engine's, then the mods' in load order); no other ordering. A section lists
+  its settings in declaration order, the mod's user settings first, its startup settings under the startup note.
+- There is no Mods tab. A mod that names no place, or names a tab no loaded mod adds, gets a tab of its own under its
+  title [the remake's own default].
+- The API, in the settings stage: `ModSettings.Tab(id, title)` adds a tab; `Section(id, title?, tab?, advanced?)`
+  opens a section that the settings declared after it (to the end of the stage) stand in; `Unlisted()` keeps the
+  settings after it out of the options (stored and read as any). A section id taken already becomes
+  `<mod id>.<id>`; a tab added twice is reported and its sections go to the first. `advanced: true` shows a section
+  only with the advanced graphics ([renderer.md](renderer.md) §19).
+- The base game: core.game's camera and cursor settings form the section `input` (the original's INPUT group) in the
+  engine's `keys` tab (titled Controls); its pause band and autosave the section `game` (GAME) on its own tab `game`;
+  the six lobby options are unlisted. refined puts its section `refined` on the `game` tab.
+- Both options screens are made from the registry: core.game's panel in the original's look (a section named like one
+  of the original's groups takes that group's bar and title; tab buttons beyond the template's eight go on along its
+  row, 90 apart [the remake's own]) and the engine's own screen without core.game (which has no key bindings).
 
 Declarations are validated: `Choice(...)` and ranged `Int`/`Float`; `SetPending`/`NextValue` hold a startup
-setting's next value; `TitleOf` gives the owning mod's title for the panel's group. [implemented with the options
-panel]
+setting's next value; `TitleOf` gives the owning mod's title for its own tab and its untitled sections. [implemented
+with the options panel]
 
 **Engine settings and mod settings** [rule, implemented with the options panel]. A setting lives with the code that
 reads it. What is not specific to the game is an engine setting, stored in its own element of `settings.xml`; what
@@ -199,27 +222,12 @@ only the base game's code reads is a setting of its built-in mod (`core.game.*`)
 | the six lobby options | `core.game` | the original's 3D lobby belongs to this game; stored only |
 | `refined.fieldBlessing`, `refined.groupedGoods` | `refined`, startup scope | that mod's rules |
 
-**The options panel** is `core.game.options` (`engine.options` is routed to it), built from the original's
-`menuoptions.xml`. The original's six groups keep their order, controls and places; each of the remake's groups sits
-right after the original group it belongs with:
-
-| Order | Group | Origin |
-|---|---|---|
-| 1 | VIDEO | original |
-| 2–5 | WINDOW, GRAPHICS, SHADOWS, QUALITY | remake |
-| 6 | VIDEO LOBBY | original |
-| 7 | AUDIO: the original's four sliders, then ambience, voice and mute in background | original + remake |
-| 8 | INPUT | original |
-| 9 | KEYS | remake |
-| 10 | GAME | original |
-| 11 | INTERFACE (language, font) | remake |
-| 12 | NETWORK | original |
-| 13 | one group per mod in load order: user settings, then startup settings | remake |
-
-A setting an original control already shows is not repeated. The content scrolls inside the frame; scrolled to the
-top it is the original's page. Every change applies at once, with no apply or cancel button; showing a value never
-writes it back (the original's `LoadOptionValue` S 005e55b0 snaps slider values when the panel opens, a menu bug
-not reproduced). Refined or faithful is not an option: it is the mod set (§9.4).
+**The options panel** is `core.game.options` (`engine.options` is routed to it): the original's `menuoptions.xml`
+frame with `menuIngameSettings.xml`'s tab control, its tabs and groups from the registry above
+([renderer.md](renderer.md) §19 lists them). A setting an original control already shows is not repeated; a page whose
+groups do not fit scrolls. Every change applies at once, with no apply or cancel button; showing a value never writes
+it back (the original's `LoadOptionValue` S 005e55b0 snaps slider values when the panel opens, a menu bug not
+reproduced). Refined or faithful is not an option: it is the mod set (§9.4).
 
 ### 6.3 Data stage [draft]
 
@@ -536,7 +544,8 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   from the same installation.
 - **Refined mode** is `{core.game, refined}`. `refined` is a code mod shipped with the game, off by default and
   enabled on the mods screen. Its fixes are implementations of game rules (§14 item 7) that wrap core.game's, each
-  switched by a startup setting of its own (on by default, in refined's group of the options panel, §6.2):
+  switched by a startup setting of its own (on by default, in refined's section on core.game's GAME tab of
+  the options, §6.2):
   `refined.fieldBlessing` (the Blessing of the bountiful fields doubles every farm's grain, not only `corn`) and
   `refined.groupedGoods` (a need whose building type is no entry of the good's group is admitted, so olympic flames
   receive grouped goods). With every switch off
