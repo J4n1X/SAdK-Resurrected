@@ -276,6 +276,15 @@ selection context when its byte +0x50 is set, else for the player table's local 
 active player of type 2, else skipped), then `RenderPasses(0x100)` (particles). The selection markers are
 therefore not updated on frames that go through the post processor [inferred].
 
+The overlay is drawn by `Scene::RenderPostFxAndOverlay` after `Scene::RenderPasses` S 0067eb20 (sky,
+`CMapRenderer::Render` terrain/streets/buildings, characters, items, animals and swarms, ships, single meshes,
+projected decals, then `RenderObjectsAndWater` S 006889d0: map objects, water) and before the particle pass
+(`RenderPasses(0x100)`). Its states come from `infomap_shader.fx` technique `Default` pass `RenderInfoIcons` (ZEnable
+true, ZFunc LessEqual, ZWriteEnable false, alpha blend SrcAlpha/InvSrcAlpha, no alpha test, Cullmode CW); no
+`SetRenderState` call sits in S 00688c40 or in `ConstructionMapRenderer` (`Begin` S 006b33e0, `AddCellsInRect`
+S 006b36d0, `FlushQuads`, `End`) [PROVEN]. Nearer plants, rocks and animals (which write depth) cover the icons; water
+and decals (no depth write) do not.
+
 `Scene::RenderPasses(mask)` S 0067eb20 [known], in this order:
 
 | Order | Mask bit | Content |
@@ -1922,6 +1931,15 @@ pass states]. What the player sees is depth of field: sharp around the focal dis
 `minLuminance 0.98`, `bloomScale 0.25`, `focalScale 25.0`, `focusSpeed 3.0` [known, file]. The temporary targets'
 size is [TODO] (the arguments of `CreateRenderTarget` in S 00697290 are not resolved by the decompile).
 
+The post-processor is off by default: `Settings::bPostFxEnabled` (+0x0c) is 0 from the constructor S 00695b40, is set
+only by `ParseCommandLine` S 00403c7f for `-postFX` (via S 00695bb0), and `Settings::Load` S 006960a0 sets it to 0
+after reading it [PROVEN]; the order of the two at start-up is not read [TODO]. When it is on, `PostProcessor::BeginScene`
+S 00696d20 renders the scene into `sceneColorRT` with a depth surface of its own, `EndScene` S 00697250 restores the
+backbuffer and its depth surface, and `UpdateFocusAndCombine` S 00696f10 / `RenderCombine` S 00696ac0 draw one
+full-screen quad with ZEnable false: the backbuffer's depth then holds no scene depth (only the frame's `Clear` to
+1.0), so the overlay's depth test passes everywhere and the icons appear on top of everything [PROVEN for the targets
+and depth flow; the visual result is inferred].
+
 ### 3.14 Selection markers and the build-placement overlay
 
 **Selection markers** `CMapRenderer::UpdateSelectionMarkers` S 00689500 [inferred]: up to 4 projected decals. By
@@ -2023,7 +2041,8 @@ the table S 007fc1b8 picked by the nearest child, S 006dad30 — nearest 0: 0,1,
 — and a subtree wholly in view goes through `CollectVisible` S 006daff0 with the nearest-child bits it last stored),
 not sorted by distance; inside a block cells go row by row in y, each row in x. Technique `Default`: depth test on (`ZFunc LessEqual`), no depth write, alpha blend. The
 overlay is drawn after the whole map, water included, and before the particles (`RenderPostFxAndOverlay`
-S 00680a00, §3.1), and after the post processor's combine, so depth of field never blurs it. The icons are
+S 00680a00, §3.1), and after the post processor's combine, so depth of field never blurs it (with the post processor
+on, the depth test no longer separates the icons from the scene: see the post processor below). The icons are
 world-sized quads: they grow on screen as the camera comes closer, and nearer plants, rocks and figures cover
 them through the depth test. `water_shader.fx` writes no depth, so water never hides an icon [known, files].
 
@@ -2033,6 +2052,12 @@ Its callers are `btInfoMap1` (`OnButtonClick` S 005eb850) and the cinematic scre
 S 005fb3e0, and `OnHide` S 005faee0, which restores the fade state the cinematic saved). The fade runs linearly
 over 0.2 s from the last drawn colour to `(1, 1, 1, fadeIn ? 1 : 0)`; `nMenu::Game::Update` S 005efea0 does not
 advance it while paused. So the icons belong to info-map mode; placing a building does not show them.
+
+`RenderBuildPlacementOverlay` S 00688c40 draws the construction-place icons of the info map. Its gate, the
+`CMapRenderer` tint alpha (+0x40), is raised only by `nMenu::Game::StartOverlayColorFade` S 005eabd0 (callers:
+`OnButtonClick` S 005eb850 for `btInfoMap1`, `nMenu::Cinematic::Update` S 005fb3e0, `nMenu::Cinematic::OnHide`
+S 005faee0) through scene slot 15 (`SceneCb_SetRendererRect` S 0067f3e0); `BeginBuildPlacement` S 006176d0 and
+`SelectCell` S 00617770 never touch it [PROVEN].
 
 ---
 

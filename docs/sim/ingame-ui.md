@@ -443,7 +443,7 @@ panel lists only video modes of at least `minResolutionX` × `minResolutionY` (1
 
 | Attribute | Type | Meaning |
 |---|---|---|
-| `texture` | name | looked up or loaded from `[data]\gfx\` by the UI resource manager [inferred] S 00494000 |
+| `texture` | name | looked up or loaded from `[data]\gfx\` by the UI resource manager [inferred] S 00494000; `menuStatistics.xml`'s tech tree pictures name it with the extension (`techtree_bavaria.dds`), every other layout texture is a bare name; the code also loads interface textures by names with the extension (`ui_ingame4.dds` S 007e5b20), so both forms resolve [inferred] |
 | `mapping` | 4 numbers | source rectangle x y w h in texture pixels |
 | `flipped` | bool | mirror |
 | `width`, `height` | number | draw size; default the owner's size |
@@ -452,9 +452,20 @@ panel lists only video modes of at least `minResolutionX` × `minResolutionY` (1
 | `stretch` | bool | with borders: stretch (true) or tile (false) edges and centre |
 | `mask` | name | mask texture; with it `maskUV0`, `maskUV1` (2 floats each) are read |
 
-Drawing [inferred] S 004a8f70, S 004a88a0: with all borders 0 one quad; otherwise a nine-slice (four fixed
-corners, edges and centre tiled or stretched). Positions are rounded to whole pixels (+0.5, truncate). Vertex
-colour = colour × widget opacity.
+Drawing [known] S 004a8f70, S 004a88a0: with all borders 0 one quad; otherwise a nine-slice (four fixed corners,
+edges and centre tiled or stretched). `UiSprite_RenderToOwnerRect` S 004aa310 takes the owner deployment's screen
+fractions (position x/y at the list node's +0x20/+0x28, size w/h at +0x5c/+0x64), multiplies each by the back buffer's width or height
+(`RelativeToPixelsX` S 004aab50 / `RelativeToPixelsY` S 004aab80: `(float)((double)W * f)`, rounded to float32) and
+truncates each toward zero with `__ftol2_sse` S 006f2af0. There is no +0.5. Four independent truncations: the right
+edge is `trunc(x) + trunc(w)`, not `trunc(x + w)`. `Shape::DrawSliced` S 004a8f70 then works on that integer
+rectangle: inner edges `ftol(x + left)`, `ftol(x + w - right)`, `ftol(y + top)`, `ftol(y + h - bottom)` (corner sizes
+are the differences, so the right and bottom corners absorb rounding); `DrawQuad` S 004a88a0 puts every quad at
+(x − 0.5, y − 0.5) .. (x + w − 0.5, y + h − 0.5) (constants 0xBF000000 at S 0087c50c / S 0087c510), UV = source rect /
+created texture size without a half-texel shift. Stretched edges and centre are one quad each; unstretched ones tile
+at integer tile sizes `ftol(srcR − srcL)` while `pos + tile < end`, the remainder quad keeps the full source tile
+(squeezed, not cropped). Twelve callers (button backgrounds S 004b3a60, `Icon::Draw` S 004ce780, S 004be2b0,
+S 004b5200, S 004bd690, S 004c6940, S 004cc480, S 004d11c0, S 00630fc0, S 007684b0, the in-world markers S 00788f90 /
+S 007885e0); text does not go through it. Vertex colour = colour × widget opacity.
 
 `mapping` is in pixels of the texture **as created** [known]: `CTexture::CreateD3DTexture` (S 004e7a9e) creates
 UI textures with `D3DX_DEFAULT` sizes, so an image whose sides are not powers of two is rounded up and

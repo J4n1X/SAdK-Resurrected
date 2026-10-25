@@ -73,7 +73,11 @@ events listed in §5.
 `StatsGraphPlayers` adds [known] S 00642fe0, S 00642d60, S 006435c0: `nUi::Graph graphs[8]` at +0x1608 (0x298
 each, XML children `graph0..7`), `u8 graphEnabled[8]` at +0x2ac8, `std::list<Position> graphPoints[8]` at
 +0x2ad0 (0xc each), `i32 statisticCategory` at +0x2b34 (0..7, the series index of
-[players-victory.md](players-victory.md) §2.5).
+[players-victory.md](players-victory.md) §2.5). `StatsGraphPlayers::ctor` S 00642f00 sets `graphEnabled[0..7]` to 1
+and `statisticCategory` to 0 [known]. The points loop of `RefreshGraphs` walks the curve's point list (its old size
+when the series has fewer than two samples) and reads the series at the same index, so a list longer than the series
+would fail on `_invalid_parameter_noinfo` (cannot happen: the lists are emptied on a category change and series only
+grow).
 
 `StatsGraphInventory` adds [known] S 00642970, S 00642590: a `std::map<good id, nUi::Graph*>` at +0x1608; one
 `Graph` exists per good whose row is switched on.
@@ -92,9 +96,12 @@ each), `fillMode` at +0x298 (0 goods and non-soldier jobs, 1 soldiers), `localPl
 `name` and `state` (labels), `playerButton` (the toggle button), `textEmpty`, `avatar` (an `Avatar`); strings
 `textFriendly`, `textInWar` and colours `colGreen`, `colRed` from XML attributes.
 
-`StatsBuilding` (0x2888) [known] S 006437a0, S 00643f60: `buildingTypeId` at +0x2880; children `m_name`,
-`m_building` (icon), `m_iconHouse1`, `m_iconHouse2`, `m_iconProducing`, `m_textHouse1`, `m_textHouse2`,
-`m_textProducing`, `m_progress0`, `m_progress1`.
+`StatsBuilding` (0x2888) [known] S 006437a0, S 00643f60, S 00643b60: `buildingTypeId` at +0x2880; children `m_name`
+(label +0x288), `m_building` (picture +0x4b0, the icon on its shape), `m_iconHouse1`, `m_iconHouse2`, `m_iconProducing`
+(pictures), `m_textHouse1`, `m_textHouse2`, `m_textProducing` (labels made as children of `m_iconHouse1`,
+`m_iconHouse2`, `m_iconProducing`: their `pos="15 6"` is relative to the icon, ctor S 00643b60), `m_progress0`,
+`m_progress1` (progress bars at +0x19b0, stride 0x768). A button member at +0x738 (kind 10) is constructed but never
+created or attached; the row's click comes from the layout's own `m_building/button` (controltype `button`).
 
 ### 2.2 `nUi::Graph` (0x298 bytes): the curve widget [known] S 004c9940, S 004c7f90
 
@@ -377,10 +384,18 @@ caller then refreshes [known]. A player row's toggle button writes `graphEnabled
   class 1 (bow), every level of the tribe's soldier ladder (`MilitaryConfig::GetSoldierId(tribe, class,
   level)`), in level order.
 - Each row (`StatsGoodInfo::SetGoodData` S 0064c8e0): icon and tooltip text (the good's `name`) from
-  `IconConfig` and the good property; the row's colour field (+0x1e4, four floats) = `IconConfig::GetGoodColor`,
-  the colour its curve gets; `countDepots` = `pStock.count(good) + pMobileStock.count(good)`
-  (Player +0x34 and +0xa0), drawn red (255, 0, 0) when 0, else white; `countOutside` = the trend value of
-  §3.2.2, with a leading `+` when positive, red when negative, else white. Counts are those of the player
+  `IconConfig` and the good property; the row's shape colour (+0x1e4, four floats) = `IconConfig::GetGoodColor`
+  S 0060f270 (white for a good without a `GoodColors` entry), the colour its curve gets. It tints the button's own
+  pictures: `goodInfos` has no normal mapping, and its `mapping_cursorover` / `mapping_marked` (`ui_ingame 536 904 40
+  40`) is a white glow frame with a transparent centre, so a marked row shows a frame in its curve's colour, the legend
+  [known: the texture's pixels]. `PictureButton::Draw` S 004b3a60 draws the background shape (+0x468, where
+  `IconConfig::ApplyGoodIconToChild468` puts the good's icon) first and then `Button::Draw` S 004afd10, so the frame
+  lies over the icon [known]. The soldier list's `mapping_marked` is the red frame `536 856`. `countDepots` =
+  `pStock.count(good) + pMobileStock.count(good)` (Player +0x34 and +0xa0), drawn red (255, 0, 0) when 0, else white; `countOutside` = the second value (pending /
+  trend) that `GameQuery_GetPlayerGoodStockAndPending` S 00533c40 writes ([inferred]: the fill functions S 00644430,
+  S 006446c0 pass the query one local and `SetGoodData` the adjacent one; §3.2.2), with a leading `+` when positive,
+  red when negative, else white. The query's first value is not used; `countDepots` is recomputed from the two
+  stocks. Counts are those of the player
   the list stored at construction (the local player); the trend is queried for the screen's local player.
 - Layout `LayoutItems` S 00644a50: row `k` at pixel `(itemsOffsetX + col * itemsSpreadX, itemsOffsetY + line *
   itemsSpreadY)`; the goods list wraps after `itemsPerLine`; the soldier list starts a new line per class.
@@ -422,7 +437,9 @@ There are six rows (ids 0..5) while the graph handles eight slots; players 6 and
 their curves cannot be switched off [inferred from the two loop bounds].
 
 **Building rows**: the constructor makes one row per entry of the viewing tribe's `TribeProperty.buildings`
-whose property has `constructionTime > 0` and `size ≠ 0`, in tribe order [known] S 00621d20. `OnXmlLoaded`
+whose property has `constructionTime > 0` and `size ≠ 0`, in tribe order [known] S 00621d20. The filter reads
+`(constructionTime > 0 || (depot && casern && territoryBuilding && constructionTime > 0)) && size != 0`; the second
+alternative is contained in the first, so it is `constructionTime > 0 && size != 0` [known]. `OnXmlLoaded`
 S 006225d0 loads each row from the XML element `building` and places row `k` at pixel `(bldOffset.x + col ×
 bldSpread.x, bldOffset.y + line × bldSpread.y)`, starting a new line after `numBldPerLine` rows (shipped
 `26 22`, `128 128`, 7) [known: disassembly].
@@ -440,14 +457,16 @@ buildings [live, 2026-10-12, maintainer].
 - icon (`IconConfig::ApplyBuildingIcon`, tribe and type) and the localised type name;
 - `m_textHouse1` = `Player::GetBuildingCount(type)`, `m_textHouse2` = `Player::GetConstructionCount(type)`;
   row opacity 0.4 when their sum is < 1, else 1.0;
-- if the property's `health` (+0x8c) is < 1:
+- if the property's `health` (+0x8c) is ≤ 0 (`CMP [ECX+0x8c],0; JLE` at 0064414b):
   - if `productivity` (+0xf4) is false, or the type has neither a `plantingDeposit` nor goods in slot 0: both
     bars, `m_textProducing` and `m_iconProducing` are hidden;
   - else `m_progress1` is hidden, `m_progress0` fill = `avgProductivity * 0.01` and `m_textProducing` is
     `trunc(avgProductivity + 0.5)` followed by `%`, where `avgProductivity` = 100 × the mean of the
     productivity entries (quests-sacrifices-stats.md §2.3) of the player's **finished** buildings of that type
     (both construction floats ≤ 0), 0 when there is none (`GetAverageBuildingProductivity` S 00533160);
-    `m_textProducing` and `m_iconProducing` are shown;
+    `m_textProducing` and `m_iconProducing` are shown. The fill is `avg × 0.01` with the double of `0.01f`
+    (S 007d4a70), the text `trunc(avg + 0.5)` (S 007d4a90); the health text is `trunc(mean × 100.0)` (S 007d8ff0); the
+    row's opacity 0.4 is the float at S 007e77f0 [known: disassembly 00644130, 006442b5, 006442e8, 0064419b];
 - else (a building with hit points) `m_progress0` is hidden, `m_progress1` fill = the mean of
   `Hitpoints::GetRatio` over the player's buildings of that type (finished or not), 0 when there is none, and
   `m_textProducing` is `trunc(mean × 100.0)` followed by `%` (`GetAverageBuildingHealth` S 00533e60);
@@ -457,9 +476,11 @@ buildings [live, 2026-10-12, maintainer].
   size [known for the test; inferred for the reading].
 
 Click on a row (`StatsBuilding::OnButtonClick` S 00643a90) [known]: `FindNearestBuildingOfType(viewer, cell
-(0, 0), type, 0, 9999999)`; if one exists the game selection is reset and set to it, the selection cell is
-copied into `MenuSelection`, the selection UI is refreshed and the statistics panel is toggled (closed, by
-the rule of §3.1). No command. [inferred] The search starts at cell (0, 0), not at the camera, so "nearest"
+(0, 0), type, 0, 9999999)`; if one exists the game selection is reset and set to it, the selection cell
+(`Selection::GetMapPosition`) is copied into `MenuSelection` +0x8c / +0x90,
+`RefreshFromGameSelection(refreshPanel = 0, focusCell = 1)` S 00617800 refreshes the selection without the action
+panel and moves the camera to that cell (`Camera::FocusOnCell`), and the statistics panel is toggled (closed, by the
+rule of §3.1). No command. [inferred] The search starts at cell (0, 0), not at the camera, so "nearest"
 means nearest to the map origin.
 
 ### 3.2 Goods bar and the stock / trend query
