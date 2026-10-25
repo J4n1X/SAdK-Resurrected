@@ -6,7 +6,7 @@ with each one: keep it exactly, adopt the idea with modern means, leave it to Go
 in [renderer.md](renderer.md), the simulation interface in [sim-boundary.md](sim-boundary.md).
 
 Tags: **[binding]**, **[draft]**, and the source tags of the cited documents (sections of `../sim/*.md`);
-**[measured]** = counted with the testbed viewer on 2026-10-15 (Compatibility renderer under a virtual display on the
+**[measured]** = counted with the testbed viewer on 2026-10-15 (the viewer's map half is retired, so new map measurements use `core.game.mapview` with `stats=true`, or `tools.mapviewer`; Compatibility renderer under a virtual display on the
 Linux box: draw calls and triangles are real, times are not). Short names: R = `../sim/rendering.md`, WO =
 `../sim/world-objects-rendering.md`, P = `../sim/particles.md`, AM = `../sim/animation-models.md`, LC =
 `../sim/logic-core.md`, MR = `../sim/map-resources.md`, ST = `../sim/streets-transport.md`, AI = `../sim/ai-player.md`,

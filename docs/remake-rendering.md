@@ -8,7 +8,7 @@ behaviour to reproduce is specified in [`sim/rendering.md`](sim/rendering.md), [
 
 ## 1. The viewer is a testbed
 
-`sadk-remake/src/Sadk.Viewer` (model viewer and map viewer) reads the original's files at run time (`.KEX`, `.s2m`,
+`sadk-remake/src/Sadk.Viewer` (now the model viewer only; its map viewer is replaced by the game's `tools.mapviewer` mod) reads the original's files at run time (`.KEX`, `.s2m`,
 the settings XML, the encrypted containers) and draws them as the original does. It exists to get the rough shape
 right and to find things out; it is **not the game's architecture**:
 
@@ -17,8 +17,9 @@ right and to find things out; it is **not the game's architecture**:
 - it builds a map's picture once at load instead of following the simulation (map objects have no identity, §5);
 - its object shader is one file with about fifteen variant defines, the opposite of §2.1 below.
 
-The game is set up separately. The viewer stays for experiments (buildings and settlers on maps: its *Place* tab);
-its code is a reference for formulas and pitfalls, not a base to extend.
+The game is set up separately. The viewer stays for model experiments; maps are viewed in the game
+(`tools.mapviewer`, buildings and settlers on maps through `core.game.match` with `place=` and `god=`). The map
+half's code remains in git history as a reference for formulas and pitfalls.
 
 ## 2. Binding decisions
 
@@ -150,8 +151,8 @@ What the viewer had to get right beyond the formulas of the `sim/` documents:
   `ssao_light_affect` with `ssao_ao_channel_affect = 1`.
 - **Reading the screen or depth texture** makes Godot copy them every frame; only the shader variant that needs them
   may declare them, and the screen copy should have no mipmaps.
-- **Vulkan uploads DXT1 as RGB** and loses the one-bit alpha the foliage is cut out with; such textures go to the GPU
-  decompressed.
+- **Vulkan uploads DXT1 as RGB** and loses the one-bit alpha the foliage is cut out with; the converter re-encodes such
+  textures to BC7.
 - **Winding.** Godot's front faces are clockwise, the original's counter-clockwise on screen: every triangle is
   reversed at import.
 - **Shading language:** varyings cannot be written inside helper functions; values computed in `fragment()` reach
@@ -189,19 +190,19 @@ What the viewer had to get right beyond the formulas of the `sim/` documents:
 | `Sadk.Formats/Container/` | the encrypted container, the Park-Miller generator, CRC-32 |
 | `Sadk.Formats/Settings/` | graphics, map objects, animals, buildings, environment, settler colours and palettes |
 | `Sadk.Formats/Effects/`, `Images/` | `.pfx` reader; TGA |
-| `Sadk.Viewer/Map/TerrainBuilder.cs` | terrain blocks, pattern layers and transitions, regions, mirror blocks |
-| `Sadk.Viewer/Map/MapScene.cs` | water and border, object placement and batching, animals |
-| `Sadk.Viewer/Map/MapViewer.cs` | environment, light, sky, reflection camera, settings, performance readout |
-| `Sadk.Viewer/Map/ResourceHints.cs`, `Particles/` | the particle system and the effects of a fresh map |
-| `Sadk.Viewer/Subjects.cs` | what both viewers share for settlers and buildings: colour tables, palettes, materials |
+| `Sadk.Viewer/Map/TerrainBuilder.cs` | terrain blocks, pattern layers and transitions, regions, mirror blocks (removed; git history) |
+| `Sadk.Viewer/Map/MapScene.cs` | water and border, object placement and batching, animals (removed; git history) |
+| `Sadk.Viewer/Map/MapViewer.cs` | environment, light, sky, reflection camera, settings, performance readout (removed; git history) |
+| `Sadk.Viewer/Map/ResourceHints.cs`, `Particles/` | the particle system and the effects of a fresh map (removed; git history) |
+| `Sadk.Viewer/Subjects.cs` | the model viewer's settlers and buildings: colour tables, palettes, materials |
 | `Sadk.Viewer/ModelViewerSubjects.cs` | the model viewer's palette controls and construction display |
-| `Sadk.Viewer/Map/Placement.cs`, `MapViewerPlace.cs` | buildings and settlers on a map: placement, ground decals on the terrain, settler LODs |
-| `Sadk.Viewer/shaders/` | terrain, water, sky, object, building, settler and particle shaders |
+| `Sadk.Viewer/Map/Placement.cs`, `MapViewerPlace.cs` | buildings and settlers on a map: placement, ground decals on the terrain, settler LODs (removed; git history) |
+| `Sadk.Viewer/shaders/` | object, building, settler and particle shaders (terrain, water and sky removed with the map half) |
 | `tools/KexCheck`, `tools/MapCheck` | whole-install checks (every `.KEX`, `.pfx`, map; the palette test vector) |
 
 ## 6. Open
 
-- Buildings and settlers on maps: placement, ground decals and settler LODs work in the viewer; open are military
+- Buildings and settlers on maps: placement, ground decals and settler LODs worked in the retired map viewer (git history); in the game they are core.game's; open are military
   flags, the door and work animations, the settlers' animation choice and carried goods, the skinning approach for
   many settlers (§4.2), and what happens to the objects under a new building (the simulation's part).
 - What only the simulation brings: goods piles, ships and their wake, projectiles, moving animals, streets and sea

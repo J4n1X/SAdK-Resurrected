@@ -1919,6 +1919,12 @@ in `[data]\gfx\`) [known, file]. The marker [known unless tagged]:
 - lies 0.3 above the ground (the normal offset of the projection,
   [world-objects-rendering.md](world-objects-rendering.md) §3.9).
 
+**The decal pass** [known]: `gfx/fx_20/decal_shader.fx`, technique `Default`, pass `RenderDecal`: `ZWriteEnable` False,
+`AlphaBlendEnable` on with `SrcBlend` SrcAlpha and `DestBlend` One (additive: the marker glows), `Lighting` False. The
+vertex colour is white; the only motion is the spin above (`time × 0.025132744`); an own and an enemy marker differ only
+by their texture (`buildingselect.dds` or `catapultTarget.dds`). In the scene's passes the decals are drawn as pass 8,
+after the terrain, the streets, the characters and the ships, and before map part 2 (the map objects and the water).
+
 **Build-placement overlay** `ConstructionMapRenderer::AddCellsInRect` S 006b36d0: for every cell of every visible
 block, except the cell the cursor hovers, the construction flags of the cell for the local player
 (`docs/sim/map-resources.md` §3.5) choose an icon. Cells whose flags are 0 get none, and nothing is drawn when

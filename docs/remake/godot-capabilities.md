@@ -7,7 +7,7 @@ viewer ran into. The design documents cite this file instead of repeating engine
 Tags: **[api]** = the type or member is in the C# API reference of the engine (checked against Redot 26.2, the
 engine until 2026-10-15: `RedotSharp.xml`, 49,813 documented members; editor types in `RedotSharpEditor.xml`; the
 move to Godot 4.7.2 was checked by building and running everything, §1);
-**[viewer]** = used by the testbed viewer (`sadk-remake`, commit `ea6b13e`) and seen working there;
+**[viewer]** = used by the testbed viewer (`sadk-remake`, commit `ea6b13e`) and seen working there (the map half of that viewer is retired, so these observations are not re-run there; new map measurements use `core.game.mapview` with `stats=true`, or `tools.mapviewer`);
 **[godot]** = Godot behaviour as Godot's documentation states it, not checked here;
 **[source]** = read in Godot's sources at the tag `4.7.2-stable` (2026-10-15 audit; file and line in the text);
 **[check]** = to verify before a design depends on it. An [api] tag says the member exists, not that it behaves as
@@ -123,8 +123,8 @@ Rules that follow:
 - Exported games cannot compress to BC formats: etcpak's compressor is registered in editor builds only
   (etcpak/register_types.cpp:41) [source]. The conversion, which has no Godot dependency, writes compressed textures
   with complete mip chains itself.
-- Vulkan uploads DXT1 as RGB and loses the one-bit alpha the foliage is cut out with: such textures go to the GPU
-  decompressed [viewer].
+- Vulkan uploads DXT1 as RGB and loses the one-bit alpha the foliage is cut out with: the converter re-encodes such
+  textures to BC7 (assets.md §6.2) [viewer].
 - glTF loaded at run time produces scene nodes; the remake converts them to its own render data (meshes, skeleton
   tables, animation tables) instead of keeping node trees per object ([renderer.md](renderer.md) §6).
 

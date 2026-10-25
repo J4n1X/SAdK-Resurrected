@@ -680,6 +680,12 @@ taken with the table square root `Math_FastSqrt` S 006e8a20 (256-entry table S 0
 lies at the spline's fixed height [inferred]: the spline of a sea route is built by `S2CG::ShipRoute::ctor`
 S 006d2430, which was not read.
 
+**When a sea route is created for the renderer** [known]: the logic callback `OnSeaRouteCreated` S 00683040 (the
+renderer's slot +0x90, [rendering.md](rendering.md) §3.2) fires only at world load, from `NavyShipRoute::PostLoad`
+S 005b6af0, and from the debug route tool. There is no "connected" condition (no check that the route joins two
+harbours' water). The ribbon (the route decal) is built only for a path of more than one cell; the end buoy is placed
+only when both harbour references of the route are valid.
+
 **Route texture animation** `StreetRenderer::DrawRoutes` S 006c29a0 [known]: with `x = routeTexSpeed * time`,
 `frame = floor(x) mod routeTexCount`, `next = frame + 1` (0 after the last), `mix = x - floor(x)`: texture
 matrix 0 scales u by `1 / routeTexCount` and offsets it by `frame / routeTexCount`; matrix 1 the same with

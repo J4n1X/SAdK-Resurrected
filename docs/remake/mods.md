@@ -112,7 +112,7 @@ editor tooling. Machine-written files (conversion records, caches) are JSON.
 
 | Source | Location | Notes |
 |---|---|---|
-| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip`; the mods that ship with the game (`refined`, `tools.assetbrowser`) are among them; the built-in `core.*` are in `<game folder>/base/` | enabled per profile; a mod with `<EnabledByDefault>true</EnabledByDefault>` is on unless the profile switches it off; the built-in mods are always on and never stored |
+| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip`; the mods that ship with the game (`refined`, `tools.assetbrowser`, `tools.mapviewer`) are among them; the built-in `core.*` are in `<game folder>/base/` | enabled per profile; a mod with `<EnabledByDefault>true</EnabledByDefault>` is on unless the profile switches it off; the built-in mods are always on and never stored |
 | received from peers | `<game folder>/mods/received/<id>-<version>-<hash>/` | kept apart from the player's own; used only for matches that need them; pruned by age |
 | development | folders given with `--mod-dir=<folder>[;<folder>]` | for working on a mod without copying it; wins over a player mod of the same id |
 
@@ -627,13 +627,19 @@ registration in its `OnUnload`.
 Its simulation needs no Godot, so the headless runner loads it (tests, replays, the checksum comparison, a dedicated
 host) with its client code left out, as every mod's is there.
 
-The development tools are a mod, `tools.assetbrowser`, which stays in `mods/` (on by default, requires the built-in `core.mainmenu`) adds "Asset
-browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented].
+The development tools are mods in `mods/`, on by default. `tools.assetbrowser` (requires the built-in `core.mainmenu`)
+adds "Asset browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented]. `tools.mapviewer`
+(requires `core.game` and `core.mainmenu`) adds "Map viewer" (the mode `tools.mapviewer.open {map?, overlay?, ontop?,
+back?, x?, z?, yaw?, pitch?, distance?}`): every map package drawn by core.game's renderer outside a match, with
+switchable overlays of what the map stores (grid bits, resources, deposits, blocking doodads, animals and roam ranges,
+spawn points, ship routes, harbours with exits and docks, start and chest positions, ambient sounds, continents,
+patterns; optionally through the hills), their legend and an inspector of the cell under the mouse [implemented,
+sadk-remake 7cb8012]. It builds against core.game's Godot assembly (`Sadk.Client`).
 
 `core.game` adds "Free game" (`!FREE GAME`) to the main menu the same way: a listener in its `intents.xml` on
 `engine.start` emits `core.mainmenu.addmenuitem`. Its `mod.xml` names `core.mainmenu` as an `Optional`
 dependency, which orders the two built-in mods; the load order is `core.mainmenu` → `core.game` → every other mod
-(`tools.assetbrowser`, …) [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
+(`tools.assetbrowser`, `tools.mapviewer`, …) [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
 
 ### 11a.2 Modes, overlays, handlers, events, listeners, routes [implemented]
 
@@ -734,7 +740,7 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
   text language, [assets.md](assets.md) §8), `engine.options { tab? }` (the Options screen, a modal overlay the game
   hosts; core.mainmenu's "!SETTINGS" entry and the map view open it, [renderer.md](renderer.md) §19).
 - **Dependencies.** A mod whose listener or route emits another mod's intent names that mod among its dependencies
-  (`tools.assetbrowser` requires `core.mainmenu`), else a warning; the version range is the contract's version. Mods
+  (`tools.assetbrowser` requires `core.mainmenu`, `tools.mapviewer` requires `core.game`, whose renderer it uses), else a warning; the version range is the contract's version. Mods
   share no types: another mod's intent is emitted as a key and plain data, never with its record.
 - **At load** (step 8): problems in a mod's own declarations are errors (the set does not load): a declaration
   without code, a class or method not found, a parameter list that differs from the record, a namespace broken, an id

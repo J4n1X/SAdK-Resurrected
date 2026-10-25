@@ -34,7 +34,7 @@ Sadk.Engine   ──►  Sadk.Session  ──►  Sadk.Simulation (core.game) (n
 Sadk.Presentation (Godot: renderer, audio, UI) ──► Sadk.Client (core.game), Sadk.MainMenu (core.mainmenu)
      ▲
 Sadk.Game (the executable)          Sadk.Headless (conversion, validation, replays)
-     mods (mods/<id>/bin): refined, tools.assetbrowser, … built against the above
+     mods (mods/<id>/bin): refined, tools.assetbrowser, tools.mapviewer, … built against the above
 ```
 
 **A run of the game:**
@@ -61,7 +61,7 @@ Sadk.Game (the executable)          Sadk.Headless (conversion, validation, repla
 | file format of data-stage definitions | C# and Lua (the original's `properties.*` API plus a `registry` view); no XML or JSON definitions in the first version. Presentation data is XML, merged and patched | [mods.md](mods.md) §6.3, §6.6 |
 | which C# Lua package | MoonSharp, used as source in a fork of our own (insertion-ordered tables, run-time constant evaluation, a clear place for the single-precision hook; formatter and escapes fixed) | [lua.md](lua.md) §2.1 |
 | manifest format, transfer of mods | `mod.xml`; identity = id, version, content hash of the simulation parts; the host's simulation set wins; received code needs the player's consent; a different set means a restart into it | [mods.md](mods.md) §3, §9 |
-| the engine's asset formats after conversion | glTF 2.0 with a `SADK_kex` extension; DDS kept (BC1 with one-bit alpha transcoded to BC3); PNG; OGG and WAV; BMFont with Unicode glyph ids; UTF-8 text tables; the original XML; `.pfx.json`; map packages `.sadkmap` | [assets.md](assets.md) §6, §7 |
+| the engine's asset formats after conversion | glTF 2.0 with a `SADK_kex` extension; DDS kept (BC1 with one-bit alpha re-encoded to BC7, some uncompressed normal maps to BC5; written with a DX10 header); PNG; OGG and WAV; BMFont with Unicode glyph ids; UTF-8 text tables; the original XML; `.pfx.json`; map packages `.sadkmap` | [assets.md](assets.md) §6, §7 |
 
 ## Decisions for the maintainer
 
@@ -79,8 +79,10 @@ The proposals that change direction or cost real work, bundled:
    mod setting. Compatibility mode = `{core.game}`, or refined with every fix off ([mods.md](mods.md) §9.4, §14
    item 7). The base game itself is built into the engine (decided 2026-10-22, [mods.md](mods.md) §11a.1).
 6. **Data-stage formats**: C# and Lua only in the first version ([mods.md](mods.md) §6.3).
-7. **DXT1 textures with one-bit alpha** — decided 2026-10-15: transcoded to BC3 (twice the size of BC1) instead of
-   decoded to RGBA8 (eight times) ([assets.md](assets.md) §6.2).
+7. **DXT1 textures with one-bit alpha** — decided 2026-10-15, BC7 since 2026-10-25: re-encoded to BC7 (twice the
+   size of BC1, like BC3) instead of decoded to RGBA8 (eight times); BC7 holds a three-colour block's colours and the
+   transparent black texels, which BC3's colour line cannot. The original's uncompressed normal maps become BC5 where the
+   material's data allows it ([assets.md](assets.md) §6.2).
 8. **The base game is built into the engine** — decided 2026-10-22: `core.game` and `core.mainmenu` are built-in mods,
    always loaded and first, not switchable; their code is the engine projects `Sadk.Simulation` (no Godot),
    `Sadk.Client` and `Sadk.MainMenu`, their data `base/<id>/`. Ids, intents, settings, rule names, asset layering and

@@ -129,7 +129,9 @@ core.game (`Core.Game.Rendering`):
 
 The mode `core.game.mapview {map, back, x, z, yaw, pitch, distance}` shows a map outside a match with a HUD of the
 switches; the asset browser opens map packages in it, and `--emit=core.game.mapview?map=…` with `--shot-after` and
-`--shot` takes unattended pictures.
+`--shot` takes unattended pictures. The mod `tools.mapviewer` builds on the same public pieces (`MapData.Load`,
+`MapRenderer`, `OrbitCamera`, `MapRenderer.Pick` / `CellAt`) and adds the map list, the data overlays, their legend and
+a cell inspector (`tools.mapviewer.open?map=…&overlay=…&ontop=true`).
 
 ## 3. Structure [draft]
 
@@ -787,7 +789,7 @@ animals, ships and animated building parts use one skinning path of their own in
 
 ### 10.1 The mesh
 
-- The mesh math is the viewer's (`TerrainBuilder`), split into a pure builder (vertex and index arrays per region
+- The mesh math is taken over from the retired testbed map viewer (`TerrainBuilder`; in git history), split into a pure builder (vertex and index arrays per region
   and pattern, no Godot) and a thin Godot backend: the original's triangle tables, four-fold subdivision, solid and
   blend patches per 4 × 4 block with transition-mask UVs, under-water tint, the pattern order of
   `terrain_static_data.xml` (RE §3.3).
@@ -800,7 +802,7 @@ animals, ships and animated building parts use one skinning path of their own in
   rectangle are re-laid.
 - Unexplored blocks are drawn flat black by the fog include, with depth.
 - **One height function**: the renderer, the picking and object placement use the plane of the drawn terrain
-  triangle (the viewer's `MapGeometry.TerrainTriangles`). The viewer's `HeightAt` interpolates bilinearly per row
+  triangle (the retired viewer's `MapGeometry.TerrainTriangles`). The viewer's `HeightAt` interpolates bilinearly per row
   and lets objects float or sink slightly; which sampler the original uses to place objects is still open (viewer
   notes). With the smooth surface of §10.2 this function is `TerrainSurface.HeightAt`.
 
@@ -879,7 +881,7 @@ show the 1.5-unit facets.
 - **Cost**: Smooth draws four times the terrain triangles (the viewer's close view: about 236 thousand → 0.95 million),
   Smoother nine times (2.1 million), Smoothest sixteen times (3.8 million), and the shadow and mirror passes draw them
   too. This is where the GPU time saved on shadows
-  (§8.4) goes. The numbers are to be measured in the viewer before the defaults are fixed.
+  (§8.4) goes. The numbers are to be measured with `core.game.mapview` before the defaults are fixed.
 - **Size of a triangle on screen**: at the usual zoom a fine triangle (1.5 units) is about 40 to 50 pixels wide on a
   1080p screen; at Smoothest (0.375 units) still about 10. Triangle count is not the problem near the camera; tiny
   triangles toward the horizon and in the far shadow cascades are, and that is what §10.3 removes.
@@ -1099,6 +1101,14 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   `(float)(1 ÷ count)`, the rest from the map's default); with inner = outer the remake gives weight 1 where the
   original divides 0 by 0 (a stated presentation-only deviation). It sets the light, fog and colour globals and the
   sun's direction and shadow factor.
+- **Refined water** [implemented, sadk-remake, 2026-10-25]: `RenderSettings.WaterLook` is `Original` (the default) or
+  `Refined`. `water.xml` declares the looks: `<Look name="Refined" shader shore="3">` with `<Reflection>` variants (the
+  shaders `water/refined.gdshaderinc`, `refined`, `refined_plain`, `refined_ssr`) and `<Value>` tunables
+  (`depth_absorption`, `depth_opacity`, `fresnel_f0`, `foam_width`, `foam_strength`, `foam_color`): the colour and
+  opacity follow the water's depth, the reflection's weight follows a Schlick fresnel term, and foam lies along the
+  shore. The shore comes from `ShoreField`, baked on the CPU: an exact Euclidean distance transform of the land mask at
+  4 texels per cell step, reaching 3 cell steps from the shore, stored as R8; a height edit updates only the window it
+  touches. Foam around objects in the water (from the screen depth) is a later option.
 
 ### 11.1 Fog that follows the zoom
 
@@ -1172,7 +1182,8 @@ instead of 0.25), and the final pixel colour is known only after Godot's light p
 - **Level fade**: `DepositDepleted` starts the 20-tick fade (the pile sinks by `level × extentY`); removal follows.
 - **Foliage as opaque cutouts** (maintainer, 2026-10-15): the elements the original blends (blend mode 1 and the
   shaders whose passes blend: `tree_shader2`, `_winter`, `_willow`, `weed_shader`) are drawn alpha-tested at the
-  original's threshold in the opaque pass, with alpha to coverage when MSAA is on. They need no sorting, write depth,
+  original's threshold in the opaque pass. Alpha to coverage is on every cutout: the map objects, the houses, the ships
+  and their frames and the animals; it has an effect when MSAA is on (§19). They need no sorting, write depth,
   cast their own shadows (no shadow-only copies) and appear in the opaque picture. The original's blending softens only
   the filtered edge pixels (the leaf textures have one-bit alpha); in the viewer the difference is barely visible.
   The switch "Blended foliage (original)" draws them blended, sorted back to front per batch, with the shadow-only
@@ -1717,6 +1728,10 @@ engine's and which a mod's: [mods.md](mods.md) §6.2. The original's eight graph
 
 SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the Compatibility renderer.
 
+**Anti-aliasing defaults** (maintainer, 2026-10-25): `RenderSettings.Msaa` is Off and FXAA is on; MSAA is too expensive
+as a default (the integrated graphics target, principle 6). The cutouts' alpha to coverage (§12) only has an effect
+once MSAA is switched on; FXAA is the cheap setting that also smooths their edges.
+
 ## 20. Performance [draft]
 
 - Budget: the remake must not load the GPU more than the original for the same picture (maintainer, 2026-10-14);
@@ -1765,7 +1780,7 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 
 1. Asset bridge, shader library with the includes, global parameters, the settings object.
 2. Terrain, water, border, sky and environment from a converted map package, through a simulation that loads the
-   map and publishes `MapChanged(Reinitialised)` (no ticks yet). Parity with the viewer's map picture.
+   map and publishes `MapChanged(Reinitialised)` (no ticks yet). Parity with the retired testbed viewer's map picture (git history).
 3. Render object table and batches; map objects from `EntityAdded` events of the loaded map; fog of war textures.
 4. Buildings (houses, construction, decals) driven by a test simulation that places and builds.
 5. Characters with GPU skinning, palettes, LOD; animals.
@@ -1819,4 +1834,6 @@ picture, by effect per cost, all as refined-look switches beside the faithful lo
    roughness and building normals (2026-10-15), set aside for now.
 6. **The interface**: scaling with the window (content scale), the original's hover look of the menu entries
    (Head_Garamond in capitals), backgrounds for the shell and mods screens.
+7. **Refined water**: colour by depth, foam from a CPU-baked shore-distance field and a tunable Schlick fresnel, as the
+   water look `Refined` [implemented, sadk-remake, 2026-10-25; §11]. Open: foam around objects in the water.
 

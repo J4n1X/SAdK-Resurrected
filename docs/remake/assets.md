@@ -50,7 +50,7 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 | `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
 | the game's folder: `settings.xml` | the game, at the first start and after each change | the installation's path and the conversion folder [implemented, maintainer 2026-10-15]; the language, `<Window>` (mode, size, screen, V-Sync, frame limit), `<Graphics>` ([renderer.md](renderer.md) §19) and `<Input>` (key bindings, [godot-capabilities.md](godot-capabilities.md) §6) [implemented 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
-| the game's folder | the installer | the engine (with `engine/` and the built-in base game's data in `base/`: `core.game`, `core.mainmenu`, later `core.lobby`) and, in `mods/`, the mods that ship with it: `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
+| the game's folder | the installer | the engine (with `engine/` and the built-in base game's data in `base/`: `core.game`, `core.mainmenu`, later `core.lobby`) and, in `mods/`, the mods that ship with it: `refined`, `tools.assetbrowser`, `tools.mapviewer` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
 | `<user data>/maps/`, `maps-received/` | the editor / transfers | map packages (§7) |
 | `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
@@ -140,7 +140,8 @@ convert side by side. A conversion folder holds [implemented]:
 
 Container decoding, KEX parsing and writing, map packaging and Lua conversion take seconds each; with textures kept
 in their compressed form the first start should take on the order of a minute. The one slow step would be encoding
-block-compressed textures; §6.2 keeps that to the DXT1 textures with one-bit alpha and a fast encoder.
+block-compressed textures; §6.2 keeps that to the DXT1 textures with one-bit alpha, the missing mip levels and a few
+normal maps, with an own BC7 / BC5 encoder (about 15 s more on six cores for the whole conversion [measured]).
 
 ## 5. Virtual file system and asset lookup
 
@@ -285,9 +286,10 @@ everything the original's look depends on; engine-native forms only in the dispo
 |---|---|---|---|
 | `.kex` mesh, skeleton | `.glb` (glTF 2.0) with an extension `SADK_kex` | glTF reader → the renderer's mesh, skeleton and animation tables | §6.3 |
 | `.kex` animation | `.glb` with the animation and the skeleton nodes it targets | same | keys stay evenly spaced (`keyCount` over `length`); nothing resampled |
-| `.dds` BC1 without alpha, BC2, BC3, A8R8G8B8 | `.dds`, unchanged; mip chains completed where they are missing | `Image.LoadDdsFromBuffer` | §6.2 |
+| `.dds` BC1 without alpha, BC2, BC3, A8R8G8B8 (other uncompressed formats are expanded to A8R8G8B8, or become BC5 as below) | `.dds`, unchanged; mip chains completed where they are missing | `Image.LoadDdsFromBuffer` | §6.2 |
 | `.dds` A4R4G4B4, R8G8B8, R5G6B5, A1R5G5B5, A8 (55 files) | `.dds` A8R8G8B8, every value expanded exactly (`round(v · 255 / max)`; A8's colour 0, as D3D9 samples it) | same | so Godot's loader always gets a format it reads |
-| `.dds` BC1 with one-bit alpha | `.dds` BC3 | same | §6.2 |
+| `.dds` BC1 with one-bit alpha | `.dds` BC7 (DX10 header) | same | §6.2 |
+| `.dds` uncompressed, bound as a normal map, alpha 255, z near the rebuilt z | `.dds` BC5 (DX10 header) | same | §6.2 |
 | `.dds` cube maps (2) | `.dds`, unchanged | own reader: the six faces as images, then a `Cubemap` | Godot's loader reads only the first face [viewer, checked] |
 | settler and avatar colour-index maps (`*_colorindices_*`) | `.dds` A8R8G8B8 unchanged (including the original's mip chain); the lobby's R8G8B8 ones expanded to A8R8G8B8, levels as they are | point sampled | never filtered, compressed or re-mipped (AM §3.15) |
 | `.tga` | `.png` (top-left origin; grey, RGB or RGBA as the source) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels; also `game/animals/pig.dds`, which holds a BMP, and the one encrypted `.png` |
@@ -307,21 +309,27 @@ everything the original's look depends on; engine-native forms only in the dispo
 
 ### 6.2 Textures [draft]
 
-- Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer.
+- Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer; BC7, BC5 and BC4 are decompressed by Godot on upload where the GL driver lacks them.
 - **BC1 with one-bit alpha** loses its alpha on Godot's Vulkan path (Vulkan uploads it as RGB) [viewer]. The
-  converter transcodes these to BC3 (maintainer's decision, 2026-10-15): the alpha block holds the one-bit alpha
-  exactly, the colour block is re-encoded from the decoded colours. Twice the size of BC1, an eighth of RGBA8.
-  [measured] 234 of the 792 DXT1 files use a transparent texel (a three-colour block with index 3) inside the
-  surface; four-colour blocks are copied unchanged. A three-colour block cannot be kept exactly: BC3's colour line has
-  no midpoint and no black off the line, so the encoder chooses among range-fit, the original end points and widened
-  end points, opaque texels first. The largest opaque error is 42 (0.34 % of the opaque texels differ by more than
-  16); 85.8 % of the transparent texels stay black, the others take the block colour nearest to black, which only
-  shows as the colour bilinear filtering blends in at cut-out edges (the original blends black there). The report
-  gives both errors per texture. The maintainer compared originals and transcodes side by side (2026-10-15): the
-  difference is barely noticeable, BC3 stays. Keeping the BC1 bytes exactly would need an own upload through
-  `RenderingDevice` as BC1 with alpha (Godot's `ImageTexture` path uses the RGB variant on Vulkan); not needed now.
+  converter re-encodes these to BC7 (decision 7), every level from the BC1 decode, with an own encoder
+  (`Sadk.Formats/Images/Bc7Compression.cs`, deterministic, modes 5, 6 and 7; only the partition tables come from bcdec,
+  MIT / Unlicense, licence in `Bc7Tables.cs`). Twice the size of BC1, an eighth of RGBA8, the same 16 bytes per block as
+  BC3. The encoder weighs alpha far above colour, so the one-bit alpha comes out exact (0 and 255, every texel).
+  [measured] 234 of the 792 DXT1 files use a transparent texel (a three-colour block with index 3) inside the surface.
+  Against the BC1 decode, over 232 of them in the decrypted data (74.6 M texels, 7.0 M transparent): BC7 has a largest
+  opaque colour error of 100, an RMS of 1.07 (0.055 % of the opaque colour values differ by more than 16, 0.004 % by more
+  than 32) and 1.6 % of the transparent texels not black (largest channel 84); a BC3 transcode would have a largest
+  opaque error of 42, an RMS of 1.48 and 14.2 % of the transparent texels not black (largest channel 255). BC7's modes
+  need no colour line through black: a block whose transparent texels sit in one part of the block uses one of the 64
+  two-subset partitions (mode 7: one subset black with alpha 0, the other the opaque colours); blocks with one opaque
+  colour range use mode 6 or mode 5. What stays inexact are blocks with three or more unrelated colours next to
+  transparent texels. The report gives the largest opaque and transparent error per texture. The files are written with
+  a DX10 header (DXGI_FORMAT_BC7_UNORM); Godot reads them as `FORMAT_BPTC_RGBA`. Where the GL driver lacks
+  `GL_ARB_texture_compression_bptc` (Compatibility renderer), Godot decompresses BC7, BC5 and BC4 on upload by itself
+  (with all mip levels; `texture_storage.cpp` `_get_gl_image_and_format`, a `WARN_PRINT` once) [checked in the 4.7
+  source]; desktop drivers expose the extension, so the usual path is native BC7. The texture job's kind version is 2.
 - **Missing mip chains** of 3D textures are completed at conversion: the last level present is decoded, box-filtered
-  down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3 or A8R8G8B8). [measured] 226
+  down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3, BC7, BC5 or A8R8G8B8). [measured] 226
   textures have no chain and `game/map/objects/buoy.dds` stops after three levels; 114 are completed (the 95
   animated water frames among them). This is needed, not only nicer: Godot's DDS loader rejects a partial chain
   [checked]. UI textures keep their chain as it is (four DXT5 UI textures and `PokerCards.dds` ship with full ones):
@@ -329,6 +337,27 @@ everything the original's look depends on; engine-native forms only in the dispo
   `lobby/gfx/Village_Minimap.dds`, `PokerCards.dds` and the localised `ui_s2logo*.dds`.
 - The six settler colour-index maps (about 100 MB uncompressed) are kept byte for byte: the original's mip chain
   holds only level-0 values and the shader samples them point-wise.
+- **Normal maps.** The textures the materials bind as normal maps are the `normal` attributes of
+  `terrain_static_data.xml` (patterns) and the `normal*`, `crossingNormal*` and `normalMap*` attributes of `graphics.xml`
+  (streets, crossings, water); there is no other list [checked]. Of 42 distinct textures 11 are DXT1 or DXT3 and stay
+  as they are (never re-encoded); 31 are uncompressed (the original's A8R8G8B8, A4R4G4B4 and R5G6B5 maps). BC5 stores x
+  and y only, so a map becomes BC5 only if (1) every texel of every level has alpha 255 (BC5 samples alpha 1; the
+  terrain shaders read the alpha as specular mask, ice bump and lava mix, so 25 of the 31 keep it and stay A8R8G8B8) and
+  (2) the mean of |stored z − sqrt(1 − x² − y²)| over level 0 is at most 6 steps of 2/255 and the largest at most 40
+  (`l_meadow_00_n` has a mean of 19.1 and a largest of 127.5 and stays A8R8G8B8 for its stored z). [measured] Five maps
+  pass: `l_sand_00_n`, `simple_crossing_n`, `z_acre_00_n`, `z_meadow_00_n`, `z_sand_00_n` (mean 2.1 to 4.6, largest 8.2
+  to 18.2 steps; BC5's x/y error after encoding: largest 14 to 21 steps from the 4- and 5/6-bit sources' own
+  precision). The original's stored z is not unit length in general (|n| − 1 up to 0.59 in `l_meadow_00_n`). Godot's
+  spatial shaders rebuild z themselves for `NORMAL_MAP` (`normal_map.z = sqrt(max(0.0, 1.0 - dot(normal_map.xy,
+  normal_map.xy)))` in `scene_forward_clustered.glsl` and the Compatibility `scene.glsl`), so the terrain shaders
+  already ignore the stored z; the street shader reads z itself and uses `sadk_unpack_normal`
+  (`shaders/sadk/normal_map.gdshaderinc`), which rebuilds z when the blue of the sample is exactly 0 (what BC5 samples
+  as); the water maps (`WaveBump1/2`) are DXT1 and keep their stored z. The conversion report lists every normal map
+  with its decision and its z deviation. BC5 is a quarter of the A8R8G8B8 size.
+- **Uncompressed 3D textures** that are not normal maps stay A8R8G8B8 (the maintainer decides later). [measured] The
+  converted tree holds 44 of them (13 native A8R8G8B8, 25 expanded from A4R4G4B4, 2 from R5G6B5, 3 from R8G8B8, 1 from
+  A1R5G5B5): 108 MiB with their chains, 27 MiB as BC7. Besides: 29 colour-index maps (311 MiB, kept exact) and 102 UI
+  textures (223 MiB).
 - [measured] The converted textures and pictures take 847 MiB (A8R8G8B8 644 MiB, mostly the colour-index maps);
   every output loads with Godot's `LoadDdsFromBuffer` / `LoadPngFromBuffer` with its full number of levels, and the
   decoded texels match the converter's own decoders (colour ±1 from rounding of interpolated BC colours).

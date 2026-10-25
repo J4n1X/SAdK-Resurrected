@@ -387,12 +387,12 @@ width turns the view by 10 radians.
 - "Go to" by id: `nMenu_FocusCameraOnUnique(id)` S 00648de0 (only caller `nMenu::GoodButton::OnClicked`
   S 0062fe50) [known]: when the id has a map-object render instance, the camera is first placed with
   `SetEyePosition` S 00784f10 (`desiredEye` and the eye, or the focus point in free-fly mode, set to the
-  object's position; `lookDir = lookDirTarget`). The cell is then taken from the fight with that id (three
-  branches reading a cell from an object the fight refers to; which objects they are was not established
-  [TODO], settled in [military.md](military.md)'s `Fight` layout), else from the settler with that id (its
-  movement cell, or a cell of the object it is aboard); if a cell inside the map was found,
-  `FocusOnCell(cell)`, and the action panel is closed
-  unless it waits for a confirmation.
+  object's position; `lookDir = lookDirTarget`). The id is looked up in the package system (S 00573720 on
+  `NTransport::System +8`), not among the fights: a package on a flag gives the flag's cell; a package with a carrier
+  the carrier's movement cell; a package in a ship the ship's cell. Otherwise the id is a settler
+  (`FindSettlerByUnique` S 006546b0): aboard a ship (S 005b9d00) it gives the ship's cell, else the settler's own cell.
+  An unknown id, or a cell outside the map, finds nothing. If a cell inside the map was found,
+  `FocusOnCell(cell)` (S 00785fe0), and the action panel is closed again unless it waits for a confirmation.
 - `ResetToStandardMode` S 00784eb0 [known]: `mode = 0`, `lookDirTarget = (0, −1, 1)`, `hasTargetPos = 0`,
   `cachedFocusHeight = −1`, mouse cursor shown. `focusPoint` is not touched: after a cutscene or the screensaver
   the standard view returns to where it was.
