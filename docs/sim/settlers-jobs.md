@@ -505,7 +505,16 @@ reference cleared, the first matching id erased from the building's home list), 
 S 00657050: if queued, leave the flag's waiting list; if the movement's ship reference is valid, leave that
 ship's cargo list; then the movies and the base); `Worker` removes itself from its workplace's worker list;
 `Carrier` releases its packages and frees its street slot. **[known]** (S 006568b0, S 00657050, S 0065d220,
-S 0065afb0). A `Constructor` unlinks the ship it builds through `NavyLink_UnlinkShipConstructor` S 0053c360 (clears
+S 0065afb0). `Soldier::dtor` S 0065a4e0 runs before the base dtor, in this order: "settler removed" (callback slot 0x24);
+`ReleaseHomeAndProjectiles` S 00659400 (unlinked from its home with `VillageLink_UnlinkSoldier`, every projectile flying
+at it becomes a position at its cell); `UnlinkOrderAndPairing` S 006588d0; the fight state's destructor
+`SoldierFightState::Destruct` S 0065c080, which with a valid fight reference or `inFight` set calls `LeaveFight`
+S 0065be90 and `ReleaseAll` S 0065bfe0, so the soldier leaves its fight's side list (`Fight::RemoveSoldier` S 005719b0) and
+a fight it was the last soldier of is deleted at the next fight update; then the bow's destructor `Bow::dtor` S 0065f1f0
+(the last projectile shot: `MilitaryLink_UnlinkProjectileFromSourceSoldier` S 0053ce90 -> `ProjectileOwner::ClearSettler`
+S 00570530 on the projectile's source, which becomes kind 2 at the soldier's cell). **[known]** (S 0065a4e0, S 0065c080,
+S 0065f1f0). A soldier with `inFight` set but no fight reference (its fight unlinked it from a ship: `Fight::RemoveShip`
+S 00571500) makes `ReleaseAll` pass a null fight to `Fight::RemoveSoldier` and crash (S 005719e3). A `Constructor` unlinks the ship it builds through `NavyLink_UnlinkShipConstructor` S 0053c360 (clears
 `ship->construction +8` and `constructor +0x120`) from its destructor S 0065e600 and from `Constructor::Update`
 S 0065ea20 when it has no site; `Construction::dtor` and `UpdateShipConstruction` call it too. **[known]**
 S 0053c360 resolves the ship without a null test, but a builder's ship reference never outlives the ship: the

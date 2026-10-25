@@ -150,7 +150,7 @@ covers it, -1 none) and `counters[7]` (u32) [known] struct layout; use of each c
 | 3 | attack result 0 (no candidate building) and result 1 (candidates, no attack) (+1 each) S 005a8550 | halved S 005a8510 | target score divisor S 005a8750 |
 | 4 | every own casern-type building added to the AI (+1 at the building's position, `Building::Init` S 00596ba0); barracks order ended with "no place found" (+1) S 00598000 | – | barracks site score divisor S 00597ea0 |
 | 5 | attack result 1 (candidates existed but none was attacked) (+1) S 005a8550 | halved S 005a8510 | catapult score S 00598e60 |
-| 6 | the building of a slot's secondary attack target still stands, has no fight (any more) and is not within 15 cells of a primary target (+1 on the slot's target area) S 005a0dd0 | – | chance of a secondary attack S 005a0910 |
+| 6 | the building of a slot's secondary attack target still stands, has no fight (any more) and is not within 15 cells of a primary target (+1 on the slot's target area) S 005a0dd0 | halved by `AttackExecution::ReleaseSlot` S 005a07f0 (before `AttackTargetSelection::ReleaseTarget` S 005a8510 halves `[3]`, `[1]`, `[5]`) | chance of a secondary attack S 005a0910 |
 
 The writers address the element at +0x14 / +0x1c / +0x24, which are `counters[1]` / `[3]` / `[5]` with the
 array at +0x10 [known] struct layout, S 005a8550 (result 0: `[3]` +1; result 1: `[5]` +1 and `[3]` +1; result 2:
@@ -285,6 +285,11 @@ See §6.1 for all fields, offsets, defaults and the values of the shipped profil
   −1, invalidates its second-carrier good and goes inactive (S 0058b9a0). `MilitaryBuildingCreation::Deactivate`
   S 00599fa0 empties the ranking (S 005a8220), invalidates a pending order (S 005a1640), clears a remembered
   target (S 00774b90) and clears its active byte.
+- **Attack system lifecycle** [known]: `AttackSystem::Activate` S 00599a40 sets the selection's and the execution's active
+  bytes and the budget to -1; the target slots are not reset (constructor values). `MilitarySystem::Deactivate` S 00585970
+  calls `AttackSystem::Deactivate` S 00599a70 (each set slot's position reset; `AttackExecution::Reset` S 005a0770 clears the
+  expansion request's **kind only** when set, sets the six target positions to -1 and goes inactive), removes every attack
+  watch (`RemoveAttackWatch`) and clears the limiter's active byte.
 - **Headquarters lost**: when an own building whose property has depot + casern + territory-building all set
   (the headquarters/castle type) is removed, `bEnabled` is cleared: `Player::Update` does nothing from then
   on, but the player stays "active" [known] S 005836d0, S 00582af0. Nothing sets `bEnabled` again except
@@ -1085,8 +1090,10 @@ score > f + 1/n  -> kind 0;   score < f - 1/n -> kind 1;   else keep the current
 
 **Budget** [known] S 00597c80, S 00599a90, S 005ade50: `AttackSystem.budget` (MilitarySystem+0x144) is -1
 (unlimited) after activation. `MilitaryLimiter::Update` (every 53 ticks): if `profile.attackLimiterDelay != 0`
-and `tick > nextTick`: `budget = attackLimiterAttackCount + rand % attackLimiterAttackCountRandom` (the random
-term only if the range > 0) and `nextTick += attackLimiterDelay + rand % attackLimiterDelayRandom`. `nextTick`
+and `tick > nextTick`: `budget = attackLimiterAttackCount + rand % attackLimiterAttackCountRandom` (the count draw
+is made when `attackLimiterAttackCountRandom > 0`, signed, `IDIV`) and `nextTick += attackLimiterDelay + rand %
+attackLimiterDelayRandom` (the delay draw when `attackLimiterDelayRandom != 0`, unsigned, `DIV`; `nextTick < tick` is an
+unsigned compare) [known: disassembly S 00597ca3..00597cdf]. `nextTick`
 starts at 0, so the first grant comes at the first limiter update. Scripts set the budget directly with
 `logic.ai_setAllowedAttackCount(player, n)` and `logic.ai_setAttackEnable(player, bool)` (-1 / 0).
 
@@ -1123,13 +1130,16 @@ The best (strictly greater, start -100; x outer loop, y, then player) becomes th
    `IsNearAnySlotCell(pos, which)` [known] S 005a07b0: true when `pos` is at hex distance < 16 (15 or less) of
    the stored target position of any of the three slots, the own slot included; `which` 0 compares with the
    **primary** target positions, 1 with the **secondary** ones; unset positions (x = -1) are skipped.
-2. *Primary target* set: release the slot if the building is gone or now ours (halves the area's failure
-   counters, clears the target area); if the building is no longer under attack, report result 2 and clear
+2. *Primary target* set: release the slot if the building is gone or now ours (`counters[6]`, then `counters[3]`,
+   `[1]`, `[5]` of the area halved; the target area's position reset; the slot's primary and secondary target positions
+   cleared); if the building is no longer under attack, report result 2 and clear
    both targets.
 3. *No primary target*: candidates = every building of the village's territory-building list that belongs to
    the target player and is not already an attack target (`NVillage::Military::HasNoAttackTarget`), at hex
    distance <= the area radius (12) from the area's map position (cell x 8), and either on a cell visible to the AI
-   player or with cached enemy distance < 13. Candidates are ordered by **descending defensive weight**
+   player (the explored byte of the `Exploration` vector `player`, S 00542b10) or with cached enemy distance < 13
+   (`Military+0x5c <= 12` as a signed compare, so a building whose distance was never computed, -1, e.g. a castle,
+   always passes [known] S 005a1090..005a109a). Candidates are ordered by **descending defensive weight**
    `SumOwnBuildingWeightAround` S 005327f0; equal weights keep the first. The weight walks rings 0..10 in the
    standard spiral (centre; per ring one step in direction 4, then `ring` steps in each of directions 0..5, visiting
    after each step): 331 cells, each once, the loop counter equal to the cell's ring; out-of-map cells are skipped.
@@ -1151,8 +1161,10 @@ The best (strictly greater, start -100; x outer loop, y, then player) becomes th
      ```
 
      `enemyStrength`, `ownStrength` = `GameStats_ComputePlayerMilitaryStrength` (level-weighted soldiers,
-     S 00533960). [inferred] that the square root is taken of that quotient (the decompilation loses the
-     operand). If the test passes **and** the game's own attack availability check passes, the primary target
+     S 00533960). [known] disassembly S 005a12e6..005a1375: `own = (float)strength(AI)`, `d = own if 1.0 <= own else 1.0`,
+     `q = (float)(strength(enemy) / d)`, `s = _CIsqrt(q)` (S 006f6790), `t = s * k`,
+     `threshold = t + counters[1] * 0.1f` (0.1 is the f32 widened, S 007db630); attack when `threshold <= ratio`. Every
+     step is rounded to a float (x87 at 24 bits). If the test passes **and** the game's own attack availability check passes, the primary target
      is set and `NMilitary::Attack::StartAttack(player, building, fraction)` is called. Whether or not the
      availability check passed, **the whole `Update` returns here**: the remaining slots are not processed in
      this round and no result is reported. If the test fails: remember as fallback, next. A profile mode other
@@ -1182,9 +1194,14 @@ h = factor(Attack, Own) if no remembered fight; else
 ```
 
 With the defaults 0.5 / 0.3 / 0.2 and the shipped factors (Weak 0.4, Normal 0.6, Strong 0.9) a first attack
-sends between `0.8 * factor` and `0.8 * factor + 0.2` of the available soldiers. A second score from the
-defenders (`factor(Defense, Enemy)`, S 0059e810) is computed for each candidate and **discarded**; it only
-consumes one random number [known] S 005a0dd0.
+sends between `0.8 * factor` and `0.8 * factor + 0.2` of the available soldiers. The defenders score
+(`AiAttack_ScoreDefendersVsFightHistory` S 0059e810, `factor(Defense, Enemy)` = index 3) is the **defence fraction of the
+strength estimate**: `AiAttack_EstimateStrengthRatio(target, attacker, attackFraction, defenceFraction)` S 0059f290
+takes four arguments (the decompilation shows two); the attackers score is passed to `DispatchAttackers` and the
+defenders score to `DispatchDefenders` [known: disassembly S 005a11a9..005a11dd, S 0059f2b7, S 0059f332]. So the
+estimate counts only the share of each defending building's soldiers that the AI expects to respond. With a remembered
+attack the defenders score's `h` = `Military_CountDefendersByKind(building, persistent 1, 1.0)` (always called) / the
+record's other-side count, only when that count is not 0 [known] S 0059e810.
 
 **Strength ratio** [known] S 0059f290, S 0059f0b0, S 0059efe0, S 0059ec60, S 0059e6c0: attackers =
 all soldiers the game would dispatch against the target, defenders = all that would respond, each tallied per
@@ -1196,14 +1213,25 @@ of its eligible soldiers at their current health (of the attacking player: `Sold
 S 00659370; of any other player: no fight reference and not in a fight) and adds `min(n, p)` to the count and
 `min(n, p) * sum / p` to the strength of the kind of its soldier component (+0x68). Soldier strength =
 `(health/maxHealth * 0.8 + 0.2) * (blockingChance * C + maxHealth + B + C * maxHealth / attackWaitTime)`
-[known] S 0059e6c0, with `B` = `SacrificeModifierQuery::GetHitDamageForProperty` S 00661ae0 and `C` =
-`...GetArmorForProperty` S 00661b40 for the soldier's good and owner ([inferred] from the names: the soldier
-good's `hitDamage` and `armor` with the player's sacrifice modifiers applied; `military.md` owns them);
-stocked soldiers in depots count at full health.
+[known] S 0059e6c0, with `B` = `SacrificeModifiers::GetHitDamageForProperty` S 006632b0 `= trunc(f32(hitDamage(+0x84) * ownBonus[3](+0x48)) +
+0.5)` and `C` = `SacrificeModifiers::GetArmorForProperty` S 00663370 `= trunc(f32(armor(+0x90) * effective[2](+0xbc)) + 0.5)`
+for the soldier's good and owner [known] (`military.md` owns the modifiers). Evaluation order of S 0059e6c0:
+`t1 = max * C`, `t2 = t1 / attackWaitTime`, `u = t2 + (max + B)`, `w = C * blocking`, `v = w + u`, `r = health / max`,
+`result = v * (r * 0.8f + 0.2f)` (0.8 and 0.2 are f32 constants widened, S 007e7ad8, S 007e6d70). Stocked soldiers in
+depots count at full health.
 Effective strength of a side = `strength[1] + strength[0] * superiority(count[0] / opponentCount)` where
-`opponentCount` = opponent's kind-0 count, else its kind-1 count, else 0.1, and `superiority` is the game's
-numeric-superiority curve (`military.md`). `ratio = (ours / theirs)^2`, or 1000 when `theirs <= 0.5`, or -1
-when the attacker tally is 0.
+`opponentCount` = opponent's kind-0 count, else its kind-1 count, else 0.1 (`StrengthTally::GetEffectiveKind`
+S 0059efe0: kind 1 its strength, kind 0 `strength[0] * superiority(count[0] / n)`), and `superiority` is the game's
+numeric-superiority curve `Military_GetNumericSuperiorityFactor(x)` S 0052de30 with `MilitaryConfig::ComputeRatioBonus`
+S 00553f70 [known]: `r = x > 1 ? x : 1`, `b = (r - 1) * 0.2f`, `b = b > 0 ? b : 0`, `result = (b + 1) / r`. The totals are
+`(0 + eff(0)) + eff(1)`; `ratio` is 1000 unless the opponent's total is above 0.5, else `(ours / theirs)^2` with the
+quotient rounded to a float first (S 0059f0b0); -1 when the attacker tally is 0.
+
+`StrengthCounter` (vftable S 007ea5dc) [known]: slot 0 (overland) is `CountBuilding` S 0059ec60 and slot 1 (by sea) a thunk
+to slot 0, so both count the same; `DispatchAttackers` still calls `Military_ShouldAttackBySea` for every sending
+building, which fills the persistent path cache. The present count `p` is `CountPresentSoldiers` S 005661c0
+(`IsPresentInBuilding(s, 0)`); the strength loop runs over the whole garrison; another player's soldier counts when its
+fight reference is invalid and its in-fight byte (+0x331) is 0.
 
 ### 3.13 Reacting to fights
 
@@ -1231,14 +1259,20 @@ h = factor(Defense, Own), or (current defenders / own count in the nearest remem
 
 Then a roll: `chance = specialDefenseRandomValue (+0x9c, default 50) - 20 * (number of the 3 x 3 low-res cells
 around the building that are current attack target areas)`; if `chance < rand % 100` and the neighbourhood
-comparison S 0059ee80 is false (weighted own `score` not above 1.5 x the weighted `threat - threatUnfinished`),
+comparison S 0059ee80 (`AiLowResGrid_CompareNeighbourhood` [known: disassembly]: `balance = w * (threat - threatUnfinished) +
+balance`, `score = w * score + score`, true when `score > balance * 1.5`, 1.5 a double, S 007e6ac8) is false (weighted own
+`score` not above 1.5 x the weighted `threat - threatUnfinished`),
 the score is replaced by `specialDefenseFactor` (+0x98, default 0.1). The factor read is index
 `0 + 2 * 1` = `factor(Defense, Own)` (0.5 in every shipped profile) [known] S 0059ea50, S 00555d10, S 0054b8a0.
 `factor(Attack, Enemy)` (+0x38) has no reader among the three callers of the getter [inferred].
 In one observed attack on a computer player the watch wrote 0.862, `StartAttack` replaced it with the player
 setting 0.5, and `DispatchDefenders` S 00576400 read 0.5 [live, 2026-10-12].
 
-**Every 127 ticks, each watch once** (`AiAttackWatch_Evaluate`) [known] S 0059b2f0: when the fight is running,
+**Every 127 ticks, each watch once** (`AiAttackWatch_Evaluate`) [known] S 0059b2f0: "the attack can still be cancelled"
+is `Fight::GetPhase == Fighting` (`Military_IsField8A0Zero` S 00570d10); "the fight is running" is the start countdown
+(+0x24) at 0 (`Military_IsField24Zero` S 00570700); the headquarters test is S 00532610 (`depot`, +0xf1, +0xf5 all set);
+the rolls are `rand % 100 < chance` (signed). Both parties get a watch (S 0053be90: attacker first); only the defending
+computer player draws at creation (S 0059b3f0 tests `fight.attacker != own`). When the fight is running,
 has a target and the target building still belongs to the defender, compute the live strength ratio
 (S 0059f100, same formula on the soldiers actually in the fight). If `ratio < 0.5`:
 - AI is the **attacker** and the attack can still be cancelled: with probability `profile.retreatChance` %
@@ -1698,7 +1732,7 @@ which are the stream slots called: bool = `WriteBool`, int = `WriteInt`, u32 = `
 | MilitarySettings | S 00599cc0 | `AI MilitarySettings` [0] | bool; int countdown |
 | AttackSystem | S 00599ad0 | `Ai AttackSystem` [1] | bool active; AttackTargetSelection; AttackExecution; int budget (§3.12) |
 | AttackTargetSelection | S 005a85b0 | `Ai AttackTargetSelection` [1] | bool active; the three target slots, each an AttackTarget |
-| AttackTarget | S 005a9a20 | `Ai AttackTarget` [0] | low-res position (a `LowResPosition`, ctor S 005a99f0); int; float time; int target player |
+| AttackTarget | S 005a9a20 | `Ai AttackTarget` [0] | low-res position (a `LowResPosition`, ctor S 005a99f0); int `radius` (+0x10; its only writer `AttackTarget::Set` S 005a9ae0 receives 12 from `ChooseNewTarget`, and `AttackExecution::Update` compares the hex distance with it, S 005a103a..005a104e); float time; int target player |
 | AttackExecution | S 005a0620 | `Ai AttackExecution` [3] | bool active; per slot the primary and the secondary target position (3 x 2 positions); ExpansionTarget (+0x40, the fallback request; ctor S 005a0880) |
 | SoldierCreation | S 005994e0 | `AI SoldierCreation` [0] | bool |
 | CatapultConstruction | S 00598cc0 | `AI CatapultConstruction` [0] | bool active; low-res position (+0x14); float best score; low-res position (+0x24); u32 cells per step; ConstructionOrder (+0x34) (types from the ctor S 00598d30) |
@@ -1779,7 +1813,7 @@ S 005821f0, S 00584870:
   kind 0, cell (-1, -1), time 0.0 (S 005a08b3, S 005a0227);
 - `AI StreetConstruction` v <= 1: the two dwords (struct name `posA`) = -1 / -1 (S 005a33e4);
 - `AI StreetRouteOptimizer` v == 0: A* step = 0 (S 005a4c7f);
-- `Ai AttackTargetSelection` v == 0: slots 1 and 2 empty: low-res position (-1, -1), kind 0, time 0.0, target
+- `Ai AttackTargetSelection` v == 0: slots 1 and 2 empty: low-res position (-1, -1), radius 0, time 0.0, target
   player -1 (S 005a99f7);
 - `Ai Cell` v <= 1: no kind-9 buildings.
 
@@ -1805,7 +1839,7 @@ through the owner pointer from another module is not excluded].
   unless noted:
   - MilitaryLimiter: 1 draw for the count (only if `attackCountRandom > 0`), 1 for the delay (only if
     `delayRandom != 0`);
-  - per attack candidate that is evaluated: 1 (attackers score), 1 (discarded defenders score), then 1 for
+  - per attack candidate that is evaluated: 1 (attackers score), 1 (defenders score, the estimate's defence fraction), then 1 for
     the mode factor if the candidate is not hopeless (also when `ratio < 0`, the two score draws are made);
     1 for the secondary-attack roll when its preconditions hold; a candidate that passes the threshold ends
     the whole attack round, so later slots draw nothing;
@@ -1868,8 +1902,7 @@ through the owner pointer from another module is not excluded].
   street strategy search (any planner that connects each new flag to the nearest own flag with a path no
   longer than twice the direct distance and occasionally adds flags and shortcuts); the CellFull back-off;
   the fight history (a single remembered ratio per opponent).
-- Quirks to decide on deliberately: the 3x3 weight at (+1,+1); the discarded defenders score (it consumes a
-  random number); budget units counting evaluation rounds, not attacks; Weak/Normal never building a
+- Quirks to decide on deliberately: the 3x3 weight at (+1,+1); budget units counting evaluation rounds, not attacks; Weak/Normal never building a
   sacrifice building because `sacrificesStartTime` stays at FLT_MAX; buildings counted once, at their anchor
   only, in the military map and the defensive weight; the free tool.
 - The AI never repairs `bEnabled` after the headquarters is lost: a computer player without headquarters

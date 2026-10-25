@@ -761,8 +761,14 @@ working place (slot 11 of §2.6).
 
 `LeaveFight` (S 0065be90) [known]: unlink from the target's attacker / defender list, from the opponent and the
 group, delete every group that targets this soldier, reset the three cells to -1, `leftFight = true`,
-`inFight = false`. `ReleaseAll` (S 0065bfe0, on death and on unbinding) also clears the opponent link of every
-soldier attacking this one, removes the soldier from the fight's side list and from its ship.
+`inFight = false`. `ReleaseAll` (S 0065bfe0) also clears the opponent link of every
+soldier attacking this one, removes the soldier from the fight's side list and from its ship. Its callers are the death
+(`TakeDamage` S 00659260), entering a building (`OnEnterBuilding` S 00659300), unbinding (`ReleaseFightStateIfEngaged`
+S 00659110 in states 0xe, 0xf, 0x21) and the soldier's destruction (`SoldierFightState::Destruct` S 0065c080, from
+`Soldier::dtor` S 0065a4e0: `LeaveFight`, then `ReleaseAll`). These are the only ways out of a side list besides a ship
+leaving the fight (`Fight::RemoveShip` S 00571500) and the fight's own destructor, and a fight ends only when its side
+lists and ship list are empty (§3.6.1), so a soldier removed from the game (a ship's cargo deleted,
+`NSettlers::System::RemoveSettler` S 00654c20) must leave through its destructor [known].
 
 Removing the **last attacker** from the side list while the target is still valid and not owned by the attacker
 posts `!attack failed` to the attacker and `!attack averted` to the target's owner (S 005719b0) [known].
@@ -1148,7 +1154,13 @@ healthiest soldiers go in, up to the HP-scaled capacity.
 - Then, if the (new) building belongs to the soldier's player: `Military_TryAssignSoldierToBuilding`
   S 00574c50: while `wantedSize - garrison - openOrders - 1 < 0`, cancel one open order; if there are none left
   and the value is still negative, the soldier is **not** taken; otherwise the soldier is unlinked from its old
-  home and its ship and becomes a garrison member.
+  home (`VillageLink_UnlinkSoldier`, when its home reference +0x1c0 is valid) and from the ship that carried it
+  (`NavyLink_UnlinkMilitarySoldier` S 0053c0a0, when its ship reference +0xf8 is valid: the reference cleared **and** the
+  soldier removed from the ship mission's soldier list), and becomes a garrison member (`VillageLink_LinkSoldier`)
+  [known]. The list removal matters: the mission's state 5 (`NNavy::Military::Update` S 005ba250,
+  `BoardSettlersAtHarbor(1)` S 005b9f30) waits until every soldier still in the list is aboard, so a capturer left in it
+  would hold the ship at the target forever, and the ship in the fight's list (+0xbc) would keep the fight active
+  (`Fight::IsActive` S 00571090).
 
 The following soldiers find the target owned by the attacker and enter by the same test.
 
@@ -1378,6 +1390,13 @@ sacrifices (§3.9), computer players (attack watch, fight history).
 (present soldiers, or stocked soldiers for a headquarters, capped at 10, S 0055fd40) to the renderer; the
 `ISoldierConnector` interface so that the computer player can count instead of send
 (`../navy-and-military.md` §3.4).
+
+`Military_CountDefendersByKind(target, persistent, scale, counts)` S 005760a0 [known: disassembly] (thiscall on
+`NMilitary::Attack`, `RET 0x10`) goes over the territory buildings in list order: the target itself, a depot, adds its
+stock (Depot+0x28) of every soldier good of its owner's tribe per kind; any other target adds
+`trunc(GetAvailableAttackers(target, target, persistent) + 0.5) + 1` to the count of its soldier kind (the scale not
+applied, one more than available); every other building of the target's owner adds
+`trunc(f32(f32(available * scale) + 0.5))`.
 
 **Rules about soldiers and military buildings owned by other specifications** (pointers only):
 

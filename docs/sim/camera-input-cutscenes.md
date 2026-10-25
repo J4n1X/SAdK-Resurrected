@@ -728,9 +728,9 @@ Settlers are not selectable by a click [inferred: no branch of this function sel
   menu 0x12 on that cell), 3 the start cell was clicked (cancel).
 - **4**: `mode = 1`, selection reset, then handled again.
 
-**Right click** (`MenuSelection::HandleRightClick` S 00617bc0) [known]: mode 2: when slot 11 of the
-create-building box returns 0 its slot 9 is called with 1 and the click is consumed (the box steps back one
-level [inferred]), else `mode = 1` and the selection is reset; mode 3: cancel street building unless the
+**Right click** (`MenuSelection::HandleRightClick` S 00617bc0) [known]: mode 2: reads the box
+`infoBoxes[0xc]` (`InfoBoxCreateBuilding`, ctor S 00634bc0); a hidden box is shown again (vslot 0x24 `SetVisible(1)`) and
+the click is consumed, else `mode = 1` and the selection is reset (details below); mode 3: cancel street building unless the
 planned street can already be completed (S 0078b180: `planner0.IsConstructionActive() && CanComplete()`; then
 the click keeps mode 3 and `MenuSelection::Update` ends the mode, [ingame-ui.md](ingame-ui.md) §3.5)
 (`MenuSelection::Cancel` S 006162e0: sound `uiCancel`, `mode = 1`, `StreetBuildMode::Cancel`
@@ -744,16 +744,28 @@ Detail of the modes [known: decompile]: mode 3: if the system has no street buil
 consumed and returns true without cancelling and without closing the panel. Otherwise `GetActiveStreetBuildMode` S 00783490;
 if the planner is not (`IsConstructionActive() && CanComplete()`, S 0078b180), `Cancel(this, 0)` S 006162e0 and return
 true; if it can be completed the mode stays 3 and the action panel is closed (`CloseUnlessConfirming` S 005f0510), return
-false. Mode 2: if the info box (`infoBoxes[0xc]`) vslot 0x2c returns 0, vslot 0x24(1) steps it back one level and the click
-is consumed (panel stays open); otherwise mode 1, `ResetSelection` S 00615d10, panel closed, return false. Mode 4: mode 1,
-`ResetSelection`, panel closed.
+false. Mode 2: vslot 0x2c is `nUi::Object::IsVisible` S 004a0100 and vslot 0x24 is `nUi::Object::SetVisible` S 004a1090 (the box's
+vftable 007f541c does not override slots 9 and 11). When `IsVisible` returns 0 the box is shown again (`SetVisible(1)`) and the
+press is consumed (return true); the mode stays 2, no reset, the panel stays open. A visible box: `mode = 1`,
+`ResetSelection` S 00615d10 (which includes `CloseUnlessConfirming` S 005f0510), return false. What hides the box while the
+mode is 2 is not found [TODO]. [ingame-ui.md](ingame-ui.md) ("if the create-building box is not visible, show it") agrees.
+Mode 4: `mode = 1`, `ResetSelection`, panel closed, handled like the default path (not consumed); the writer of mode 4 is
+not found [TODO]. Any other mode: reset, not consumed.
+
+The consumed result: `nMenu::Game::OnMouseButton1Down` S 005eab40 sets `buttonPressed[1]` (Game+0x3a) in both cases and
+returns the result of `HandleRightClick` to `nUi::Object::DispatchEvent` S 004a07a0, which stops offering the press to the
+widgets behind at the first child that returns 1. `CApplicationEx::HandleWindowMessage` S 00401f30 (case 0x204) ignores the
+result. The camera's look-around (`UpdateStandardMode` S 00786e70: `buttonPressed[1] != 0 && uiSuppressed == 0`) starts whether
+the press was consumed or not [known].
 
 The right button on the press [known: decompile]: S 005eab40 has no `IsGameHanging` gate, stores no position and checks no
 camera style, modifier or pause state. It never picks an object (no `SelectAtCursor`). S 005eab70 is not a Game override
 but the stock `nUi::Event::OnMouseButton1Up` shared by every widget; `Object::DispatchMouseUp` S 0049ff40 reaches it only if
-a press set the flag. `WM_RBUTTONDBLCLK` dispatches the right double-click slot (vslot 17) = S 0072db80, which returns 0:
-the second press of a double click neither calls `HandleRightClick` nor sets `Game + 0x3a`, so it does not deselect and
-does not start the look-around; the release after it is not dispatched (the flag was cleared by the first release). There
+a press set the flag. The second press arrives as `WM_RBUTTONDBLCLK` (S 00401f30 case 0x206): `Root->HandleEvent(1, 1, 0)` ->
+`Object::DispatchMouseDoubleClick` S 0049ff20 -> `Event::DispatchMouseDoubleClick` S 004ab1f0 -> the Game's slot 17 =
+`Generic_ReturnZero` S 0072db80 (the left double click is slot 14, S 005eab30). The second press of a double click neither calls `HandleRightClick` nor sets `Game + 0x3a`, so it does not deselect and
+does not start the look-around; the release after it is not dispatched (the flag was cleared by the first release, S 005eab70). [inferred] open: for every
+double click the window layer calls `GameAction vtbl+0x18(1, 1)` (S 00401f30), a left-button-down game action, not traced. There
 is no drag threshold and no click suppression for the right button: the press has deselected / cancelled before the
 look-around (S 00786e70: `buttonPressed[1] != 0 && uiSuppressed == 0` -> mode LookAround) turns the view, and the
 look-around starts also when `HandleRightClick` returned true (consumed).

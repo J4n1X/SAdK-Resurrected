@@ -296,7 +296,7 @@ the ship is not moving (movement float `+0x20` ≤ 0, movement state 0 or 4) [kn
 | 2 | If all mission soldiers have left their fight → 7; else board those that have not (standing on the harbour, idle) → 3 when all are aboard |
 | 3 | Sail to the route end **owned by the fight's defender** (`fight+0x1c`) → 4; no such end → 7 |
 | 4 | Disembark one soldier per tick; when empty, or when all have left the fight → 5 |
-| 5 | Board the soldiers that left the fight → 6 when all are aboard |
+| 5 | Board the soldiers that left the fight → 6 when all are aboard. "All" are the soldiers still in the mission's list: the dead leave it through their release (`Soldier::ReleaseLinks` → `NavyLink_UnlinkMilitarySoldier`), the capturers when they join the captured building (`Military_TryAssignSoldierToBuilding` S 00574c50), so after a capture only the soldiers walking back to the landing harbour (soldier states 0x21 → 0x31) are waited for [known] |
 | 6 | Sail to the opposite end of the route → 7 |
 | 7 | Disembark one per tick, unlinking mission soldiers; when empty `NNavy::Military::Finish` `005ba190` |
 

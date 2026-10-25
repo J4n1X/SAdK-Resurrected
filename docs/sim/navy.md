@@ -906,6 +906,8 @@ S 005ba250, S 005b9f30, S 005ba190 [known]; additions:
   still linked" and the state is kept [known] S 005ba250, S 005bcd10.
 - `Finish` S 005ba190: `bActive = 0`; unlink from the fight; unlink every mission soldier (last to first);
   take the ship off its route. The ship then returns to state 0 and calls `ReturnToOwnHarbor` (§3.8).
+- When the attack captured the territory around the landing harbour, the route is now own-to-own after `Finish` and the
+  ship takes it up as its ferry at once [known: S 005bab60; seen in the remake's port on `MP_6P_ship_ahoi`].
 - Unchecked reads in `Update` S 005ba250 [known]: state 0 sails to `GetEndHarborOwnedBy(route, owner)` S 005b6970
   with no test, and `MoveToHarbor` S 005b97f0 dereferences the harbour, so a mission whose route is gone, or has no
   end of the owner's, crashes. That can happen: a harbour exit takes a non-expedition ship off its route
