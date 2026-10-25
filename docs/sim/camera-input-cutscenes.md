@@ -374,7 +374,8 @@ width turns the view by 10 radians.
 - Minimap press and drag: `nMenu::MiniMap::FocusCameraOnCursor` S 005f1520 (called from the minimap's mouse
   press and mouse move handlers S 005f18e0, S 005f2130) converts the mouse position inside the minimap to a
   vertex (`y = vertexHeight − v`), clamps it to `0 .. vertexWidth − 1` and `0 .. vertexHeight − 1`, and calls
-  `FocusOnVertex` [known for the clamp and the call; the texture-to-vertex scaling was not re-derived].
+  `FocusOnVertex` S 00786060 [known; the exact scaling is in [hud-panels.md](hud-panels.md) §3.7 "Input"]. The press
+  and every move while button 0 is held (and the middle button is not) call it, so a drag refocuses on each move.
 - Selection: `MenuSelection::RefreshFromGameSelection(.., focusCell = 1)` S 00617800 calls `FocusOnCell` with
   the controller's `hoveredCellX/Y`; it is called with `focusCell = 1` by `nMenu::Game::OnButtonClick` S 005eb850
   (the back / forward buttons that cycle through buildings of the same type [inferred: that function was not
@@ -634,7 +635,7 @@ The in-game screen `nMenu::Game` (event face vftable S 007eec1c) [known]:
 | Input | Handler | Behaviour |
 |---|---|---|
 | left press | `OnMouseButton0Down` S 005eaae0 | swallowed while the network game hangs; else widget default, then `Cursor::SelectAtCursor` and `MenuSelection::HandleClick` (§3.10) |
-| right press / release | S 005eab40 / S 005eab70 | `MenuSelection::HandleRightClick`; `Game + 0x3a` = 1 / 0 (look-around) |
+| right press / release | S 005eab40 (`Game::OnMouseButton1Down`) / S 005eab70 (stock `nUi::Event::OnMouseButton1Up`) | the press calls `MenuSelection::HandleRightClick` S 00617bc0 and sets `buttonPressed[1]` (`Game + 0x3a`) in both the consumed and the not-consumed case, and returns the consumed flag; the release clears the flag and returns 0 (look-around) |
 | middle press / release | S 005eab80 / S 005eaba0 | `ActionButtonPanel::CloseUnlessConfirming`; `Game + 0x3b` = 1 / 0 (drag); a middle press reaches this handler even when the base dispatch refuses the event (S 005eaaa0) |
 | wheel | `OnMouseWheel` S 005eb140 | sign only → `Camera::OnWheelUp` / `OnWheelDown`; never consumed |
 | key down | `OnKeyDown` S 005ec340 | Shift sets the team-chat byte; then `Camera::HandleKeyDown`; then Enter (chat, cheats, §3.12) |
@@ -738,6 +739,24 @@ when a waypoint beyond the start cell exists, otherwise it is just ended without
 `mode = 1`, reset; mode 1: the selection is reset. The action panel is closed unless it is waiting for a
 confirmation (not on the two consumed paths). Because the right button is also the look-around button, a right click both deselects and starts
 turning the view.
+
+Detail of the modes [known: decompile]: mode 3: if the system has no street build mode (`streetModes.size == 0`) the click is
+consumed and returns true without cancelling and without closing the panel. Otherwise `GetActiveStreetBuildMode` S 00783490;
+if the planner is not (`IsConstructionActive() && CanComplete()`, S 0078b180), `Cancel(this, 0)` S 006162e0 and return
+true; if it can be completed the mode stays 3 and the action panel is closed (`CloseUnlessConfirming` S 005f0510), return
+false. Mode 2: if the info box (`infoBoxes[0xc]`) vslot 0x2c returns 0, vslot 0x24(1) steps it back one level and the click
+is consumed (panel stays open); otherwise mode 1, `ResetSelection` S 00615d10, panel closed, return false. Mode 4: mode 1,
+`ResetSelection`, panel closed.
+
+The right button on the press [known: decompile]: S 005eab40 has no `IsGameHanging` gate, stores no position and checks no
+camera style, modifier or pause state. It never picks an object (no `SelectAtCursor`). S 005eab70 is not a Game override
+but the stock `nUi::Event::OnMouseButton1Up` shared by every widget; `Object::DispatchMouseUp` S 0049ff40 reaches it only if
+a press set the flag. `WM_RBUTTONDBLCLK` dispatches the right double-click slot (vslot 17) = S 0072db80, which returns 0:
+the second press of a double click neither calls `HandleRightClick` nor sets `Game + 0x3a`, so it does not deselect and
+does not start the look-around; the release after it is not dispatched (the flag was cleared by the first release). There
+is no drag threshold and no click suppression for the right button: the press has deselected / cancelled before the
+look-around (S 00786e70: `buttonPressed[1] != 0 && uiSuppressed == 0` -> mode LookAround) turns the view, and the
+look-around starts also when `HandleRightClick` returned true (consumed).
 
 **Street building** [known for the calls; the planner itself is in
 [streets-transport.md](streets-transport.md)]. Action 9 of a selected flag calls `MenuSelection::BeginStreetBuild`
@@ -944,7 +963,12 @@ Produces:
   (`Terrain_RayHitGroundApprox` S 0068a610: no hit when the ray points up, and the point then stays the corner);
   the far pair takes the hit only when it is nearer than the far-plane corner; nothing is drawn when all four
   miss; uv = ((x − originX) ÷ extentX, 1 − (z − originZ) ÷ extentZ); the edges are clipped against the round
-  minimap (`Math_IntersectLineCircle2D`, radius = half the widget width) and drawn with the shape's alpha);
+  minimap (`Math_IntersectLineCircle2D`, radius = half the widget width) and drawn with the shape's alpha; a corner whose ray
+  misses keeps its original frustum position; the world extent is `(mapW - 1) * tileStepX` (S 00686f80, S 00686fa0) while
+  the cell symbols use `cell / mapWidth`, a systematic offset of about one cell in 256; the frustum is drawn with
+  `DrawLine2D` S 004e1cb0 (white, widget alpha, 1 px), clipped by hand to the circle, not through the mask;
+  `renderFrustum` (obj+0x9a9) defaults to 1 in the constructor, so the in-game minimap draws it although
+  `menuingame.xml` does not set `renderfrustrum`; the cinematic layout sets it to true explicitly);
 - the local selection (`ai::game::Selection`) and, through the menus, command events
   ([game-commands.md](game-commands.md) §5.1): this is the only way input changes the simulation;
 - during a cinematic: the three switches of `BeginCinematic` (AI off, chests off, sacrifices paused), the

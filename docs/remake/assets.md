@@ -289,7 +289,7 @@ everything the original's look depends on; engine-native forms only in the dispo
 | `.dds` BC1 without alpha, BC2, BC3, A8R8G8B8 (other uncompressed formats are expanded to A8R8G8B8, or become BC5 as below) | `.dds`, unchanged; mip chains completed where they are missing | `Image.LoadDdsFromBuffer` | §6.2 |
 | `.dds` A4R4G4B4, R8G8B8, R5G6B5, A1R5G5B5, A8 (55 files) | `.dds` A8R8G8B8, every value expanded exactly (`round(v · 255 / max)`; A8's colour 0, as D3D9 samples it) | same | so Godot's loader always gets a format it reads |
 | `.dds` BC1 with one-bit alpha | `.dds` BC7 (DX10 header) | same | §6.2 |
-| `.dds` uncompressed, bound as a normal map, alpha 255, z near the rebuilt z | `.dds` BC5 (DX10 header) | same | §6.2 |
+| `.dds` uncompressed, bound as a normal map, alpha 255, and either read only through Godot's `NORMAL_MAP` (terrain patterns) or with its stored z near the rebuilt z (streets, crossings) | `.dds` BC5 (DX10 header) | same | §6.2 |
 | `.dds` cube maps (2) | `.dds`, unchanged | own reader: the six faces as images, then a `Cubemap` | Godot's loader reads only the first face [viewer, checked] |
 | settler and avatar colour-index maps (`*_colorindices_*`) | `.dds` A8R8G8B8 unchanged (including the original's mip chain); the lobby's R8G8B8 ones expanded to A8R8G8B8, levels as they are | point sampled | never filtered, compressed or re-mipped (AM §3.15) |
 | `.tga` | `.png` (top-left origin; grey, RGB or RGBA as the source) | `Image.LoadPngFromBuffer` | colour ramps, the building colour map and UI atlases keep their exact texels; also `game/animals/pig.dds`, which holds a BMP, and the one encrypted `.png` |
@@ -309,7 +309,7 @@ everything the original's look depends on; engine-native forms only in the dispo
 
 ### 6.2 Textures [draft]
 
-- Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer; BC7, BC5 and BC4 are decompressed by Godot on upload where the GL driver lacks them.
+- Compressed textures stay compressed: BC1, BC2 and BC3 are GPU formats on every renderer; BC7 and BC5 are decompressed by Godot on upload where the GL driver lacks them.
 - **BC1 with one-bit alpha** loses its alpha on Godot's Vulkan path (Vulkan uploads it as RGB) [viewer]. The
   converter re-encodes these to BC7 (decision 7), every level from the BC1 decode, with an own encoder
   (`Sadk.Formats/Images/Bc7Compression.cs`, deterministic, modes 5, 6 and 7; only the partition tables come from bcdec,
@@ -325,11 +325,14 @@ everything the original's look depends on; engine-native forms only in the dispo
   colour range use mode 6 or mode 5. What stays inexact are blocks with three or more unrelated colours next to
   transparent texels. The report gives the largest opaque and transparent error per texture. The files are written with
   a DX10 header (DXGI_FORMAT_BC7_UNORM); Godot reads them as `FORMAT_BPTC_RGBA`. Where the GL driver lacks
-  `GL_ARB_texture_compression_bptc` (Compatibility renderer), Godot decompresses BC7, BC5 and BC4 on upload by itself
+  `GL_ARB_texture_compression_bptc` (Compatibility renderer), Godot decompresses BC7 and BC5 on upload by itself
   (with all mip levels; `texture_storage.cpp` `_get_gl_image_and_format`, a `WARN_PRINT` once) [checked in the 4.7
-  source]; desktop drivers expose the extension, so the usual path is native BC7. The texture job's kind version is 2.
+  source]; desktop drivers expose the extension, so the usual path is native BC7. The texture job's kind version is 3.
+  The decoder is checked against bcdec's decode of fixed blocks of modes 5, 6 and 7 (anchors 15, 2 and 6) and the BC5
+  decoder against bcdec's of both end-point orders (tests `Bc7Tests`, `RgtcTests`).
 - **Missing mip chains** of 3D textures are completed at conversion: the last level present is decoded, box-filtered
-  down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3, BC7, BC5 or A8R8G8B8). [measured] 226
+  down to 1 × 1, and each new level encoded in the texture's own format (BC1, BC2, BC3, BC7 with the transcode's alpha
+  weight, BC5 or A8R8G8B8). [measured] 226
   textures have no chain and `game/map/objects/buoy.dds` stops after three levels; 114 are completed (the 95
   animated water frames among them). This is needed, not only nicer: Godot's DDS loader rejects a partial chain
   [checked]. UI textures keep their chain as it is (four DXT5 UI textures and `PokerCards.dds` ship with full ones):
@@ -337,23 +340,25 @@ everything the original's look depends on; engine-native forms only in the dispo
   `lobby/gfx/Village_Minimap.dds`, `PokerCards.dds` and the localised `ui_s2logo*.dds`.
 - The six settler colour-index maps (about 100 MB uncompressed) are kept byte for byte: the original's mip chain
   holds only level-0 values and the shader samples them point-wise.
-- **Normal maps.** The textures the materials bind as normal maps are the `normal` attributes of
-  `terrain_static_data.xml` (patterns) and the `normal*`, `crossingNormal*` and `normalMap*` attributes of `graphics.xml`
-  (streets, crossings, water); there is no other list [checked]. Of 42 distinct textures 11 are DXT1 or DXT3 and stay
-  as they are (never re-encoded); 31 are uncompressed (the original's A8R8G8B8, A4R4G4B4 and R5G6B5 maps). BC5 stores x
-  and y only, so a map becomes BC5 only if (1) every texel of every level has alpha 255 (BC5 samples alpha 1; the
-  terrain shaders read the alpha as specular mask, ice bump and lava mix, so 25 of the 31 keep it and stay A8R8G8B8) and
-  (2) the mean of |stored z − sqrt(1 − x² − y²)| over level 0 is at most 6 steps of 2/255 and the largest at most 40
-  (`l_meadow_00_n` has a mean of 19.1 and a largest of 127.5 and stays A8R8G8B8 for its stored z). [measured] Five maps
-  pass: `l_sand_00_n`, `simple_crossing_n`, `z_acre_00_n`, `z_meadow_00_n`, `z_sand_00_n` (mean 2.1 to 4.6, largest 8.2
-  to 18.2 steps; BC5's x/y error after encoding: largest 14 to 21 steps from the 4- and 5/6-bit sources' own
-  precision). The original's stored z is not unit length in general (|n| − 1 up to 0.59 in `l_meadow_00_n`). Godot's
-  spatial shaders rebuild z themselves for `NORMAL_MAP` (`normal_map.z = sqrt(max(0.0, 1.0 - dot(normal_map.xy,
-  normal_map.xy)))` in `scene_forward_clustered.glsl` and the Compatibility `scene.glsl`), so the terrain shaders
-  already ignore the stored z; the street shader reads z itself and uses `sadk_unpack_normal`
-  (`shaders/sadk/normal_map.gdshaderinc`), which rebuilds z when the blue of the sample is exactly 0 (what BC5 samples
-  as); the water maps (`WaveBump1/2`) are DXT1 and keep their stored z. The conversion report lists every normal map
-  with its decision and its z deviation. BC5 is a quarter of the A8R8G8B8 size.
+- **Normal maps.** The textures the materials bind as normal maps come from the typed settings (`GameSettings`): the
+  patterns' `normal` in `terrain_static_data.xml`, the street's `normal0/1` and `crossingNormal0/1` and the water
+  presets' `normalMap0/1` in `graphics.xml`; there is no other list [checked]. How the shaders read a map decides
+  whether it may lose its blue channel (`NormalMapUse`): the terrain hands x and y to Godot's `NORMAL_MAP`, and Godot's
+  spatial shaders rebuild z themselves and ignore blue (`normal_map.z = sqrt(max(0.0, 1.0 - dot(normal_map.xy,
+  normal_map.xy)))` in `scene_forward_clustered.glsl` and the Compatibility `scene.glsl` [checked in the 4.7 source]);
+  the street shader reads the stored z and rebuilds it only from a BC5 sample (`sadk_unpack_normal` in
+  `shaders/sadk/normal_map.gdshaderinc`: a blue of exactly 0, what BC5 samples as); the water shader reads its maps
+  raw (`rgb * 2 - 1`), so they are never BC5 (`WaveBump1/2` are DXT1 anyway). A map bound in several places takes the
+  strictest reader. The use is part of the texture job's name, so a settings change that changes it converts the map
+  again and one that does not leaves it alone. Compressed maps stay as they are (never re-encoded); of the uncompressed
+  ones (the original's A8R8G8B8, A4R4G4B4 and R5G6B5 maps) a map becomes BC5 only if (1) every texel of every level has
+  alpha 255 (BC5 samples alpha 1; the terrain shaders read the alpha as specular mask, ice bump and lava mix, so 25
+  keep it and stay A8R8G8B8) and (2) for a map the street shader reads, the mean of |stored z − sqrt(1 − x² − y²)| over
+  level 0 is at most 6 steps of 2/255 and the largest at most 40. [measured] Six maps become BC5: the terrain's
+  `l_meadow_00_n`, `l_sand_00_n`, `z_acre_00_n`, `z_meadow_00_n`, `z_sand_00_n` and the crossing's `simple_crossing_n`
+  (mean 2.2, largest 9.2 steps). The original's stored z is not unit length in general (`l_meadow_00_n`: mean 19.1,
+  largest 127.5 steps, |n| − 1 up to 0.59), which matters to no reader of it since Godot rebuilds z. The conversion
+  report lists every normal map with its decision and its z deviation. BC5 is a quarter of the A8R8G8B8 size.
 - **Uncompressed 3D textures** that are not normal maps stay A8R8G8B8 (the maintainer decides later). [measured] The
   converted tree holds 44 of them (13 native A8R8G8B8, 25 expanded from A4R4G4B4, 2 from R5G6B5, 3 from R8G8B8, 1 from
   A1R5G5B5): 108 MiB with their chains, 27 MiB as BC7. Besides: 29 colour-index maps (311 MiB, kept exact) and 102 UI

@@ -412,6 +412,11 @@ A flag's model is chosen only when the flag is created. When a harbour is linked
 `NNet::Flag::LinkNavyObject` S 00669e60 announces the flag again (flag removed, then flag added), so the scene
 replaces `z_flag_00` by `z_harbor_flag_00` [known] S 00669e60, S 00682ca0.
 
+A flag's vertex is the fine-grid vertex of its cell, `vx = 4*cx + 2*(cy & 1)`, `vy = 4*cy` (`Scene::OnFlagCreated` S 00682ca0), so
+`vy` is always even and the half step of `VertexToWorldPos` S 00687500 for odd `vy` never applies to a flag.
+`g_MapVertexWidth` (0x00880fa8) is `4*mapWidth + 1` (`NMap::System::Init` S 00672430, `Load` S 00672030). World z grows with
+`vy`; the 1.3 street-width shift is on z only and its sign is "toward smaller z when the hash <= 0.5" (below). [known, decompiled]
+
 World position of a cell-anchored object in the handlers (flag, harbor place, route buoy, chest, spawn point):
 `vx = cx*4 (+2 if cy odd)`, `vy = cy*4` in vertex coordinates, then the vertex-to-world rule of §2.1
 [known] S 00680c80, S 00682ec0. Deposits and doodads pass their stored position unchanged; it is therefore a
@@ -1514,7 +1519,10 @@ instance and reports nothing.
 **Placement** `MapObjLayer::AddInstance` S 0068dd40 [known]: the vertex's world position; for kinds 1 (`flag`) and 9
 (`harbor`) a shift of 1.3 street widths (`<Street width>`) on z, toward -z when
 `((0x3434b6 - (u*u*0x4bd9 + 0x2e48d)*u) & 0x4b746f) / 3354521.0 <= 0.5` with `u = i*0x3a ^ i*0x74000`,
-`i = vy * vertexWidth + vx` (u32 arithmetic), else toward +z; plus the element's `offset`; a yaw
+`i = vy * vertexWidth + vx` (u32 arithmetic), else toward +z (the compare at S 0068ddd3-0068dde2 is `FLD r; FCOMP 0.5f;
+FNSTSW AX; TEST AH,0x41; JNZ`, taken for `r <= 0.5` to 0068ddf9: `z = z - width*1.3` (`FSUBP`); otherwise 0068dde4:
+`z = z + width*1.3`; the 1.3 is the double 1.2999999523 at S 007f97c8; `r` reaches about 1.47, the mask 0x4b746f exceeds
+the divisor 3354521, so the "minus" share is not one half); plus the element's `offset`; a yaw
 `rotMin + r * (rotMax - rotMin)` from one draw and the scales `min + r * (max - min)` for x, y, z from three more,
 always, whatever the ranges; world = scale * rotationY(yaw) * translation (row vectors: scale in the model's axes);
 then the height sampled at that position (`TerrainGrid::SampleHeightAndNormal`), raised to the water level when at or

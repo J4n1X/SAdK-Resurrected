@@ -1078,6 +1078,15 @@ at once, inside a batch it only sets `fullDoodadRefresh`, so the closing batch c
 (S 005321c0). Blocking doodads are never removed by these checks [known: neither function looks at the blocking
 index].
 
+**Creation does not check the cell** [known: decompile of S 00656ec0, S 00544e00, S 00545370, S 00545150]: neither the dying
+branch of `Settler::Update` nor `AddDoodadAtFinePos` / the doodad constructor / `AddDoodadAtCell` calls
+`Object::ShouldBeRemoved` or reads grid bit 0x2 / 0x100 or the flag layer; the new object is always returned. A permanent
+non-blocking doodad (the settler skeleton) created on a street, flag or building cell stays until a map-update batch
+covers its cell (`RemoveObstructedInRect` S 00544b70 from `MapUpdateBatch_End` S 005321c0, `RemoveObstructedAtCell`
+S 00544dc0, `RemoveObstructedAtFinePos` S 00544ad0 from `CreateDeposit`). Nothing on a settler's walk or a timer rechecks it.
+Only temporary doodads (lifetime >= 1) are checked per tick (`System::Update` S 005446c0). A blocking permanent doodad is
+never rechecked by the rect / fine-pos paths (they walk only the static index and the temporary map).
+
 **Removal** `RemoveDoodad(id)` S 00544480: from whichever map holds it; a blocking doodad clears bit 0x400 [known].
 
 **Lookup** `FindDoodadAtCell(cell, typeOrZero)` S 00543dc0 [known]: every test compares with the cell's **sample

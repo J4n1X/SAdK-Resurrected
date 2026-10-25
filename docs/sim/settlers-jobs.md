@@ -452,6 +452,10 @@ Called first by every class `Update`: **[known]**
      The test is `NDoodads::System::FindDoodadAtFinePos` S 00544080: the static index (key
      `y × vertexWidth + x`), then a scan of the temporary doodads, then the blocking index. A second death on the
      same vertex therefore adds no second skeleton. **[known]**
+     The skeleton position is `FinePos::SetFromMapPos(cell)` when `movement->fine.moving` is false, else
+     `movement->fine.currentCell[0..1]`; the guard is `FindDoodadAtFinePos == NULL` (any doodad, not only skeletons); the
+     `total - remaining == 14.0` test is a plain float equality. The skeleton is placed without a street, flag or building
+     check ([`map-resources.md`](map-resources.md) §3.11, "Creation does not check the cell"). **[known]**
 
 `StartDying()` (S 00656760): `state = 5`; reset a running animation; abort movement if busy; start animation kind
 6 for `cfg SettlerDyingTime` ticks. **[known]**

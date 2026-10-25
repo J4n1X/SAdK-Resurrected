@@ -865,11 +865,22 @@ Coordinates: cell (x, y) → texture (x / mapWidth, 1 − y / mapHeight), then i
 **Symbols** `RenderSymbols` S 005f5bb0 [known], all tinted (1, 1, 1, widget opacity), each drawn centred on its
 cell with the texture rectangle of `mapSymbols.xml` and the minimap mask:
 
-1. symbol 3 for every ship of the local player whose two movement floats (ship +0x20 → +0x48, +0x4c) are ≤ 0;
-2. symbol 4 for every fight in which the local player is one side and whose id is valid, at the fight cell;
+1. symbol 3 (Ship) for every **finished** ship of the local player, at the ship's movement cell
+   (`*(ship+0x24)+4/+8`). The two floats at ship +0x20 → +0x48 / +0x4c are the Construction object's `remainingWork1` /
+   `remainingWork2` ([navy.md](navy.md) §2.5), not movement floats: a ship under construction is not drawn, a moving
+   ship is [known];
+2. symbol 4 (Fight) for every valid fight in which the local player is one side, at its **target building's anchor
+   cell** (`Fight+0x28` ReferenceBuilding, cached pointer at `+0x18` via `Generic_GetDword18` S 0059e5e0, building
+   `+0x20/+0x24`). A fight counts as valid when the high dword of the target reference's id (`Fight+0x3c`) is >= 0, i.e.
+   once the target is bound; it is not a test of the fight's own id [known];
 3. symbol 4 at **half opacity** for every other valid fight, except those whose two sides are both enemies of
-   the local player (not drawn): fights of allies are shown dimmed;
-4. the camera frustum, if `renderFrustum` (default true; the shipped XML does not set it);
+   the local player (not drawn): fights of allies are shown dimmed. "Enemy" is `Player::IsEnemyOf` S 005be280:
+   `this.index != other.index && (this.team != other.team || this.team == -1)`, so team-mates and allies count as
+   non-enemies. The half alpha is the double 0.5 at S 007d4a90 times the widget opacity [known];
+
+   Ships and fights have no fog test, no blinking and no age fade;
+4. the camera frustum, if `renderFrustum` (default true; the shipped XML does not set it; its details are in
+   [camera-input-cutscenes.md](camera-input-cutscenes.md) §5);
 5. the list symbols (messages, `menu.addMinimapSymbol`). `MinimapSymbolList_Add` ignores a negative x or y
    (S 005f5af0). `MinimapSymbolList_TickExpire` S 005f2690 decrements `remaining` once per menu update
    ([ingame-ui.md](ingame-ui.md) §4) while it is positive and removes the symbol when it reaches 0; a negative
@@ -877,19 +888,80 @@ cell with the texture rectangle of `mapSymbols.xml` and the minimap mask:
    `lifetime="100"`; 2 `Quest`, 3 `Ship`, 4 `Fight` have −1; all use texture `ui_ingame4` and `center="2 3"`
    [known: data].
 
+**Symbol drawing** [known]: `MiniMap_DrawMapSymbol` S 005f55a0 places a symbol at `MapCellToViewPos` S 005f20c0 =
+`(cellX / W, 1 - cellY / H)` (cell units, the cell's lower-left corner) through `TextureToViewCoords` S 005f13f0, scales by
+the widget size, centres the sprite on that point by half its pixel size, and draws it through the round mask of
+`overlays[0]` (`ui_mask_minimap.tga`, mask UVs derived from the view position), so symbols never leave the circle. Size on
+screen = the symbol's mapping w x h in screen pixels (no scaling with the zoom or the widget), colour white times the alpha.
+`MapSymbolData::LoadFromXml` S 005f4c90 reads only `texture`, `name`, `mapping`, `lifetime`: `center="2 3"` is never read.
+List symbols (`MinimapSymbolList_DrawAll` S 005f5a90, S 005f5a20) fade: alpha = `opacity` for a negative remaining
+lifetime, else `remaining * opacity / (lifetime / 2)` (integer half), i.e. full alpha above half the lifetime, then linear
+to 0. The symbol's float cell is truncated (`ftol`) to a whole cell.
+
+**Pictures, dots, filtering** [known from the disassembly; the decompiler of these four functions mislabels branches]:
+
+- The pixel-to-cell mapping is the same in `UpdateTerritoryOverlay` S 005f3fc0, `UpdateObjectOverlay` S 005f4390 and
+  `MiniMap_ApplyExplorationMask` S 005f16d0: `x = ftol(col * mapW / texW)`, `y = (mapH - 1) - ftol(row * mapH / texH)`, with
+  `mapW` and `mapH` the **cell** dimensions (0x880fb0 / 0x880fb4); memory row 0 is the top (y = mapH - 1); a pixel samples
+  the lower-left cell of its span (truncation). The map picture is 512 x 512, the overlays 256 x 256, whatever the map's
+  size (a 128-cell map shows each cell on 2 x 2 overlay pixels, a 512-cell map skips every other cell).
+- `rowCount = -1` (the only caller, `Render`) means "texH rows from the cursor at obj+0x7c8 / +0x7cc"; the cursor only
+  counts up and `row = cursor % texH`, so every row is written once per pass, in ascending order.
+- Overlay 1 per pixel: no building (the id's high dword < 0) writes 0 to that pixel alone; a building writes its colour to
+  (col, row), (col-1, row), (col-1, row-1), (col, row-1) as plain buffer offsets with **no column or row bounds check** (at
+  column 0 the left pixel is the last of the previous row; at row 0 the writes land before the buffer), so later pixels
+  overwrite earlier ones. The second branch of S 005f4390 (flat white or transparent per cell, at S 005f44e5) is dead: its
+  test is `mapW < 0`. `FindBuildingByUnique` S 00558250 is not null-checked.
+- Territory (overlay 0): unexplored cells keep the owner's RGB with alpha 0 (`& 0x00ffffff`); explored interior cells
+  `& 0x99ffffff`; border cells (grid bit 0x20) keep their alpha. `ApplyExplorationMask` ORs `0xff000000` into explored
+  pixels of the capture and writes 0 for unexplored ones (the X8R8G8B8 target then shows black); it runs only while
+  `Game +0xfff8` is set (always 1).
+- Filtering: `Object+0x180` (`pointfiltering`) is cleared by the constructor S 004a3cc0 and only `LoadFromXml` S 004a76c0
+  sets it; `menuingame.xml <miniMap>` has no such attribute, so `DrawQuad` S 004a88a0 passes 0 and
+  `UIRenderer::DrawMaskedQuad` S 004e1aa0 picks `RenderUIElementMaskedTex2Linear`: the picture and both overlays are
+  sampled linearly [known selection; that "Linear" is bilinear is [inferred], the sampler states live in the .fx]. A quad is
+  offset by (-0.5, -0.5) pixels.
+- On screen the 2 x 2 dot of a 256-pixel overlay covers about 1.5 x 1.5 pixels of the 188-pixel widget at zoom 1.
+- The base picture's content: `RefreshMapTexture` S 005f1070 -> `Scene::RenderOverviewTexture` S 00680d90 (512 x 512,
+  X8R8G8B8 + D24S8): a top-down orthographic `MapCamera` S 0067f9a0 (eye `AABB.max.y + 50`, near 0.1, far 200),
+  `PrepareFullCellPass` (all cells revealed), `RenderPatternsPlain`, `MapObjLayer::RenderEntries` (static map objects,
+  detail 0) and a water quad per low cell (`CMapRenderer::RenderWaterPass` S 00688f70): no buildings, settlers, ships,
+  shadows, fog or UI. [inferred] for what `RenderEntries` draws; one render per load or device reset, not a timer.
+
+**Reset of the source rectangle** [inferred: static reading, not seen live; a Frida read of obj+0x1b0 around a building
+placement settles it]: `CaptureMapTexture` S 005f3dd0 ends with `ShapedObject::BindTexture` S 004b51e0 ->
+`Shape::BindTexture` S 004a86d0, which sets the mapping to `(0, 0, texW, texH)` and then copies the mapping's w/h into
+`textureWidth/Height`. The capture runs on every `dirty` recapture in `Render` S 005f49e0 (`dirty` is set by `MarkDirty`
+S 005f1190: building created or removed, sacrifice started or removed; by `OnVisibilityRegionChanged` S 005f11a0, called
+from `NotifyPlayerRectChanged` S 00677ea0 for every `ExploreArea` S 00674800 for each active non-enemy player; by the
+constructor and `LoadFromXml`) and on the device reset. So the original most likely drops the player's zoom and pan
+whenever one of those happens. The remake does not port this reset (a harmful UI bug outside the simulation, fixed
+outright): it keeps the rectangle.
+
 **Input** [known] S 005f18e0, S 005f2130, S 005f2390, S 005f1af0, S 005f1520:
 
-- Press (left button): store the cursor position, move the camera to the map point under the cursor
-  (`u = srcX / texW + cursorX × srcW / texW`, the same for v; x = u × width, y = height − v × height, in map
-  vertex units (`g_MapVertexWidth` / `g_MapVertexHeight`), each clamped to `0 .. size − 1`;
-  `Camera::FocusOnVertex`) and run the base press handler. [inferred] for the two multiplications, which the
-  decompiled text hides in float-to-int conversions.
-- Move while hovered: with the pan button held (event face byte +0x13; the middle button per
-  [ingame-ui.md](ingame-ui.md) §3.8.5) the source rectangle moves by −cursor delta × source size, clamped to
-  `0 .. texture size − source size`; else with the left button held the camera follows the cursor.
-- Wheel while hovered: `factor = (15 − delta) / 15.0`; a factor < 1 is refused when the source width is below
-  `textureWidth / 10` or the source height below `textureHeight / 10`; else the source rectangle is scaled
-  around the cursor point, its size capped at the texture size and its position clamped inside the texture.
+- Press (left button) S 005f18e0 and every move S 005f2130 while button 0 is held (and the middle button is not):
+  `FocusCameraOnCursor` S 005f1520, exactly: `u = x/texW + (w/texW) * cx`, `v = y/texH + (h/texH) * cy`;
+  `vx = ftol(vertexW * u)`, `vy = ftol(vertexH * v)` with `vertexW = 4W + 1`, `vertexH = 4H + 1` (globals 0x880fa8/ac);
+  `cellX = vx`, `cellY = vertexH - vy` (Y flipped), each clamped to `0 .. vertices - 1`; `Camera::FocusOnVertex` S 00786060
+  sets the focus at once. The press then runs the base press handler.
+- Wheel S 005f2390 is gated on the hover (`hovered` byte at obj+0x144; `intersectionType="1"` = an **ellipse** hit test, so
+  the wheel, the pan and the clicks act only inside the circle). `notches = (short)HIWORD(wParam) / 0x78` (truncating signed
+  division; forward positive), `factor = (float)((15 - notches) / 15.0)` (double 15.0 at S 007e2aa8). One notch forward is
+  14/15, one backward 16/15; several notches in one event multiply once as `(15 - n) / 15`.
+- `ZoomAroundPoint` S 005f1af0: only for `factor < 1` the step is refused when `w < texW / 10.0` or `h < texH / 10.0`
+  (double 10.0 at S 007e2508; strict `<`, tested on the size **before** the step: a 512-texel picture goes
+  512 x (14/15)^n, the 34th notch is still allowed and ends at 49.0, below 51.2). Then, with the cursor `a` (0..1 over the
+  widget): anchor = `(x + a.x * w, y + a.y * h)`, each corner scaled about it, then in this order `x, y = max(x, 0)`,
+  `w, h = min(size, texture)`, `x = min(x, texW - w)`, `y = min(y, texH - h)`: near an edge the rectangle slides instead
+  of keeping the anchor. The zoom state is the source rectangle (obj+0x1b0..+0x1cc), no separate scalar; zoom-out limit 1x.
+- The pan is the **middle** button: `OnMouseButton2Down` S 005f1890 (vtable slot 18) sets `lastPress` (obj+0x290, the
+  cursor normalised over the widget, 0..1) and `pressed[2]` (obj+0x1b); the release is the base class's S 005eaba0.
+  `OnMouseMove_Face8` S 005f2130 (slot 27), only while hovered: with `pressed[2]`, `d = cursor - lastPress`;
+  `x -= d.x * w`, `y -= d.y * h`; clamp `x, y >= 0`, `x + w <= texW`, `y + h <= texH`; `lastPress = cursor`; returns 1.
+  Without the middle button and with the left one, `FocusCameraOnCursor` follows the cursor; `lastPress` is updated on
+  every hovered move. Middle wins over left.
+- The camera frustum goes through `TextureToViewCoords` too, so the view frame follows the zoom and the pan.
 
 ### 3.8 Quest and sacrifice panels (summary)
 
@@ -1112,9 +1184,8 @@ survives from one match to the next inside one program run depends on the object
     `cbMessages` entries in `Game::LoadFromXml` S 005ecaf0 also sets the filter bytes back (a read of the
     combo box's mark function and of `OnFilterButtonToggled` S 005f8e80 settles it);
   - the minimap's XML load sets `refreshCountdown` to 0 and `dirty` to 1 (S 005f10a0), and the next capture
-    takes the texture size from the source rectangle (§3.7) [known]. [TODO] not established: whether zoom and
-    pan (the source rectangle) are reset between matches; a read of `Picture::LoadFromXml` for the `mapping`
-    attribute and of where the layout is reloaded settles it;
+    takes the texture size from the source rectangle (§3.7) [known]. Every capture resets the source rectangle (zoom and
+    pan) to the whole texture (§3.7 "Reset of the source rectangle") [inferred];
   - [TODO] not established: whether the chat log is emptied between matches (a read of the `ChatSystem`
     attach and detach functions settles it).
 - What the panels display is saved with the simulation: series and histories

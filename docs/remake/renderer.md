@@ -429,7 +429,7 @@ needs:
 | water | `water/water`, `water/water_border`, `water/water_ssr` (refined option) |
 | sky | `sky/sky` (the remake's cloud layer), `sky/sky_original` (the 633-unit dome) |
 | particles | `particles/flat`, `particles/spherical`, `particles/volume`, `particles/additive` (passes 0..3; 4 and 5 unused) |
-| world overlays | `streets/street`, `streets/crossing`, `streets/route`, `streets/buoys`, `border/border`, `overlays/build_icons`, `overlays/decal` (selection) |
+| world overlays | `streets/street`, `streets/crossing`, `streets/buoys`, `border/border`, `overlays/build_icons`, `overlays/decal` (selection) |
 | shadows | `shadow/cutout_<kind>` for blended casters (only with the original's blended foliage, §12): alpha-tested, shadow only, with the kind's vertex animation |
 
 **Render states** (blend mode, culling, depth writes) belong to the file: a kind that the original draws in several
@@ -933,14 +933,17 @@ show the 1.5-unit facets.
   level, stitch or neighbour level); its CPU work runs in parallel on workers, the Godot meshes are made after, and the
   whole batch is swapped in in one frame. The first picture is built synchronously in the layer's first frame
   (Steinfjord, 6 cores, Compatibility renderer: Faithful 279 ms, Moderate 572-733 ms, Very High 0.9-1.0 s). A jump of the
-  selection point (it moves more than a region's side, `TerrainRebuilds.JumpDistance`, in one frame: a minimap click, a
-  good button, the message list) is stepped the same way: the levels of the new place are built on the workers and waited
+  view is stepped the same way: the camera controllers say when they put the camera at another place at once
+  (`WorldRenderer.JumpView`: the match camera's `FocusOn` for a minimap click, a good button, a message and the start,
+  its home key, the free camera's `JumpTo`), and the terrain layer reads `WorldRenderer.ViewJumped` in that frame
+  (the renderer clears it after the layers' frame). The levels of the new place are built on the workers and waited
   for, and the batch is swapped in before the frame is drawn. Only the regions whose signature changes are built (the
   place left and the place reached), not the map. The geomorph is a function of the eye alone (§10.2), so on meshes made
-  for the new eye it shows the steady state and nothing reshapes after the jump. Scrolling and orbiting keep the
-  asynchronous path. The cost of a jump is logged (`terrain: camera jump, levels of the new place built in N ms`);
-  measured on the real GPU machine: 95-139 ms per jump (at Low, Compatibility renderer, 6 cores, MP_6P_ship_ahoi:
-  115-180 ms).
+  for the new eye it shows the steady state and nothing reshapes after the jump. Scrolling, orbiting and zooming never
+  jump, however far a slow frame moves the eye: they keep the asynchronous path. The jumps and the longest one's
+  main-thread time are in the map view's statistics (`--stats`: `jumps=N worst jump=M ms` in the terrain part of the
+  `STATS` line); measured on the real GPU machine: 95-139 ms per jump (at Low, Compatibility renderer, 6 cores,
+  MP_6P_ship_ahoi: 115-180 ms).
 - Memory: only the dense levels (finer than the fine grid) are kept on the CPU (the wanted level and one either side,
   prefetched one hysteresis ahead); the original's levels are built again with each batch. Measured on Steinfjord
   (vertex buffers / normal texture / CPU at rest):
@@ -1355,9 +1358,17 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 ### 15.1 Streets and routes
 
 The original's route spline (Hermite, tangent factor 1.3), the street strip clipped against the terrain triangles,
-crossings as hexagon fans, water-street buoy chains, sea-route strips with the 16-frame cross-faded texture (WO §3.5
-to §3.8); built per street on a worker thread from `EntityAdded` / `StreetUpgraded` / removal, rebuilt on height
+crossings as hexagon fans, water-street buoy chains (WO §3.5 to §3.8; the sea-route strip is not ported, see below); built per street on a worker thread from `EntityAdded` / `StreetUpgraded` / removal, rebuilt on height
 changes under it. Street previews of the placement mode come from `IQueries` and draw with the preview tint.
+
+**Sea routes are not drawn as a ribbon.** The remake does not port the route pass (`RenderRoutes`,
+`StreetRenderer::DrawRoutes` S 006c29a0, with `RouteDecal::BuildFromSpline` S 006e2450 and the route shader): the
+maintainer's decision of 2026-10-25, since the original's ribbon is practically invisible. A route stays visible through
+its two end buoys (map objects, `Scene::OnSeaRouteCreated` S 00683040 -> `MapObjLayer::AddInstance` S 0068dd40), which
+also carry the route's picking (`PickShipRouteAtMouse` S 00787b00) and selection. The simulation (`ShipRouteAdded`,
+`NavySystem` routes) is unchanged. The `graphics.xml <Street route*>` attributes stay in the original's data and are not
+read by the remake. The original's behaviour stays documented in `docs/sim/world-objects-rendering.md` §3.7. This is a
+deliberate omission, not a `[TODO]`; a mod that wants the ribbon draws its own.
 
 **As built** [implemented, sadk-remake fb451d1]:
 
@@ -1380,7 +1391,7 @@ changes under it. Street previews of the placement mode come from `IQueries` and
   crossing but the harbour place's ground plot (§13.1).
 - **Differences from the original**: the strip is a grid sampled from the heights, not the strip clipped against
   the terrain triangles; every flag node gets a crossing; the other streets at a node are rebuilt when its street
-  count changes [inferred]; water streets and sea routes are not drawn yet; the normal map's
+  count changes [inferred]; water streets are not drawn yet, sea routes by decision (above); the normal map's
   channel convention is [inferred].
 
 ### 15.2 Territory borders
@@ -1526,22 +1537,32 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   message's remaining time falls by the tick's simulated time. The list is saved and restored with the game
   ([sim-boundary.md](sim-boundary.md) §7).
 - **Minimap**: the map picture is each cell's pattern average colour lit by the map's light, water in the map's
-  water colour, one pixel per cell; the territory and building overlays and the click as the original's
+  water colour, one sample per cell in the original's 512 × 512 picture (the overlays 256 × 256); the territory and building overlays and the click as the original's
   (S 005f3fc0, S 005f4390, S 005f1520; hud-panels §3.7); the symbol lifetimes from `mapSymbols.xml`; unexplored
   cells transparent. The camera's view frame ports `MiniMap::DrawCameraFrustum` S 005f2a50 (frustum corners 0, 1,
   7, 6 cut with y = 0, the far pair only when nearer than the far corner, nothing when all four miss, edges clipped
   against the round minimap; [camera-input-cutscenes.md](../sim/camera-input-cutscenes.md) §5).
+- **Minimap zoom, pan and symbols** [implemented, sadk-remake 2026-10-25]: the intents are `core.game.minimap {u, v}` (a
+  click), `core.game.minimap.wheel {u, v, notches}` and `core.game.minimap.pan {dx, dy}`; the source rectangle (the zoom
+  state) lives in the minimap view. The wheel and the middle-button pan follow the original's rules (hud-panels §3.7
+  "Input": factor `(15 - notches) / 15`, the 1/10 size limit, the clamps, the rectangle sliding at an edge). The press is a
+  camera jump (§10.4) and each held-button move refocuses without a jump, as the original calls `FocusCameraOnCursor`
+  S 005f1520 from the press S 005f18e0 and from every move S 005f2130 while button 0 is held (`FocusOnVertex` S 00786060
+  sets the focus at once). The ship symbol marks every finished ship of the local player, the fight symbol sits at the
+  target building's anchor cell (half alpha for other fights unless both sides are enemies); symbol sizes are the
+  mapping's pixels, list symbols fade over the second half of their lifetime; the picture is 512 × 512 and the overlays
+  256 × 256 as the original's, sampled linearly. The original's reset of the zoom and pan on every recapture
+  (`CaptureMapTexture` S 005f3dd0) is not ported: a harmful UI bug outside the simulation, fixed outright.
 - **Statistics panel**: the curves, coloured from `menu.cfg`. The original's UI player colours (S 0087f8c8) are
   iconconfig.xml's `<PlayerColors>` (`IconConfig::LoadFromXml` S 00611320) and differ from `menu.cfg`'s.
 - `debug=true` shows the developer panel.
 - **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the message
   lifetime counts simulated time (the original subtracts the frame time once per logic tick, so its lifetime
-  depends on the frame rate); the minimap picture (the original renders the scene from above) and its resolution
-  (the original's overlays are a fixed 256 px); no statistics key (**S** moves the camera); no build or pause
+  depends on the frame rate); the minimap picture's content (the original renders the scene from above); no statistics key (**S** moves the camera); no build or pause
   button (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells
   transparent as documented, not seen in the original; the curve colours from `menu.cfg` where the original's
   panels use the `<PlayerColors>` table.
-- **Open**: the minimap's wheel zoom and middle-button pan, its ship and fight symbols; the statistics player
+- **Open**: the statistics player
   rows and the inventory, buildings and tech tabs; the chat, the selection preview, back and forward cycling, info-map buttons 2 and 3; whether the original hides `btOptions`
   or `btQuests` in code (ingame-ui §10 Q15).
 

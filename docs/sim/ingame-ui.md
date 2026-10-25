@@ -1397,12 +1397,15 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
 - Overlay 1: objects. Building 0xffaaaaaa; a building whose property byte +0xf5 is set 0xffffffff or 0xffff8888
   (by property +0x54); a sacrifice site (working mode 9) `sacrifices_color`; a chest `chests_color`; nothing
   on unexplored cells. Both overlays are rebuilt when a building is created or removed or a sacrifice starts.
-- Symbols (on top): own ships that are not moving (symbol 3), fights of the local player (4), other fights at
-  half alpha unless both sides are enemies of the local player, the camera frustum as a clipped trapezoid (if
-  `renderfrustrum`), and the script / message symbols with their lifetime.
-- Input: left click or left drag moves the camera to the map point (y flipped); dragging with the middle mouse button (button index 2, `WM_MBUTTONDOWN`
-  S 00401f30; its pressed byte is Event face +0x11 + 2, read by S 005f2130) [known] pans the minimap
-  view inside the texture; the wheel zooms (§3.3.3).
+- Symbols (on top): the local player's finished ships at their movement cell (symbol 3), fights of the local player at
+  their target building's anchor cell (4), other fights at half alpha unless both sides are enemies of the local player,
+  the camera frustum as a clipped trapezoid (if `renderfrustrum`), and the script / message symbols with their lifetime
+  ([hud-panels.md](hud-panels.md) §3.7).
+- Input: left click or left drag moves the camera to the map point (y flipped; `FocusCameraOnCursor` S 005f1520 from the
+  press S 005f18e0 and from every move S 005f2130 while button 0 is held); dragging with the middle mouse button (button
+  index 2, `WM_MBUTTONDOWN` S 00401f30; its pressed byte is Event face +0x11 + 2, read by S 005f2130) [known] pans the
+  minimap view inside the texture; the wheel zooms (§3.3.3). Every recapture of the base image resets the zoom and the pan
+  ([hud-panels.md](hud-panels.md) §3.7) [inferred].
 - Symbol definitions: `mapSymbols.xml` (§6).
 
 #### 3.8.6 World overlays (`overlayPanel`) [known] S 0061fc60, S 0061f980, S 0061f770, S 0061f830, S 0063d870, S 006403c0, S 0063dd30

@@ -995,8 +995,8 @@ These matter more in the remake than in the original, because Harmony patches ca
    - **HUD frame, minimap and messages** ([renderer.md](renderer.md) §15.5): a message's remaining time falls by
      the tick's simulated time (the original subtracts the frame time once per logic tick, so its lifetime
      depends on the frame rate); the minimap picture is each cell's pattern average colour lit by the map's light,
-     water in the map's water colour (the original renders the scene from above), one pixel per cell (the
-     original's overlays are a fixed 256 px); no statistics key (**S** moves the camera); no build or pause button
+     water in the map's water colour (the original renders the scene from above), one sample per cell in the
+     original's 512 × 512 picture, the overlays 256 × 256 as the original's; no statistics key (**S** moves the camera); no build or pause button
      (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells are
      transparent as documented, not seen in the original; the message list at the top left, where the layout puts
      it; the statistics curve colours from `menu.cfg` (the original's table S 0087f8c8 not compared); `debug=true`

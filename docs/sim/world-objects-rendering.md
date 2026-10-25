@@ -603,12 +603,23 @@ The stone circle under a harbour flag is **not** a crossing: it is the harbour p
 flag or no flag ([rendering.md](rendering.md) §3.11 "Harbour place plot") [known]. It is drawn with the house
 ground decals, after the streets, so it covers the end of a land street at the harbour flag.
 
+**Flag respawns** [known, decompiled]: flag objects are respawned (four new RNG draws) by `Flag::LinkNavyObject` S 00669e60
+(as `z_harbor_flag_00`) and `Flag::UnlinkNavyObject` S 00669eb0 (back to `z_flag_00`), also from `Flag::PostLoad`
+S 0066a5f0 on load. The hash shift and the fixed yaw/scale of the flag elements do not depend on the draws.
+
 **Door path** [known]: every building has a short street from its door to its middle: a two-point `CStreet`
 (S 006ccc70) from the cell of the entrance flag (flag +0x28) to the building's anchor cell (+0x20), stored at
 `S2CG::Building +0x100`. It is made in `S2CG::Building::ctor` S 006ac810 and `Building::Update` S 006abcf0 through
 `CreateEntranceStreet` S 006aa7b0; building sites have one too. Its mesh is `StreetDecal::BuildStraight`
-S 006e0e30: one slice, side = normal × d (d = the path's direction, not normalised), v from 0 to
-`texStretch` × length, the kind-0 texture. It has no flag node, so no crossing and no trimming. It is drawn
+S 006e0e30, the kind-0 texture; it has no flag node, so no crossing and no trimming.
+`BuildStraight` [known, decompiled]: `d = normalize(toPos - fromPos)` (3D); `sideF = nF x d`, `sideT = nT x d` (unnormalised
+cell normals from `GetCellNormal` S 00687270); edge points `pos -+ W*side` (`W` = `<Street width>` = 1.0, a half width: the
+strip is 2.0 wide, no door-path special case). Four planes (`Plane::FromPoints` S 006eb9c0, `ClipByPlanes` S 006ed6e0 keeps
+`dist >= -0.0001`): left edge, right edge, from-end through `fromPos`, to-end through `toPos`; each completed by a point
+offset with the cell normals. No extension or `crossingRadius` trim. Triangles from `CLandscape::CollectTrianglesInBounds`
+S 0068a760 (stride 1). UV: `u = clamp(dot((p-fromPos)/W, (sideF+sideT)/2)*0.5 + 0.5, 0, 1)`,
+`v = f * texStretch * |toPos-fromPos|`. `street_shader.fx` addresses u Clamp, v Wrap. `Building::CreateEntranceStreet` is
+called only from `Building::Update` S 006abcf0 and `Building::ctor` S 006ac810. The path is drawn
 while the building is not hidden (`Building::SetHidden` S 006aa320; `CStreet::IsVisibleOrFlag4C` S 006ccdf0)
 without a frustum test, with the streets (map layer 2, before the buildings' ground decals of layer 4,
 [rendering.md](rendering.md) §3.1), and removed only by `Building::dtor` S 006ab040, so it stays through the

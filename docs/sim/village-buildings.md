@@ -347,7 +347,7 @@ following must hold, in this order:
 1. The territory grid says the cell belongs to the player [known].
 2. If `size & 0x40`: no territory-giving building (`territoryRange > 0`) on the cell or within 4 hex rings
    [known] S 0052dc30. The upgrade check (§3.13), which ignores the centre cell, skips this rule.
-3. The **entrance flag cell** (one step in direction 1, NE, from the anchor) is usable: inside the map, has
+3. The **entrance flag cell** (one step in direction 1 from the anchor; on screen the bottom side, see the direction note below) is usable: inside the map, has
    the right grid bit (`size == 8`: bit 0x10 set; any other size: bit 0x200 set; `size == 0x10` is also
    accepted when bit 0x10 is clear, whatever bit 0x200 says), and either already holds a layer-0 object that is
    a flag of this player, or holds none and a flag can be placed there [known] S 0052fa00.
