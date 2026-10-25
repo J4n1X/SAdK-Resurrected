@@ -1518,7 +1518,14 @@ through `MapPos::SetFromFinePos` S 00675160 and are divided by 4 (blocks of 4 ×
 object belongs to the block of `InstanceMesh::GetClampedMapCell` S 006db650 / 4 (`CTerrainCellMgr::AddObject`
 S 006b7070). The plot is drawn with every ground decal (§3.9), in the buildings pass after the streets, so it covers
 a street's end at the harbour flag. The harbour flag itself adds only its model `z_harbor_flag_00` and its goods
-pile (`Scene::OnFlagCreated` S 00682ca0).
+pile (`Scene::OnFlagCreated` S 00682ca0): it has no ground of its own. `harbor_flag.KEX` (182 vertices, height 0 to
+3.358) stands on a pole foot, eight vertices of a ±0.25 square, no plate; it stands upright (yaw ±3°, no tilt:
+`AddInstance` S 0068dd40 samples the height with a null normal) at the terrain height of its shifted position. A
+"path circle" at a harbour is the street crossing fan (`StreetDecal::BuildJunctionFan` S 006de590), present only when
+a land street ends at the flag; the stone ring is the plot above [known]. The plot, like every ground decal, has no
+depth bias and no vertical clipping: the cut is the three edge planes of each terrain triangle (`ClipByPlanes`
+S 006ed6e0) with a lift of 0.01, and the original's terrain has no level of detail, so the plot always lies on the
+drawn surface [known].
 
 **Creation order**, which fixes which draws an object gets [known] S 005273d0, S 005b3a90, S 0053ec60, S 00543f50,
 S 00683040, S 00682ec0: the map's objects reach the renderer through the logic callbacks of `NLogic::System::PostLoad`:
