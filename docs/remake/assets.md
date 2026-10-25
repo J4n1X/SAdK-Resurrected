@@ -50,7 +50,7 @@ files: decrypted, the `.dds` files hold 756 MiB. 55 file names occur more than o
 | `<conversion folder>/<install id>/` | the converter | the converted tree in open formats, plus `conversion.json` (the source list and what each output was made from); the conversion folder is chosen at the first start (below) |
 | the game's folder: `settings.xml` | the game, at the first start and after each change | the installation's path and the conversion folder [implemented, maintainer 2026-10-15]; the language, `<Window>` (mode, size, screen, V-Sync, frame limit), `<Graphics>` ([renderer.md](renderer.md) §19) and `<Input>` (key bindings, [godot-capabilities.md](godot-capabilities.md) §6) [implemented 2026-10-15] |
 | `<user data>/cache/` | the game, on demand | engine-native forms of converted and modded assets (Godot binary meshes, baked animation textures, compiled shader variants), keyed by `(content hash, converter version, engine version)`; may be deleted at any time |
-| the game's folder | the installer | the engine and, in `mods/`, the mods that ship with it: `core.game`, `core.mainmenu`, `core.lobby`, `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
+| the game's folder | the installer | the engine (with `engine/` and the built-in base game's data in `base/`: `core.game`, `core.mainmenu`, later `core.lobby`) and, in `mods/`, the mods that ship with it: `refined`, `tools.assetbrowser` (assemblies, shaders, the remake's own layouts) |
 | `<user data>/mods/`, `mods-received/` | the player / transfers | mods ([mods.md](mods.md) §4) |
 | `<user data>/maps/`, `maps-received/` | the editor / transfers | map packages (§7) |
 | `<user data>/saves/`, `profiles/`, `settings.xml` | the game | saves, mod profiles, settings |
@@ -149,8 +149,8 @@ block-compressed textures; §6.2 keeps that to the DXT1 textures with one-bit al
 All assets are read through one virtual file system of **logical paths**. Layers, from bottom to top:
 
 1. the converted installation (the base game's content from the player's copy);
-2. the mods' `assets/` folders, in load order ([mods.md](mods.md) §5): first `core.game`'s (the remake's shaders,
-   layouts, UI parts, visual-descriptor extensions), then `refined`'s when active, then the others;
+2. the mods' `assets/` folders, in load order ([mods.md](mods.md) §5): first the built-in base game's (`core.mainmenu`'s, then `core.game`'s: the remake's shaders,
+   layouts, UI parts, visual-descriptor extensions; from `base/<id>/assets`), then `refined`'s when active, then the others;
 3. the current map package's `assets/` folder, while that map is loaded [binding: a map's files before the base
    game's].
 
@@ -203,9 +203,9 @@ The engine ships assets of its own at the bottom of the file system, below the c
 next to the executable (in the editor `src/Sadk.Game/engine/`, built from `src/Sadk.Presentation/assets`). It holds
 what every world and mod builds on: the shared shader includes `shaders/sadk/*`, the sky shaders `shaders/sky/*` and
 the engine's text tables `game/language/<lang>/engine.txt`. Any layer above replaces a file at the same logical
-path, so `core.game` or a mod can change a shared include for every shader that uses it. A folder (not the `.pck`)
+path, so the base game (`core.game`) or a mod can change a shared include for every shader that uses it. A folder (not the `.pck`)
 needs no I/O path of its own, works alike in the editor and in exports, and lets players see the files. The startup
-log names it first (`file system: engine (20 files), install (…), mod:…`). A mod build deletes files the mod no
+log names it first (`file system: engine (20 files), install (…), mod:core.mainmenu (…), mod:core.game (…), …`). A mod build deletes files the mod no
 longer has from the game's copy of it, so a stale copy cannot shadow the engine's.
 
 ### 5.3b The file system in Godot's `ResourceLoader` [implemented 2026-10-15]
@@ -302,7 +302,7 @@ everything the original's look depends on; engine-native forms only in the dispo
 | `.lua`, `menu.cfg` | converted Lua ([lua.md](lua.md) §3) | Lua host | the original source is kept beside it as `<path>.orig` for error reports |
 | `.s2m` + `.bin`, `.bmp`, `.lua`, cutscenes, briefing texts | map package (§7) | map loader | |
 | `.npc` | `.json` + palette `.png` | lobby / avatars | only when the remake has the 3D lobby |
-| `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in `core.game`; the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
+| `.fx`, `.inc` | not converted | — | the remake's shaders are its own files in the built-in `core.game` (`base/core.game/assets/shaders`); the `.fx` names stay lookup keys ([renderer.md](renderer.md) §7.5) |
 | `.psd`, `.lep`, `.ico`, `.html`, `.sav`, `.fx`, `.inc`, `.npc`, unused text tables and ini copies, the installer pictures, the two prototype maps (124 files) | not converted; the report lists each with its reason | — | FI §3.14; the prototype maps need `tools/s2m_upgrade.py` first (MF §9) |
 
 ### 6.2 Textures [draft]

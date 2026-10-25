@@ -29,23 +29,22 @@ Reading order: this file, then `sim-boundary.md` (the interface everything else 
 
 ```
 Sadk.Formats  ──►  Sadk.Convert                                   (no Godot)
-Sadk.Engine   ──►  Sadk.Session                                   (no Godot)
-     ▲                 ▲
-     │      mods: core.game (no Godot) ─── its client assembly (Godot); core.mainmenu, … (Godot)
-     │                 ▲                          ▲
-Sadk.Presentation (Godot: renderer, audio, UI) ───┘
+Sadk.Engine   ──►  Sadk.Session  ──►  Sadk.Simulation (core.game) (no Godot)
+     ▲                                     ▲
+Sadk.Presentation (Godot: renderer, audio, UI) ──► Sadk.Client (core.game), Sadk.MainMenu (core.mainmenu)
      ▲
 Sadk.Game (the executable)          Sadk.Headless (conversion, validation, replays)
+     mods (mods/<id>/bin): refined, tools.assetbrowser, … built against the above
 ```
 
 **A run of the game:**
 
 1. Start: settings; the installation is found and checked; the first start converts it into open formats
    ([assets.md](assets.md) §4).
-2. Mods are resolved and ordered, the virtual file system mounted (converted installation, then the mods),
+2. Mods are resolved and ordered, the built-in base game first; the virtual file system mounted (the engine's assets, the converted installation, then the mods),
    assemblies loaded and their Harmony patches applied ([mods.md](mods.md) §5, §6).
 3. Settings stage; data stage (the engine defines the kinds and the `properties.*` API, `Sadk.Engine.Content`;
-   `core.game` runs the original's property scripts through it; mods add and change entries in C# and Lua without
+   the built-in `core.game` runs the original's property scripts through it; mods add and change entries in C# and Lua without
    needing `core.game` for the types); the registry is frozen and checksummed; presentation documents (the original's
    settings XML as visual descriptors, layouts) are merged and patched.
 4. Main menu.
@@ -78,10 +77,15 @@ The proposals that change direction or cost real work, bundled:
 5. **`refined` as a simulation mod shipped with the game** — decided 2026-10-18: `refined` is a simulation mod shipped
    with the game and enabled on the mods screen. Its fixes are game rules wrapping core.game's, each switchable as a
    mod setting. Compatibility mode = `{core.game}`, or refined with every fix off ([mods.md](mods.md) §9.4, §14
-   item 7).
+   item 7). The base game itself is built into the engine (decided 2026-10-22, [mods.md](mods.md) §11a.1).
 6. **Data-stage formats**: C# and Lua only in the first version ([mods.md](mods.md) §6.3).
 7. **DXT1 textures with one-bit alpha** — decided 2026-10-15: transcoded to BC3 (twice the size of BC1) instead of
    decoded to RGBA8 (eight times) ([assets.md](assets.md) §6.2).
+8. **The base game is built into the engine** — decided 2026-10-22: `core.game` and `core.mainmenu` are built-in mods,
+   always loaded and first, not switchable; their code is the engine projects `Sadk.Simulation` (no Godot),
+   `Sadk.Client` and `Sadk.MainMenu`, their data `base/<id>/`. Ids, intents, settings, rule names, asset layering and
+   the match set are unchanged, so game rules stay overridable by name and old saves and replays load
+   ([mods.md](mods.md) §11a.1). [implemented, sadk-remake 2026-10-25]
 
 Also decided on 2026-10-15:
 

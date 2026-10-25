@@ -66,7 +66,8 @@ players-victory §3.6].
 | `Sadk.Convert` | no | the first-start conversion ([assets.md](assets.md) §4) |
 | `Sadk.Presentation` | yes | renderer, audio, UI framework, input, camera, presentation random streams |
 | `Sadk.Game` | yes | the executable: bootstrap, screens, glue |
-| `core.game`: its simulation and client assemblies (`Core.Game`, later `Core.Game.Client`) | no / yes | the base game's components, systems, commands, Lua bindings / its presentation handlers and UI sections |
+| `Sadk.Simulation` | no | the built-in `core.game`'s simulation: components, systems, commands, game rules, Lua bindings |
+| `Sadk.Client`, `Sadk.MainMenu` | yes | `core.game`'s presentation handlers, renderer and UI; `core.mainmenu` |
 | `Sadk.Headless` | no | command-line runner: conversion, mod validation, replays, checksum comparison |
 
 `Sadk.Presentation` references `Sadk.Engine` only through the view interfaces and event types. Simulation objects are

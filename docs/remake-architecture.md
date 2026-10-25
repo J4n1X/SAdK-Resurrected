@@ -26,11 +26,11 @@ The renderer's own decisions and what the testbed viewer found: [`remake-renderi
 
 ## 3. Mod model
 
-Modelled on Factorio: **the base game is a mod.** The engine knows no content, but it **knows the game**: buildings,
+Modelled on Factorio: **the base game is built like a mod.** The engine knows no content of its own, but it **knows the game**: buildings,
 workers and their jobs, placement, goods and stocks, building panels are the engine's own extensible mechanisms, not
 code inside core.game (maintainer, 2026-10-18: the engine must be tied tighter to the game instead of being mostly a
 data store and a rendering agent). core.game is the original's content plus the original's behaviours, registered
-through the same extension points a mod uses. The work list is [`remake/mods.md`](remake/mods.md) §14.
+through the same extension points a mod uses; since 2026-10-22 it is a built-in mod of the engine, always loaded and first, but still overridable by name like any mod's rules ([`remake/mods.md`](remake/mods.md) §11a.1). The work list is [`remake/mods.md`](remake/mods.md) §14.
 
 - **Load stages** over all mods in dependency order: settings, then data (each mod's definitions, then all
   "updates", then all "final fixes"), then the frozen registry becomes the game's content, then runtime.
@@ -140,11 +140,11 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
 - A fixed system order per tick, registered by position; mods insert their systems relative to named systems, and
   the engine refuses ambiguous orders.
 
-## 8. The `base` mod and the original's data
+## 8. The `core.game` mod and the original's data
 
-- `base` builds its registry entries from the player's installation (the property scripts in
+- `core.game` builds its registry entries from the player's installation (the property scripts in
   `data\game\scripts\properties`, the settings XML), so no original values are shipped.
-- **Names are the keys** inside the remake; `base` keeps each entry's original id as data. The original's maps and
+- **Names are the keys** inside the remake; `core.game` keeps each entry's original id as data. The original's maps and
   saves store those ids, and its tables are iterated in order of the **signed** id, which changes simulation
   results (`sim/properties-data.md` §2.1). Compatibility mode keeps both.
 - **How the entries are made: by running the original's property scripts.** The 22 Lua scripts are a program that
@@ -152,11 +152,11 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
   §3.3, `sim/properties-data.md`). The remake runs the same scripts with its own Lua runtime and its own
   implementation of those bindings, which fill the registry. No code is generated and nothing is compiled; ids
   and record order come out as in the original. The other mods' data stages run afterwards.
-- What `base` contains as C# is behaviour only (components, systems, commands); it is compiled with the game.
+- What `core.game` contains as C# is behaviour only (components, systems, commands); it is compiled with the game (`Sadk.Simulation`).
 
 ## 9. Code loading
 
-- The game's own code, `base` included, is compiled ahead of time with the .NET tools into assemblies; an export
+- The game's own code, the built-in base game included, is compiled ahead of time with the .NET tools into assemblies; an export
   ships them with the .NET runtime.
 - **Mods are precompiled assemblies (DLLs)**, built against the engine assembly and loaded at start-up through
   `AssemblyLoadContext`. This needs the JIT runtime, not NativeAOT; Harmony needs it as well.

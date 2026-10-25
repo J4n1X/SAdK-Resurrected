@@ -40,7 +40,7 @@ Added here [draft]:
 8. **The engine holds what every world needs, `core.game` the match maps** [the maintainer's decision 2026-10-15].
    The world renderer base (`Sadk.Presentation.Rendering`: renderer, layers, environment rig, mirror and
    reflections, settings, globals, orbit camera) and the shared shader includes (the engine asset layer,
-   [assets.md](assets.md) §5) are engine code and assets, so no mod is needed for them; `core.game`'s client assembly
+   [assets.md](assets.md) §5) are engine code and assets, so no mod is needed for them; `core.game`'s client assembly (`Sadk.Client`, part of the engine)
    adds the map renderer and its layers, and its shaders and descriptors reproduce the original's look, replaceable
    like any other asset. A later lobby renderer builds on the same base.
 9. **Every look must work on all three renderers** (Forward+, Mobile, Compatibility); features that need
@@ -69,7 +69,7 @@ Added here [draft]:
 ## 2. Place in the process [draft]
 
 The world renderer base is the engine's (`Sadk.Presentation.Rendering`); the map renderer and its layers are
-`core.game`'s client assembly `Core.Game.Renderer` (namespace `Core.Game.Rendering`; [mods.md](mods.md) §11a). Per
+`core.game`'s client assembly `Sadk.Client` (namespace `Core.Game.Rendering`; [mods.md](mods.md) §11a). Per
 frame it runs in steps 3 and 4 of the presentation frame
 ([sim-boundary.md](sim-boundary.md) §4.2): apply each tick record's events and motion samples, then interpolate,
 animate and draw. It runs on the main thread; CPU-heavy preparation (terrain region meshes, ground decals, street
@@ -396,7 +396,7 @@ does, the refined mode a placeholder.
 ### 7.1 The library [draft]
 
 The shared includes `sadk/*` and the sky shaders come with the engine (`engine/shaders/`, [assets.md](assets.md)
-§5.3a); the kinds' shaders are `core.game`'s, under `core.game/assets/shaders/` (logical `shaders/...`):
+§5.3a); the kinds' shaders are `core.game`'s, under `core.game`'s `assets/shaders/` (`base/core.game/` in the game folder, `src/Base/core.game/` in the source; logical `shaders/...`):
 
 | File | Holds |
 |---|---|
@@ -562,7 +562,7 @@ characters; goods; animals; ships; single meshes; selection decals; map objects 
 water itself (after blended objects, RR §4.1); the build overlay; particles. The build overlay comes after the whole
 map, water included, and before the particles (`Scene::RenderPostFxAndOverlay` S 00680a00), and after the post-process
 combine, so the depth of field never blurs it. Godot sorts transparent objects by distance; render priorities enforce
-the pass boundaries where the original's order matters. As built (sadk-remake d515744, `Renderer/DrawOrder.cs`): the
+the pass boundaries where the original's order matters. As built (sadk-remake d515744, `src/Sadk.Client/DrawOrder.cs`): the
 terrain blend layers clamp to priority 125 at most, the build overlay is at 126 and the particles at 127 (pass 0x100,
 the original's last); the remake's optional depth of field still blurs the overlay.
 
@@ -1077,7 +1077,7 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   overlay, planar reflection (default), screen-space (option) or none. No water beyond the map: the original's two
   border-water techniques are never used (RE §3.5). [implemented, sadk-remake e94cc01: `WaterMesher`; block counts
   Icebound 423 → 419, Ship Ahoi 544 → 529.] The mirror request still uses the at-or-below test, a harmless superset.
-- **Border skirt** [implemented, sadk-remake e94cc01, `Renderer/Water/BorderSkirt.cs`]: the original's skirt
+- **Border skirt** [implemented, sadk-remake e94cc01, `src/Sadk.Client/Water/BorderSkirt.cs`]: the original's skirt
   (RE §3.5: `BuildMapBorderSegments` S 006a7fa0, `ComputeMapEdgeExtents` S 006a77d0, `RenderMapBorder` S 006a7400):
   one edge height for the map (the lowest edge cell), one segment per edge block plus the four corners with the
   original's coded extents, 200 units out; two black passes without depth writes or culling, the first sloped from
@@ -1232,7 +1232,7 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
 - **Feed**: the simulation implements `IBuildingSource.Connect(IBuildingSink)` and hands over every building, then
   feeds `Add(BuildingSpawn)`, `AddRemains`, `Update(id, BuildingState)` (every tick while constructing or upgrading,
   else on change), `Remove(id, Vanish | Demolish)`, `Door(id)` and `Work(id, duration, offset, speed)`
-  (`Core.Game.Rendering.Buildings`, `Renderer/Buildings/BuildingFeed.cs`). `BuildingState` keeps the original's two
+  (`Core.Game.Rendering.Buildings`, `src/Sadk.Client/Buildings/BuildingFeed.cs`). `BuildingState` keeps the original's two
   construction phases (`Frame = 1 − remainingB`, `Build = 1 − remainingA`, `FromRemaining`), an upgrade, health (the
   fire level comes from it), the military flag and the selection; the layer runs the demolition sink itself after
   `Remove(Demolish)` (0.35 per second).
@@ -1397,7 +1397,7 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 
 **As built** [implemented, sadk-remake d2d47ee]:
 
-- **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `Renderer/BuildMode/`) keeps one rendering-server MultiMesh per
+- **Overlay**: `BuildOverlayLayer` (an `IMapLayer`, `src/Sadk.Client/BuildMode/`) keeps one rendering-server MultiMesh per
   4 × 4-cell terrain block (sadk-remake d515744), one instance per cell with an icon at the cell's point on the drawn
   terrain surface, and Godot sorts the blocks back to front by distance. The original's order is the reversed
   quadtree collection order (`RenderBuildPlacementOverlay` S 00688c40 walks the visible block list backwards and

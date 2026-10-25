@@ -10,8 +10,10 @@ here, to be confirmed; facts about the original keep the tags of the document th
 
 ## 1. What is already fixed [binding]
 
-- The base game is mods: `core.game`, `core.mainmenu`, `core.lobby` (§11a); the engine knows no content. Every mod,
-  these included, can be switched off (maintainer, 2026-10-15); there is no built-in mod.
+- The base game is built into the engine as built-in mods: `core.game`, `core.mainmenu`, later `core.lobby` (§11a);
+  they are always loaded, first, and cannot be switched off (maintainer, 2026-10-22). They keep a mod's identity and
+  extension points: other mods name them as dependencies, override their game rules by name, listen to and replace
+  their intents, patch their documents and assets, and change their registry entries.
 - Load stages over all mods in dependency order: settings, data (definitions, updates, final fixes), frozen
   registry, runtime. One registry; any mod may change any entry during the data stages.
 - A manifest per mod: name, version, dependencies (required, optional, incompatible), whether it changes the
@@ -60,11 +62,12 @@ data-stage script (`data/data.lua`, `data/data-updates.lua`, `data/data-final-fi
 makes it a simulation mod; `mod.xml` has no flag for it. The registry checksum (§6.5) catches anything the contents
 miss.
 
-The core mods (§11a) are ordinary mods with this layout that ship with the game in `<game folder>/mods/`
-[implemented 2026-10-15]. `core.game`'s
-`assets/` will hold the remake's own files (shaders, the remake's layouts and UI parts); the content converted from
-the player's installation is mounted below all mods as a layer of its own (assets.md §5.1). `refined`, a mod that
-ships with the game as well, carries the refined mode's simulation fixes as game rules (§9.4, §14 item 7).
+The built-in mods (§11a) have this layout too, without `bin/`: their data is in `<game folder>/base/<id>/` (in the
+source tree `src/Base/<id>/`), their code is the game's own assemblies, which the host hands to the mod loader as
+entry types [implemented 2026-10-22]. `core.game`'s `assets/` holds the remake's own files (shaders, the remake's
+layouts and UI parts); the content converted from the player's installation is mounted below all mods as a layer of
+its own (assets.md §5.1). `refined`, a mod that ships with the game in `mods/`, carries the refined mode's simulation
+fixes as game rules (§9.4, §14 item 7).
 
 ## 3. Manifest (`mod.xml`) [draft]
 
@@ -109,7 +112,7 @@ editor tooling. Machine-written files (conversion records, caches) are JSON.
 
 | Source | Location | Notes |
 |---|---|---|
-| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip`; the mods that ship with the game (`core.*`, `refined`, `tools.assetbrowser`) are among them | enabled per profile; a mod with `<EnabledByDefault>true</EnabledByDefault>` is on unless the profile switches it off |
+| the player's mods | `<game folder>/mods/<id>/` or `<game folder>/mods/<id>.zip`; the mods that ship with the game (`refined`, `tools.assetbrowser`) are among them; the built-in `core.*` are in `<game folder>/base/` | enabled per profile; a mod with `<EnabledByDefault>true</EnabledByDefault>` is on unless the profile switches it off; the built-in mods are always on and never stored |
 | received from peers | `<game folder>/mods/received/<id>-<version>-<hash>/` | kept apart from the player's own; used only for matches that need them; pruned by age |
 | development | folders given with `--mod-dir=<folder>[;<folder>]` | for working on a mod without copying it; wins over a player mod of the same id |
 
@@ -121,11 +124,14 @@ problem on the mods screen; the other mods stay usable.
 
 ## 5. Load order [draft]
 
-1. Collect the enabled mods (no mod is added by force); check `Requires` (present, version in range) and
+1. Collect the enabled mods and every built-in mod (always in; an enabled list that names one, from an old
+   profile, replay or save, is fine); check `Requires` (present, version in range) and
    `Incompatible`; any failure stops with a message that names both mods.
 2. Sort topologically: every `Requires` and every present `Optional` dependency comes before the dependent mod.
    Ties are broken by the ordinal order of the ids, so every machine computes the same order from the same set. A
-   cycle stops with a message listing it.
+   cycle stops with a message listing it. The built-in mods come before every other mod (core.mainmenu, then
+   core.game, by core.game's Optional dependency), so their asset layers lie directly above the installation.
+   [implemented 2026-10-22]
 3. No mod is ordered by its id; a mod that builds on another's rules (§14 item 7) names it as a dependency.
    [implemented]
 
@@ -142,7 +148,7 @@ the counterpart of today's "hook order = load order" rule for sadkmod mods.
 |---|---|---|
 | 0 | settings, installation check, first-start conversion ([assets.md](assets.md) §4) | engine |
 | 1 | discover and resolve mods (§4, §5) | engine |
-| 2 | mount the virtual file system: converted installation, then the mods in order ([assets.md](assets.md) §5) | engine |
+| 2 | mount the virtual file system: the engine's assets, the converted installation, then the mods in order, the built-in ones first ([assets.md](assets.md) §5) | engine |
 | 3 | load assemblies, call each mod's entry point: Harmony patches, registrations (§7) | each mod in order |
 | 4 | settings stage (§6.2) | each mod in order |
 | 5 | data stage: definitions, then updates, then final fixes (§6.3) | each mod in order, per sub-stage |
@@ -177,7 +183,7 @@ panel]
 
 **Engine settings and mod settings** [rule, implemented with the options panel]. A setting lives with the code that
 reads it. What is not specific to the game is an engine setting, stored in its own element of `settings.xml`; what
-only a core mod's code reads is that mod's setting, stored in the profile like any mod's:
+only the base game's code reads is a setting of its built-in mod (`core.game.*`), stored in the profile like any mod's:
 
 | Setting | Lives in | Why |
 |---|---|---|
@@ -370,7 +376,8 @@ registration first:
   the game's project, and the paths of two mods would collide) and no game entry point. A mod's node type becomes a
   script without a path when its first object is made; such a script is reference-counted and leaves Godot's type map
   with its last object, so the mod's code unloads once its views are freed, in editor runs and exports alike
-  [tested 2026-10-15]. The shared build rules are `src/Mods/Mod.props` in sadk-remake.
+  [tested 2026-10-15]. The shared build rules of the mods that ship with the game are `src/Mods/Mod.props` in sadk-remake; the base game's
+  projects (`Sadk.Simulation`, `Sadk.Client`, `Sadk.MainMenu`) are engine projects.
 - **A mod may use the types of the mods it depends on** [implemented]. Its reference to an assembly of a dependency
   (a mod's to a type another mod defines) resolves to the copy that mod loaded, so both share one type; only
   declared dependencies are searched (`Requires`, `Optional`, and theirs in turn), before the mod's own `bin/`. A mod
@@ -523,7 +530,7 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 
 ### 9.4 Compatibility mode, refined mode [draft]
 
-- **Compatibility mode** is the match set `{core.game}` with presentation-only differences allowed, so the simulation is
+- **Compatibility mode** is the match set `{core.game}` (the built-in base game alone) with presentation-only differences allowed, so the simulation is
   the original's tick by tick. Talking to original clients additionally needs the original's build checksum of the
   installation's `scripts\**\*.lua` and `settings\**\*.xml` (`../data-loading.md` §3), which the remake computes
   from the same installation.
@@ -555,7 +562,8 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 - **SDK** [implemented 2026-10-15]: the game's `sdk/` folder holds `Mod.props`, Godot's source generator and an
   example mod. A mod's project sets `ModId` and imports `sdk/Mod.props`; it then references the game's assemblies
   (from the exported `data_` folder, never copied), the generator (as a "tools project", §7.1; `ModUsesGodot=false`
-  for simulation-only code) and the assemblies of every mod its `mod.xml` names as `Requires` or `Optional` (from the
+  for simulation-only code) and the engine's assemblies, the base game's among them (`Sadk.Simulation`; for client code `Sadk.Client` and
+  `Sadk.MainMenu`), and the assemblies of every other mod its `mod.xml` names as `Requires` or `Optional` (from the
   game's `mods/`, in a step the editor's design-time build runs too, so IntelliSense completes their types). A build
   copies the mod into `mods/<id>/`; `dotnet run` starts the game with the mod switched on for that run (the game's
   `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Godot's options, for instance the
@@ -564,7 +572,7 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Godot editor.
   **The editor's view is checked** [implemented]: `tools/check-sdk.sh <game folder>` opens mod projects with Roslyn's
   `MSBuildWorkspace`, the loader of the editor's language server (a design-time build, then the compiler with the
-  generators and analyzers), and compares references and diagnostics: the shipped example clean with `Core.Game`
+  generators and analyzers), and compares references and diagnostics: the shipped example clean with the engine
   referenced, a misspelled `TribeDef` member exactly CS0117, a client mod with its own node type clean, the same
   without `partial` exactly Godot's GD0001, the repository's example clean. `tools/export-game.sh` runs it after
   every export; with only the SDK and the game files, a mod author's machine needs nothing else but .NET's
@@ -573,8 +581,9 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   export's `data_` folder, Godot's and Harmony's from their packages), so the editor shows the engine's, core.game's
   and Godot's descriptions; the check probes them. Checked with two mods built outside the repository: a tribe in C# with
   the engine's `TribeDef` (the example requires no mod since the content model moved into the engine), and a client mod
-with its own node type, an overlay and a menu entry. The core mods in the
-  repository use `src/Mods/Mod.props`, with project references to each other. [planned] Typed constants and emit
+with its own node type, an overlay and a menu entry. The mods in the
+  repository use `src/Mods/Mod.props`; the base game is built with the game (`src/Sadk.Simulation`,
+  `src/Sadk.Client`, `src/Sadk.MainMenu`, data in `src/Base`). [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
   `mod.xml` and `intents.xml`, the mods' XML doc files next to their assemblies, a `dotnet new` template.
 - **Lua API reference** generated from the binding attributes ([lua.md](lua.md) §10), one page per table.
@@ -587,41 +596,44 @@ with its own node type, an overlay and a menu entry. The core mods in the
 - **Logs**: one log file; every line from mod code carries the mod id; Lua errors with file and line (the original
   discards them, [lua.md](lua.md) §2.7).
 
-## 11a. Core mods, modes and intents [agreed with the maintainer 2026-10-15; implemented in sadk-remake d49188c]
+## 11a. The built-in base game, modes and intents [agreed with the maintainer 2026-10-15, the base game built into the engine 2026-10-22; implemented in sadk-remake d49188c and the core merge]
 
-### 11a.1 The game is a host; the remake is mods
+### 11a.1 The game is a host; the base game is built in
 
 `Sadk.Game` and the engine are a host: the first-start conversion, the virtual file system, the registry, the mod
 loader, the Lua host, the asset loaders and instantiation helpers, the intent bus with its mode host (below), and the
 game's own `engine.shell` (when no mod enters a mode) and `engine.mods` (the mods screen). After the start the game
-emits `engine.start`; from there the mods decide what shows. The remake itself is three **core mods**, ordinary mods in
-`<game folder>/mods/` that ship with the game and are on by default (`<EnabledByDefault>true</EnabledByDefault>` in
-`mod.xml`; the profile lists such a mod only when the player switched it off, as `<Disabled id="…"/>`):
+emits `engine.start`; from there the mods decide what shows. The base game is part of the engine as **built-in
+mods** (maintainer's decision 2026-10-22): the host hands their entry types to the mod loader (`ModSource.BuiltIn`),
+their data is in `<game folder>/base/<id>/` (`mod.xml`, `intents.xml`, `assets/`). They are always loaded, first, are
+not listed on the mods screen and never stored in a profile; everything else about them is a mod's: the id that owns
+their intents, settings, systems, commands and rule layers, their place in the match set, their asset layers (directly
+above the installation, below every other mod), and dependencies on them by id. Game rules stay overridable by name.
 
 | Mod | Side | Holds |
 |---|---|---|
-| `core.game` | simulation + client | the game's content (it fills the engine's registry from the original's property scripts) and the logic that uses it, systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies: `Core.Game.Simulation` (no Godot) and `Core.Game.Renderer` (Godot), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
-| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem` |
+| `core.game` | simulation + client | the game's content (it fills the engine's registry from the original's property scripts) and the logic that uses it, systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies are the engine's `Sadk.Simulation` (no Godot, namespace `Core.Game`) and `Sadk.Client` (Godot, `Core.Game.Rendering`), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
+| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem`. Its assembly: `Sadk.MainMenu` (an assembly of its own: the loader reads a built-in mod's intents and registrations from the assemblies of its entry types, one mod id per assembly) |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
-The engine holds the vocabulary every mod builds on, so no core mod is needed for it [the maintainer's decision
+The engine holds the vocabulary every mod builds on [the maintainer's decision
 2026-10-15]: the content model (record types, kinds, the `properties` API, §6.3), and the world renderer base with
 the shared shaders, global shader parameters and camera actions ([renderer.md](renderer.md) §2.1, the engine asset
 layer of [assets.md](assets.md) §5.3a). `core.game`'s client entry point only registers its map layers; a mod adds
 layers to maps with `MapLayers.Register` and to other worlds with `WorldLayers.Register(kind, …)`, and disposes the
 registration in its `OnUnload`.
 
-`core.game` is the only simulation mod of the three, so it alone decides multiplayer compatibility (§9.1); a changed
-main menu or lobby never splits players. `core.game` requires no other core mod, so it loads headless (tests, replays,
-the checksum comparison, a dedicated host).
+`core.game` is the only built-in mod with simulation code, so of the base game it alone enters the match set (§9.1).
+Its simulation needs no Godot, so the headless runner loads it (tests, replays, the checksum comparison, a dedicated
+host) with its client code left out, as every mod's is there.
 
-The development tools are a mod as well: `tools.assetbrowser` (on by default, requires `core.mainmenu`) adds "Asset
+The development tools are a mod, `tools.assetbrowser`, which stays in `mods/` (on by default, requires the built-in `core.mainmenu`) adds "Asset
 browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented].
 
 `core.game` adds "Free game" (`!FREE GAME`) to the main menu the same way: a listener in its `intents.xml` on
 `engine.start` emits `core.mainmenu.addmenuitem`. Its `mod.xml` names `core.mainmenu` as an `Optional`
-dependency, so `core.game` still loads without it (headless); the load order is `core.mainmenu` → `core.game` →
-`tools.assetbrowser` [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
+dependency, which orders the two built-in mods; the load order is `core.mainmenu` → `core.game` → every other mod
+(`tools.assetbrowser`, …) [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
 
 ### 11a.2 Modes, overlays, handlers, events, listeners, routes [implemented]
 
