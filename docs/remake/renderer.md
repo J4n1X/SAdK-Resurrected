@@ -561,8 +561,9 @@ differed in the last bits, so single triangles failed the depth test); streets, 
 (transparent; the original pulls them toward the camera by moving the near plane from 1.0 to 1.1, `SetNearPlaneOffset`
 S 004d9e10 with depth bias 0.1 in `StreetRenderer::Render` S 006c3ab0, a pull of about 9 % of the view depth, some
 3.4 units at 40 (3.36 with the far plane 500; WO §3.8); §15.1 says how the remake stands in for it); buildings with
-house decals before them (the remake cuts the streets off where a plot's cover, its decal alpha baked into a map
-texture, reaches half, as built in sadk-remake 55c251e: the original blends the decal's soft rim over the streets, so a street
+house decals before them (the remake cuts the streets off where the plot of a building site or a harbour place, its
+decal alpha baked into a map texture, reaches half; a finished building's plot is drawn over them as the original's;
+as built in sadk-remake b57b0e3: the original blends the decal's soft rim over the streets, so a street
 under it showed through); map objects;
 characters; goods; animals; ships; single meshes; selection decals; map objects clipped at the water and then the
 water itself (after blended objects, RR §4.1); the build overlay; particles. The build overlay comes after the whole
