@@ -1563,8 +1563,10 @@ pile (`Scene::OnFlagCreated` S 00682ca0): it has no ground of its own. `harbor_f
 "path circle" at a harbour is the street crossing fan (`StreetDecal::BuildJunctionFan` S 006de590), present only when
 a land street ends at the flag; the stone ring is the plot above [known]. The plot, like every ground decal, has no
 depth bias and no vertical clipping: the cut is the three edge planes of each terrain triangle (`ClipByPlanes`
-S 006ed6e0) with a lift of 0.01, and the original's terrain has no level of detail, so the plot always lies on the
-drawn surface [known].
+S 006ed6e0) with a lift of 0.01 above the fine triangles, whatever level the
+terrain draws [known]. Within half the level-of-detail distance of the selection point (§3.3: 42 to 136 units by
+preset; at the original's zoom the view near the focus) the terrain draws the fine grid, so the plot lies on the
+drawn surface there; farther out a coarser level can cover parts of it [inferred from §3.3].
 
 **Creation order**, which fixes which draws an object gets [known] S 005273d0, S 005b3a90, S 0053ec60, S 00543f50,
 S 00683040, S 00682ec0: the map's objects reach the renderer through the logic callbacks of `NLogic::System::PostLoad`:
@@ -2180,8 +2182,10 @@ Without a post processor the first call masks the bit out (`passMask & ~0x100`) 
   and hexagon under a back-buffer pixel, through `ScreenPickHelper::PickCell` S 0068c8d0 and `PickHex`
   S 0068cc10) [known]; `CLandscape::PickRayCell` S 0068a0d0 / `PickRayHex` S 0068a080,
   `CCharacterMgr::PickCharacterByRay` S 00692fc0, `ShipMgr::PickShip` S 00697db0 ([known]: nearest bounding-sphere entry with a mesh hit, [ingame-ui.md](ingame-ui.md) §3.4) [inferred, mapped names for the others];
-- the overview texture `RenderOverviewTexture` S 00680d90 (a top-down view of the whole map through a camera
-  fitted to the grid, water and terrain pass only) [inferred] and the preview textures `RenderPreviewTexture`
+- the overview texture `RenderOverviewTexture` S 00680d90 (an orthographic top-down view of the box between the corner
+  cells, near 0.1, far 200, eye 50 above the box; `CMapRenderer::RenderWaterPass` S 00688f70: the terrain patterns with
+  every cell revealed, the map objects of detail level 0, the water without mirror; device fog off) [known]
+  ([hud-panels.md](hud-panels.md) §3.7) and the preview textures `RenderPreviewTexture`
   S 00681300, whose callers are the object and ship previews of the pick helper S 0068cae0, S 0068cb60
   [known for the callers];
 - the 3D sound listener transform S 00681c10 and positional sound emitters of characters and buildings

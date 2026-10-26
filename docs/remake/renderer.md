@@ -640,9 +640,14 @@ was not traced.
 
 ### 8.5 Minimap and previews [draft]
 
-- The minimap's world picture is a top-down render of terrain and water into a 512 × 512 target, as the original
-  makes it (`RenderOverviewTexture`, RE §5), redone when heights or patterns change; territory, objects and symbols
-  are drawn by the UI from views.
+- The minimap's world picture is a top-down render of terrain, the map objects drawn at detail 0 and water into a
+  512 × 512 target, as the original makes it (`RenderOverviewTexture`, RE §5; hud-panels §3.7), rendered once;
+  territory, objects and symbols are drawn by the UI from views. It is `MinimapOverview`, a `SubViewport` sharing the
+  match's world, rendered once with `UpdateMode.Once`: its camera's cull mask is `RenderLayers.Overview` (bit 10, set by the
+  terrain chunks, the water meshes and the batches of map objects drawn at detail 0) plus the shadowless sun and the marker
+  `RenderLayers.OverviewMarker` (bit 18), by which the shaders drop the fog, the fog of war and the mirror
+  (`shaders/sadk/overview.gdshaderinc`). The map objects out of the main view are held in their batches for the frame of the
+  render (`ObjectLayer.HoldAll`).
 - Object previews in the UI (a building in its panel) render through one shared preview `SubViewport`.
 
 ### 8.6 Post effects [draft]
@@ -872,8 +877,10 @@ show the 1.5-unit facets.
 - **Everything on the ground uses the same surface**:
   - `TerrainSurface.HeightAt(x, z, mode)` in C#, float32, the same formula as the shader: object placement, settler
     and animal height snapping, picking;
-  - ground decals, streets, crossings and selection markers are draped in their vertex shaders through the same
-    include, with meshes dense enough to follow the curve, instead of being clipped against flat triangles;
+  - ground decals are clipped against the original's triangles, cut along the finest level's lattice and laid on it, and
+    the terrain keeps that level under them (§10.3 "Kept ground", §13.1); streets, crossings and selection markers are
+    laid on the surface at their own vertices (streets keep a reduced form of the original's depth bias, §15) [the streets
+    and markers do not keep the levels];
   - the water's shore fade reads the smooth height; the border skirt keeps the original's one map-wide edge height
     (§11), which does not depend on the surface.
 - **The simulation is untouched**: it keeps the fine height grid and its rules; the smooth surface never reaches it.
@@ -918,6 +925,26 @@ show the 1.5-unit facets.
 - **Shadows and the mirror view** choose their own, coarser levels (the far cascades and the reflection need less).
 - **Faithful** reproduces the original's own terrain LOD exactly (maintainer, 2026-10-15): its three levels per block,
   its selection (RE §3.3), its stitching and its hard switch, popping included. The refined settings morph instead.
+- **Kept ground.** Under every building's and harbour place's plot every refined terrain detail keeps its finest level at
+  every distance and does not blend it [implemented, sadk-remake e8a00c0]. A house stands at its levelled height (the simulation's
+  vertex height at its cell) and its plot is laid on the finest level; the coarser levels the terrain blends to away from
+  the eye do not keep the levelled ground, so without this the ground moved under the house and the plot by up to 0.5 to
+  0.75 units (the sawmill at (47, 58) of `MP_2P_steinfjord`, every detail, the selection point swept out to 600 units; up
+  to 0.29 to 0.74 with the eye within 100 units). The owners of the plots claim their decal's x, z box in an open registry
+  (`FinestGround` on the map data, `DecalMeshes.Claim`: the buildings' plots, ruins and upgrade targets, the harbour
+  places' plots; any owner may claim ground under its own key); the terrain keeps the blocks the box, grown by one fine
+  step, reaches into (`TerrainMesher.BlocksUnder`), counted per block. A kept block takes the band scale
+  `Never / blend start` for every level, the mechanism `Terrain lod="Shape"` uses for rocks: its band and the blend of
+  every vertex it holds (its edge vertices included, by the largest scale of the blocks sharing them) reach no distance, so
+  it is drawn at level 0 unblended. Its neighbours keep their own bands; an edge toward a coarser neighbour is stitched to
+  that neighbour's unblended edge, which changes only the kept block's triangles along that edge, hence the grown box. A
+  claim or a release rebuilds the kept blocks and their eight neighbours with the next batch, like a height change. The
+  faithful look keeps the original's levels and ignores the claims.
+  Cost per plot (the sawmill: 2 blocks kept): with the eye far away 1.5 k more triangles at Low, 7.9 k at Moderate, 34.6 k
+  at Very high (the kept blocks at level 0 and the rings the one-level neighbour rule draws around them); building a kept
+  block at level 0 takes about 0.7 ms at Low, 2.7 ms at Moderate, 10 ms at Very high on a worker, once per claim or height
+  change, no per-frame work. A kept block's level stays in the CPU cache as its wanted level: 46 KB at Low, 181 KB at
+  Moderate, 713 KB at Very high per block.
 
 ### 10.4 As built [implemented, sadk-remake 1135c7c]
 
@@ -1286,6 +1313,11 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   (`<Terrain decalClip="Original|Vertical">`, the original the default) is open (§24). Not reproduced: the
   512-triangle pool crash, the read past the grid's last row ([TODO]), `Matrix44_TransformCoord`'s rounding order.
   `TerrainSurface.ComputeNormals` (the Faithful terrain's lighting) does not use the formula of S 00687810 yet.
+  With the refined terrain details a decal is laid on the finest level: a finest level finer than the fine grid cuts the
+  clipped pieces along its lattice (`DecalLattice`) and lays them on it (`TerrainSurface.LevelHeight`), so each piece lies
+  in one drawn triangle; the terrain keeps that level under the decal's box at every distance (§10.3 "Kept ground"), so the
+  decal needs no depth bias and no vertex work: it lies on the drawn surface wherever the eye is [implemented]. The harbour
+  places' plots are claimed the same way. The faithful look keeps the original's plot on the fine triangles.
 - **Harbour plot** [implemented, sadk-remake c8f44a0]: every harbour place gets the `GROUND` decal of
   `Harbour_decal.KEX` through the `groundDecal` attribute of its type (§5.2), owned or not, flag or not (RE §3.11);
   `ObjectLayer` lays it, relays it by the 4 × 4 block rule and on detail changes, and removes it with the object.
@@ -1536,8 +1568,7 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - **Messages**: rows, row text and scroll buttons follow the original's (ingame-ui §3.8.5, hud-panels §3.5); a
   message's remaining time falls by the tick's simulated time. The list is saved and restored with the game
   ([sim-boundary.md](sim-boundary.md) §7).
-- **Minimap**: the map picture is each cell's pattern average colour lit by the map's light, water in the map's
-  water colour, one sample per cell in the original's 512 × 512 picture (the overlays 256 × 256); the territory and building overlays and the click as the original's
+- **Minimap**: the map picture is the overview render of §8.5 in the original's 512 × 512 picture (the overlays 256 × 256); the territory and building overlays and the click as the original's
   (S 005f3fc0, S 005f4390, S 005f1520; hud-panels §3.7); the symbol lifetimes from `mapSymbols.xml`; unexplored
   cells transparent. The camera's view frame ports `MiniMap::DrawCameraFrustum` S 005f2a50 (frustum corners 0, 1,
   7, 6 cut with y = 0, the far pair only when nearer than the far corner, nothing when all four miss, edges clipped
@@ -1558,7 +1589,7 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - `debug=true` shows the developer panel.
 - **Differences from the original** (to review, [sim-boundary.md](sim-boundary.md) §11 item 4): the message
   lifetime counts simulated time (the original subtracts the frame time once per logic tick, so its lifetime
-  depends on the frame rate); the minimap picture's content (the original renders the scene from above); no statistics key (**S** moves the camera); no build or pause
+  depends on the frame rate); no statistics key (**S** moves the camera); no build or pause
   button (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells
   transparent as documented, not seen in the original; the curve colours from `menu.cfg` where the original's
   panels use the `<PlayerColors>` table.

@@ -786,6 +786,10 @@ original does not survive (§11 item 4).
   read flag, unique id, argument); they enter neither the state hash nor the checksum.
 - While the session hangs: faithful mode drops commands as the original does (GC §3.1), refined mode refuses them
   with a visible reason.
+- **The typed cheats and the chat.** The remake sends `WhatCanEyeSee` and `ItsLikeAJackpot` as commands of the local player
+  (`core.game.cheat.explore`, `core.game.cheat.jackpot`, refused in a network match) and `WhatTheHell` as the speed command
+  `core.game.speed` (20), so the command log and a replay hold them; chat lines travel through `Sadk.Session.IChatTransport`,
+  a session seam beside the command transport, not through the command queue.
 
 ## 8. Random numbers [draft]
 
@@ -998,9 +1002,9 @@ These matter more in the remake than in the original, because Harmony patches ca
      S 006c57b0, S 006919b0).
    - **HUD frame, minimap and messages** ([renderer.md](renderer.md) §15.5): a message's remaining time falls by
      the tick's simulated time (the original subtracts the frame time once per logic tick, so its lifetime
-     depends on the frame rate); the minimap picture is each cell's pattern average colour lit by the map's light,
-     water in the map's water colour (the original renders the scene from above), one sample per cell in the
-     original's 512 × 512 picture, the overlays 256 × 256 as the original's; no statistics key (**S** moves the camera); no build or pause button
+     depends on the frame rate); the minimap picture is the overview render of the scene from above
+     ([renderer.md](renderer.md) §8.5) in the original's 512 × 512 picture, the overlays 256 × 256 as the original's;
+     no statistics key (**S** moves the camera); no build or pause button
      (the original has neither); the back button sits where the menu combo box is; unexplored minimap cells are
      transparent as documented, not seen in the original; the message list at the top left, where the layout puts
      it; the statistics curve colours from `menu.cfg` (the original's table S 0087f8c8 not compared); `debug=true`

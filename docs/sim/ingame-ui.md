@@ -664,7 +664,7 @@ world and all character keys except `p` are swallowed [known] S 005eaae0, S 005e
 | `p` | pause toggle; nothing in a network match (roles 1..4), nothing while the game screen is not active or the cinematic dialog is. Pausing stores the speed scale (user profile +0x24), sets it to 0, pauses all sounds, brings the `pause` panel to the front and fades it in over 1.0 s; if a session exists and its role is not 0 the localised text of `!Pause` is first sent as chat to all. Unpausing restores the stored speed (at least 1), resumes the sounds and fades the panel out over 1.0 s | [known] S 005eb180, S 005da400, S 005ea9b0 |
 | `h` | camera to the local player's home building (only in camera state 0) | [known] S 005eb180 |
 | `x` | toggle the `NetInfo` dialog (slot 7), network roles 1..4 only | [known] S 005eb180 |
-| Enter | chat input not focused and tutorial hidden: open the chat line. Focused: send the line (to the team while Shift is held, else to all) and close the input. Offline, the cheat strings of §8 are tested first | [inferred] S 005ec340 |
+| Enter | chat input not focused and tutorial hidden (tutorial vcall +0x2c == 0): `ShowOpaque` and `SetInputText("", focus)`, which opens the chat line. Focused (`ChatSystem::IsInputFocused` S 004abdf0; the chat's `EditEx` does not take Enter, its Enter latch +0x348 being off): in role 0 the cheat strings of §8 are tested, then the line is sent (`SendChatToAll` S 00410410, or `SendTeamChat` S 00409f60 while `Game +0xffe0` is set) and `CloseChatInput` S 005eaed0 runs (`ClearInput(true)`, then `FadeOut(chatFadeOutTime, false)`) | [known] S 005ec340 |
 | Shift | held: team chat modifier | [inferred] S 005ec340, S 005eb230 |
 | Arrow keys (0x25..0x28), Shift, Insert, Delete | `nGame::Camera::HandleKeyDown`, tried before Enter and only while no text field and no widget has focus: arrows and Shift are entered in the camera's held-key map; Delete sets the rotation rate target to 1.5 (to 0 if it is −1.5), Insert to −1.5 (to 0 if it is 1.5). All of them are consumed | [known] S 00787790, S 005ec340 |
 | Any key, `1`..`4` included | closes the action button panel (0.2 s fade) unless a confirmation is open; the key still propagates, so the hotkeys still press their buttons | [known] S 005f0770 |
@@ -747,6 +747,17 @@ attribute `zoomInTime` > 0 attaches a scale-in animation to the HUD root (shippe
 drop-downs, adds and activates the chat channel `Chat` (id 1), calls `MenuSelection::CreateInfoBoxes`, creates
 goods bar, quest lines, minimap, quest log and tutorial [inferred]. `DestroyHudWidgets` S 005ea650 undoes it
 on leaving and deletes the panels at +0xcc70..+0xcc84.
+
+The match's chat lines [known]: `Game::OnEnter` S 005eed00 adds `!START` (lobby_ui.txt; white, sender tag 0, the active log;
+only while `uiSuppressed` is 0; no fade). `Game::OnChatToAll` S 005ef320 and `OnChatToAllied` S 005ef530 add
+`<name> (<!ALL>): <text>` / `<name> (<!TEAM>): <text>` in white with the sender's player index as the tag, then `ShowOpaque`
+and, unless the input is focused, `FadeOut(chatFadeOutTime, false)`. These are the only three `AddText` callers of
+`nMenu::Game`. `chatFadeInTime` (+0xb09c) is loaded and read nowhere. Offline the manager is in state `GameStarting`
+(StartUpNetwork(0) → DummyNetwork, ConnectAndJoin, `BeginGameStarting` S 0040b170), so `BroadcastEvent` S 0040fd80 applies a
+sent line locally at once, and a team line reaches the local slot (the only human, filled slot; `ArePlayersAllied`
+S 00413780 is true for the same index): a typed line is shown as the player's own. The name is `PlayerInfo::GetPlayerName`
+of the session slot, which offline is `NComm_GetLocalPlayerName` S 0041f4e0: the profile name (`UserProfile +0x40`), or
+`default` when it is empty.
 
 The parents `SetupHud` gives the fixed members [known: disassembly of S 005ed700]: `selectionBorder` →
 `selectionPicture`; `btBack`, `btForward`, `btSettings`, `btStatistics` → `selectionBorder` (005ee2c6..005ee322;
@@ -1398,16 +1409,17 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
 
 **Minimap** (`nMenu::MiniMap`) [inferred] S 005f3dd0, S 005f3fc0, S 005f4390, S 005f5bb0, S 005f2130
 
-- Base image: the scene renders the map into a 512 × 512 target; a copy masked by the local player's explored
-  cells is the widget's texture. That texture has no alpha channel, so unexplored land is opaque black inside
-  the round mask [known] ([hud-panels.md](hud-panels.md) §3.7). Refreshed after a device reset and on a delayed
-  request.
+- Base image: the scene renders the map from above into a 512 × 512 target (terrain, the map objects of priority 0, the
+  water; every cell revealed, no fog) once, on the minimap's first update and after a device reset; a copy masked by the
+  local player's explored cells is the widget's texture, made again at every capture (any player's exploration step, a
+  building created or removed, a sacrifice started or ended). That texture has no alpha channel, so unexplored land is
+  opaque black inside the round mask [known] ([hud-panels.md](hud-panels.md) §3.7).
 - Overlay 0 (256 × 256, half resolution): territory. Each cell in the owner's colour (`Player::GetColorEntry`,
   the table the military flags use, [hud-panels.md](hud-panels.md) §3.7); interior cells alpha
   0x99, border cells (grid-state bit 0x20) opaque; unexplored cells transparent.
 - Overlay 1: objects. Building 0xffaaaaaa; a building whose property byte +0xf5 is set 0xffffffff or 0xffff8888
   (by property +0x54); a sacrifice site (working mode 9) `sacrifices_color`; a chest `chests_color`; nothing
-  on unexplored cells. Both overlays are rebuilt when a building is created or removed or a sacrifice starts.
+  on unexplored cells. Both overlays are rebuilt at every capture of the base image (`Render` S 005f49e0).
 - Symbols (on top): the local player's finished ships at their movement cell (symbol 3), fights of the local player at
   their target building's anchor cell (4), other fights at half alpha unless both sides are enemies of the local player,
   the camera frustum as a clipped trapezoid (if `renderfrustrum`), and the script / message symbols with their lifetime
@@ -1416,7 +1428,7 @@ defined in `goodinfosets.xml` (§6). The XML attribute `good` (a hex good id) pr
   press S 005f18e0 and from every move S 005f2130 while button 0 is held); dragging with the middle mouse button (button
   index 2, `WM_MBUTTONDOWN` S 00401f30; its pressed byte is Event face +0x11 + 2, read by S 005f2130) [known] pans the
   minimap view inside the texture; the wheel zooms (§3.3.3). Every recapture of the base image resets the zoom and the pan
-  ([hud-panels.md](hud-panels.md) §3.7) [inferred].
+  ([hud-panels.md](hud-panels.md) §3.7) [known] (`Shape::BindTexture` S 004a86d0).
 - Symbol definitions: `mapSymbols.xml` (§6).
 
 #### 3.8.6 World overlays (`overlayPanel`) [known] S 0061fc60, S 0061f980, S 0061f770, S 0061f830, S 0063d870, S 006403c0, S 0063dd30
@@ -2026,7 +2038,7 @@ Exceptions, all local-only or offline-only:
 | What | Effect | Guard |
 |---|---|---|
 | Pause (`p`) | `TogglePause` S 005da400: saves the profile's speed scale and sets it to 0 (unpause restores it, at least 1.0), pauses all sounds, fades in the pause panel; the HUD logic of `Game::Update` stops (§4) | no effect in network roles 1..4, when the game screen is not open or while the cinematic dialog is open; the key works while the session hangs [known] |
-| Chat cheats on Enter: `WhatTheHell` (speed scale 20), `WhatCanEyeSee` (explore the whole map for the local player), `DontWantToLose` (records the current map as completed in the user profile and saves it; `Game::Update` then opens the end screen, §4), `ThatsANiceView` (camera state 0 ↔ 2), `ItsLikeAJackpot` (adds 10 of every entry of the tribe's goods and jobs lists, soldiers included, whose good type is neither 2 nor 3 to `stockB` of the local player's first completed depot, S 00558730; [camera-input-cutscenes.md](camera-input-cutscenes.md) §3.12) | the first, second and last change simulation state directly | offline role (role 0) only; the line is still sent as chat afterwards [known] S 005ec340, S 005eba50 |
+| Chat cheats on Enter: the whole line compared with `std::operator==(string, char*)` S 004156e0 (exact, case-sensitive, no trimming, no arguments), five independent tests in this order: `WhatTheHell` (`UserProfile +0x24` = 20.0, the field `HandleSetGameSpeed` S 00782a20 writes; the manager's `speedUp` and net tick length stay), `WhatCanEyeSee` (`MapModifier::ExploreArea((g_MapWidth / 2, g_MapHeight / 2), g_MapHeight, local player)` S 00674800: the local player and every active non-enemy player explore, the owners of the buildings they now see are marked spotted), `DontWantToLose` (`RecordCurrentMapCompleted` S 0057b680 and `UserProfile_SaveMapStates` S 00579430; `Game::Update` S 005efea0 then opens the victory dialog, screen 3, on a map of type 1 or 0x65, else the report, screen 0, once: map state 0 → 1), `ThatsANiceView` (camera mode 0 → `ResetView(2)`, 2 → `ResetView(0)`, others unchanged), `ItsLikeAJackpot` (`Cheat_FillStoreWithGoods` S 005eba50; adds 10 of every entry of the tribe's goods and jobs lists, soldiers included, whose good type is neither 2 nor 3 to `stockB` of the local player's first completed depot, S 00558730; [camera-input-cutscenes.md](camera-input-cutscenes.md) §3.12) | `WhatCanEyeSee` and `ItsLikeAJackpot` change simulation state directly, `WhatTheHell` the local game speed; `DontWantToLose` writes only the user profile, `ThatsANiceView` only the camera; no confirmation, no message | offline role only (`NComm_Manager_IsRole0` S 004083d0: manager +0x3c8 == 0); no check of difficulty, map type, campaign or any switch; the line is still sent as chat afterwards and shown like any line [known] S 005ec340, S 005eba50 |
 | `ComputeSelectionKind` on a soldier in a fight, `MakeUniqueFromState` on a ship | change the **local selection** (not simulation state) | – |
 | Lua `menu.*` world edits | [lua-runtime.md](lua-runtime.md) §3.7 | map scripts run identically on all peers |
 | Emergency save, autosave notice | file output | – |

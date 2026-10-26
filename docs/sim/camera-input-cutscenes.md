@@ -368,6 +368,18 @@ width turns the view by 10 radians.
 - Every frame: `eyePos = desiredEye = focusPoint`, `lookDir = moveDir = lookDirTarget`. There is no terrain or
   water clearance in this mode; only the map border test of `SetFocusPointClamped` applies.
 
+[known] S 00786ae0: the keys are the camera's key set (+0x8c, filled by `HandleKeyDown` S 00787790 with VK 0x10 and
+0x25..0x28, ignored while a text field has the focus); Left passes `−(v f)`, Right `+(v f)` to `Strafe(…, fromEye = false)`;
+Up / Down add `±2 f v × normalize(moveDir)` to the focus through `SetFocusPointClamped`. The look reads
+`Cursor::GetMoveDelta` S 004925c0 (screen fractions, no warp, the cursor stays visible) with no inversion option. The four
+assignments run every frame even when `isUpdating` is 0. Wheel: `OnWheelUp` S 00786960 in mode 2 is `MoveVertical(−10 dt)`
+(× 5 with Shift), `OnWheelDown` S 00786a10 the same upward written out; `MoveVertical` S 00785b90 sets `focus.y += 2 d`
+through `SetFocusPointClamped`. `Camera::Update` S 00787530 eases the zoom in every mode. `ResetView` S 007867c0 has no
+mode-dependent code and does not reset `cachedFocusHeight`; its `FocusOnLocalPlayerBuilding` runs `FocusOnCell` →
+`UpdateStandardView(false, 0.3)` also in mode 2, so free flight starts 18 before the headquarters' cell at the standard focus
+height, looking along (0, −0.625, 0.781). `SetEyePosition` S 00784f10 sets the focus instead of the eye in mode 2;
+`Messages::Update` S 005f86a0 calls `ResetToStandardMode` when the mode is not 0; 'h' acts only in mode 0.
+
 ### 3.5 Jumps
 
 - `'h'` (character 0x68, `nMenu::Game::OnChar` S 005eb180) [known]: in mode 0, `FocusOnLocalPlayerBuilding`.
@@ -764,8 +776,18 @@ but the stock `nUi::Event::OnMouseButton1Up` shared by every widget; `Object::Di
 a press set the flag. The second press arrives as `WM_RBUTTONDBLCLK` (S 00401f30 case 0x206): `Root->HandleEvent(1, 1, 0)` ->
 `Object::DispatchMouseDoubleClick` S 0049ff20 -> `Event::DispatchMouseDoubleClick` S 004ab1f0 -> the Game's slot 17 =
 `Generic_ReturnZero` S 0072db80 (the left double click is slot 14, S 005eab30). The second press of a double click neither calls `HandleRightClick` nor sets `Game + 0x3a`, so it does not deselect and
-does not start the look-around; the release after it is not dispatched (the flag was cleared by the first release, S 005eab70). [inferred] open: for every
-double click the window layer calls `GameAction vtbl+0x18(1, 1)` (S 00401f30), a left-button-down game action, not traced. There
+does not start the look-around; the release after it is not dispatched (the flag was cleared by the first release, S 005eab70). For every double click the
+window layer calls `GameAction vtbl+0x18(1, 1)` (S 00401f30, cases 0x203 / 0x206 / 0x209 at S 004022ac, S 004023b3, S 004024c7, after
+the object at `this+0x88` [inferred: the lobby object, null in a free game] has declined it); slot +0x18 of the vftable S 007dec84
+is `BaseAction::OnKeyEvent` S 00490f50, so the call is only "virtual key 1 (VK_LBUTTON) down" written into the key table
+(`keyState[1]++`, `pressedThisFrame[1] = -1`) [known] and reaches no selection, build, street or camera code, which run on
+the `Root->HandleEvent` events sent first. For a right or middle double click no left release follows, so `keyState[1]` stays
+positive until the next left release or a window deactivation and the level query `IsLeftButtonDown(0)` S 004910a0
+(`IsKeyDown` S 00490ff0, source 0) reads true meanwhile; its readers are `Ui_IsAnyMouseButtonDown` S 004b5450 (`Tip::Update`
+S 004b5ab0: no tooltip popup opens and an open one fades out), `Grabber::Update` S 004bebf0 and the messages list's scroll
+repeat [known], so after a right double click hover tooltips stay closed until the next left click [inferred]; the readers of
+`pressedThisFrame[1]` in a match are not traced [TODO]. The remake does not port the latch (a harmful input quirk outside the
+simulation). There
 is no drag threshold and no click suppression for the right button: the press has deselected / cancelled before the
 look-around (S 00786e70: `buttonPressed[1] != 0 && uiSuppressed == 0` -> mode LookAround) turns the view, and the
 look-around starts also when `HandleRightClick` returned true (consumed).
@@ -861,8 +883,12 @@ and closes the input:
 | `ThatsANiceView` | camera mode 0 → `ResetView(2)` (free fly), mode 2 → `ResetView(0)`; other modes unchanged |
 | `ItsLikeAJackpot` | `Cheat_FillStoreWithGoods` S 005eba50: the target is the building S 00558730 returns, the first building of the village's depot list (`depotBuildings`, +0x20) owned by the local player whose two remaining construction fractions are both ≤ 0; into its `stockB` (`Depot +0x28`) it adds 10 of each entry of the tribe property's goods list (+0x24..+0x28), then of its jobs list (+0x34..+0x38), skipping good types 2 and 3; the soldiers are in the jobs list too |
 
-Two of these change simulation state directly, outside the command path, which is why they are limited to
-offline play ([game-commands.md](game-commands.md) §8).
+`WhatCanEyeSee` and `ItsLikeAJackpot` change simulation state directly, outside the command path, and `WhatTheHell` the
+local game speed (without the manager's `speedUp`), which is why they are limited to offline play
+([game-commands.md](game-commands.md) §8). The comparison is `std::operator==` S 004156e0 (exact, case-sensitive); the gate
+is `NComm_Manager_IsRole0` S 004083d0 alone. No cheat prints a message; the typed line is sent and shown as chat like any
+other. `Stock::AddEntry` S 00539e10 checks neither capacity nor accepted goods, so the jackpot's soldiers land in a
+storehouse too when it is the first finished depot.
 
 ### 3.13 Developer features in the shipped binary
 

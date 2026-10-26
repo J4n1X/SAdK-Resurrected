@@ -634,13 +634,18 @@ visible tab buttons left to right from the first button's position.
 - XML: `MinHeight` (default 72), `MaxHeight` (default 212), children `ChatInput` (an `EditEx`),
   `ChatScrollbar`, `ChatMinimize`, `ChatMaximize`, `ChatButton` (template of the per-channel buttons) and
   `<ChatOutput x y width height lineSpacing>` (defaults 0, 0, 238, 15, 2; pixels).
-- Height: each frame the widget's height is `MinHeight` while minimised, else `MaxHeight`; the minimise button
-  sets the flag, the maximise button clears it. A mouse-down on the chat clears its animations and shows it.
+- Height: each frame the widget's height is `MinHeight` while minimised, else `MaxHeight` (`Deployment::SetHeight`); the
+  minimise button sets the flag, the maximise button clears it; the maximise button is shown only while minimised, the
+  minimise button only while not, the scroll bar only while not (`UpdateLayout` S 004acdd0). While the input is focused and
+  a fade runs, `Update` S 004ae670 calls `ShowOpaque` S 004abf70. The output's height is recomputed by `UpdateLayout` as the
+  input's top − 2 − output y. A mouse-down on the chat clears its animations and shows it.
 - Channels: ids are caller-defined; id 0 is invalid, −1 = every channel, −2 = the active channel. A click on a
   channel's button makes it the active channel. `SetActiveChannel` refuses a disabled channel unless forced.
 - `AddText(channel, senderTag, text, colour)`: the text is word-wrapped to the output width with the break
   characters ` \t\n.:,;+-*/=` and trimmed of ` \t\n`; empty pieces are dropped; each piece becomes a line
-  `{senderTag, colour ARGB, text}`. At `maxLines` (256) the oldest line is discarded. If the view is scrolled
+  `{senderTag, colour ARGB, text}`. `maxLines` is 256 from the constructor S 004ade70 and 0x400 (1024) after `Create` S 004aca00. Per wrapped piece, the oldest
+  line is discarded first when the log holds `maxLines` (also for a piece that is dropped next as empty); then a piece that
+  trims to nothing (`g_strWhitespaceChars`) is dropped. If the view is scrolled
   back it stays anchored (scroll-back count + 1), else it shows the newest line.
 - Draw: nothing unless 0 < lineHeight ≤ height. Line step = font lineHeight + lineSpacing; n = (height −
   lineHeight) ÷ step (integer); up to n + 1 lines are drawn bottom-up from the newest (minus the scroll-back),
@@ -650,6 +655,20 @@ visible tab buttons left to right from the first button's position.
   the bar is set to lineCount − scroll-back − 1 each frame [inferred: `ChatLog` +0x14 read as the line count].
 - A click on the output area hit-tests the line under the cursor and calls the "line clicked" observers with
   that line (used for clicking a sender name) [inferred from S 004ae670].
+
+Word wrap [known]: `String_WordWrap` S 004b69c0 (text, out, breakChars, trimChars, font, maxWidth, hardBreak): width = sum of
+`BitmapFont::GetCharAdvance` S 004e2660 (xAdvance + charSpacing, 0 for a missing glyph); a character fits while the sum ≤
+maxWidth. `\n` ends a piece (not part of it). A break character is remembered before the width test; at the first character
+that does not fit the piece ends after the last break character of the line (kept, then trimmed if in trimChars). Without a
+break character a hard break cuts after the overflowing character (the piece is one character wider than maxWidth); without
+a hard break the piece runs on to the next break character. A break character more than 15 characters back is ignored (cut
+after the overflowing character). Each piece is trimmed on both ends (`String_Trim` S 004b6880); empty pieces are emitted;
+the remainder is the last piece.
+
+Fade [known]: `Object::FadeOut(seconds, smooth)` S 0049fe70 → `nUi_FadeOutObject` S 004c3c30: nothing unless attached and
+visible; a running fade stops; an `AnimationAlphaFade` from the current opacity (1 unless a fade was cut) to 0 over exactly
+`seconds`, no delay, linear (smooth = smootherstep), recursive over the children; at its end `AlphaFade::Stop` S 004d22c0
+hides the widget and puts its opacity back to 1.
 
 No shipped layout carries `controltype="ChatSystem"`: the object is created in code (`nMenu::Game`,
 `LobbyMenu::WorldScreen`) and configured by the layout node of its name with the template `LobbyChat`

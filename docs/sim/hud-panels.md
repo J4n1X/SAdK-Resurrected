@@ -849,10 +849,11 @@ black, cut to the circle only by the round mask (`RenderUIElementMaskedTex2`). T
 which the layout gives as `ui_ingame` with the mapping `0 0 1 1`. The countdown is 0 after construction and after
 the XML load, so the first capture happens in the first update; each update then decrements it down to −1.
 The countdown path (virtual slot 34, S 005f1070) first has the scene render the image at 512 × 512; the copy
-and mask step alone (slot 35) is repeated by `Render` whenever `dirty` is set (§4), [inferred] which is how
-newly explored area appears on the image.
-The mask is applied only while the byte Game +0xfff8 is set; [inferred] it is constant true (the plate
-comment of S 005f16d0 records one writer, the `Game` constructor storing 1; that search was not repeated).
+and mask step alone (slot 35) is repeated by `Render` whenever `dirty` is set (§4) [known]: that is how newly
+explored area appears on the image (`OnVisibilityRegionChanged` S 005f11a0 sets `dirty`). The scene render itself is
+not repeated: newly felled forests or changed ground stay as they were at the first render until a device reset.
+The mask is applied only while the byte Game +0xfff8 is set; it is constant true [known]: S 005eec39
+`MOV byte [ESI+0xfff8], 1` in the `nMenu::Game` constructor, and no other writer.
 The widget is drawn through the round mask `ui_mask_minimap.tga` [known: data]. Nothing of the minimap is
 drawn while the developer variable `ui.MiniMapRender` is false, and no symbol while `ui.MiniMapRenderSymbols`
 is false [known] S 005f49e0, S 005f5bb0; both default to true (value bytes 1 at S 0087f5d0 and S 0087f61a
@@ -943,20 +944,41 @@ to 0. The symbol's float cell is truncated (`ftol`) to a whole cell.
   sampled linearly [known selection; that "Linear" is bilinear is [inferred], the sampler states live in the .fx]. A quad is
   offset by (-0.5, -0.5) pixels.
 - On screen the 2 x 2 dot of a 256-pixel overlay covers about 1.5 x 1.5 pixels of the 188-pixel widget at zoom 1.
-- The base picture's content: `RefreshMapTexture` S 005f1070 -> `Scene::RenderOverviewTexture` S 00680d90 (512 x 512,
-  X8R8G8B8 + D24S8): a top-down orthographic `MapCamera` S 0067f9a0 (eye `AABB.max.y + 50`, near 0.1, far 200),
-  `PrepareFullCellPass` (all cells revealed), `RenderPatternsPlain`, `MapObjLayer::RenderEntries` (static map objects,
-  detail 0) and a water quad per low cell (`CMapRenderer::RenderWaterPass` S 00688f70): no buildings, settlers, ships,
-  shadows, fog or UI. [inferred] for what `RenderEntries` draws; one render per load or device reset, not a timer.
+- The base picture's content [known]: `RefreshMapTexture` S 005f1070 -> `Scene::RenderOverviewTexture` S 00680d90
+  (512 x 512, X8R8G8B8 + D24S8 [inferred from the format numbers 0x16 / 0x4b]):
+  - camera: `MapCamera::ctor` S 0067f9a0: the box of `CellToWorldPos` S 00687790 of cell (0, 0) and cell (W − 1, H − 1)
+    (only those two cells' heights enter it), `OrthoLH` S 006e8e10 of the box's x and z sizes (a box that is not square is
+    stretched onto the square target), near 0.1 (S 007e02a8), far 200 (S 007dfe24), eye = (centre x, box top + 50.0
+    (double S 007e5b30), centre z), target = (centre x, box bottom, centre z), `LookAtLH_AutoUp` S 006e9c10: up +z
+    (S 00882870) when the view runs along y, so the picture's top is the largest map y and its right the largest x;
+    the outer half cells are outside the picture;
+  - states: `SetAlphaBlend(false)`, `SetAlphaRef(0)`, `EnableFog(false)` (device fog only), `SetNearPlaneOffset(0, 0)`;
+    the clear is the device's (flags 7 from the `CGraphicDevice` constructor S 004d739e, colour = the map environment's
+    background, `MapEnvData::ApplyToDevice` S 006ae3a0 [inferred: that nothing changes it before the render]);
+  - `CMapRenderer::RenderWaterPass` S 00688f70: `CLandscape::PrepareFullCellPass` S 0068a270 sets every cell's revealed
+    flag (cell +0xa0, `RevealHiddenCellsForFullPass` S 006b77a0; `SetVisible(1)` on every cell un-hides its objects) and
+    ORs alpha 0xff into every texel of the fog-of-war overlay (`TerrainMesh::RevealAllSaveHidden` S 006c0ae0), then binds
+    that overlay to stage 3: CalcFOW runs but changes nothing, so unexplored land is drawn lit with its real layers;
+    `RenderPatternsPlain` S 00689ea0 (technique `NoShadow` of `terrain_shader.fx`: sun N·L + ambient, no shadow map; no
+    unexplored-cell pass, no ground cover); `MapObjLayer::RenderEntries` S 0068d360 at detail 0: an entry is drawn when it
+    is not `transparent`, has a mesh and its `priority` (`MapObjDefs_ParseLandscapeElement` S 0068f200, read at
+    S 0068f57b, 0 when absent) is 0, unless the device flag +0xa8 → +0x20 lets every priority through (its writer not
+    traced): trees, stones, resources, flags, gates, buoys, signs and fingerposts are in, the small vegetation of
+    priorities 1 to 4 (grass, ferns, plants, bushes, cacti) is not; the water: `BeginWaterPass` S 006a7c70 with every flag
+    false (technique `RenderWaterNoMirror`, alpha blended over the ground by the effect's own states), one
+    `AddWaterTileQuad` S 006a7de0 per cell at or below the sea level (`IsMinHeightAtOrBelowSeaLevel` S 006b4f60); the pass
+    ends restoring the hidden cells (`Forward_Field18_Field20_Clear` S 00689ef0).
+  - Not drawn: buildings (`Scene::OnBuildingCreated` S 00681520 adds them only to the pickable list), streets, borders,
+    house decals, settlers, ships, the sky.
+  - One render per minimap creation, load or device reset, not a timer.
 
-**Reset of the source rectangle** [inferred: static reading, not seen live; a Frida read of obj+0x1b0 around a building
-placement settles it]: `CaptureMapTexture` S 005f3dd0 ends with `ShapedObject::BindTexture` S 004b51e0 ->
+**Reset of the source rectangle** [known: read in the binary, not seen live]: `CaptureMapTexture` S 005f3dd0 ends with `ShapedObject::BindTexture` S 004b51e0 ->
 `Shape::BindTexture` S 004a86d0, which sets the mapping to `(0, 0, texW, texH)` and then copies the mapping's w/h into
 `textureWidth/Height`. The capture runs on every `dirty` recapture in `Render` S 005f49e0 (`dirty` is set by `MarkDirty`
 S 005f1190: building created or removed, sacrifice started or removed; by `OnVisibilityRegionChanged` S 005f11a0, called
 from `NotifyPlayerRectChanged` S 00677ea0 for every `ExploreArea` S 00674800 for each active non-enemy player; by the
-constructor and `LoadFromXml`) and on the device reset. So the original most likely drops the player's zoom and pan
-whenever one of those happens. The remake does not port this reset (a harmful UI bug outside the simulation, fixed
+constructor and `LoadFromXml`) and on the device reset. So the original drops the player's zoom and pan whenever one of those happens; with any player exploring, that is
+nearly every frame of a running match. The remake does not port this reset (a harmful UI bug outside the simulation, fixed
 outright): it keeps the rectangle.
 
 **Input** [known] S 005f18e0, S 005f2130, S 005f2390, S 005f1af0, S 005f1520:
@@ -1073,8 +1095,9 @@ visible [inferred: the tree only updates children of visible widgets]:
   clicks; expiry poll (1 s); rebuild of the filtered list (only after a poll, removal or expiry reported a
   change) and of the slots (after any change); row opacity.
 - `MiniMap` update (S 005f1980) [known]: base update; if `refreshCountdown == 0` call virtual slot 34
-  (`RefreshMapTexture` S 005f1070: the scene's virtual slot +0x78 is called with (512, 512), [inferred] it
-  renders the map overview into the scene's render target; then slot 35 `CaptureMapTexture` S 005f3dd0);
+  (`RefreshMapTexture` S 005f1070: the scene's virtual slot +0x78, `Scene::RenderOverviewTexture` S 00680d90, is called
+  with (512, 512) and renders the map overview into the scene's render target [known] (§3.7); then slot 35
+  `CaptureMapTexture` S 005f3dd0);
   decrement the countdown while it is ≥ 0 (it rests at −1); set both overlay pictures' source rectangles to
   the minimap's × 0.5. The countdown is set to 0 by the constructor, by `LoadFromXml` S 005f10a0 and by
   `OnDeviceReset` S 005f1170, and by nothing else [known for the three writers; inferred for "nothing else":
@@ -1206,7 +1229,7 @@ survives from one match to the next inside one program run depends on the object
     combo box's mark function and of `OnFilterButtonToggled` S 005f8e80 settles it);
   - the minimap's XML load sets `refreshCountdown` to 0 and `dirty` to 1 (S 005f10a0), and the next capture
     takes the texture size from the source rectangle (§3.7) [known]. Every capture resets the source rectangle (zoom and
-    pan) to the whole texture (§3.7 "Reset of the source rectangle") [inferred];
+    pan) to the whole texture (§3.7 "Reset of the source rectangle") [known];
   - [TODO] not established: whether the chat log is emptied between matches (a read of the `ChatSystem`
     attach and detach functions settles it).
 - What the panels display is saved with the simulation: series and histories
@@ -1296,7 +1319,6 @@ survives from one match to the next inside one program run depends on the object
 | 6 | Answered (§3.1): in the first minute the graph lists only the own player and shows no data [live, 2026-10-12] | — |
 | 7 | State that survives from one match to the next in one program run: the message filter bytes, the minimap zoom and pan, the chat log (§7) | read of the combo box mark function and `OnFilterButtonToggled` S 005f8e80; of `Picture::LoadFromXml` and where the HUD layout is reloaded; of the `ChatSystem` attach / detach functions |
 | 8 | Whether the shipped scripts add their minimap quest symbols again after a load (§7) | read of the campaign scripts' load hooks |
-| 9 | Whether the scene call of `MiniMap::RefreshMapTexture` S 005f1070 (scene slot +0x78 with 512, 512) renders terrain only or also objects (§4) | read of the scene's vftable slot +0x78 |
 | 10 | Answered (§4, [ingame-ui.md](ingame-ui.md) §3.8.6): slot +0x84 is the position slot (building S 0063e770, soldier S 0064ba40, fight S 0063e310) | — |
 
 ---

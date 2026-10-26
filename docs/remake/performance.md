@@ -119,7 +119,7 @@ interface, which then keeps the periods as a table for the original's staggered 
 | no shadow pass while the shadow factor is 0 (sun lower than 20°); caster masks per quality preset (R §2.2, §3.13) | the same skip; casters per descriptor; light shadows by default ([renderer.md](renderer.md) §8.4) |
 | one global light per frame from the environment spheres at the focus point (R §3.13) | global shader parameters ([renderer.md](renderer.md) §7.3) |
 | a short fog range and a small camera envelope (eye at most 84 units, far plane 500) bound everything drawn | fog that follows the zoom, with far plane, shadow and mirror range and LOD bands ending at the fog ([renderer.md](renderer.md) §11.1) |
-| the minimap rendered once, overlays rebuilt when dirty (`../sim/hud-panels.md` §3.7) | event-driven overlay textures; the base picture redrawn on height and pattern events |
+| the minimap rendered once, overlays rebuilt when dirty (`../sim/hud-panels.md` §3.7) | the base picture rendered once (`MinimapOverview`, [renderer.md](renderer.md) §8.5); event-driven overlay textures |
 | meshes for streets, decals and building sites built on events (WO §3.3, §4) | the same, on worker threads, kept on the GPU |
 | at most four ambient sounds, a start-time audibility cut-off at 30 × the minimum distance, footsteps only near the camera, one UI sound per frame (AU §3.3 to §3.9) | a voice budget with the same rules |
 | mesh cache, compiled effect cache, map-info cache, failed loads cached, first-run preset from a fill-rate test (AM §3.3, WO §3.11, `../sim/app-shell.md` §3.10) | the converter's output and Redot's caches; shaders compiled behind the loading screen; a negative cache for missing mod assets; a short GPU test for the first preset |
