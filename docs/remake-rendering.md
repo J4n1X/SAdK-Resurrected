@@ -67,8 +67,6 @@ The shadow defaults are far heavier than the original's single map; settling the
 
 ### 2.4 Not reproduced
 
-- The original's terrain tessellation and level of detail (the remake draws the terrain at full resolution and
-  culls it in regions, §4.2).
 - The fixed-function and low-shader paths: the pre-animated water frames, the radial terrain alpha (it exists only
   below shader level 2, `rendering.md` §3.3) and the `ffp` techniques.
 - The caustics pass: as shipped it adds nothing (`rendering.md` §3.5).

@@ -834,7 +834,10 @@ since program start); refined mode gives every peer, every load and every sessio
 - **Beyond the original**: the remake keeps state the original loses on load: the active deposit order, the animal
   time stamps (the original's post-load clamp changes later checksums on `sp02_perpetual_ice`), the victory state,
   the ship sinking timer, the open-need index and a few appended fields. Ships go into an extension (the map part's
-  navy writes 0 ships). The messages are written as the original writes them, from the presentation's list (§7);
+  navy writes 0 ships), and so do the buildings' remake-only fields (the regeneration tick, a sacrifice's free ticket
+  and target player), in the "Remake Buildings" section of the tick-less system `core.game.village.remakestate`: the
+  `VillageBuilding` record keeps the original's v0–v2 layout (`Building::StoreSavegame` S 0055c470, `Load`
+  S 0055d290) [implemented, sadk-remake p0 round]. The messages are written as the original writes them, from the presentation's list (§7);
   the AI is written in the original's layout (§6.17); the chests and the quests are written in empty or default form
   into the original's sections. The remake part (v2) records each game rule's layers, and the command log (format 5)
   records the rules; a load or replay with other rules warns ([mods.md](mods.md) §14 item 7). The military's transient
@@ -1049,7 +1052,7 @@ These matter more in the remake than in the original, because Harmony patches ca
      `!DEFEAT`.
    - **Save and load** (§9.1): the remake keeps state the original loses on load (the active deposit order, the
      animal time stamps, the victory state, the ship sinking timer, the open-need index, a few appended fields); the
-     game speed is not restored (as the original); ships go into an extension; the chests and the quests are written
+     game speed is not restored (as the original); ships and the buildings' remake-only fields go into extensions; the chests and the quests are written
      in empty or default form into the original's sections; a load checks section names and
      versions; strings are Latin-1; the original's rebuilds are kept (construction flags, object layers, indexes,
      cancelled street planners, the stock running total); the military's path cache is empty with stamp 0 after a
