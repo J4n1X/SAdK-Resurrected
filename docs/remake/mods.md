@@ -280,7 +280,9 @@ naming the mod, file and line.
   keys on the id treat it like the original's entries [decided 2026-10-26]: the same scheme as a mod command's wire id
   (`CommandType.HashWireId`: FNV-1a over the key's UTF-8 bytes, top bit set), read as signed 32 bit. It is the same
   on every peer with the same mod set and does not depend on load order. A collision with another entry's id of the
-  kind, or the value −1 (the original's "none"), is a load error naming both entries.
+  kind, or the value −1 (the original's "none"), is a load error naming both entries. Kinds the original keeps in id
+  order take a mod's entries at their assigned id's place. Consumers read `RegistryEntry.Id` (always present after the
+  freeze); `OriginalId` stays the original's id alone [implemented, sadk-remake round 1].
 - A mod's new entries take the prefix `<mod id>.` by convention (`X_createNamed` adds it). Defining a key that
   exists is an error; changing an existing entry goes through `get`. Collisions are loud instead of silently
   overriding; a hex `X_create` over an id another mod derived from a name is a load error naming both records, not a
