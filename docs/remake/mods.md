@@ -853,8 +853,8 @@ Work, in this order:
      are a later extension.
    - core.game implements every base rule as the original, with addresses (`Core.Game.Rules`,
      `Simulation/Rules/OriginalRules.cs`).
-   - Saves (remake part v2) and command logs (format 5) record each rule's layers; a load or replay with other rules
-     warns. The rule set's fingerprint enters the world checksum and state hash only when a rule has more than one
+   - Saves (remake part v3) and command logs (format 6) record each rule's layers with the rest of the match identity
+     ([sim-boundary.md](sim-boundary.md) §9.1); a load or replay with other rules warns. The rule set's fingerprint enters the world checksum and state hash only when a rule has more than one
      layer, so compatibility mode's checksum is the original's.
    - Mods may declare rules of their own under their id.
    - First rules: `production.productAmount` (`GetEntryWithModifiers` S 00661c50 with its literal-`corn` compare at

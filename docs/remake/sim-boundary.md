@@ -817,7 +817,7 @@ since program start); refined mode gives every peer, every load and every sessio
 
 - **File**: the original's container (SF); the map part in the map-file layout; the logic part (`Game File Logic`
   v6: the random generator, players, village, settlers, transport, military, street net, AI, statistics, script and
-  quests, sacrifices, chests); then the remake's block (the setup, the systems, the session values and per-system
+  quests, sacrifices, chests); then the remake's block (the match identity, the setup, the session values and per-system
   extension sections with their lengths) behind a 16-byte footer the original never reads. `S2mWriter` writes all
   31 shipped maps byte for byte. `tools/sadk_crypt.py` reads the remake's `.aav`. Strings are Latin-1.
 - **Sections**: `ISaveSection` (`Save`, `Load`, `Relink`, `PostLoad`, `AfterPostLoad`), ordered by After / Before.
@@ -839,8 +839,11 @@ since program start); refined mode gives every peer, every load and every sessio
   `VillageBuilding` record keeps the original's v0–v2 layout (`Building::StoreSavegame` S 0055c470, `Load`
   S 0055d290) [implemented, sadk-remake p0 round]. The messages are written as the original writes them, from the presentation's list (§7);
   the AI is written in the original's layout (§6.17); the chests and the quests are written in empty or default form
-  into the original's sections. The remake part (v2) records each game rule's layers, and the command log (format 5)
-  records the rules; a load or replay with other rules warns ([mods.md](mods.md) §14 item 7). The military's transient
+  into the original's sections. The remake part (v3) and the command log (format 6) record the match identity
+  (`MatchIdentity`): the registry checksum, the match set (mods with their versions), the systems, each game rule's
+  layers and the startup settings; a load or replay warns of each part that differs from the running mod set's
+  ([mods.md](mods.md) §10, §14 item 7). Older versions are still read with what they record (remake part v2: the
+  checksum, the systems, the rules; command log format 5: the checksum, the mods, the rules). The military's transient
   path cache is empty with stamp 0 after a load (the original
   stamps it with the load tick, `Attack::PostLoad` S 00575800, MI §7). The saved next-tick time is the float32 sum.
 - **Open**: the AI's military half (§6.17); a loaded game parts from the uninterrupted one where the village order
