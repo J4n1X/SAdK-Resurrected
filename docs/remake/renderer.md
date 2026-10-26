@@ -555,11 +555,15 @@ depends on them.
 ### 8.2 Draw order [draft]
 
 The original's pass order (RE §3.1) mapped to Godot: sky; opaque terrain; unexplored terrain black (by the fog
-shader); terrain blend layers (transparent, render priority by pattern rank); streets, crossings and routes
+shader); terrain blend layers (transparent, render priority by pattern rank; drawn 0.05 units toward the eye, as built
+in sadk-remake 16d7051: Godot compiles their vertex code apart from the opaque pass's, and [inferred] the depths
+differed in the last bits, so single triangles failed the depth test); streets, crossings and routes
 (transparent; the original pulls them toward the camera by moving the near plane from 1.0 to 1.1, `SetNearPlaneOffset`
 S 004d9e10 with depth bias 0.1 in `StreetRenderer::Render` S 006c3ab0, a pull of about 9 % of the view depth, some
 3.4 units at 40 (3.36 with the far plane 500; WO §3.8); §15.1 says how the remake stands in for it); buildings with
-house decals before them; map objects;
+house decals before them (the remake fades the streets out under a plot's cover, its decal alpha baked into a map
+texture, as built in sadk-remake e459c39: the original blends the decal's soft rim over the streets, so a street
+under it showed through); map objects;
 characters; goods; animals; ships; single meshes; selection decals; map objects clipped at the water and then the
 water itself (after blended objects, RR §4.1); the build overlay; particles. The build overlay comes after the whole
 map, water included, and before the particles (`Scene::RenderPostFxAndOverlay` S 00680a00), and after the post-process
