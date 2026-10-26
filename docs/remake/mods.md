@@ -276,6 +276,11 @@ naming the mod, file and line.
 - `core.game`'s keys are the global variable names the original's property scripts assign the ids to (`brauhaus`,
   `woodCutter`); how they are found is in [lua.md](lua.md) §3.3. Each entry also keeps its original id (signed
   32 bit) as data [binding].
+- An entry a mod defines without an original id gets one at the freeze, so maps, saves, commands and every rule that
+  keys on the id treat it like the original's entries [decided 2026-10-26]: the same scheme as a mod command's wire id
+  (`CommandType.HashWireId`: FNV-1a over the key's UTF-8 bytes, top bit set), read as signed 32 bit. It is the same
+  on every peer with the same mod set and does not depend on load order. A collision with another entry's id of the
+  kind, or the value −1 (the original's "none"), is a load error naming both entries.
 - A mod's new entries take the prefix `<mod id>.` by convention (`X_createNamed` adds it). Defining a key that
   exists is an error; changing an existing entry goes through `get`. Collisions are loud instead of silently
   overriding; a hex `X_create` over an id another mod derived from a name is a load error naming both records, not a
@@ -595,6 +600,11 @@ with its own node type, an overlay and a menu entry. The mods in the
   `src/Sadk.Client`, `src/Sadk.MainMenu`, data in `src/Base`). [planned] Typed constants and emit
   helpers for the intents of the required mods (a source generator over their declarations), XML schemas for
   `mod.xml` and `intents.xml`, the mods' XML doc files next to their assemblies, a `dotnet new` template.
+- **The supported surface** [decided 2026-10-26]: every type stays public, so a mod can reach anything (with HarmonyX
+  where it must change it); the part mod authors can rely on across versions carries `[ModApi]` (`Sadk.Engine`),
+  which the SDK guide lists and the editor shows in its descriptions. A change to a `[ModApi]` member is a breaking
+  change named in the release notes; anything unmarked may change without notice. The base game's simulation has one
+  namespace per folder (`Core.Game.Village`, `Core.Game.Settlers`, …), so the namespace says where a type lives.
 - **Lua API reference** generated from the binding attributes ([lua.md](lua.md) §10), one page per table.
 - **`Sadk.Headless validate-mods [--game-folder=] [--mod-dir=] [--enable=a,b]`** [implemented]: loads a mod set like
   the game (without client code), prints the load order, the layers, the patch report, the startup settings, every
