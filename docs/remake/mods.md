@@ -896,7 +896,8 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   `work.animalBreeding`, `work.scholar`). The contract has the decision points the original's worker passes through
   (choose the next work, update the work state, release the product, the progress shown) and the properties other
   code asks of a mode today (the production-speed scaling of `GetProductionDuration` S 00565ed0, the mine test, the
-  animal cap, the transport handover's gatherer test). core.game's 12 behaviours are today's `switch` branches moved
+  animal cap, the transport handover's gatherer test, and the presentation's choice of the info box, `BuildingKind`,
+  which tests the sacrifice, mine and scholar modes, read through a view). core.game's 12 behaviours are today's `switch` branches moved
   as they are (`ChooseNextWork`, `UpdateWorkState`, `UpdateRelease`, `StartGathering`, `UpdateGathering`,
   `FinishWorking`, `Worker.WorkProgress`, `Production.Duration`/`IsMine`/`CanStart` and the other mode tests), with
   their addresses; `BuildingWorkingMode` stays the original's data value. Proof: every match test's checksums and
@@ -922,6 +923,9 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   cell near the building, walk there, `Act` the handling kind for a moment, walk back, `Act` work for a long time,
   produce one salt. Acceptance: placed only near water; one cycle seen in a headless match; a save in the middle of a
   cycle loads and finishes it; the base game's checksums unchanged with the mod off.
+
+The Salzfeld's panel is the original's production info box, chosen from its data (a product with a stock); a
+building's own panel is presentation, keyed by its key, never part of the definition.
 
 Open after the slice: components with their own state (item 1, the evaporation slots), panel sections (item 4), the
 other closed dispatch (settler classes, sacrifice effects, victory conditions, info boxes, actions, HUD widgets), and
