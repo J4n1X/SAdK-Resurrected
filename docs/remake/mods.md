@@ -874,8 +874,7 @@ Work, in this order:
      S 0077a8e0 and the buff in `Building::Update` S 006abcf0) and `transport.groupMembership` (`SelectByArrangement`
      S 00652b70 → `ReleaseId` S 005c3220, from `SelectOrderForNode` S 00652e00; groups from `InitFromTribe`
      S 005c1370, entries by `AddEntry` S 005c38a0).
-   - Further seams in core.game, candidates for rules: the work behaviours' `switch (WorkingMode)` (item 3); the
-     sacrifice effects (`ApplyOwnEffect` S 006630b0); which production modes are speed-scaled (S 00565ed0); the
+   - Further seams in core.game, candidates for rules: the sacrifice effects (`ApplyOwnEffect` S 006630b0); the
      initial group membership (`InitFromTribe`) and `ArrangementGroup.PickNext` S 005c30c0; the stock-and-age score
      (S 00651330, factor 10); `DefaultBuildingType` S 00533b20; the literal-id good rules in `GoodRulesDef`
      (TimedWhileWorked, FreeDepositNeedsNoTimer, StreetCarrier, GroundResourceOnWater, FoundOnBuildableGround).
@@ -889,20 +888,34 @@ remake-only (§9.4).
 Items 2 and 3 with the Salzfeld as the first user (migration steps 1 and 2 of the data-driven concept: the frameworks
 in the engine, core.game's behaviours wrapped coarse and faithful; splitting them finer comes later).
 
-- **Named work behaviours.** A work behaviour is an engine contract (`IWorkBehaviour`, `[ModApi]`) registered by name
-  in a `NamedRegistry` owned by the simulation catalog, so a mod adds or replaces one (replacing a base behaviour
-  makes the match remake-only, §9.4). `BuildingDef.Production.Behaviour` names one; when a definition names none, the
-  original's working mode gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`,
-  `work.settlerBreeding`, `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`,
-  `work.animalBreeding`, `work.scholar`). The contract has the decision points the original's worker passes through
-  (choose the next work, update the work state, release the product, the progress shown) and the properties other
-  code asks of a mode today (the production-speed scaling of `GetProductionDuration` S 00565ed0, the mine test, the
-  animal cap, the transport handover's gatherer test, and the presentation's choice of the info box, `BuildingKind`,
-  which tests the sacrifice, mine and scholar modes, read through a view). core.game's 12 behaviours are today's `switch` branches moved
-  as they are (`ChooseNextWork`, `UpdateWorkState`, `UpdateRelease`, `StartGathering`, `UpdateGathering`,
-  `FinishWorking`, `Worker.WorkProgress`, `Production.Duration`/`IsMine`/`CanStart` and the other mode tests), with
-  their addresses; `BuildingWorkingMode` stays the original's data value. Proof: every match test's checksums and
-  saves are byte-identical before and after.
+- **Named work behaviours** [implemented, sadk-remake r3-behaviours]. A work behaviour is core.game's contract
+  (`Core.Game.Work.IWorkBehaviour`, `[ModApi]`; its members drive core.game's `Worker` at its `Building`, so it is not an
+  engine type), implemented through the base class `WorkBehaviour` and registered by name with `[WorkBehaviour("name")]`.
+  The mechanism is the engine's: a class with a `[Named]` attribute (the contract's own attribute derives from it) that
+  implements one `[NamedContract("registry")]` interface is collected, as rules and systems are, into a `NamedRegistry`
+  per contract owned by the simulation catalog (`SimulationCatalog.Named`), owner by owner in load order, so a later mod's
+  class under a name replaces the earlier one (replacing a base behaviour makes the match remake-only, §9.4). One object
+  of each class serves every match of the mod set: a behaviour keeps no match state. `BuildingDef.Production.Behaviour`
+  names one (left out of the registry checksum while empty); when a definition names none, the original's working mode
+  gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`, `work.settlerBreeding`,
+  `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`, `work.animalBreeding`,
+  `work.scholar`; `WorkBehaviourNames`). A type whose behaviour no mod registers is a load error of the mod set naming
+  the type. The contract has the decision points the original's worker passes through (`Start`: step 3 of
+  `ChooseNextWork` S 0065d660; `UpdateJob`: the job's states before the worker's own in `Worker::Update` S 0065d7f0;
+  `UpdateWork`, `UpdateSecondWork`, `Release`: states 0x1d, 0x1e, 0x24; `BringOutFinished`; `WorkActionKind` and
+  `FinishWorking`: `NMovie::Working` S 0077eda0 / S 0077ebf0; `ProductGood`: `PickupProduct::Start` S 00777f80;
+  `Progress`: `GetWorkProgress` S 0065ce80; `WorkTarget`) and the properties other code asks of a mode
+  (`ScalesWithProductionSpeed`: `GetProductionDuration` S 00565ed0; `IsMine(type)`; `LimitsAnimalsInBlock`: S 00565bd0;
+  `LinksDeposit`: S 0055bfb0; `HuntsAnimal`: S 0055c050; `PutsDownExtraUnits`: the transport handover's gatherer test,
+  S 0077a8e0; `IsSacrifice`; `StartsInWork`: S 0065c710; `WorksAtDeposit`; `IsScholar`). The presentation reads the ones
+  it needs (the info box's sacrifice, mine and scholar tests in `BuildingKind`, the minimap's sacrifice mark, the worker
+  figure's work object) through the engine view `IWorkBehaviourView.TraitsOf(type)`. core.game's 12 behaviours
+  (`src/Sadk.Simulation/Work/`) are the former `switch` branches moved as they were, with their addresses;
+  `BuildingWorkingMode` stays the original's data value, which the computer player's port, the definition's validation,
+  the product-buff test and the product-amount rules still read. The match identity records the behaviours (form 2, a
+  part `Named`) and the world checksum adds their fingerprint only when more than one mod registered, so the base game's
+  saves and checksums are the original's. Proof: per-tick checksums, state hashes and saves of sessions with every
+  working mode byte-identical before and after.
 - **The step library** for new behaviours: a job is a list of steps over the worker: `Find` (a target by a query),
   `WalkTo`, `Act(kind, ticks)` (an action timer; the presentation picks the clip of the action kind, as for the
   original's settlers: handling-second-half shows `Pickup`, work shows `WorkLoop0`), `Carry(good)`, `Deliver`,
