@@ -896,7 +896,8 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   per contract owned by the simulation catalog (`SimulationCatalog.Named`), owner by owner in load order, so a later mod's
   class under a name replaces the earlier one (replacing a base behaviour makes the match remake-only, §9.4). One object
   of each class serves every match of the mod set: a behaviour keeps no match state. `BuildingDef.Production.Behaviour`
-  names one (left out of the registry checksum while empty); when a definition names none, the original's working mode
+  names one with the parameters it reads (a `SlotUse`, as a placement rule: `<Behaviour use="salzfeld.saltWork"
+  fetchTicks="30"/>`; left out of the registry checksum while empty); when a definition names none, the original's working mode
   gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`, `work.settlerBreeding`,
   `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`, `work.animalBreeding`,
   `work.scholar`; `WorkBehaviourNames`). A type whose behaviour no mod registers is a load error of the mod set naming
@@ -916,26 +917,44 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   part `Named`) and the world checksum adds their fingerprint only when more than one mod registered, so the base game's
   saves and checksums are the original's. Proof: per-tick checksums, state hashes and saves of sessions with every
   working mode byte-identical before and after.
-- **The step library** for new behaviours: a job is a list of steps over the worker: `Find` (a target by a query),
-  `WalkTo`, `Act(kind, ticks)` (an action timer; the presentation picks the clip of the action kind, as for the
-  original's settlers: handling-second-half shows `Pickup`, work shows `WorkLoop0`), `Carry(good)`, `Deliver`,
-  `Produce`. A job saves as its behaviour's name, its step index and its targets, and is rebuilt on load. Steps use
-  integers and the simulation's random generator only. The simulation never names a clip.
-  A job's cycle time is the sum of its steps (the `Act` ticks, and the walks once `Find` has a target, by path length)
-  and its progress is the share of that sum done, so a step-built behaviour needs no `ProductionTime`: the ticks are
-  its parameters, given on the definition (`<Behaviour use="salzfeld.saltWork" fetchTicks="30" workTicks="3500"/>`;
-  parameters are read by the behaviour, not by the engine). A behaviour that is speed-scaled has the production-speed
-  factor of S 00565ed0 applied to its `Act` ticks. The base behaviours keep the original's data and formulas
+- **The step library** [implemented, sadk-remake r3-salzfeld]: core.game's `StepBehaviour : WorkBehaviour` (`[ModApi]`,
+  `src/Sadk.Simulation/Work/StepBehaviour.cs`), whose subclass plans the worker's `Job` (`Plan(in WorkContext)`, a function
+  of the building's definition only) from steps: `Find(query, out target)` (a target cell by an `ITargetQuery`; the
+  library's first, `TargetQueries.NearestShore(radius)`, the fisher's shore search from the entrance flag cell, the cell
+  `placement.nearWater` tests for), `WalkTo(target)` (out: the worker's `LeaveBuilding`, then `MoveToCell` with the plain
+  and then the free-path search, in state 0x1d; `WalkTo(JobTarget.Door)`: the gatherers' `ReturnHome` in state 0x21),
+  `Act(kind, ticks)` (the worker's action timer in state 0x1d; the presentation picks the clip of the action kind:
+  handling-second-half shows `Pickup`, work shows `WorkLoop0`; the simulation never names a clip), `Carry(good)` (a
+  transport package in the worker's hands, `CreateCarriedPackage` S 0064cce0), `Deliver` (the carried unit into the input
+  stock), `Produce(product)` (units into the output stock as `OnProductionFinished` delivers: the production event, the
+  product-amount rule when the good is a product slot, the goods statistic) and `Rest(ticks)` (state 0x23); the steps
+  after `Otherwise()` run instead when a step cannot be done (a find without a result, a walk that cannot start). `Start`
+  plans the job, puts its state on the worker (`Worker.StepJob`) and runs it to its first step that takes time;
+  `UpdateJob` runs it while the worker has it; at its end the job is dropped and the worker rests or idles outside
+  (`RestOrIdleOutside`), walking home first when outside. A job's cycle time is the sum of its steps (the `Act` ticks,
+  and the walks once their targets are known, a cell of a walk counted as a tick) and `Progress` is the share of that sum
+  done (0 in the otherwise steps), so a step-built behaviour needs no `ProductionTime`: the ticks are its parameters,
+  given on the definition and read by the behaviour, not by the engine. A behaviour that is speed-scaled has the
+  production-speed factor of S 00565ed0 applied to its `Act` ticks (float32, truncated). Steps count in integers and draw
+  only the simulation's random generator. The job saves (the village's remake section, `VillageRemakeStateSystem`, a
+  second record `Remake Work Jobs` v0 after `Remake Buildings`, written only while a worker has a job: per worker in
+  building and slot order its id, the behaviour's name, the branch, the step, the step's phase, the timer, the done and
+  current cost, the targets) and enters the checksum and state hash only while one exists, so the base game's saves and
+  checksums are the original's; a load rebuilds the plan by the behaviour's name and puts the rest back. The worker's own
+  record and the walks' movies are saved as for every worker. The base behaviours keep the original's data and formulas
   (`ProductionTime` as the producing timer; the gatherers' fixed progress per stage, S 0077d1f0).
 - **Placement rules** [implemented, sadk-remake r3-defs]. `BuildingDef.Placement.Rules` lists rules by name with
   parameters (data: `SlotUse`, a name and its parameters as an ordered string map, the type behaviours take too; the
   section is `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's).
-  A rule is the engine contract `IPlacementRule` (`Sadk.Engine.Simulation`, beside the world and map views it reads),
-  registered with `[PlacementRule("name")]` in a simulation assembly into the catalog's `NamedRegistry`
-  (`SimulationCatalog.PlacementRules`; a later mod's registration of a name replaces the earlier one, and the registry
-  goes with the catalog when the set unloads). `GameQuery.CanPlaceBuildingTypeAt` runs a type's rules after the
+  A rule is the engine contract `IPlacementRule` (`Sadk.Engine.Simulation`, beside the world and map views it reads), a
+  named contract (`[NamedContract("placement")]`) registered with `[PlacementRule("name")]` in a simulation assembly on
+  the named implementations of the work behaviours (`SimulationCatalog.Named`; a later mod's registration of a name
+  replaces the earlier one, the registry goes with the catalog when the set unloads, and a match records a mod's rules
+  with the other named implementations). `GameQuery.CanPlaceBuildingTypeAt` runs a type's rules after the
   original's tests, so the place command and an upgrade see them; build mode asks them through the placement view
-  (`IBuildingPlacementQueries.PlacementRulesAllow`) for the cursor's mark and the build menu opened at a cell, while
+  (`IBuildingPlacementQueries.PlacementRulesAllow`) for the cursor's mark and the build menu opened at a cell, and the
+  computer player's site test (`SearchConstructionPlace.FitsCellFlags` S 0052eab0, its candidate scan and its re-check
+  before placing) asks them after the original's flags test, while
   the overlay stays the cell's construction flags (the original's icon is the cell's alone, S 006b36d0). A rule name
   no loaded mod registers, or parameters the rule refuses (`CheckParameters`), is a load error naming the building.
   First rule, core.game's `placement.nearWater(distance)`: a shore cell (`GridBits.Shore`) within the distance over
@@ -957,13 +976,23 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   the mod's XML of the sub-stage. Errors (an unknown kind, member, entry or key, a bad value, a parent not defined yet)
   are load errors naming mod, file, line, entry and member path. The Salzfeld adds itself to the Bavarians' buildings
   with an `<Update>`.
-- **The Salzfeld mod** (`src/Mods/Salzfeld`, also the SDK's example): `defs/salzfeld.xml` (the building, parent
-  `oxenBreeding`, its own key `salzfeld.saltworks`, no produced settler, product `saltBav`, behaviour
-  `salzfeld.saltWork`, placement `placement.nearWater`, an `<Update>` adding it to the Bavarians' buildings), a
-  `patches/` entry adding its descriptor `Bavarian_<gfx>` (a copy of `Bavarian_Donkeybreeding`) to `buildings.xml`, and `SaltWork`: find a shore
-  cell near the building, walk there, `Act` the handling kind for a moment, walk back, `Act` work for a long time,
-  produce one salt. Acceptance: placed only near water; one cycle seen in a headless match; a save in the middle of a
-  cycle loads and finishes it; the base game's checksums unchanged with the mod off.
+- **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld] (`src/Mods/Salzfeld`, a simulation assembly without Godot,
+  shipped in the game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml` (the
+  building, parent `oxenBreeding`, its own key `salzfeld.saltworks` and `Name` (its text key), `GfxName` `Saltworks`,
+  working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is the salt
+  mine's fish), `StockLimit` -1, `RestTime` 400, `WorkingRadius` 8, behaviour `salzfeld.saltWork` with `fetchTicks` 30 and
+  `workTicks` 3500, placement `placement.nearWater` 6, an `<Update>` adding it to the Bavarians' buildings),
+  `patches/salzfeld.xml` (its descriptor `Bavarian_Saltworks` in `buildings.xml`: `Bavarian_Donkeybreeding`'s mesh,
+  frame and doors without the oxen of its production and their sounds; its build-menu icon in `iconconfig.xml`, the Oxen
+  Breeding's), its texts (`assets/game/language/{en,de}/salzfeld.txt`: "Salt Works", "Salzfeld") and `SaltWork`, a
+  `StepBehaviour` scaled by the production speed: the nearest shore cell within the working radius, the walk there,
+  `Act` the handling kind for `fetchTicks`, the walk home, `Act` work for `workTicks`, produce one salt; no shore in
+  reach: `Rest(RestTime)`. The mod build copies `defs/` with the other folders (both `Mod.props`). Acceptance, in
+  `SalzfeldTests` over the shipped package through the loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode):
+  placed only near water; one cycle (the shore cell, kind 3 for 30 ticks there, kind 4 for 3500 inside, the salt 3500
+  ticks after); a save in the work phase loads and finishes the cycle tick by tick in step with the uninterrupted match;
+  the computer player's site test refuses a site the rule refuses; the base game's registry checksum, record, saves and
+  checksums unchanged with the mod off.
 
 The Salzfeld's panel is the original's production info box, chosen from its data (a product with a stock); a
 building's own panel is presentation, keyed by its key, never part of the definition.
