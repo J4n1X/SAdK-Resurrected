@@ -963,4 +963,8 @@ drivers do.
 Open after the slice: components with their own state (item 1, the evaporation slots), panel sections (item 4), the
 other closed dispatch (settler classes, sacrifice effects, victory conditions, info boxes, actions, HUD widgets), and
 splitting the base behaviours into steps.
+A candidate mod for then: congestion-aware routing of packages (the maintainer's idea, 2026-10-27): a named slot
+`transport.nextHop` whose base is the original's next-hop cache, wrapped by a mod whose own system keeps the smoothed
+load per flag, the reservations and each package's detour budget (saved and checksummed), plus backpressure for
+single-path networks.
 
