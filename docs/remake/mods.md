@@ -19,9 +19,9 @@ here, to be confirmed; facts about the original keep the tags of the document th
 - A manifest per mod: name, version, dependencies (required, optional, incompatible), whether it changes the
   simulation. Multiplayer requires the same simulation mods in the same versions; missing mods are transferred.
 - Three levels of change: values of registry entries, components added to types, Harmony patches.
-- Mods are precompiled assemblies loaded through `AssemblyLoadContext`; JIT runtime, no NativeAOT. Mods may define
-  their own Godot node types (maintainer, 2026-10-15, §7.1); moddable UI comes as `IInspectable` descriptions and XML
-  layouts. Source mods (Roslyn) are optional and later.
+- Mods bring precompiled assemblies loaded through `AssemblyLoadContext`, or C# sources that the game compiles with
+  Roslyn when the mod loads (source mods, §7.5); JIT runtime, no NativeAOT. Mods may define their own Godot node types
+  (maintainer, 2026-10-15, §7.1); moddable UI comes as `IInspectable` descriptions and XML layouts.
 - The renderer is moddable through the asset lookup (assets, shaders) and Harmony, not through registry entries of
   its own.
 - `core.game` builds its registry entries by running the original's property scripts against its own
@@ -36,6 +36,7 @@ the manifest.
 <id>/
   mod.xml                     manifest (§3)
   bin/                        assemblies: simulation assemblies (no Godot reference) and client assemblies
+  src/                        C# sources the game compiles (source mods, §7.5); any folder the manifest names
   data/                       data-stage Lua: settings.lua, data.lua, data-updates.lua, data-final-fixes.lua (§6)
   assets/                     a layer of the virtual file system (assets.md §4): models, textures, sounds,
                               shaders, presentation XML (visuals, layouts, UI parts), localisation, fonts
@@ -51,20 +52,22 @@ What a part changes, and therefore whether the mod is a simulation mod:
 |---|---|---|
 | simulation assemblies | yes | components, systems, commands, Lua libraries for map scripts, Harmony patches of simulation code |
 | client assemblies | no | render kinds, UI parts, input, audio; may reference Godot. Must not change simulation state (§7.6) |
+| simulation / client sources | as the assemblies | compiled into one assembly per declared folder (§7.5) |
 | `data/*.lua` | yes | registry changes. `settings.lua` only declares settings |
 | `assets/` | no | presentation only; the simulation never reads an asset (§8.3) |
 | `patches/` | no | patch presentation documents only |
 | `scripts/` | yes | run inside the simulation when a map script requires them |
 | `assets/maps/` | per map | a map is compared and transferred as a map, not as part of the mod set; an overlay folder that changes a map's `world/` or `script/` changes that map (assets.md §5.6) |
 
-Whether a mod changes the simulation is read from its contents [implemented 2026-10-15]: a simulation assembly, a
-data-stage script (`data/data.lua`, `data/data-updates.lua`, `data/data-final-fixes.lua`) or a `scripts/` library
+Whether a mod changes the simulation is read from its contents [implemented 2026-10-15]: a simulation assembly or
+simulation sources, a data-stage script (`data/data.lua`, `data/data-updates.lua`, `data/data-final-fixes.lua`) or a `scripts/` library
 makes it a simulation mod; `mod.xml` has no flag for it. The registry checksum (§6.5) catches anything the contents
 miss.
 
 The built-in mods (§11a) have this layout too, without `bin/`: their data is in `<game folder>/base/<id>/` (in the
-source tree `src/Base/<id>/`), their code is the game's own assemblies, which the host hands to the mod loader as
-entry types [implemented 2026-10-22]. `core.game`'s `assets/` holds the remake's own files (shaders, the remake's
+source tree `src/Base/<id>/`), their code is the game's own assemblies, which their `mod.xml` names by file name
+under `<Assemblies>` (`<Simulation>Sadk.Simulation.dll</Simulation>`) and the loader finds in the engine's load
+context [implemented]. `core.game`'s `assets/` holds the remake's own files (shaders, the remake's
 layouts and UI parts); the content converted from the player's installation is mounted below all mods as a layer of
 its own (assets.md §5.1). `refined`, a mod that ships with the game in `mods/`, carries the refined mode's simulation
 fixes as game rules (§9.4, §14 item 7).
@@ -99,7 +102,9 @@ fixes as game rules (§9.4, §14 item 7).
   range with a message instead of failing inside the mod.
 - **Dependencies**: `Requires` must be present in a matching version; `Optional` is ordered before this mod when
   present; `Incompatible` must be absent. Version ranges use the npm/Cargo syntax (`^1.0`, `>=1.2 <2`).
-- **Assemblies**: the entry assemblies per side; their private dependencies sit next to them in `bin/`.
+- **Assemblies**: the entry assemblies per side; their private dependencies sit next to them in `bin/`. A source mod
+  names folders of C# sources instead (`<SimulationSources name="BreweryYeast">src/</SimulationSources>`,
+  `<ClientSources>`, §7.5); a mod may have both kinds.
 - **Transfer**: `allowed` (default), `forbidden` (the author does not want peers to redistribute it; a peer
   without it cannot join), or `manual` (peers are told where to get it).
 - **SaveCompatible**: the oldest version whose saves this version loads (§10).
@@ -447,15 +452,62 @@ after an in-process unload (§9.3).
 Code mods run with full trust, as in RimWorld and Factorio's native-free world has no equivalent: a mod can do
 anything the game process can. Therefore:
 
-- a mod received from a peer (§9.2) that contains assemblies is loaded only after the player confirmed it (mod id,
-  version, content hash, which peer sent it); the confirmation is remembered per content hash;
-- data-only mods (no `bin/`) can be accepted automatically, as today's `AcceptServerMods=true`;
+- a mod received from a peer (§9.2) that contains code (assemblies or source parts) is loaded only after the player
+  confirmed it (mod id, version, content hash, which peer sent it); the confirmation is remembered per content hash;
+- source mods (§7.5) have the same full trust as built ones: the compiler gives no sandbox, and the compiled code runs
+  like any mod's;
+- data-only mods (no assemblies, no source parts) can be accepted automatically, as today's `AcceptServerMods=true`;
 - Lua is sandboxed: no `io`, `os`, `debug`, `loadlib` ([lua.md](lua.md) §2.4).
 
-### 7.5 Source mods (later) [binding §9, sketch]
+### 7.5 Source mods [implemented 2026-10-27]
 
-`.cs` files under `src/` compiled with Roslyn at start-up into a DLL cached under `<user data>/cache/` by a hash of
-the sources and the engine version; then loaded like any other mod. Content hashes for multiplayer use the sources.
+A mod may ship its C# as plain `.cs` files: no project, no build step, no SDK. The game compiles them with Roslyn when
+the mod loads and loads the result like a built assembly (§7.1, §7.2): the mod's collectible context, its entry
+points, unloading with Harmony unpatching and the leak check (§9.3) are the same.
+
+- **Manifest.** Under `<Assemblies>`, `<SimulationSources name="Salzfeld">src/</SimulationSources>` and
+  `<ClientSources name="Salzfeld.Client">src/Client/</ClientSources>`. Each element is one assembly named `name`
+  (`A-Z a-z 0-9 . - _`; by default the mod's id, for a client part the id with `.client`) of the `.cs` files below its
+  folder, a folder inside the mod, except those below a deeper folder another part names and those below a `bin/` or
+  `obj/` folder (an editor's build output). The parts of a side load after its assemblies and may use them;
+  simulation code loads before client code, so a client part may use the mod's simulation parts. Simulation sources
+  make the mod a simulation mod (§2).
+- **The compiler** (`Sadk.Engine.Mods.SourceCompiler`): Microsoft.CodeAnalysis.CSharp 4.12.0, the newest line that ships
+  a net8.0 build, about 9.5 MB in the export's `data_` folder. A part compiles as the SDK's `Mod.props` builds a
+  project: net8.0 and C# 12, nullable on, the SDK's implicit usings and preprocessor symbols, release optimisation,
+  `CS1701`/`CS1702` off, deterministic.
+- **References**: what a built mod's references resolve to when it loads (§7.1): the running runtime's assemblies;
+  `Sadk.Engine`, `Sadk.Formats`, `Sadk.Lua`, `Sadk.Session`, the base game's `Sadk.Simulation` and HarmonyX; for a client
+  part also `Sadk.Presentation`, `Sadk.Client`, `Sadk.MainMenu` and GodotSharp; the code of the mods it depends on
+  (the dependency rule of §7.1; a simulation part sees only their simulation code); the mod's own code loaded before
+  it; the libraries in the mod's `bin/`. A simulation part has no Godot: `using Godot` there is a compile error, which
+  the load errors explain with a pointer to client parts; the check of §7.1 still runs on the compiled assembly.
+- **Godot node types** in a client part: the game runs Godot's source generators and analyzers (the SDK's
+  `sdk/analyzers/Godot.SourceGenerators.dll`, in an exported game's folder and, after a build, in the development game's)
+  with the "tools project" properties of §7.1, so a node type gets its bridges and a missing `partial` is Godot's
+  `GD0001` error, as in the editor. A game without them refuses a client part that defines a `GodotObject` type, naming
+  the type, instead of loading a node whose `_Ready` would never be called.
+- **Cache.** The build (dll and portable PDB) is kept in `<user data>/cache/mods/<id>/<name>-<key>.dll`; the key is a
+  SHA-256 over the build rules' version, the engine version, the compiler's version, the part's side and name, every
+  reference's identity (name and module version id; an image's name and content hash; the runtime as one identity of
+  its version, runtime identifier and `System.Private.CoreLib`'s module version id), the analyzers' content hashes and
+  every source file's path and content hash. A new engine build, a changed dependency or a changed file therefore
+  compiles again; a hit reads two files and never starts the compiler, and a new build replaces the part's older one.
+  Measured with the Salzfeld as a source mod (one file; headless `validate-mods`, debug build of the engine,
+  2026-10-27): 1.3 s to compile in a fresh process (Roslyn's first use), 6 ms from the cache.
+- **Diagnostics.** A compile error fails the mod's load, each error as `[mod] src/File.cs(line,col): error CSxxxx: …`
+  among the load errors that the mods screen and `validate-mods` show; warnings go to the log. The symbols carry the
+  sources, so stack traces name the mod's files and lines.
+- **Multiplayer.** The content hash (§9.1) covers the simulation sources, not the build: the build is deterministic, so
+  peers with the same sources on the same game version run the same code. [inferred] Peers on different systems
+  compile against their own builds of the same runtime release, whose API is the same; the cache key keeps each
+  machine's builds apart.
+- **Trust**: full, as for a built mod (§7.4).
+- [TODO] A changed file compiles its whole part again (one to a few seconds; no incremental compilation).
+
+The Salzfeld (§14.1) runs its whole cycle as a source mod too: sadk-remake's `SalzfeldTests` copies its package without
+`bin/`, with `SaltWork.cs` under `src/`, and checks the same cycle; `SourceModTests` load, patch and unload a source mod
+in three rounds (the first compiles, the next two hit the cache) and check the errors.
 
 ### 7.6 Client code and the simulation [draft]
 
@@ -501,8 +553,11 @@ desynchronise a match, and the simulation runs headless without any asset.
 ### 9.1 Identity [draft]
 
 A mod in a match is `(id, version, content hash)`. The content hash covers the simulation-relevant files: the
-manifest, the simulation assemblies, `data/`, `scripts/`, and the values of the mod's `startup` settings. Client
-assemblies and assets are not covered: client-only differences are allowed.
+manifest, `data/`, `defs/`, `scripts/`, the simulation assemblies and the libraries in `bin/` (not a declared client
+assembly), the sources of the simulation parts (§7.5), and the values of the mod's `startup` settings. Client
+assemblies and sources and assets are not covered: client-only differences are allowed. The files' part is
+`ModSource.ContentHash` in sadk-remake [implemented 2026-10-27]; the match set (`ModSet.MatchSet`) still names id and
+version only, and the hash and the setting values join it with the multiplayer work [TODO].
 
 The **match set** is the list of simulation mods in load order with their identities; its hash is exchanged when
 a peer joins, together with the registry checksum (§6.5) and the engine version.
@@ -586,7 +641,8 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   `--enable=<id>`; `GameArguments` and `GameEngineArguments` add the game's and Godot's options, for instance the
   installation and conversion folder when the game folder has no `settings.xml` yet). `sdk/README.md` is the guide
   for mod authors. In the source repository the SDK builds against the repository's projects (a repository-only
-  `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Godot editor.
+  `src/Sdk/Directory.Build.props`), and `dotnet run` starts the development game through the Godot editor. A mod
+  without a project is a source mod (§7.5); the guide's "Source mods" section describes it.
   **The editor's view is checked** [implemented]: `tools/check-sdk.sh <game folder>` opens mod projects with Roslyn's
   `MSBuildWorkspace`, the loader of the editor's language server (a design-time build, then the compiler with the
   generators and analyzers), and compares references and diagnostics: the shipped example clean with the engine
@@ -626,8 +682,12 @@ with its own node type, an overlay and a menu entry. The mods in the
 loader, the Lua host, the asset loaders and instantiation helpers, the intent bus with its mode host (below), and the
 game's own `engine.shell` (when no mod enters a mode) and `engine.mods` (the mods screen). After the start the game
 emits `engine.start`; from there the mods decide what shows. The base game is part of the engine as **built-in
-mods** (maintainer's decision 2026-10-22): the host hands their entry types to the mod loader (`ModSource.BuiltIn`),
-their data is in `<game folder>/base/<id>/` (`mod.xml`, `intents.xml`, `assets/`). They are always loaded, first, are
+mods** (maintainer's decision 2026-10-22): the host names their folders to the mod loader (`ModSource.BuiltIn`),
+their data is in `<game folder>/base/<id>/` (`mod.xml`, `intents.xml`, `assets/`), and their `mod.xml` names their
+assemblies. Only where their code comes from differs from a mod's: the loader takes the assemblies of those names from
+the engine's load context (compiled with the game, never collected, no source parts) instead of a collectible context
+of their own; from there they take a mod's path, entry points found in each assembly, the check that a simulation
+assembly does not reference Godot, intents, systems and commands from their assemblies [implemented]. They are always loaded, first, are
 not listed on the mods screen and never stored in a profile; everything else about them is a mod's: the id that owns
 their intents, settings, systems, commands and rule layers, their place in the match set, their asset layers (directly
 above the installation, below every other mod), and dependencies on them by id. Game rules stay overridable by name.
@@ -635,7 +695,7 @@ above the installation, below every other mod), and dependencies on them by id. 
 | Mod | Side | Holds |
 |---|---|---|
 | `core.game` | simulation + client | the game's content (it fills the engine's registry from the original's property scripts) and the logic that uses it, systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies are the engine's `Sadk.Simulation` (no Godot, namespace `Core.Game` with one sub-namespace per folder, `Core.Game.Village`, …) and `Sadk.Client` (Godot, `Core.Game.Rendering`), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
-| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem`. Its assembly: `Sadk.MainMenu` (an assembly of its own: the loader reads a built-in mod's intents and registrations from the assemblies of its entry types, one mod id per assembly) |
+| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem`. Its assembly: `Sadk.MainMenu` (an assembly of its own: the loader reads a mod's entry points, intents and registrations from its assemblies, one mod id per assembly) |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
 The engine holds the vocabulary every mod builds on [the maintainer's decision
@@ -837,15 +897,16 @@ presentation patch, no client code. It goes into the SDK as the example mod and 
 and their panel rows of the first draft wait for components and panel sections (items 1 and 4).
 
 Work, in this order:
-1. **Components on types.** `ComponentDef` / `ComponentState` with `Tick`, `Save`, `Load`, `WriteChecksum`, attached to
-   building types (later settlers, map objects); state saved and checksummed by the engine, not by each mod.
+1. **Components on types.** Named component types (`IComponentType`) / `ComponentState` with `Tick`, `Save`, `Load`,
+   `WriteChecksum`, named by building types (later settlers, map objects); state saved and checksummed by the base game,
+   not by each mod (done, §14.2).
 2. **Placement rules.** A list of rules on the building definition (distance to water, terrain, neighbours, …) that the
    site check runs and that build mode shows, so valid sites appear without renderer code.
 3. **Named work behaviours.** The 12 original modes become registered behaviours (faithful mode keeps the original's
    code and order); `Production.Behaviour` names one; a mod registers its own. The original's job steps (walk to a
    cell, search a water or resource cell, play an animation, carry, take from and put into a building) become a step
    library behaviours are built from.
-4. **Panel sections.** `IInspectable` components bring their rows and buttons into the building panel.
+4. **Panel sections.** `IInspectable` components bring their rows and buttons into the building panel (done, §14.2).
 5. **Audit core.game for closed dispatch.** Every `switch` on a type, mode or kind enum is a candidate seam; each one
    becomes a registry or stays, with the reason written down.
 6. **Move the mechanisms into the engine.** The frameworks of 1 to 4 live in `Sadk.Engine` (simulation side) and
@@ -896,12 +957,15 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   per contract owned by the simulation catalog (`SimulationCatalog.Named`), owner by owner in load order, so a later mod's
   class under a name replaces the earlier one (replacing a base behaviour makes the match remake-only, §9.4). One object
   of each class serves every match of the mod set: a behaviour keeps no match state. `BuildingDef.Production.Behaviour`
-  names one with the parameters it reads (a `SlotUse`, as a placement rule: `<Behaviour use="salzfeld.saltWork"
+  names one with the parameters it reads (a `SlotUse`, as a placement rule: `<Behaviour use="mymod.saltWork"
   fetchTicks="30"/>`; left out of the registry checksum while empty); when a definition names none, the original's working mode
   gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`, `work.settlerBreeding`,
   `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`, `work.animalBreeding`,
   `work.scholar`; `WorkBehaviourNames`). A type whose behaviour no mod registers is a load error of the mod set naming
-  the type. The contract has the decision points the original's worker passes through (`Start`: step 3 of
+  the type. The contract extends the engine's `ISlotUseCheck` (`CheckParameters(SlotUse, Registry)`, the problems of a
+  use's parameters and children, none by default in `WorkBehaviour`): `WorkBehaviourNames.Check` runs it for every type
+  that names its behaviour when the mod set loads and when a world starts, so a malformed use is a load error naming the
+  type's owner, the type and the use, never an exception inside a tick. The contract has the decision points the original's worker passes through (`Start`: step 3 of
   `ChooseNextWork` S 0065d660; `UpdateJob`: the job's states before the worker's own in `Worker::Update` S 0065d7f0;
   `UpdateWork`, `UpdateSecondWork`, `Release`: states 0x1d, 0x1e, 0x24; `BringOutFinished`; `WorkActionKind` and
   `FinishWorking`: `NMovie::Working` S 0077eda0 / S 0077ebf0; `ProductGood`: `PickupProduct::Start` S 00777f80;
@@ -944,8 +1008,9 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   record and the walks' movies are saved as for every worker. The base behaviours keep the original's data and formulas
   (`ProductionTime` as the producing timer; the gatherers' fixed progress per stage, S 0077d1f0).
 - **Placement rules** [implemented, sadk-remake r3-defs]. `BuildingDef.Placement.Rules` lists rules by name with
-  parameters (data: `SlotUse`, a name and its parameters as an ordered string map, the type behaviours take too; the
-  section is `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's).
+  parameters (data: `SlotUse`, a name, its parameters as an ordered string map and its children, an ordered list of
+  nested `SlotUse`s, `[OmitWhenEmpty]` so a use without children keeps its canonical form; the type behaviours take too;
+  the section is `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's).
   A rule is the engine contract `IPlacementRule` (`Sadk.Engine.Simulation`, beside the world and map views it reads), a
   named contract (`[NamedContract("placement")]`) registered with `[PlacementRule("name")]` in a simulation assembly on
   the named implementations of the work behaviours (`SimulationCatalog.Named`; a later mod's registration of a name
@@ -971,36 +1036,52 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   (`GoodAmount`) is built from its constructor's parameters, the unstated ones kept from the value it replaces; a
   list's children (`<Item>` by convention) replace its items, `<Add>` children append by the list's own rule and
   `<Remove>` children remove the items matching what they state; a map is the same with a `key` attribute per child;
-  an element mapped to a `SlotUse` takes `use` and its parameters as attributes. `parent` makes the entry a deep copy
+  an element mapped to a `SlotUse` takes `use` and its parameters as attributes and its children as child elements (each
+  child named by its element, its attributes its parameters, recursively; `SlotUse.Source`, not walked by the registry,
+  keeps the file and line for the load's errors). `parent` makes the entry a deep copy
   of an entry defined before it (any mod's), then applies the element. Every reference must name an entry by the end of
   the mod's XML of the sub-stage. Errors (an unknown kind, member, entry or key, a bad value, a parent not defined yet)
   are load errors naming mod, file, line, entry and member path. The Salzfeld adds itself to the Bavarians' buildings
   with an `<Update>`.
-- **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld] (`src/Mods/Salzfeld`, a simulation assembly without Godot,
-  shipped in the game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml` (the
-  building, parent `oxenBreeding`, its own key `salzfeld.saltworks` and `Name` (its text key), `GfxName` `Saltworks`,
-  working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is the salt
-  mine's fish), `StockLimit` -1, `RestTime` 400, `WorkingRadius` 8, behaviour `salzfeld.saltWork` with `fetchTicks` 30 and
-  `workTicks` 3500, placement `placement.nearWater` 6, an `<Update>` adding it to the Bavarians' buildings),
+- **The step list** [implemented, sadk-remake r4-steps]: core.game's built-in behaviour `work.steps` (`StepListWork`,
+  `src/Sadk.Simulation/Work/StepListWork.cs`), a `StepBehaviour` whose `Plan` reads the definition's
+  `Production.Behaviour` children in order, one `Job` builder call each, so a linear job without decisions needs no code:
+  `<Find shore="n|radius"/>` (a query of the step library named by the step's one parameter, its value the argument;
+  `shore`: `TargetQueries.NearestShore`, `radius` the building's `WorkingRadius`; the queries are a list over the step
+  library's own, and a job that needs another query is a coded `StepBehaviour`, whose `Find` takes any `ITargetQuery`),
+  `<WalkTo target="found|door"/>` (the last `Find`'s target, or home), `<Act kind="…" ticks="n"/>` (kinds `handlingFirstHalf`
+  2, `handling` 3, `work` 4, `alternativeWork` 5 of `ActionKinds`), `<Carry good="key"/>`, `<Deliver/>`,
+  `<Produce good="key" amount="n"/>` (without `good` the building's product, its amount unless `amount` says otherwise;
+  with it 1 unit unless `amount` says otherwise), `<Rest ticks="n|rest"/>` (`rest` the building's `RestTime`) and
+  `<Otherwise/>` (once, with steps before and after it). Its `CheckParameters` is the same reading, collecting every
+  problem: an unknown step, kind, query or good, a missing, malformed or unknown parameter, a step with children, a
+  `WalkTo target="found"` without a `Find` before it, a misplaced or second `Otherwise`, each an error
+  `[owner] building 'key': work behaviour work.steps: file:line: step n <Step …/>: what is wrong`. The behaviour is
+  speed-scaled (`ScalesWithProductionSpeed`, one answer per behaviour as `GetProductionDuration` S 00565ed0 asks it): the
+  production-speed factor shortens every `Act`, not the walks and rests. A behaviour that decides (between targets, on
+  counted state) stays C#, as RimWorld's job drivers do.
+- **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld; data only since r4-steps] (`src/Mods/Salzfeld`, a mod
+  without code, shipped in the game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml`
+  (the building, parent `oxenBreeding`, its own key `salzfeld.saltworks` and `Name` (its text key), `GfxName`
+  `Saltworks`, working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is
+  the salt mine's fish), `StockLimit` -1, `RestTime` 400, `WorkingRadius` 8, placement `placement.nearWater` 6, an
+  `<Update>` adding it to the Bavarians' buildings, and its worker as the step list: `Find shore="radius"`,
+  `WalkTo found`, `Act handling 30`, `WalkTo door`, `Act work 3500`, `Produce`, `Otherwise`, `Rest rest`),
   `patches/salzfeld.xml` (its descriptor `Bavarian_Saltworks` in `buildings.xml`: `Bavarian_Donkeybreeding`'s mesh,
   frame and doors without the oxen of its production and their sounds; its build-menu icon in `iconconfig.xml`, the Oxen
-  Breeding's), its texts (`assets/game/language/{en,de}/salzfeld.txt`: "Salt Works", "Salzfeld") and `SaltWork`, a
-  `StepBehaviour` scaled by the production speed: the nearest shore cell within the working radius, the walk there,
-  `Act` the handling kind for `fetchTicks`, the walk home, `Act` work for `workTicks`, produce one salt; no shore in
-  reach: `Rest(RestTime)`. The mod build copies `defs/` with the other folders (both `Mod.props`). Acceptance, in
-  `SalzfeldTests` over the shipped package through the loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode):
-  placed only near water; one cycle (the shore cell, kind 3 for 30 ticks there, kind 4 for 3500 inside, the salt 3500
-  ticks after); a save in the work phase loads and finishes the cycle tick by tick in step with the uninterrupted match;
-  the computer player's site test refuses a site the rule refuses; the base game's registry checksum, record, saves and
-  checksums unchanged with the mod off.
+  Breeding's) and its texts (`assets/game/language/{en,de}/salzfeld.txt`: "Salt Works", "Salzfeld"). The game's mods
+  without code are folders listed in `src/Mods/DataMods.targets`, which the game's and the tests' builds import: it
+  mirrors each into the game's `mods/<id>/` (the export copies that folder as for every mod). The same job as code,
+  `SaltWork : StepBehaviour` (`salzfeld.saltWork` with `fetchTicks` and `workTicks`), is the SDK guide's example of a
+  coded behaviour and the tests' source-mod variant. Acceptance, in `SalzfeldTests` over the shipped package through the
+  loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode): placed only near water; one cycle (the shore cell, kind 3
+  for 30 ticks there from tick 88, kind 4 for 3500 inside from tick 212, the salt at tick 3712), the same from the coded
+  behaviour compiled as a source mod; a save in the work phase loads and finishes the cycle tick by tick in step with the
+  uninterrupted match; the computer player's site test refuses a site the rule refuses; the base game's registry
+  checksum, record, saves and checksums unchanged with the mod off.
 
 The Salzfeld's panel is the original's production info box, chosen from its data (a product with a stock); a
 building's own panel is presentation, keyed by its key, never part of the definition.
-
-A follow-up on the step library: the built-in behaviour `work.steps` runs a linear step list given in the definition
-(`<Work use="work.steps">` with `<Find>`, `<WalkTo>`, `<Act>`, `<Produce>` and an `<Otherwise>`), so a job without
-decisions needs no code; a behaviour that decides (between targets, on counted state) stays C#, as RimWorld's job
-drivers do.
 
 Open after the slice: components with their own state (item 1, the evaporation slots), panel sections (item 4), the
 other closed dispatch (settler classes, sacrifice effects, victory conditions, info boxes, actions, HUD widgets), and
@@ -1009,4 +1090,132 @@ A candidate mod for then: congestion-aware routing of packages (the maintainer's
 `transport.nextHop` whose base is the original's next-hop cache, wrapped by a mod whose own system keeps the smoothed
 load per flag, the reservations and each package's detour budget (saved and checksummed), plus backpressure for
 single-path networks.
+
+### 14.2 The second slice [decided 2026-10-27; planned]
+
+Items 1 and 4 (components, panel sections) and the carriers' decision points, on the pattern of the first slice: a
+definition names a piece and its parameters (`SlotUse`), an implementation registers by that name on the engine's
+named implementations, the base game's code moves into its base implementation unchanged.
+
+- **Components with their own state** [implemented, sadk-remake s2-components]. A definition lists components by name
+  with parameters: `Def.Components`, a list of `SlotUse` (`<Components><Component use="brewery.yeast" limit="6"/></Components>`),
+  `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's. The typed
+  sections code attaches to a definition (core.game's `GoodRulesDef` and `AiGoodRolesDef`, the rules the original ties
+  to literal good ids) are data, not components: they are `Def.Attached` (`AttachedSection`, found by type with
+  `TryGet<T>`), written under their old canonical name `Components` (`[CanonicalName]`), so the checksum keeps them as
+  before. A component type is the engine contract `IComponentType` (`[NamedContract("component")]`, `[ModApi]`),
+  registered with `[ComponentType("name")]`; it checks a use's parameters at load (`ISlotUseCheck`; `ComponentTypes.Check`
+  also refuses an unknown name, a name listed twice and components on a definition that is no building) and creates one
+  `ComponentState` (`[ModApi]`: `Tick`, `Save`, `Load`, `WriteChecksum`, `WriteState`) per instance from a
+  `ComponentContext` (the world, the entity, the use); integers and the simulation's random generator only. Building
+  types first (later settlers and map objects). The village of core.game makes the states when a building's construction
+  completes (`IComponentType.OnConstructionSite` makes them at placement), brings them in line with the type when it
+  changes (an upgrade: kept by name, the new type's made, the ones it lacks dropped) and after a load, removes them with
+  the building and hands them to the new building on a change of owner (`TransferBuildingOwnership`). They live on the
+  building (`Building.ComponentStates`; a work behaviour reaches them with `job.Building.Component<T>("name")`).
+  `VillageRemakeStateSystem` (no new system: the match's systems list is recorded in saves) ticks them right after the
+  village's update, building by building in vector order, a building's in its type's order, and saves them as a third
+  record of its section, `Remake Components` v0 after `Remake Buildings` and the optional `Remake Work Jobs`, only while
+  some building has one: the count of such buildings, per building in vector order its id and its count, per component
+  its name and the state's own length-prefixed block, so a load that does not know a component skips it with a warning.
+  The same content without the counts of buildings enters the checksum (`WriteChecksum`) and the state hash
+  (`WriteState`) only while one exists. With no component anywhere every match's checksums, state hashes and saves are
+  byte-identical to before (sp04_hayfield with a god player and 69 buildings, MP_2P_steinfjord with a god player,
+  MP_6P_middle_of_nowhere with computer players: per-tick checksums, state hashes every 25 ticks, saves every 500).
+- **Panel sections** [implemented, sadk-remake s2-components]. A component state that implements `IInspectable`
+  (`[ModApi]`) has a title (a text key) and describes rows: `ComponentText` (a text key), `ComponentBar` (a label, a value
+  and its maximum, drawn as `value/maximum` and a bar), `ComponentGood` (a good and a count) and `ComponentButton` (a text
+  key and an action id). The simulation evaluates them and the presentation reads them through the view
+  `IComponentView.SectionsOf(entity)` (the village offers it), plain records, so the client stays on views
+  (ClientBoundaryTests); every building info box part has them as `InfoBoxPart.Sections`. The building info boxes get a
+  `<ComponentSections template="componentSection"/>` slot (core.game's `patches/component-sections.xml` adds it to the
+  production, mine, catapult, default, store, territory, barracks and construction boxes of `menuingame.xml` and puts the
+  section template `componentSection` into `templates.xml`: its margins and line heights as attributes, the elements of
+  a title, a text, a value, a bar, a good's picture and a button as children); the box grows by the selected building's
+  sections below the original's members and is built again when their shape changes; a box without components looks as
+  before. A button sends the core.game command `ComponentAction(Entity, Component, Action)` (`core.game.componentaction`),
+  validated and executed by the component type (`IComponentType.Validate`, `Execute`) like any command.
+- **The carriers' decision points.** Named contracts in core.game with today's code as the base implementation, moved
+  as it is with its addresses and proven byte-identical: `transport.flagAdmission` (may a settler put his package down
+  here: `Transport_CarrierTryPlacePackageOnFlag` S 0064dae0, asked by carriers, workers and builders alike),
+  `transport.nextHop` (the package's next flag: the search `GetNextHopFlagCell` S 006666d0 that the package's
+  one-entry next-hop cache, `ComputeNextHop` S 0064f3a0, and the free packages' return search ask; the cache stays the
+  transport's), `transport.choosePackage` (which package a carrier takes: `WaitForPackage` S 0077ac50 with
+  `FindBestPackageToCarry` S 0064d7e0, and the exchange choice `FindBestSwapPackageOnFlag` S 0064d2f0), and the street
+  carrier's state machine `carrier.street` (`UpdateStreetTransport` S 0065b200) as a carrier behaviour a mod can replace
+  or extend: one virtual handler per state, a mod's own states numbered from 0x100. Each base implementation is a class
+  with virtual steps; a mod derives from it and registers under the same name. The drop's own stack test
+  (`PutDownCarriedPackage` S 0064d590) is not part of the admission: a package admitted to a full flag stays in the
+  carrier's hands, so a mod that hands packages over at a full flag does it in a state of its own with the transport's
+  link operations. State such a mod keeps (a congestion load per flag, an overflow slot) lives in the mod's own
+  system (saved and checksummed by it, §7.2). The base game's carriers do not change.
+- **Acceptance.** A test mod gives the brewery (`brauhaus`) a yeast stock component whose section shows in its info box
+  (the table of §12: "A brewery panel shows its yeast stock") and whose button empties it by command (done:
+  `tests/TestMods/ComponentMod`, `ComponentModTests`: the stock grows while the brewery produces, a save in between loads
+  and goes on in step, the mod unloads cleanly); a test mod
+  replaces `transport.flagAdmission` and changes where packages wait; with no mod, every match test's checksums and
+  saves are byte-identical to before. Then the maintainer's transport ideas (the overflow slot, congestion routing)
+  can be built as a mod on these seams.
+
+### 14.3 Info boxes and actions by name [decided 2026-10-27; planned]
+
+The in-match selection's closed sets become open registries, before the panel sections of §14.2 build on them.
+
+- **Info boxes.** What box a selection gets is a name (`MenuSelection.Kind`; the base game's `SelectionKind.*`,
+  `core.game.flag`, `core.game.production`, …, one per original kind 0..0x14). An info box type (`IInfoBox`,
+  `[ModApi]`; `InfoBox` a ready implementation) gives its layout element (the original's `menuingame.xml` element, e.g.
+  `infoboxProduction`, none for the attack slider's kind), its members (`BoxMember`, the constructor's table), its four
+  actions by name for a selection (`SetSelectionKind` S 00616f40), its step when chosen (the attack slider's binding),
+  its per-frame keep test (the boxes' `Update` closing with `ResetAndRefresh(0)`), whether it chooses again every frame
+  (the sacrifice boxes), and its shown instance (`InfoBoxPart`, `[ModApi]`, one per opening): `Update` reads its content
+  from the views every frame into its own fields and buffers (no content record per frame), `Build` makes its members,
+  `Refresh` writes them through the view, which writes a list or a picture only when it changed. The boxes register by
+  name (`InfoBoxes.Register`, a `NamedRegistry`) from core.game's client entry (`OriginalInfoBoxes`, the original's
+  boxes moved as they are with their addresses); a mod's registration is owned by its `ModContext` and goes with it. The
+  choice stays the original's rule (`SelectionRules.Compute`, `MenuSelection_ComputeSelectionKind` S 006156a0, moved as it
+  is) and returns a name; a mod's choice rule (`InfoBoxes.RegisterChoice`) is asked first, the last registered first,
+  and gives a name or none to leave the choice to the next rule. Nothing changes on screen.
+- **Actions.** An action of the four buttons (`SelectionAction`, `[ModApi]`) has a name (the base game's are the original's
+  `g_ActionNames`, `Action_Building_Destroy`, …, which also key the layout's failure texts `<Name>_<code>`), the
+  original's number where it has one, its tooltip, its icon cell (or an own picture), red or green, whether it asks for
+  confirmation, its availability with the failure code for a selection (`RefreshAvailability` S 00623da0), the typed
+  command it sends or its own step (`ExecuteAction` S 00623730), and the action a button shows instead (the swaps of
+  6/7 and 15..20). They register by name (`SelectionActions.Register`; `GameActions.Original` the original's 30); a box
+  lists its actions by name, and a mod adds an action to any box by name (`SelectionActions.AddToBox`), which takes the
+  box's first hidden buttons. No command goes by its hex id through reflection.
+- **HUD widgets** [implemented 2026-10-27]. Each widget of the HUD (`HudFrame`, the original's `SetupHud` S 005ed700 reading
+  `menuingame.xml`) is a HUD widget (`IHudWidget`, `[ModApi]`) registered by its layout element's name with an order
+  (`HudWidgets.Register(element, order, create)`, a `NamedRegistry` of core.game's client, owned by the registering
+  mod's context): it builds and wires that element (where it goes, its intent, its hotkey, its per-frame refresh, what
+  it takes from the match's records). The frame makes one widget per registered name its layout has, in order (the
+  order is the drawing order; the base game's follow `SetupHud`'s attach order); the elements under a widget's element
+  are built with it, and an element of the layout's root without a widget is left to its owner (the selection's info
+  boxes, the pause bar). The base widgets are the frame's former code moved as it is; a mod adds a widget for an
+  element its layout patch adds, or replaces one by name.
+
+### 14.4 TODO after the refactor [the maintainer, 2026-10-27: to be done, not deferred]
+
+The closed dispatch and seams still left after §14.1–§14.3, each on the same pattern (a name with parameters on the
+definition, an implementation registered by name, the base game's code moved as it is and proven byte-identical):
+
+- **Settler classes**: the settler factory is a closed `switch` (`SettlerSystem`); classes by name, so a mod adds a
+  profession with its own state machine (the carriers of §14.2 are the first).
+- **Sacrifice effects**: closed switches in `SacrificeModifiers` (`ApplyOwnEffect` S 006630b0); effects by name.
+- **Victory conditions**: `switch (mode) case 1/2/3` in `VictorySystem` (`MapTypes`/`WinConditions` named already);
+  conditions by name.
+- **Soldier kinds as data**: behaviour keyed by kind index 0 (sword) / 1 (bow) in combat, garrisons and the AI's
+  strength (`SoldierTable.Kinds = 2`); melee or ranged from a flag on the soldier section, the index kept only for the
+  original's save and checksum layouts.
+- **Replaceable systems and command handlers**: `[SimSystem(Replaces = "…")]` takes a system's slot; a command-handler
+  registry keyed by command id with the rules' wrap/replace layering (the command record stays data).
+- **Combat and AI formulas as rules**: strike value, hit chance, reach, the attack decision and the strength estimate
+  as named game rules (`MilitarySystem.Combat`, `AiPlayer` scoring), like `production.productAmount`.
+- **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
+  concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
+- **Declarative panel bindings**: `<ProgressBar value="{Component.Value}"/>` in layouts (architecture §6), so a panel
+  section can be XML only, as `work.steps` made simple jobs.
+- **The maintainer's transport mod**: congestion-aware routing and the overflow slot over the §14.2 seams
+  (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`).
+- **Multiplayer identity of mods**: the match set's content hash and startup values in `MatchIdentity` (with the
+  lockstep work, milestone 4).
 

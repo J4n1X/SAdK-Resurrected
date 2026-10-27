@@ -137,7 +137,7 @@ The corrections to `lua-runtime.md` and `lua-surface.md` are applied in those fi
 ## Suggested first steps
 
 1. `Sadk.Formats` taken over from the viewer; `Sadk.Convert` with the file record, the start check and the
-   whole-install self-checks (the viewer's `KexCheck`, `MapCheck`); the virtual file system.
+   whole-install self-checks (the viewer's `KexCheck`); the virtual file system.
 2. `Sadk.Lua` (the fork) with the number model and the formatter; the converter; the data stage running `data.lua`
    into a registry; the registry checksum; the vocabulary replay.
 3. The simulation's world build from a converted map, publishing `MapChanged` and `EntityAdded` events headless.

@@ -106,8 +106,9 @@ Engine (`Sadk.Presentation.Rendering`):
 
 | Type | What it is |
 |---|---|
-| `WorldRenderer` | the node that draws a world through its own camera (horizontal field of view 50°, near plane 1): its kind (`WorldKind`), layers (`Layers`, `AddLayer`, `RemoveLayer`, `Layer<T>()`), `Environment` (the rig), `Mirror` (requests), `SetView(focus, eyeDistance)`, `Report`, the presentation clock (`Time`, `Paused`); a world type overrides `GroundHeight`, `Bounds`, `Pick` and its report lines |
-| `IWorldLayer`, `WorldLayers` | one part of a world's picture (`Show`, `Clear`, `Frame`, `ApplySettings`, `Report`) and the registry per world kind: `WorldLayers.Register(kind, name, order, factory)` returns a registration the mod disposes in its `OnUnload` |
+| `WorldRenderer` | the node that draws a world through its own camera (horizontal field of view 50°, near plane 1): its kind (`WorldKind`), layers (`Layers`, `AddLayer`, `RemoveLayer`, `Layer<T>()` for the code that made it), the layers' services (`Services`, §2.2), `Environment` (the rig), `Mirror` (requests), `SetView(focus, eyeDistance)`, `Report`, the clock it runs on (`Clock`, §17); a world type overrides `GroundHeight`, `Bounds`, `Pick` and its report lines |
+| `IWorldLayer`, `WorldLayers` | one part of a world's picture (`ProvideServices`, `Show`, `Clear`, `Frame`, `ApplySettings`, `Report`) and the registry per world kind: `WorldLayers.Register(kind, name, order, factory)` returns a registration the mod disposes in its `OnUnload` |
+| `RenderServices`, `WorldServices` | the services the layers offer one another by interface, and the registry per world kind a mod wraps or replaces them through (§2.2) |
 | `EnvironmentRig`, `WorldLight` | the world environment, the sun and its shadowless copy for the mirror, the mirror view, the sky, the fog that follows the zoom with the far plane and shadow range after it; a world's environment layer feeds it each frame (`SetLight`); `WorldLight.Unlit` is the neutral look without an environment |
 | `MirrorRequests` | a layer whose material reads the mirror picture sets the bounds where it does; the mirror view is drawn only in planar mode while one of them is in view (§8.3) |
 | `ReflectionVariants` | the shader of a reflective material per reflection mode, from its table's `<Reflection>` children |
@@ -126,12 +127,49 @@ core.game (`Core.Game.Rendering`):
 | `MapGeometry` | grid to world; `HeightAt` is the plane of the drawn terrain triangle (§10.1), used for placement, picking and the camera |
 | `MapRenderer` | a `WorldRenderer` of kind `core.game.map`: `Show(map)`, `Clear`, `HeightAt`, `CellAt` |
 | `IMapLayer`, `MapLayers` | a map layer (`Show(renderer, map)`) and `MapLayers.Register(name, order, factory)`, the same as `WorldLayers.Register("core.game.map", …)` (core.game: map environment 100, terrain 200, water 300, map objects 400) |
+| `MapServices` | `MapServices.Register<T>((renderer, current) => …)`, the same as `WorldServices.Register<T>("core.game.map", …)`; core.game's services in §2.2 |
 
 The mode `core.game.mapview {map, back, x, z, yaw, pitch, distance}` shows a map outside a match with a HUD of the
 switches; the asset browser opens map packages in it, and `--emit=core.game.mapview?map=…` with `--shot-after` and
 `--shot` takes unattended pictures. The mod `tools.mapviewer` builds on the same public pieces (`MapData.Load`,
 `MapRenderer`, `OrbitCamera`, `MapRenderer.Pick` / `CellAt`) and adds the map list, the data overlays, their legend and
 a cell inspector (`tools.mapviewer.open?map=…&overlay=…&ontop=true`).
+
+### 2.2 Services between layers [implemented]
+
+A layer never looks another up by its type. What one layer serves the others is an interface, offered to the renderer's
+`RenderServices` and resolved by the layers that use it once, in their `Show`:
+
+1. When the renderer shows a world it asks every layer, in order, for its offers (`IWorldLayer.ProvideServices`:
+   `services.Provide<IFogOfWar>(this)`); a later offer of an interface covers an earlier one.
+2. Then the world kind's registrations (`WorldServices.Register<T>(kind, (renderer, current) => …)`, for maps
+   `MapServices.Register<T>`) are asked in the order they were made; each gets the service in place to wrap or replace,
+   or returns null to leave it.
+3. Then the layers are shown. A layer without the service it asks for draws without it (no fog of war in a gallery).
+4. When the world goes, every offer is withdrawn, so the renderer keeps neither a layer of that world nor a mod's object.
+
+A mod hands its registration to its context; disposing it takes exactly that registration away, so the next world shown
+has the service it covered (the layer's, or another mod's). A renderer showing its world when a registration comes or
+goes keeps what it resolved until it shows a world again, as it keeps its layers. Replacing the layer itself by its name
+(`WorldLayers`) replaces its services with it.
+
+core.game's map layers offer:
+
+| Service | Served by | Used by |
+|---|---|---|
+| `IFogOfWar` (viewer, active, explored cell, shown cell, revealed block) | fog of war | buildings, characters, streets (door paths) |
+| `IGroundOcclusion` (occluders by `OccluderKey`) | ground occlusion | map objects, buildings |
+| `IParticles` (start, one-shot, follow, stop, movies) | particles | buildings (fires, dust, clip events), characters (clip events), the scene's effects |
+| `IBuildingPlaces` (node, world box, bone transform) | buildings | the scene's effects; the selection ring, picks, previews and the catapult box |
+| `ICharacterPlaces` (bones, link bone, attachment, drawn, explored, position) | characters | goods, the scene's effects |
+| `IWorkplaceAnimations`, `IBuildingEntrances` | buildings | the settler feed and the entrance passes (wired by the match) |
+| `IAttachedItems` | goods | the settler feed (wired by the match) |
+
+The code that makes a renderer and drives its layers (the match, the galleries, the map view's statistics) still holds
+the concrete layers it feeds (`Layer<T>()`): the feeds, sources and clocks it sets on them are its composition, not a
+layer's business. The interface's own reads of map objects, characters and ships (the selection, the minimap, the build
+mode's picks) still look the object and character layers up by type [TODO]; the buildings' boxes it reads through
+`IBuildingPlaces`.
 
 ## 3. Structure [draft]
 
@@ -1265,8 +1303,8 @@ the GPU skinning of §9. [draft; suggestion forwarded by the maintainer 2026-10-
   door, slot 1 work) on disjoint bones (the conversion records each bone's layer per building model), so the two
   play at once without blending (an `AnimationTree` with both, or one player per layer).
   Triggered by `ActionTimerStarted` of the worker and by settlers passing `enterDistance` (presentation logic over
-  motion samples), as RE §3.9 describes. While a building is out of view, a `VisibleOnScreenNotifier3D` on its node
-  switches its players off; on `screen_entered` each player seeks to `(clock − clip start) mod length`, so the clip
+  motion samples), as RE §3.9 describes. While a building is out of view, its visibility notifier (the layers' shared
+  `NotifierSet`, a RenderingServer notifier per building) switches its players off; on `screen_entered` each player seeks to `(clock − clip start) mod length`, so the clip
   shows where it would be by now (`VisibleOnScreenEnabler3D` would resume where it stopped instead). Notifiers ignore
   shadow passes, so the shadow of a building just outside the view may show a held pose
   ([godot-capabilities.md](godot-capabilities.md) §6).
@@ -1669,9 +1707,11 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
     catapult stone, 1.4715 otherwise) and the target point of S 006a3610; `flightPFX` follows the arc
     (`ParticleLayer.Follow`), `impactPFX` plays at the target and the trail is released (S 006a3af0): in the shipped
     data the stone's `BoulderFly` and `BoulderHit`;
-  - *character clip particles* (`CharacterParticles`): a clip's `<Particle>` events on any character
-    (S 006b05e0, S 006b0710) at the slot bone plus the turned offset, moved with the bone every frame, stopped at
-    `start + duration` or with the next clip.
+  - *clip particles* (`ClipEventRunner`, shared by buildings and characters, the original's one `AnimatedVisual`
+    path: `EventBase::Tick` S 006b00f0, `PlayAnimationWithEffects` S 006d8670): a clip's `<Particle>` events
+    (S 006b05e0, S 006b0710) at the slot bone plus the turned offset, the emitter dated to the event's moment, moved
+    with the bone while it lives, a zero duration stopping the emission at once, every live emitter stopped at the clip's
+    end; events start only while the model is enabled (fog-visible, not hidden) [inferred for characters].
   The building gallery plays a movie (`movie=<name>`) on every building, or a one-shot (`effect=<name>`) in front
   of every building each second. Tests: the shipped movies, the keyframe timing, the back-dating, the buff rules.
 - **Scene effects, decisions to review** ([sim-boundary.md](sim-boundary.md) §11 item 4): the effect and movie names
@@ -1721,6 +1761,12 @@ particles). This is the Godot-first and CPU/GPU-balance rule: per-frame work on 
   camera), layers get the game step, and what Godot animates goes under `WorldRenderer.Animated`, a pausable node. The
   free camera moves in real time and only on input nothing else handled (a text field or an open overlay keeps it
   still).
+- **A clock per renderer** [implemented]: `WorldRenderer.Clock` is the clock a renderer runs on, the process clock
+  (`PresentationClock.Current`) by default. The renderer's frame step, its environment and camera, and its layers'
+  clip, door, effect and movie times read it, never the process clock, so a gallery or a test drives a renderer's time
+  with a clock of its own (it advances it itself; the driver node advances only the process clock). The shaders' time
+  globals (`sadk_time`, `sadk_real_time`) are process-wide and stay the process clock's: what a shader times by itself
+  (the characters' skinning, §9) follows the process clock in any renderer.
 
 ## 18. Picking [draft]
 

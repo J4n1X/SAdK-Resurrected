@@ -71,8 +71,9 @@ there is a way to break lockstep.
 
 - **Type and instance are separate.** A `BuildingType` (size, costs, components with their parameters) exists once
   per type; a placed `Building` points to its type and carries only its own state.
-- **A component exists twice:** a definition on the type (`ComponentDef`, the parameters) and a state per instance
-  (`ComponentState`, created by the definition). The state has `Tick`, `Save` and `Load`.
+- **A component exists twice:** a named use on the type (`Def.Components`, the component type's name and its
+  parameters, `remake/mods.md` §14.2) and a state per instance (`ComponentState`, created by the component type). The
+  state has `Tick`, `Save`, `Load` and `WriteChecksum`.
 - **Interfaces describe capabilities of components** (`IStorage`, `IWorkplace`, `IInspectable`, …), so systems and
   UI ask what a thing can do without knowing its type.
 - Inheritance is the exception: a mod may subclass a core type when composition cannot express what it needs.
@@ -160,12 +161,13 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
   ships them with the .NET runtime.
 - **Mods are precompiled assemblies (DLLs)**, built against the engine assembly and loaded at start-up through
   `AssemblyLoadContext`. This needs the JIT runtime, not NativeAOT; Harmony needs it as well.
-- **Optional, later: source mods.** `.cs` files compiled once with Roslyn (`Microsoft.CodeAnalysis.CSharp`) and
-  cached as a DLL keyed by a hash of the sources, so modders can work without a .NET setup. Costs about 10-20 MB
-  for the compiler.
-- **Mods do not define Godot node classes.** Godot registers classes derived from its node types when the project
-  is built, not reliably from an assembly loaded at run time. Mods bring UI as `IInspectable` descriptions that the
-  engine draws (§6). If a mod ever needs its own node class, the engine provides a registration path for it.
+- **Source mods** [implemented 2026-10-27, [remake/mods.md](remake/mods.md) §7.5]: `.cs` files compiled with Roslyn
+  (`Microsoft.CodeAnalysis.CSharp` 4.12) when the mod loads and cached as a DLL keyed by a hash of the sources and
+  references, so modders can work without a .NET setup. The compiler costs about 9.5 MB in the export.
+- **Mods may define Godot node types** (maintainer, 2026-10-15; [mods.md](remake/mods.md) §7.1): Godot's source
+  generators run on a mod's client code (in its project as a "tools project", or when a source mod's client part is
+  compiled), so the bridges exist; the type becomes a script without a path that unloads with its last object. Moddable
+  UI still comes as XML layouts and `IInspectable` descriptions the engine draws (§6).
 
 ## 10. Lua
 

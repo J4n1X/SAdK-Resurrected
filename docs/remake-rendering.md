@@ -196,7 +196,7 @@ What the viewer had to get right beyond the formulas of the `sim/` documents:
 | `Sadk.Viewer/ModelViewerSubjects.cs` | the model viewer's palette controls and construction display |
 | `Sadk.Viewer/Map/Placement.cs`, `MapViewerPlace.cs` | buildings and settlers on a map: placement, ground decals on the terrain, settler LODs (removed; git history) |
 | `Sadk.Viewer/shaders/` | object, building, settler and particle shaders (terrain, water and sky removed with the map half) |
-| `tools/KexCheck`, `tools/MapCheck` | whole-install checks (every `.KEX`, `.pfx`, map; the palette test vector) |
+| `tools/KexCheck` | whole-install checks (every `.KEX`, `.pfx`; the palette test vector); the maps' full parse is `Sadk.Headless verify` (assets.md §4.2) |
 
 ## 6. Open
 

@@ -610,8 +610,19 @@ public sealed class LogicPlayers : LuaLibrary
   registration of the same table and name replaces the function, with a log line: a mod can fix a binding (for
   example `pl_getProducedGoodCount`) without Harmony, or add a table of its own. Harmony reaches the C# methods
   behind them like any other method.
-- The class attribute drives the checks: a SIM binding called outside the match state's tick or a world build is an
-  error; a UI binding never touches simulation services.
+- The class limits the states a binding may be installed into (§2.2), checked when a mod registers the library for a
+  context and again when it is installed into a state; a library with a binding the state may not have is refused
+  with an error naming the library, the binding and its class [implemented]:
+
+  | Class | data stage | match | recording | UI |
+  |---|---|---|---|---|
+  | `Data` | yes | no (a match's `properties` is the vocabulary replay, §2.2) | no | no |
+  | SIM, RNG, MSG | no | yes | no | no |
+  | UI | no | yes (emits `ScriptUi`, §6.1) | yes | yes |
+  | Q, Q/cache, LOCAL | yes | yes | yes | yes |
+
+  A SIM binding called outside the match state's tick or a world build is an error, and a UI binding never touches
+  simulation services [draft: no call-time check yet].
 - The Lua API reference for mod authors is generated from these attributes and their doc comments, one page per
   table ([mods.md](mods.md) §11).
 

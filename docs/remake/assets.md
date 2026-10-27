@@ -121,8 +121,16 @@ convert side by side. A conversion folder holds [implemented]:
   machines and used as cache keys. [checked] Two full conversions of the reference installation agree output for
   output (`Sadk.Headless compare`).
 - **Self-checks** run as part of the conversion: every container's CRCs (the reader checks them), every `.KEX` and
-  `.pfx` parses completely, every map parses to its last byte, and the settler palette test vector
-  (`AM` §3.15) comes out right. These are the viewer's `tools/KexCheck` and `tools/MapCheck`.
+  `.pfx` parses completely, every map's header (MapInfo) reads, and the settler palette test vector
+  (`AM` §3.15) comes out right (the viewer's `tools/KexCheck`). [implemented] The full parse of a map is not one of
+  them: the size of a doodad record depends on its type's lifetime (`dd_setLifeTime`, a record carries one when it is
+  at least 0; `NDoodads::Object::Load` S 00545260), a value of the registry that the property scripts build when they
+  run in the data stage and that mods may change. The converter does not run them (it depends on `Sadk.Formats`
+  only and stays mod-independent), and it keeps no second reading of them. `Sadk.Headless verify` parses every
+  converted map package's world part to its last byte with the base game's registry (`MatchMaps.Parse`, the same
+  call a match load makes) and checks that every type id it names (patterns, deposits, animals, doodads, spawn
+  points) is registered. [measured] On the reference installation all 31 maps pass; 26 doodad types have a lifetime
+  (25 resource and water signs at 3000 ticks, the empty sign at 30000).
 - **Compatibility records**: for every `scripts\**\*.lua` and `settings\**\*.xml` the converter keeps the container
   header field +0x08 (the plaintext CRC-32), which is what the original's build checksum XORs
   (`GameData_ComputeBuildChecksum` S 005ab800, DL §3). Without them the remake cannot answer an original client's
@@ -446,7 +454,8 @@ change or add files without touching it (§5.6).
   (free maps have no description keys). `map.xml` [implemented] carries `id` (the MapInfo UUID, Microsoft byte
   order), `name`, `version`, `contentHash` (SHA-256 over the package's other files), `format`, `type` (campaign or
   free), `players` (start positions), `width`, `height`, `originalClients`, `scriptApi`, `titleKey`,
-  `descriptionKey` and `RequiredMods`. The whole map is parsed to its last byte as the package's self-check. In the
+  `descriptionKey` and `RequiredMods`. The package job reads the map's header; the whole map is parsed to its last
+  byte by `verify` and by every match load, with the registry's doodad lifetimes (§4.2). In the
   reference installation all 31 current maps have their file name as internal name; the two prototype maps in the
   old layout are not packaged (`MF` §9; `tools/s2m_upgrade.py` converts them).
 - A map adds assets, presentation XML (new visual descriptors, a patched skydome list) and scripts through its own
