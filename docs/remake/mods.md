@@ -798,8 +798,13 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
 ## 13. Open decisions
 
 1. Decided 2026-10-15 (instead of the draft's restart): unloading in the process, with the leak check (§9.3).
-2. Decided 2026-10-15: C# and Lua (the original `properties.*` API and a `registry` view) for registry entries,
-   no XML/JSON definitions in the first version (§6.3); answers [binding] §13 item 1.
+2. Decided 2026-10-27: a mod defines registry entries in C# or in XML definitions (RimWorld style; an entry names
+   a parent by key, `parent="woodCutter"`, and states only what differs); Lua stays the format of the original's
+   property scripts, from which the base game's definitions are converted out of the player's installation (no game
+   data is shipped). The converter may write the converted base definitions as XML for reference, generated in the
+   player's data folder, never shipped. Unifying the original's per-tribe variants of a good (`stoneBav`/`stoneScots`,
+   `pretzel`/`bread`, `halberd`/`claymore`) is deferred: their original ids are in maps, saves, commands and
+   checksums, which faithful mode keeps (§6.3; answers [binding] §13 item 1).
 3. XML for manifests and every patchable presentation document; JSON only for machine-written files (§3).
 4. Decided 2026-10-18: `refined` is a simulation mod shipped with the game; its fixes are game rules switched by
    mod settings (§9.4, §14 item 7).
