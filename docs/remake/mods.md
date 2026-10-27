@@ -907,6 +907,12 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   original's settlers: handling-second-half shows `Pickup`, work shows `WorkLoop0`), `Carry(good)`, `Deliver`,
   `Produce`. A job saves as its behaviour's name, its step index and its targets, and is rebuilt on load. Steps use
   integers and the simulation's random generator only. The simulation never names a clip.
+  A job's cycle time is the sum of its steps (the `Act` ticks, and the walks once `Find` has a target, by path length)
+  and its progress is the share of that sum done, so a step-built behaviour needs no `ProductionTime`: the ticks are
+  its parameters, given on the definition (`<Behaviour use="salzfeld.saltWork" fetchTicks="30" workTicks="3500"/>`;
+  parameters are read by the behaviour, not by the engine). A behaviour that is speed-scaled has the production-speed
+  factor of S 00565ed0 applied to its `Act` ticks. The base behaviours keep the original's data and formulas
+  (`ProductionTime` as the producing timer; the gatherers' fixed progress per stage, S 0077d1f0).
 - **Placement rules.** `BuildingDef.Placement.Rules` lists rules by name with parameters (data); a rule is an engine
   contract registered by name, run by the site check after the original's tests and shown by build mode. First rule:
   `placement.nearWater(distance)`, a shore cell (`GridBits.Shore`) within the distance over walkable ground (the
