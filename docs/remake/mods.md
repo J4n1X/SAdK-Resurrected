@@ -914,8 +914,9 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
 - **XML definitions.** A mod's `defs/*.xml` are read in its definitions stage: an element per entry kind
   (`<Building key="…" parent="…">`), children and attributes named after the definition's members (the registry's own
   walker maps them, so a mod's subclass fields work too), references by key, `parent` copies the parent entry's
-  definition and the element states only what differs. Only new entries; changing an existing one stays the data
-  stage's `Updates` (§6.5). Errors name file, line and member.
+  definition and the element states only what differs. `<Update kind="…" key="…">` changes an existing entry in the
+  same form (members set, list items added with `<Add>` or removed with `<Remove>`), in load order, as the data stage's
+  `Updates` (§6.5): the Salzfeld adds itself to the Bavarians' buildings this way. Errors name file, line and member.
 - **The Salzfeld mod** (`src/Mods/Salzfeld`, also the SDK's example): `defs/salzfeld.xml` (the building, parent
   `oxenBreeding`, its own key `salzfeld.saltworks`, no produced settler, product `saltBav`, behaviour
   `salzfeld.saltWork`, placement `placement.nearWater`), a `patches/` entry adding it to the Bavarians' buildings and its
@@ -926,6 +927,11 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
 
 The Salzfeld's panel is the original's production info box, chosen from its data (a product with a stock); a
 building's own panel is presentation, keyed by its key, never part of the definition.
+
+A follow-up on the step library: the built-in behaviour `work.steps` runs a linear step list given in the definition
+(`<Work use="work.steps">` with `<Find>`, `<WalkTo>`, `<Act>`, `<Produce>` and an `<Otherwise>`), so a job without
+decisions needs no code; a behaviour that decides (between targets, on counted state) stays C#, as RimWorld's job
+drivers do.
 
 Open after the slice: components with their own state (item 1, the evaporation slots), panel sections (item 4), the
 other closed dispatch (settler classes, sacrifice effects, victory conditions, info boxes, actions, HUD widgets), and
