@@ -232,8 +232,9 @@ reproduced). Refined or faithful is not an option: it is the mod set (§9.4).
 ### 6.3 Data stage [draft]
 
 Three sub-stages; each runs over all mods in load order before the next starts [binding]. In each sub-stage a
-mod's C# part runs first (`IDataStage.Definitions` / `Updates` / `FinalFixes`), then its Lua file (`data.lua` /
-`data-updates.lua` / `data-final-fixes.lua`).
+mod's C# part runs first (`IDataStage.Definitions` / `Updates` / `FinalFixes`), then its XML definitions
+(`defs/*.xml`, §14.1: entries in the definitions sub-stage, `<Update>` elements in the updates sub-stage), then its Lua
+file (`data.lua` / `data-updates.lua` / `data-final-fixes.lua`).
 
 **The content model is the engine's** [implemented, the maintainer's decision 2026-10-15]: the record types
 (`TribeDef`, `GoodDef`, `BuildingDef`, `PatternDef`, …, namespace `Sadk.Engine.Content`), the registry kinds and the
@@ -304,7 +305,7 @@ After the final fixes:
    set means a mod's data stage is not deterministic, and the message names the first differing entry. A record's
    canonical form names its type without namespace [implemented], so moving a definition type between namespaces or
    assemblies does not change the checksum; code is covered by the match set's content hashes (§9.1). The reference
-   installation gives `22926df0…` (892 records).
+   installation gives `874b7d6c…` (896 entries).
 
 After the freeze the registry is read-only for the rest of the process.
 
@@ -913,20 +914,40 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   parameters are read by the behaviour, not by the engine). A behaviour that is speed-scaled has the production-speed
   factor of S 00565ed0 applied to its `Act` ticks. The base behaviours keep the original's data and formulas
   (`ProductionTime` as the producing timer; the gatherers' fixed progress per stage, S 0077d1f0).
-- **Placement rules.** `BuildingDef.Placement.Rules` lists rules by name with parameters (data); a rule is an engine
-  contract registered by name, run by the site check after the original's tests and shown by build mode. First rule:
-  `placement.nearWater(distance)`, a shore cell (`GridBits.Shore`) within the distance over walkable ground (the
-  fisher's search, `GroundResources.FindFishingSpots`, without its fish test).
-- **XML definitions.** A mod's `defs/*.xml` are read in its definitions stage: an element per entry kind
-  (`<Building key="…" parent="…">`), children and attributes named after the definition's members (the registry's own
-  walker maps them, so a mod's subclass fields work too), references by key, `parent` copies the parent entry's
-  definition and the element states only what differs. `<Update kind="…" key="…">` changes an existing entry in the
-  same form (members set, list items added with `<Add>` or removed with `<Remove>`), in load order, as the data stage's
-  `Updates` (§6.5): the Salzfeld adds itself to the Bavarians' buildings this way. Errors name file, line and member.
+- **Placement rules** [implemented, sadk-remake r3-defs]. `BuildingDef.Placement.Rules` lists rules by name with
+  parameters (data: `SlotUse`, a name and its parameters as an ordered string map, the type behaviours take too; the
+  section is `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's).
+  A rule is the engine contract `IPlacementRule` (`Sadk.Engine.Simulation`, beside the world and map views it reads),
+  registered with `[PlacementRule("name")]` in a simulation assembly into the catalog's `NamedRegistry`
+  (`SimulationCatalog.PlacementRules`; a later mod's registration of a name replaces the earlier one, and the registry
+  goes with the catalog when the set unloads). `GameQuery.CanPlaceBuildingTypeAt` runs a type's rules after the
+  original's tests, so the place command and an upgrade see them; build mode asks them through the placement view
+  (`IBuildingPlacementQueries.PlacementRulesAllow`) for the cursor's mark and the build menu opened at a cell, while
+  the overlay stays the cell's construction flags (the original's icon is the cell's alone, S 006b36d0). A rule name
+  no loaded mod registers, or parameters the rule refuses (`CheckParameters`), is a load error naming the building.
+  First rule, core.game's `placement.nearWater(distance)`: a shore cell (`GridBits.Shore`) within the distance over
+  walkable ground from the entrance cell (anchor + direction 1), the fisher's flood fill without its fish test
+  (`GroundResources.SearchShore` / `NearestShoreCell`, shared with `FindFishingSpots`).
+- **XML definitions** [implemented, sadk-remake r3-defs]. A mod's `defs/*.xml` (root `<Defs>`, files in ordinal name
+  order) are read in each sub-stage after the mod's C# part and before its Lua file: in the definitions stage an
+  element per entry kind (`<Building key="…" parent="…" type="…">`, element names matched to the kind names without
+  case) defines an entry; in the updates stage `<Update kind="…" key="…">` changes an existing one in the same form.
+  Attributes and children are the definition's members by name (without case), mapped with the registry's own walker,
+  so a mod's subclass fields work too (`type` names a definition class of the engine or of the simulation code of the
+  mods loaded so far). Scalars and references are attributes or text (a typed reference is a key, an untyped one
+  `kind:key`, empty text is none); a section is a child changing only what it states; an immutable record
+  (`GoodAmount`) is built from its constructor's parameters, the unstated ones kept from the value it replaces; a
+  list's children (`<Item>` by convention) replace its items, `<Add>` children append by the list's own rule and
+  `<Remove>` children remove the items matching what they state; a map is the same with a `key` attribute per child;
+  an element mapped to a `SlotUse` takes `use` and its parameters as attributes. `parent` makes the entry a deep copy
+  of an entry defined before it (any mod's), then applies the element. Every reference must name an entry by the end of
+  the mod's XML of the sub-stage. Errors (an unknown kind, member, entry or key, a bad value, a parent not defined yet)
+  are load errors naming mod, file, line, entry and member path. The Salzfeld adds itself to the Bavarians' buildings
+  with an `<Update>`.
 - **The Salzfeld mod** (`src/Mods/Salzfeld`, also the SDK's example): `defs/salzfeld.xml` (the building, parent
   `oxenBreeding`, its own key `salzfeld.saltworks`, no produced settler, product `saltBav`, behaviour
-  `salzfeld.saltWork`, placement `placement.nearWater`), a `patches/` entry adding it to the Bavarians' buildings and its
-  descriptor `Bavarian_<gfx>` (a copy of `Bavarian_Donkeybreeding`) to `buildings.xml`, and `SaltWork`: find a shore
+  `salzfeld.saltWork`, placement `placement.nearWater`, an `<Update>` adding it to the Bavarians' buildings), a
+  `patches/` entry adding its descriptor `Bavarian_<gfx>` (a copy of `Bavarian_Donkeybreeding`) to `buildings.xml`, and `SaltWork`: find a shore
   cell near the building, walk there, `Act` the handling kind for a moment, walk back, `Act` work for a long time,
   produce one salt. Acceptance: placed only near water; one cycle seen in a headless match; a save in the middle of a
   cycle loads and finishes it; the base game's checksums unchanged with the mod off.
