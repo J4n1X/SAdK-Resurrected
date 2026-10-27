@@ -826,10 +826,14 @@ State of `sadk-remake` a923aeb:
 - What does exist: mods add `SimSystem`s by position (`[SimSystem(After, Before)]`) with their own checksum and save
   data, entries through the data stage, and Harmony on anything.
 
-**Acceptance scenario: the Salzfeld.** A Bavarian large building that may only be placed within N cells of a shore.
-Its worker either walks to the shore, scoops water and fills one of three evaporation slots, or harvests salt from a
-finished slot; the panel shows the three slots. It must be possible as **one small mod without Harmony**: a data-stage
-entry, one behaviour class, one component state, assets. It goes into the SDK as the example mod and into the tests.
+**Acceptance scenario: the Salzfeld** (the maintainer's proof of concept, 2026-10-27). A Bavarian building with the
+Oxen Breeding's model (`Bavarian_Donkeybreeding`, `PB_B_Cowbreeder01`), placed only near a shore. Its worker, the
+plain building helper (`good_buildingHelperBav`), walks to the water, waits there a moment (the pick-up clip stands in
+for fetching water, which has no clip of its own), walks back, works for a while and then produces the Bavarians' salt
+(`saltBav`, which the pretzel needs). It is very slow on purpose (balance): a cycle takes many times a salt mine's
+333 + 55 ticks. It must be possible as **one small mod without Harmony**: an XML definition, one behaviour class, a
+presentation patch, no client code. It goes into the SDK as the example mod and into the tests. The evaporation slots
+and their panel rows of the first draft wait for components and panel sections (items 1 and 4).
 
 Work, in this order:
 1. **Components on types.** `ComponentDef` / `ComponentState` with `Tick`, `Save`, `Load`, `WriteChecksum`, attached to
@@ -878,3 +882,48 @@ Work, in this order:
 Constraint: in compatibility mode the registered original behaviours run in exactly the original's order with the
 original's random draws, so the checksum against the original holds; a mod that adds a behaviour makes the match
 remake-only (§9.4).
+
+### 14.1 The first slice [decided 2026-10-27; planned]
+
+Items 2 and 3 with the Salzfeld as the first user (migration steps 1 and 2 of the data-driven concept: the frameworks
+in the engine, core.game's behaviours wrapped coarse and faithful; splitting them finer comes later).
+
+- **Named work behaviours.** A work behaviour is an engine contract (`IWorkBehaviour`, `[ModApi]`) registered by name
+  in a `NamedRegistry` owned by the simulation catalog, so a mod adds or replaces one (replacing a base behaviour
+  makes the match remake-only, §9.4). `BuildingDef.Production.Behaviour` names one; when a definition names none, the
+  original's working mode gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`,
+  `work.settlerBreeding`, `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`,
+  `work.animalBreeding`, `work.scholar`). The contract has the decision points the original's worker passes through
+  (choose the next work, update the work state, release the product, the progress shown) and the properties other
+  code asks of a mode today (the production-speed scaling of `GetProductionDuration` S 00565ed0, the mine test, the
+  animal cap, the transport handover's gatherer test). core.game's 12 behaviours are today's `switch` branches moved
+  as they are (`ChooseNextWork`, `UpdateWorkState`, `UpdateRelease`, `StartGathering`, `UpdateGathering`,
+  `FinishWorking`, `Worker.WorkProgress`, `Production.Duration`/`IsMine`/`CanStart` and the other mode tests), with
+  their addresses; `BuildingWorkingMode` stays the original's data value. Proof: every match test's checksums and
+  saves are byte-identical before and after.
+- **The step library** for new behaviours: a job is a list of steps over the worker: `Find` (a target by a query),
+  `WalkTo`, `Act(kind, ticks)` (an action timer; the presentation picks the clip of the action kind, as for the
+  original's settlers: handling-second-half shows `Pickup`, work shows `WorkLoop0`), `Carry(good)`, `Deliver`,
+  `Produce`. A job saves as its behaviour's name, its step index and its targets, and is rebuilt on load. Steps use
+  integers and the simulation's random generator only. The simulation never names a clip.
+- **Placement rules.** `BuildingDef.Placement.Rules` lists rules by name with parameters (data); a rule is an engine
+  contract registered by name, run by the site check after the original's tests and shown by build mode. First rule:
+  `placement.nearWater(distance)`, a shore cell (`GridBits.Shore`) within the distance over walkable ground (the
+  fisher's search, `GroundResources.FindFishingSpots`, without its fish test).
+- **XML definitions.** A mod's `defs/*.xml` are read in its definitions stage: an element per entry kind
+  (`<Building key="…" parent="…">`), children and attributes named after the definition's members (the registry's own
+  walker maps them, so a mod's subclass fields work too), references by key, `parent` copies the parent entry's
+  definition and the element states only what differs. Only new entries; changing an existing one stays the data
+  stage's `Updates` (§6.5). Errors name file, line and member.
+- **The Salzfeld mod** (`src/Mods/Salzfeld`, also the SDK's example): `defs/salzfeld.xml` (the building, parent
+  `oxenBreeding`, its own key `salzfeld.saltworks`, no produced settler, product `saltBav`, behaviour
+  `salzfeld.saltWork`, placement `placement.nearWater`), a `patches/` entry adding it to the Bavarians' buildings and its
+  descriptor `Bavarian_<gfx>` (a copy of `Bavarian_Donkeybreeding`) to `buildings.xml`, and `SaltWork`: find a shore
+  cell near the building, walk there, `Act` the handling kind for a moment, walk back, `Act` work for a long time,
+  produce one salt. Acceptance: placed only near water; one cycle seen in a headless match; a save in the middle of a
+  cycle loads and finishes it; the base game's checksums unchanged with the mod off.
+
+Open after the slice: components with their own state (item 1, the evaporation slots), panel sections (item 4), the
+other closed dispatch (settler classes, sacrifice effects, victory conditions, info boxes, actions, HUD widgets), and
+splitting the base behaviours into steps.
+
