@@ -1066,8 +1066,22 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   speed-scaled (`ScalesWithProductionSpeed`, one answer per behaviour as `GetProductionDuration` S 00565ed0 asks it): the
   production-speed factor shortens every `Act`, not the walks and rests. A behaviour that decides (between targets, on
   counted state) stays C#, as RimWorld's job drivers do.
+- **Reacting to the game** [implemented, sadk-remake 1cb6bec]: a mod's system subscribes to the world's events in its
+  `Start` (`SimSystem.On<T>`, sim-boundary.md §5.2: delivered right after the command or system that emitted them, inside
+  the tick) and acts through core.game's `[ModApi]` operations. The first one: `VillageSystem.ChangeType(building,
+  type)`, `Building::SetType` S 0055c110 with the hit-point rescale as an upgrade finishes (a type without hit points,
+  health 0 as the original's non-military types, takes the new type's health: the original's rescale would divide by
+  0 and remove it). The SDK guide's section "Reacting to the game".
+- **Per-building recipes and `Take`** [implemented, sadk-remake 1cb6bec]: `ProductionSection.Recipe` (`<Recipe><Item
+  Good="water" Amount="1"/></Recipe>`) in place of the product's costs, resolved by `ProductionSection.Inputs()` for
+  every reader (`RecipeOf`, the goods arrangement, production on/off, the computer players' needs, the info box's input
+  slots, the building tip); empty for every original type and then left out of the registry checksum. The step
+  `<Take good="key"/>` (`Job.Take`): a unit from the input stock, requested again at once (as `StartProductionCycle`
+  S 005657c0 does with the recipe); none there: the step cannot be done.
 - **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld; its worker data only since r4-steps; a simulation
-  assembly since 2026-10-28] (`src/Mods/Salzfeld`, `Salzfeld.csproj` against core.game's simulation, shipped in the
+  assembly since 2026-10-28; two kinds since 1cb6bec: the build menu offers `salzfeld.saltworksLandlocked` (no
+  placement rule, recipe water, `Take`), and its code (`Salzfeld.cs`, a handler of `BuildingAdded`) turns one placed
+  where the coastal type's rules allow into `salzfeld.saltworks` in the tick it was placed] (`src/Mods/Salzfeld`, `Salzfeld.csproj` against core.game's simulation, shipped in the
   game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml`
   (the building, parent `oxenBreeding`, its own key `salzfeld.saltworks` and `Name` (its text key), `GfxName`
   `Saltworks`, working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is
@@ -1228,6 +1242,16 @@ definition, an implementation registered by name, the base game's code moved as 
   (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`).
 - **Multiplayer identity of mods**: the match set's content hash and startup values in `MatchIdentity` (with the
   lockstep work, milestone 4).
+- **The accessibility pass** (the maintainer, 2026-10-28: "a wide, sweeping change to the codebase once more to make
+  things far more accessible"): making the Salzfeld's second kind took about 80 lines in the engine and core.game,
+  because a mod could neither react to the game (events went to the presentation only; now `World.On`) nor call what
+  core.game's systems can do (their operations are private; `ChangeType` is the first opened). The pass is driven by
+  the maintainer's examples of what a mod must be able to do (to come); each example becomes a test mod, and what it
+  needs is opened as `[ModApi]` operations on core.game's systems (placing, removing, changing and capturing
+  buildings, handing out and taking goods, spawning settlers and soldiers, starting attacks and expeditions, map
+  edits) and as events where a moment has none yet, each a port of the original's code path with its address. The
+  first sweep before the examples: list every system's operations a mod would call and whether the original has them as
+  one function.
 - **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
   `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The

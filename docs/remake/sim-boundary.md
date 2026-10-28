@@ -278,8 +278,16 @@ types to handlers, so a mod brings render and audio behaviour for its own events
 - Events are appended in emission order: the commands of the boundary first, then the subsystems in the fixed tick
   order (LC §4.2), then `onLogicTick`. Each carries `(tick, seq)`. A removal and a re-creation inside one tick (an
   upgrade's completion: "removed" with the building flagged destroyed, then "added", RE §3.9) keep that order.
-- Consumers run after the tick, never inside it. Subscribers run in registration order, but none may depend on
-  another's order (the original orders receivers by heap address, LC §8).
+- The presentation consumes after the tick, never inside it. Subscribers run in registration order, but none may depend
+  on another's order (the original orders receivers by heap address, LC §8).
+- Simulation code may handle events inside the tick [implemented, sadk-remake 1cb6bec]: `World.On<T>(owner, handler)`
+  (`SimSystem.On<T>` in a system's `Start`, which runs in the system order for a new and a loaded world alike). A
+  command's events reach the handlers right after the command (`World.Execute`, in a tick or in the gap before one), a
+  system's right after its `Update` and before the next system (`World.UpdateSystems`); in emission order, one event's
+  handlers in their systems' order; the events a handler emits in the same pass. The build's events reach no handler.
+  A handler runs between systems, never inside one, so it may change the world; the order is the same on every machine.
+  Nothing is held across a tick, so saves carry nothing new, and a world without handlers ticks byte-identically (the
+  base game registers none). This is how mods react to the game (mods.md §14.1).
 - Emission never depends on whether anyone listens, and nothing about events enters the checksum or the save.
 - After a load the simulation publishes `LoadRebuildBegin`, an `EntityAdded(reason = Loaded)` for every entity in
   the original's post-load order (SF §3.6: buildings, remains and orders, flags and streets, the navy, ..., chests,
