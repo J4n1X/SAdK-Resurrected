@@ -1252,6 +1252,29 @@ definition, an implementation registered by name, the base game's code moved as 
   edits) and as events where a moment has none yet, each a port of the original's code path with its address. The
   first sweep before the examples: list every system's operations a mod would call and whether the original has them as
   one function.
+  The examples arrived the same day (eleven: an archery tower upgrade, a warehouse that refuses a good, several ships per
+  sea route with a dock action, a radial menu with any number of buttons, a deposit-restoring sacrifice, a Scots street
+  upgrade, garrison slots by soldier level, the anti-stall router and overflow slot, longer water streets, a
+  first-person mode, a HUD toggle). Assessed against sadk-remake 1cb6bec: possible on the supported surface today only
+  the water-street depth (`GameConfigDef.MaxWaterStreetWaterDepth`, data); on public but unmarked members the deposit
+  sacrifice, most of the archery tower, the router and swaps, the first-person mode; blocked the rest. The work list,
+  each item serving the ideas in brackets:
+  - mechanisms: refined-setting switches for named implementations, systems and components, numeric startup settings
+    into rules (2, 3, 6, 8, 9); a typed component view for the client (1, 7);
+  - named seams and rules (the original's code moved unchanged into the base implementation, proven byte-identical):
+    `transport.returnDepot` with an `Accepts` test (2, 8); `FlagAdmission.CanDrop` and an overflow place in `FlagStacks`
+    (8); the carrier's wait-and-swap decision as a `StreetCarrier` virtual and `NextHopContext.Purpose` (8);
+    `net.streetUpgrade`, `movement.stepSpeed` (6); a garrison policy `IGarrisonPolicy` named by `MilitarySection` (7);
+    `navy.routeCapacity`, the ship state machine as a named `navy.ferry` piece, `sacrifice.sinksShip` (3); sacrifice
+    effects by name (5); optionally `streets.waterStreetCell` (9);
+  - operations opened as `[ModApi]`: a projectile shot from a building and `TakeDamage` (1); `SendOut(depot, good)`, the
+    good flags, `TryStreetSwap`, `ComputeNextHop` (2, 8); taking a ship off its route, sailing it to a harbour (3);
+    sacrifice offers and map resources with a write that emits `MapChanged` (5); the match's client surface
+    (`MatchContext`, `MapGeometry`, the renderer's camera and services, `InputActions`) (10);
+  - client seams: a military-flag provider (1); the military and warehouse info-box parts and a good button's indicator
+    opened (2, 7); the radial action menu with any number of buttons, pixel-identical up to four (4, base game); one
+    owner of the mouse cursor, `MatchView.HideHud`, `MatchView.TakeCamera` (10, 11); a radial-menu widget for mods (7).
+  The HUD toggle (11) is a base-game feature (F10, the original's hidden "Hide UI" developer switch S 005ed700).
 - **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
   `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The
