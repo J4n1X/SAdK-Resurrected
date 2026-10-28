@@ -1571,7 +1571,12 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   S 00697db0); the ship box and the route box, the expedition actions 1–3, the markers (a ship's size-11 marker and
   the route ends) and the hover tip; ingame-ui §3.5. The pick list holds only kinds 6 and 8, so removals of other map
   objects do not reorder it as in the original (S 0068cff0).
-- **Open**: a building's own mesh test (S 006aae60) and hidden flag in the pick (S 00787cc0); the good buttons' click
+- **Implemented** (sadk-remake, the demo fix round): a building's own ray test after its box (vtable slot 9,
+  `S2CG::Building::Render` S 006aae60 → `PickMesh::IntersectRay` S 0076ff90): LOD part 0's pick mesh, a site with a frame
+  stage above 0 the frame's pick mesh up to the stage's triangle count, a site at `constrProgress` <= 0 nothing, else part
+  0 cut by `GetConstructionClipPlaneStatic` S 006aad50 (a world-space plane tested against model-space vertices, an
+  original quirk kept); the search goes on when it fails (`Buildings/BuildingPick.cs`).
+- **Open**: the hidden flag in the pick (S 00787cc0); the good buttons' click
   in every box (close the action panel and focus the camera on the unit: `GoodButton::OnClicked` S 0062fe50 →
   `nMenu_FocusCameraOnUnique` S 00648de0), so the ship boxes' lists are partial; the tab pages' fade (`fadetime`,
   `TabControl::LoadFromXml` S 004bad00) and the shared frame's move and zoom; selection kind 3's third button (always 14);

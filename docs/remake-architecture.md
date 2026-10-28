@@ -138,8 +138,10 @@ registry.Building("brauhaus").Get<ProductionDef>().Output["yeast"] = 1;
 - Integers: 32-bit `uint` where the original uses 32-bit arithmetic (random generator).
 - No iteration over `Dictionary<,>` or hash sets; ordered containers where the original iterates a `std::map`.
 - One simulation random generator, drawn only by simulation code, in the original's order.
-- A fixed system order per tick, registered by position; mods insert their systems relative to named systems, and
-  the engine refuses ambiguous orders.
+- A fixed system order per tick, registered by position: the engine's and the base game's systems in the one order
+  their constraints give; a mod's system is slotted in beside the one system it names (right after its `After`, right
+  before its `Before`), mods naming the same system in load order, the same on every peer (sadk-remake
+  `SimulationCatalog.Order`; the SDK guide lists the base systems).
 
 ## 8. The `core.game` mod and the original's data
 

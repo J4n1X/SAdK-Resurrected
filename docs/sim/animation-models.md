@@ -940,7 +940,9 @@ byte +0x58 set, so `Item::Update` S 006d0720 returns at once for it and never re
   while the figure is hidden, inside its building or riding a ship, `ArcherSpeed` whenever its condition fails.
   **[known]**
 - **Carrier** (S 006c9250, `UpdateAttachedItem` S 006c8ee0) **[known]**: on a water street with a boat, take the
-  street's boat item (placed by `boatOffset`, sunk by `draft * 0.7`), hide the street's parked boat, carry the
+  street's boat item (placed by `boatOffset`, sunk by `draft * 0.7`; the item is never hidden again, so the boat stays
+  where the carrier stepped out), show the street's paddle mesh while he rows (`SetBoatVisible` S 006d1ea0;
+  `boatBoneIndex` +0x88 is the paddle's bone), carry the
   cargo in the boat (`goodOffset`, turned by `goodRotation`), run the `BoatFX` emitter while moving, bob with
   `sin(phase) * 0.15 + 0.3` times the boat draft (`phase += dt * 0.7 * const` S 00882840), and return animation
   type `4 + moving` looped (so `WorkLoop0Boat` / `WorkLoop1Boat` through keyA = the boat good **[inferred]**).

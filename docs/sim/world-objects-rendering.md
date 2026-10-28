@@ -629,7 +629,9 @@ demolition sink.
 a street of type 1 with `texture1` / `normal1`; the switch 0 → 1 moves the street to the kind-1 list and
 promotes both of its flag nodes. A crossing is kind 1 (`crossingTexture1` / `crossingNormal1`) when any street
 attached to it is of type 1 at the time it is registered (`RegisterCrossing` S 006c3160) or once one of its
-streets is promoted, else kind 0. The diffuse texture is bound to stage 0 and the normal map to stage 1. The
+streets is promoted, else kind 0. `RegisterCrossing` runs before any street is attached to the node, so a new crossing
+is always kind 0 and only a promotion makes it kind 1; after a load every crossing is plain until a street is promoted
+[known] (sadk-remake demo fix round). The diffuse texture is bound to stage 0 and the normal map to stage 1. The
 upgrade has no animation: `StreetRenderer::PromoteStreetToKind1` S 006c39f0 moves the street and its two
 crossings to the kind-1 lists at once [known].
 
