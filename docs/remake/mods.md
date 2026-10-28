@@ -1227,4 +1227,9 @@ definition, an implementation registered by name, the base game's code moved as 
   (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`).
 - **Multiplayer identity of mods**: the match set's content hash and startup values in `MatchIdentity` (with the
   lockstep work, milestone 4).
+- **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
+  goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
+  `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The
+  carriers bring the good because the input stock asks for it (the recipe and the stock limit), never the step. First
+  use: a Salt Works built where no shore is in reach takes water as an input good and works from its stock.
 
