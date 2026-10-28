@@ -1224,7 +1224,11 @@ definition, an implementation registered by name, the base game's code moved as 
 
 - **Settler classes**: the settler factory is a closed `switch` (`SettlerSystem`); classes by name, so a mod adds a
   profession with its own state machine (the carriers of §14.2 are the first).
-- **Sacrifice effects**: closed switches in `SacrificeModifiers` (`ApplyOwnEffect` S 006630b0); effects by name.
+- **Sacrifice effects** [implemented, sadk-remake 5778b7d]: effects by name (`ISacrificeEffect`, `[SacrificeEffect]`,
+  `NamedSacrificeEffect` with `Fire`, `Modify`, `Started`, `Ended`); core.game registers the original's effect types under
+  names (`sacrifice.soldierDamage`, … `SacrificeEffectNames`, S 00660960, S 00660500, S 00663560, S 006630b0,
+  S 006631e0), a definition names more in `NamedEffects`; a modifier table holds named values a mod's effect sets and its
+  rules read; a tribe's `OfferedSacrifices` offer a mod's sacrifice at its temples.
 - **Victory conditions**: `switch (mode) case 1/2/3` in `VictorySystem` (`MapTypes`/`WinConditions` named already);
   conditions by name.
 - **Soldier kinds as data**: behaviour keyed by kind index 0 (sword) / 1 (bow) in combat, garrisons and the AI's
@@ -1233,13 +1237,18 @@ definition, an implementation registered by name, the base game's code moved as 
 - **Replaceable systems and command handlers**: `[SimSystem(Replaces = "…")]` takes a system's slot; a command-handler
   registry keyed by command id with the rules' wrap/replace layering (the command record stays data).
 - **Combat and AI formulas as rules**: strike value, hit chance, reach, the attack decision and the strength estimate
-  as named game rules (`MilitarySystem.Combat`, `AiPlayer` scoring), like `production.productAmount`.
+  as named game rules (`MilitarySystem.Combat`, `AiPlayer` scoring), like `production.productAmount`. The sword group's
+  superiority is one [implemented, sadk-remake 5778b7d]: `military.groupSuperiority` (S 005735b0), its query carrying
+  the striker's owner and the sacrifices' view.
 - **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
   concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
 - **Declarative panel bindings**: `<ProgressBar value="{Component.Value}"/>` in layouts (architecture §6), so a panel
   section can be XML only, as `work.steps` made simple jobs.
 - **The maintainer's transport mod**: congestion-aware routing and the overflow slot over the §14.2 seams
-  (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`).
+  (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`). The seams it needs exist [implemented, sadk-remake
+  5778b7d]: `NextHopContext.Purpose` (a route or a probe), `IFlagAdmission.CanDrop`, the rule `transport.flagOverflow`
+  (an overflow place beyond the six stacks, 0 in the original), the carrier's retry and swap at a refused flag as
+  `StreetCarrier` virtuals (step 0x14 of S 0077a2f0); the test mod `AntiStallMod` uses them.
 - **Multiplayer identity of mods**: the match set's content hash and startup values in `MatchIdentity` (with the
   lockstep work, milestone 4).
 - **The accessibility pass** (the maintainer, 2026-10-28: "a wide, sweeping change to the codebase once more to make
@@ -1280,6 +1289,29 @@ definition, an implementation registered by name, the base game's code moved as 
     opened (2, 7); the radial action menu with any number of buttons, pixel-identical up to four (4, base game); one
     owner of the mouse cursor, `MatchView.HideHud`, `MatchView.TakeCamera` (10, 11); a radial-menu widget for mods (7).
   The HUD toggle (11) is a base-game feature (F10, the original's hidden "Hide UI" developer switch S 005ed700).
+  Steps 1 and 2 (the audit tool `Sadk.Headless audit` and the friendly foundation) are in sadk-remake 31ae102.
+  **Round 1** [implemented, sadk-remake 5778b7d] covers transport and streets, military, navy, sacrifices and the map, each
+  idea a test mod in `tests/TestMods` that builds without Harmony on the `[ModApi]` surface, faithful mode byte-identical
+  (the six capture sessions' checksums, state hashes and save sections):
+  - transport and streets: `transport.returnDepot` (`ReturnDepotChooser`, virtual `Accepts`; S 00557ef0), `SendOut`
+    (`depot.SendOut(good)`), the good flags (`depot.PullsIn`), the overflow and carrier seams above, the rules
+    `net.streetUpgrade` (S 00668e10), `movement.stepSpeed` (S 00773a40, S 00773ec0) and `net.waterStreet` (S 0052e550,
+    the length asked by the street planner, S 00663bf0); refined's `WaterStreetsByLength` (any depth, a length setting).
+    Test mods `WarehouseBanMod` (2), `ScotsRoadsMod` (6), `AntiStallMod` (8); 9 in refined;
+  - military: the garrison policy `IGarrisonPolicy` named by `MilitarySection.Garrison` (capacity, wanted size, orders,
+    surplus, fits and exchange, promotion, conquest, the computer players' threat), `military.groupSuperiority`,
+    `MilitarySystem.ShootAt` (`b.ShootAt`), a non-soldier settler killed through the dying path (`Settler.Kill`). Test
+    mods `ArcheryMod` (1), `GarrisonSlotsMod` (7), `HumanWaveMod` (13);
+  - navy, sacrifices and map: the rule `navy.routeCapacity` (S 005b6d30), the ship state machine as the named piece
+    `navy.ferry` (S 005bb500), `ship.TakeOffRoute`, `SailTo`, `MoveTo`, `ReturnToOwnHarbour`, the event `ShipCompleted`,
+    the sacrifice effects by name (above; the sink sacrifice's `Sinks` replaces the planned `sacrifice.sinksShip`),
+    `MapSystem.ChangeResource(s)` announcing `MapChanged(GroundResources)`. Test mods `FleetMod` (3), `AlchemyMod` (5).
+  A save's or log's identity lists every rule; a rule one side does not record compares as equal while it runs its base
+  implementation alone (`MatchIdentity.Compare`), so files from before a new rule load without a warning. Left in these
+  areas: the remaining fixed decisions (the supplier search S 00557da0, the stack and swap tests, the catapults, the fight
+  cell search, the coast and expedition queries), setters of packages, flags, fights and ships, and the systems' own
+  cross-system calls turned into events. Round 2: the village, the settlers and the simulation core, the AI, map
+  scripts, statistics and victory; round 3: the client (ideas 4, 10, 11 and the ideas' client parts).
 - **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
   `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The
