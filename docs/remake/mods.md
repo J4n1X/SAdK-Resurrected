@@ -1243,7 +1243,12 @@ definition, an implementation registered by name, the base game's code moved as 
 - **Multiplayer identity of mods**: the match set's content hash and startup values in `MatchIdentity` (with the
   lockstep work, milestone 4).
 - **The accessibility pass** (the maintainer, 2026-10-28: "a wide, sweeping change to the codebase once more to make
-  things far more accessible"): making the Salzfeld's second kind took about 80 lines in the engine and core.game,
+  things far more accessible"). Its goal is the reason the base game is a built-in mod: the engine's surface so open
+  that any mod can change any other thing. Its measure: **core.game uses only what any mod can use.** Wherever the base
+  game reaches private code, a closed switch, a sealed panel or a hard-coded limit, that is a hole in the surface: every
+  rule replaceable by name, every moment an event, every action an opened `[ModApi]` operation, every panel and menu
+  extensible, every limit data or a setting, the original's code staying the base implementation (faithful mode
+  byte-identical). The history: making the Salzfeld's second kind took about 80 lines in the engine and core.game,
   because a mod could neither react to the game (events went to the presentation only; now `World.On`) nor call what
   core.game's systems can do (their operations are private; `ChangeType` is the first opened). The pass is driven by
   the maintainer's examples of what a mod must be able to do (to come); each example becomes a test mod, and what it
