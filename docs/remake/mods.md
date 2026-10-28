@@ -958,7 +958,7 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   class under a name replaces the earlier one (replacing a base behaviour makes the match remake-only, §9.4). One object
   of each class serves every match of the mod set: a behaviour keeps no match state. `BuildingDef.Production.Behaviour`
   names one with the parameters it reads (a `SlotUse`, as a placement rule: `<Behaviour use="mymod.saltWork"
-  fetchTicks="30"/>`; left out of the registry checksum while empty); when a definition names none, the original's working mode
+  workTicks="3500"/>`; left out of the registry checksum while empty); when a definition names none, the original's working mode
   gives its base name (`work.foresting`, `work.mining`, `work.farming`, `work.fishing`, `work.settlerBreeding`,
   `work.catapult`, `work.producing`, `work.hunting`, `work.idling`, `work.sacrifice`, `work.animalBreeding`,
   `work.scholar`; `WorkBehaviourNames`). A type whose behaviour no mod registers is a load error of the mod set naming
@@ -989,7 +989,8 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   and then the free-path search, in state 0x1d; `WalkTo(JobTarget.Door)`: the gatherers' `ReturnHome` in state 0x21),
   `Act(kind, ticks)` (the worker's action timer in state 0x1d; the presentation picks the clip of the action kind:
   handling-second-half shows `Pickup`, work shows `WorkLoop0`; the simulation never names a clip), `Carry(good)` (a
-  transport package in the worker's hands, `CreateCarriedPackage` S 0064cce0), `Deliver` (the carried unit into the input
+  transport package in the worker's hands, `CreateCarriedPackage` S 0064cce0; a walk with it plays the good's carrying
+  clip, as a carrier's), `Deliver` (the carried unit into the input stock), `Consume` (the carried unit used up, into no
   stock), `Produce(product)` (units into the output stock as `OnProductionFinished` delivers: the production event, the
   product-amount rule when the good is a product slot, the goods statistic) and `Rest(ticks)` (state 0x23); the steps
   after `Otherwise()` run instead when a step cannot be done (a find without a result, a walk that cannot start). `Start`
@@ -999,7 +1000,12 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   and the walks once their targets are known, a cell of a walk counted as a tick) and `Progress` is the share of that sum
   done (0 in the otherwise steps), so a step-built behaviour needs no `ProductionTime`: the ticks are its parameters,
   given on the definition and read by the behaviour, not by the engine. A behaviour that is speed-scaled has the
-  production-speed factor of S 00565ed0 applied to its `Act` ticks (float32, truncated). Steps count in integers and draw
+  production-speed factor of S 00565ed0 applied to its `Act` ticks (float32, truncated). The productivity statistic gains 0.25
+  per production event and loses 0.05 every 600 ticks (`RegisterProductionEvent` S 00538460, `Statistics::Update`
+  S 00537ba0): it counts products, and every original building produces well within 3000 ticks, so it reads full while
+  it works. A step-built `Produce` registers one event per 600 ticks of its branch's `Act` ticks (at least one),
+  counting a long work as the short cycles it stands for; no original building runs a step list, so the faithful mode is
+  unchanged. Steps count in integers and draw
   only the simulation's random generator. The job saves (the village's remake section, `VillageRemakeStateSystem`, a
   second record `Remake Work Jobs` v0 after `Remake Buildings`, written only while a worker has a job: per worker in
   building and slot order its id, the behaviour's name, the branch, the step, the step's phase, the timer, the done and
@@ -1051,7 +1057,7 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   library's own, and a job that needs another query is a coded `StepBehaviour`, whose `Find` takes any `ITargetQuery`),
   `<WalkTo target="found|door"/>` (the last `Find`'s target, or home), `<Act kind="…" ticks="n"/>` (kinds `handlingFirstHalf`
   2, `handling` 3, `work` 4, `alternativeWork` 5 of `ActionKinds`), `<Carry good="key"/>`, `<Deliver/>`,
-  `<Produce good="key" amount="n"/>` (without `good` the building's product, its amount unless `amount` says otherwise;
+  `<Consume/>`, `<Produce good="key" amount="n"/>` (without `good` the building's product, its amount unless `amount` says otherwise;
   with it 1 unit unless `amount` says otherwise), `<Rest ticks="n|rest"/>` (`rest` the building's `RestTime`) and
   `<Otherwise/>` (once, with steps before and after it). Its `CheckParameters` is the same reading, collecting every
   problem: an unknown step, kind, query or good, a missing, malformed or unknown parameter, a step with children, a
@@ -1066,16 +1072,19 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   `Saltworks`, working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is
   the salt mine's fish), `StockLimit` -1, `RestTime` 400, `WorkingRadius` 8, placement `placement.nearWater` 6, an
   `<Update>` adding it to the Bavarians' buildings, and its worker as the step list: `Find shore="radius"`,
-  `WalkTo found`, `Act handling 30`, `WalkTo door`, `Act work 3500`, `Produce`, `Otherwise`, `Rest rest`),
+  `WalkTo found`, `Act handlingFirstHalf 4`, `Carry water`, `Act handling 4` (the original's pick-up, `NMovie::Pickup`
+  S 007781e0: the put-down clip, the good in hand, the pick-up clip), `WalkTo door` (with the bucket: `WalkWater`),
+  `Consume`, `Act work 3500`, `Produce`, `Otherwise`, `Rest rest`),
   `patches/salzfeld.xml` (its descriptor `Bavarian_Saltworks` in `buildings.xml`: `Bavarian_Donkeybreeding`'s mesh,
   frame and doors without the oxen of its production and their sounds; its build-menu icon in `iconconfig.xml`, the Oxen
   Breeding's) and its texts (`assets/game/language/{en,de}/salzfeld.txt`: "Salt Works", "Salzfeld"). The game's mods
   without code are folders listed in `src/Mods/DataMods.targets`, which the game's and the tests' builds import: it
   mirrors each into the game's `mods/<id>/` (the export copies that folder as for every mod). The same job as code,
-  `SaltWork : StepBehaviour` (`salzfeld.saltWork` with `fetchTicks` and `workTicks`), is the SDK guide's example of a
+  `SaltWork : StepBehaviour` (`salzfeld.saltWork` with `handlingTicks` and `workTicks`), is the SDK guide's example of a
   coded behaviour and the tests' source-mod variant. Acceptance, in `SalzfeldTests` over the shipped package through the
-  loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode): placed only near water; one cycle (the shore cell, kind 3
-  for 30 ticks there from tick 88, kind 4 for 3500 inside from tick 212, the salt at tick 3712), the same from the coded
+  loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode): placed only near water; one cycle (the shore cell, kinds 2
+  and 3 for 4 ticks each there, the second from tick 92, the water in hand to the door, kind 4 for 3500 inside from tick
+  190, the salt at tick 3690, the productivity full), the same from the coded
   behaviour compiled as a source mod; a save in the work phase loads and finishes the cycle tick by tick in step with the
   uninterrupted match; the computer player's site test refuses a site the rule refuses; the base game's registry
   checksum, record, saves and checksums unchanged with the mod off.
