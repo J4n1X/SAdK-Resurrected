@@ -1137,9 +1137,12 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   12.4 / 17.6 / 45.5 / 87.4 ms before, 10.7 / 14.7 / 34.9 / 53.4 ms after; Very High 12.7 / 17.9 / 29.9 / 51.1 →
   10.2 / 11.6 / 15.4 / 18.7 ms; the terrain's main-thread share at Very High 4.10 / 7.01 / 15.9 / 27.4 →
   2.76 / 3.38 / 4.07 / 4.41 ms. A building placement costs the terrain 2–5 ms of main thread per height change and
-  the water under 0.5 ms (3.7–15 ms before); the rest of the placement hitch (frames of 35–74 ms) is the simulation
-  tick on the main thread (driver advance and publish, 30–65 ms), which the simulation thread removes
-  ([sim-boundary.md](sim-boundary.md) §4.3).
+  the water under 0.5 ms (3.7–15 ms before). The rest of the placement hitch (frames of 35–74 ms) was the building
+  type's visuals being read and built the first time one was placed (about 40 ms a type); the match's load now prepares
+  every type its tribes can build (`BuildingLayer.Prepare`, sadk-remake 6a80842), as the original loads every
+  `<Building>` of `buildings.xml` under "Loading building configs" (`Scene_LoadBuildingsXml` S 006821b0 →
+  `RegisterBuildingType` S 006a2860 → `BuildingDesc::LoadFromXml` S 006d3880). The simulation's tick of a placement costs
+  2–4 ms ([sim-boundary.md](sim-boundary.md) §4.3).
 - **Garbage**: while orbiting at Low the rebuilds allocate about 257 MB/s (3 MB/s with a still camera), about 46
   collections a second with the longest pause per window around 5.5 ms (p50) and up to 25 ms; the remaining terrain
   spikes coincide with them. Exact-size arrays passed as spans halve the allocation but made the worst frame about

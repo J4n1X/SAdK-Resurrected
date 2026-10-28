@@ -208,9 +208,11 @@ What changes against §4.1 and §4.2:
   wall time each frame (offline only, `../sim/lua-runtime.md`) need a decision on which thread they run.
 
 CPU-heavy presentation work (terrain region rebuilds, decal clipping, particle simulation) runs on worker threads
-and is applied on the main thread. Measured on the main thread today (sadk-remake 4c535b5, a god-mode building
-placement): the terrain costs 2 to 5 ms per height change, the simulation tick (driver advance plus publish) 30 to
-65 ms; the latter is the hitch this thread removes ([renderer.md](renderer.md) §10.5).
+and is applied on the main thread. Measured at a god-mode building placement: the terrain costs 2 to 5 ms of main
+thread per height change; the simulation's tick 2 to 4 ms (Release, its systems, the command and the events timed one by
+one on MP_2P_steinfjord, sadk-remake 1cb6bec), against 1.4 to 1.8 ms for an ordinary tick. The frames of 35 to 74 ms
+seen at a placement were the building type's visuals being read and built on first use, which the load now prepares
+([renderer.md](renderer.md) §10.5). The thread still takes the tick's few milliseconds off the frame.
 
 **Refined mode** [TODO, later]: parallel work *inside* a tick (path searches, AI evaluation, territory and
 visibility maps computed against a read-only view, applied in a fixed order; deadline jobs started at tick N and
