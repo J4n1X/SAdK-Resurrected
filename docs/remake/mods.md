@@ -1066,8 +1066,9 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   speed-scaled (`ScalesWithProductionSpeed`, one answer per behaviour as `GetProductionDuration` S 00565ed0 asks it): the
   production-speed factor shortens every `Act`, not the walks and rests. A behaviour that decides (between targets, on
   counted state) stays C#, as RimWorld's job drivers do.
-- **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld; data only since r4-steps] (`src/Mods/Salzfeld`, a mod
-  without code, shipped in the game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml`
+- **The Salzfeld mod** [implemented, sadk-remake r3-salzfeld; its worker data only since r4-steps; a simulation
+  assembly since 2026-10-28] (`src/Mods/Salzfeld`, `Salzfeld.csproj` against core.game's simulation, shipped in the
+  game's `mods/` like `refined`; the SDK guide's example of a content mod): `defs/salzfeld.xml`
   (the building, parent `oxenBreeding`, its own key `salzfeld.saltworks` and `Name` (its text key), `GfxName`
   `Saltworks`, working mode `Producing`, no produced settler, product `saltBav`, `IgnoreGoodCosts` (the salt's recipe is
   the salt mine's fish), `StockLimit` -1, `RestTime` 400, `WorkingRadius` 8, placement `placement.nearWater` 6, an
@@ -1078,8 +1079,8 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   `patches/salzfeld.xml` (its descriptor `Bavarian_Saltworks` in `buildings.xml`: `Bavarian_Donkeybreeding`'s mesh,
   frame and doors without the oxen of its production and their sounds; its build-menu icon in `iconconfig.xml`, the Oxen
   Breeding's) and its texts (`assets/game/language/{en,de}/salzfeld.txt`: "Salt Works", "Salzfeld"). The game's mods
-  without code are folders listed in `src/Mods/DataMods.targets`, which the game's and the tests' builds import: it
-  mirrors each into the game's `mods/<id>/` (the export copies that folder as for every mod). The same job as code,
+  without code are folders listed in `src/Mods/DataMods.targets` (none at present), which the game's and the tests'
+  builds import: it mirrors each into the game's `mods/<id>/` (the export copies that folder as for every mod). The same job as code,
   `SaltWork : StepBehaviour` (`salzfeld.saltWork` with `handlingTicks` and `workTicks`), is the SDK guide's example of a
   coded behaviour and the tests' source-mod variant. Acceptance, in `SalzfeldTests` over the shipped package through the
   loader (MP_2P_ladybird_isle, player 0 Bavarian with god mode): placed only near water; one cycle (the shore cell, kinds 2
