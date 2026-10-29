@@ -65,8 +65,10 @@ the mods) demonstrates that understanding; it is not the point.
 - **Parallel agents are welcome** for big work: commit a small shared foundation first, give each agent its own
   files (or its own `git worktree add` + branch), and merge. In Ghidra keep **one writer per struct**: fan out
   read-only analysis, apply struct edits serially.
-- **Git.** Branch `master` (not `main`). When work is done and checked, fast-forward it into `master`, push, and
-  delete the branch and its worktree; leftover branches get in the way. `backup/*` branches are never merged.
+- **Git.** Branch `master` (not `main`). When work is done and checked, squash it into `master` as one commit
+  (`git merge --squash`, a message that sums up the branch), push, and delete the branch and its worktree; leftover
+  branches and long strings of small commits both get in the way. Small notes ride with the next real commit, never
+  on their own. Never rewrite pushed history. `backup/*` branches are never merged.
   The submodules `lobby/` and `sadkmod/` are separate public repositories: change them inside the submodule,
   commit and push there, then update the pointer here.
 - **Public repository, anonymized history.** Never commit the maintainer's real name or e-mail, the server's

@@ -14,11 +14,17 @@
 // Offline only, through the gate the game puts on its typed cheats (NComm_Manager_IsRole0, nMenu::Game::OnKeyDown
 // S 005ec340): every tool of the window changes the simulation outside the command stream.
 //
-// Two faults of the window are taken out, as the debugger did:
+// Three faults of the window are taken out:
 // - Enter inside it hides the window and the whole game screen, world included (nMenu::Debug::Update S 00609130 asks
 //   nUi::GameAction::IsEnterTriggered S 004912c0). While that update runs, Enter reads as not pressed.
 // - OnShow sets the camera's distance scale (nGame::System +0x2d0 +0x2c) from 70 to 180, which at a far zoom puts
 //   the whole view into the distance haze. The scale the camera had is kept; OnHide writes the game's 70 as before.
+// - Tools -> Infomap (nMenu::Debug::Tool_GenerateFromImageMaps S 006048f0) reads the textures `infoMap` and `landMap`
+//   as 32-bit pixels, width * height of them. The file-name index (ai::file::FileScanHolder::ResolvePath S 006e3fd0)
+//   turns `gfx\infoMap.dds` into the shipped map\textures\infomap.dds, the 512 x 64 DXT3 info-map overlay, so the
+//   first pass reads four times past the locked DXT3 data and faults when that leaves mapped memory (crash dump of
+//   2026-10-29, S 006035a1, row 42); no file is named landMap, so the second pass gets no texture. The tool does
+//   nothing.
 #include <sadkmod/game/sadk_noav/fn/_global.hpp>
 #include <sadkmod/game/sadk_noav/fn/nMenu.hpp>
 #include <sadkmod/game/sadk_noav/fn/nUi.hpp>
@@ -29,6 +35,7 @@ using GameUpdate = sadk::Hook<game::fn::nMenu::Game::Update>;
 using EditorUpdate = sadk::Hook<game::fn::nMenu::Debug::Update>;
 using EditorShow = sadk::Hook<game::fn::nMenu::Debug::OnShow>;
 using EnterTriggered = sadk::Hook<game::fn::nUi::GameAction::IsEnterTriggered>;
+using GenerateFromImages = sadk::Hook<game::fn::nMenu::Debug::Tool_GenerateFromImageMaps>;
 
 constexpr std::int32_t EDITOR_SCREEN = 1;   // nMenu::System dialog slot of nMenu::Debug
 
@@ -77,13 +84,19 @@ static void SADK_THISCALL on_editor_show(game::nMenu::Debug_offset_0x20_ face, v
     screen->gameSystem->camera.distanceScale = scale;
 }
 
+static void SADK_THISCALL on_generate_from_images(game::nMenu::Debug *)
+{
+    sadk::log("debug window: Tools -> Infomap skipped (the install has no infoMap / landMap pictures)");
+}
+
 bool debugwindow_start()
 {
     int hooks = GameUpdate::install(on_game_update, "F12 toggles the debug window") +
                 EditorUpdate::install(on_editor_update, "debug window: Enter does not blank the screen") +
                 EnterTriggered::install(on_enter_triggered) +
-                EditorShow::install(on_editor_show, "debug window: camera keeps its distance scale");
-    return hooks == 4;
+                EditorShow::install(on_editor_show, "debug window: camera keeps its distance scale") +
+                GenerateFromImages::install(on_generate_from_images, "debug window: Tools -> Infomap does nothing");
+    return hooks == 5;
 }
 
 SADKMOD_MAIN(debugwindow_start, 1, SADKMOD_CLIENT)

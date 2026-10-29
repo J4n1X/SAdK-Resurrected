@@ -687,8 +687,19 @@ route bits or the continents do not match the stored navy objects (same document
 name** (`infoMap`, `landMap`), lock it and read 32-bit pixels at `pixels[y * width + x]`; the pixel (x, y) is the
 vertex (x, y), so an image is expected to be (4W + 1) × (4H + 1) [inferred]. A name the manager does not hold yet is
 loaded from `[data]\gfx\<name>.dds` (`UiResourceManager_LoadGfxTexture` S 00493500, `ai::ui::ResourcePath`
-S 004bdc60), so the two images are `data\game\gfx\infoMap.dds` and `landMap.dds` [known]; the install holds
-neither file [known: folder listing], and no UI layout file defines the names.
+S 004bdc60), so the two images are meant to be `data\game\gfx\infoMap.dds` and `landMap.dds` [known]; no UI layout
+file defines the names. The file read does not keep that folder: `NBase::gReadFileData` S 006e6d40 passes every
+relative path through `ai::file::FileScanHolder::ResolvePath` S 006e3fd0, which looks up the **file name alone** in
+the index built at start-up [known]. `infoMap.dds` therefore finds the shipped `data\game\map\textures\infomap.dds`,
+the 512 × 64 DXT3 overlay of the in-game info map; nothing is named `landMap` [known: folder listing].
+
+On a shipped install the tool cannot work [known; a crash dump of 2026-10-29 has the texture's width 512 and height 64
+on the stack and the fault at S 006035a1, the pixel read of row 42]: pass 1 reads `width * height` 32-bit pixels
+(128 KiB) from the locked DXT3 level, which holds one byte per pixel (32 KiB), runs past it and faults once the read
+leaves mapped memory; where the overrun stays mapped, it turns heap bytes into heights and patterns. Pass 2 gets no
+texture (`GetOrLoadTexture` returns null) and faults in `Tool_ApplyLandMapImage` S 00603d60 (§8 of
+`docs/mod-concepts/mapedit.md`, crash log). The `debugwindow` mod turns the entry into a no-op. Remake: presentation
+of a developer tool, no simulation state; supplying the two pictures under names of their own is the working form.
 
 *Pass 1, `MapEditor_ApplyInfoMapImage`* S 006033d0. For every pixel whose vertex is in the grid:
 
@@ -911,7 +922,7 @@ ship construction, the resources update and the scene update (list with addresse
 | `data\game\scripts\editor\copypaste.lua` (encrypted) | five presets | `Height` (`paste_heightMode` 1), `HeightAdd` (2), `HeightSub` (3), `Doodads` (`paste_useDoodad` 1), `Deposit` (`paste_useDeposit` 1) [known: data] |
 | `data\game\scripts\properties\patterns.lua`, `deposits.lua`, `doodads.lua`, `Goods.lua` | the ids the tools hard-code | `pattern_meadow = properties.pa_create("bfe4e8e3")`, `pattern_seaground = properties.pa_create("babeb00b")`, `pattern_snow = properties.pa_create("fade0ff")`, `tree_02 = properties.dp_create("063287b3")`, `stone_01 = properties.dp_create("9f1bd60e")`, `doodad_stones_0 = properties.dd_create("455c1f4e")`, `fish = properties.gp_create("4012e5a3")` [known: data] |
 | `harbors.lua`, `spawnpoints.lua`, `animals.lua`, `sounds.lua`, `buildings.lua`, `tribes.lua` | the element lists of modes 6, 10, 13, 14, 17, 19 | [properties-data.md](properties-data.md) |
-| Textures `infoMap`, `landMap` | inputs of the generator. `UiResourceManager::GetOrLoadTexture` S 00494000 loads an unknown name through `ai::ui::ResourcePath` S 004bdc60 (kind Gfx): `[data]\gfx\<name>` plus `.dds` when the name holds no `.`, so the files are `data\game\gfx\infoMap.dds` and `landMap.dds` [known]. Neither file is in the install [known: folder listing] | §3.11 |
+| Textures `infoMap`, `landMap` | inputs of the generator. `UiResourceManager::GetOrLoadTexture` S 00494000 loads an unknown name through `ai::ui::ResourcePath` S 004bdc60 (kind Gfx): `[data]\gfx\<name>` plus `.dds` when the name holds no `.`, so the files are meant to be `data\game\gfx\infoMap.dds` and `landMap.dds` [known]. The read resolves by file name alone (`FileScanHolder::ResolvePath` S 006e3fd0): `infoMap` finds the 512 × 64 DXT3 overlay `data\game\map\textures\infomap.dds`, `landMap` finds nothing [known] | §3.11 |
 | `data\game\Editor\LogicalEditor\Presets\*.lep` | eight preset files of an external editor; not read by the client | [formats-inventory.md](formats-inventory.md) §3.7 |
 | Texture `uiBigDialog` (`data\game\gfx\uiBigDialog.dds`) | the dialog's style name, a string in the constructor S 00607d20 [known]. The overlay text uses the UI system font (`UiResourceManager::GetSystemFont`, S 006066d0) [known]. The install also holds a font `language\<lang>\fonts\editor.fnt`; no code names it (the only string `editor` in the image is the Lua library name, S 0060a340) [known: string search of the decompiled image] | [ui-toolkit.md](ui-toolkit.md) |
 
