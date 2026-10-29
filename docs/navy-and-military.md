@@ -418,8 +418,22 @@ The expedition (`NNavy::Expedition`, `Ship+0x30`):
 `mods/navalcombatfix/` (`combat.cpp`, `retreat.cpp`; a server mod: every player of a match needs it). These are rules the maintainer
 decided, not a restoration of lost behaviour. Every case the game already handles runs the game's code unchanged.
 
-**Own sea link.** For a building of player P on another landmass than the target, the mod considers every pair of
-P's own harbours: H1 on the target's landmass, H2 on the building's landmass, and the route from H2's exit to H1.
+**Across the water.** The mod's test is the game's own foot test, not the landmass: a building is across the water
+from a target when `Military_IsTargetReachable`'s first half fails (§3.3: the walk between the two entrance cells,
+`MilitaryAttack_GetCachedPathLength` `00575b70`, is not shorter than twice the hex distance; 0x7fffffff without a
+path). Two landmasses always fail it, so the A* runs only within one. A harbour is on a building's side of the water
+when the same test holds for the walk from the building's entrance to the harbour cell (the harbour's flag stands
+there; `NMap::AStar`'s precondition slot `0041eca0` takes any two cells), with the walk allowed at least 12 steps next
+to the building, which twice a small hex distance does not leave for a way round the building [inferred: the bound is
+the mod's]. The harbour walks use the volatile cache, as the attack menu does. A map whose parts are joined only far
+away needs this: Gold Henge is four quadrants around a cross of channels, joined by a land bridge in the middle, one
+landmass [save of 2026-10-29: all 16 harbours and 275 territory buildings on continent 1]. A defender across a strait
+there failed the game's test (whose sea branch needs an enemy, §3.3) and sent nobody, and a test by landmass never
+applied.
+
+**Own sea link.** For a building of player P across the water from the target, the mod considers every pair of P's
+own harbours: H1 on the target's side, H2 on the building's side, and the route from H2's exit to H1. The hex sum
+below is checked before the two harbour walks.
 A pair counts only if **its own route has a ship for these soldiers**, by the checks `SendSoldiersBySea` makes
 (§5.2). The ship is one of these:
 - P's ship already on that route, carrying the fight being dispatched;
@@ -465,14 +479,14 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 
 | Hooked | Change |
 |---|---|
-| `Military_GetAttackReachFactor` | When the game returns 0: `falloff(d(target, H1) + d(H2, building))` of the own sea link. The crossing counts as zero length, and the ground rule of §3.2 applies to the remaining walk. For attackers and defenders alike |
+| `Military_GetAttackReachFactor` | When the game returns 0: `falloff(d(target, H1) + d(H2, building))` of the own sea link. The crossing counts as zero length, and the ground rule of §3.2 applies to the remaining walk. For attackers and defenders alike. On the target's landmass the game's own value (the falloff of the straight distance, which the game's own sea attacks there use too) stays |
 | `Military_IsTargetReachable` | Also true (with `allowSea`) when an own sea link exists |
-| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's landmass closer than the target's range + 1 + `LandingReach`, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's (or a neutral landing's) harbour attackable |
+| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's side of the water closer than the target's range + 1 + `LandingReach`, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's (or a neutral landing's) harbour attackable |
 | `Military_IsHarborWithinBuildingRange` | The game's landing test for an enemy-owned harbour (§2): `LandingReach` cells beyond the target's range + 1. The attack button, the reach factor and the reachability test all use it |
 | `NMilitary::Attack::DispatchAttackers` | Unchanged; only records the fight being dispatched |
-| `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building on another landmass than the target sends through slot 1 (by sea) instead of slot 0 |
-| `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code when the game's own reach factor counted the building. Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
-| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's landmass. State 5 (`ShipLostOnDefeat`): see below |
+| `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building across the water from the target sends through slot 1 (by sea) instead of slot 0; its foot test reads the persistent cache, where `GetAvailableAttackers` has just put the same walk |
+| `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code where the game's own sea rule counted the building: through the reach factor's sea branch (another landmass, or no overland falloff), or, on the target's landmass, for an attacker the game's reachability test passes (an enemy landing harbour, §3.3). Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
+| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's side of the water. State 5 (`ShipLostOnDefeat`): see below |
 
 **Retreat pickup.** `NMovie::MoveToHome::Start` is hooked. Where it finds no home for a healthy soldier in state 3
 (the moment the game would let it stray, see §4), a ship picks the soldier up instead, when there is:
