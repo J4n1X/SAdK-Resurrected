@@ -1288,6 +1288,10 @@ definition, an implementation registered by name, the base game's code moved as 
   - client seams: a military-flag provider (1); the military and warehouse info-box parts and a good button's indicator
     opened (2, 7); the radial action menu with any number of buttons, pixel-identical up to four (4, base game); one
     owner of the mouse cursor, `MatchView.HideHud`, `MatchView.TakeCamera` (10, 11); a radial-menu widget for mods (7).
+    The military-flag provider (`BuildingFlags.Register`), the info-box parts (`InfoBoxes.Extend` with stacking
+    extensions, the store and military boxes, `UiGoodButton.SetIndicator`) and the ring widget (`UiRadialMenu`) are
+    implemented [sadk-remake 7305fa7]: the garrison slots by group with a ring of levels, the warehouse's refusal and
+    the archery tower's bow flag are their test mods' client parts.
   The HUD toggle (11) is a base-game feature (F10, the original's hidden "Hide UI" developer switch S 005ed700).
   Steps 1 and 2 (the audit tool `Sadk.Headless audit` and the friendly foundation) are in sadk-remake 31ae102.
   **Round 1** [implemented, sadk-remake 5778b7d] covers transport and streets, military, navy, sacrifices and the map, each
