@@ -919,7 +919,8 @@ storehouse too when it is the first finished depot.
   ([save-format.md](save-format.md) §3.4). The only write found is the constructor's 0 [inferred: text search of
   the decompiled code; a write through a pointer would not show]. This document treats it as always 0.
 - **CVars** [known: constructors' callers]: variables are registered with a group and a name, among them group
-  `ui` (`Hide UI`, which makes `nUi::Root::Render` S 00491660 skip the UI; `DumpToFile`; `BatchUiRendering`;
+  `ui` (`Hide UI`, which makes `nUi::Root::Render` S 00491660 skip the widget tree, not an open combo box's list nor
+  the mouse pointer, which that function does not draw [known]; `DumpToFile`; `BatchUiRendering`;
   `MiniMapRender`; `MiniMapRenderSymbols`), the scene's show flags (general, profile, characters, items,
   shadow, particles, post FX, buildings, ships, terrain, fog of war, ...; struct `S2CG::Scene`), `Shader /
   MaxShader`, `Street / DepthBias`, `Character / ForceLOD`, and lobby groups. Their only front ends are the CVar
@@ -998,7 +999,9 @@ Produces:
   and look-at point feed the sound listener ([audio.md](audio.md) §3.2), and the device frustum built from them
   is what the minimap draws as the view trapezoid (`nMenu::MiniMap::DrawCameraFrustum` S 005f2a50 [known]: rays
   from the camera through the frustum corners 0, 1, 7 and 6 (near pair, far pair) are cut with the plane y = 0
-  (`Terrain_RayHitGroundApprox` S 0068a610: no hit when the ray points up, and the point then stays the corner);
+  (`Terrain_RayHitGroundApprox` S 0068a610: no hit when the ray points up, and the point then stays the corner; the
+  test is `0 < dir.y`, so a level ray passes it and `t = −origin.y ÷ 0` makes the hit infinite, NaN in a component whose
+  direction is 0 [known]; the original's cameras never look level);
   the far pair takes the hit only when it is nearer than the far-plane corner; nothing is drawn when all four
   miss; uv = ((x − originX) ÷ extentX, 1 − (z − originZ) ÷ extentZ); the edges are clipped against the round
   minimap (`Math_IntersectLineCircle2D`, radius = half the widget width) and drawn with the shape's alpha; a corner whose ray

@@ -1832,7 +1832,7 @@ Per frame (`CApplicationEx::FrameTick_InGame` S 004018e0; the calls below are in
 6. Render (`App_RenderWorldFrame` S 00401260; not while minimised; while the 3D lobby world is active the
    lobby object's update runs instead [inferred]): the scene, then `nMenu::System::Render`
    S 005d9800 → `nUi::Root::Render` S 00491660: the widget tree in child order unless the debug variable
-   `ui.Hide UI` is set (per widget: nothing if invisible, else pre-render, draw, children, post-render,
+   `ui.Hide UI` is set (the mouse pointer is not drawn here, so the switch leaves it shown [known]) (per widget: nothing if invisible, else pre-render, draw, children, post-render,
    S 004a1370; the base draw S 004a0500 stamps the widget with the next value of a global render counter, the
    render id of §2.1), then the item widgets of an open combo box on top of the tree; after that
    `System::Render` draws the requester once more if it is open.

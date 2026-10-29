@@ -1292,7 +1292,21 @@ definition, an implementation registered by name, the base game's code moved as 
     extensions, the store and military boxes, `UiGoodButton.SetIndicator`) and the ring widget (`UiRadialMenu`) are
     implemented [sadk-remake 7305fa7]: the garrison slots by group with a ring of levels, the warehouse's refusal and
     the archery tower's bow flag are their test mods' client parts.
-  The HUD toggle (11) is a base-game feature (F10, the original's hidden "Hide UI" developer switch S 005ed700).
+  The radial action menu (4) is implemented [sadk-remake b25d6fe]: up to four buttons the original's panel (`btAction1..4`,
+  the strip by `LayoutVisibleButtons` S 005f0df0 and its jump table S 005f0ef0, `PositionAtCursor` S 005f0880), more
+  buttons on the half circle the four span (190.3°, 63.4° apart; `ActionPanelRules.Arc`) over a generated background
+  (`ActionPanelArcBackground`), keys 5–0 for actions 5–10; a mod adds an action to a selection kind with
+  `SelectionActions.Add` (its availability and command like the base game's). FleetMod's client part docks and undocks
+  a ship by it and lists every ship of a sea route in the route box (`ShipBoxContent.Ships`); a sacrifice definition
+  names its own icon (`SacrificeDef.IconTexture`, `IconRegion`, `SacrificeIcons.Of`) for the mods' sacrifices.
+  The seams of 10 and 11 are implemented [sadk-remake b25d6fe]: `MatchView.TakeCamera(owner)` (the match camera steps
+  aside until the handle is disposed), `MatchView.HideHud(reason)`, one owner of the mouse pointer
+  (`CursorMode.Request(reason, Hidden|Captured)`, the camera's look-around through it), the marked `MatchContext`
+  (`World`, `Renderer`, `Geometry` with heights and water, `Local`) and `InputActions` for a mod's keys; the test mod
+  `FirstPersonMod` (F7: walk, jump, sprint, swim and dive, the fog of war keeping you out) uses only them.
+  The HUD toggle (11) is a base-game feature (F10, `core.game.hud.toggle`, the original's hidden "Hide UI" developer
+  switch S 005ed700): through `HideHud` and the pointer owner it hides the panels and the mouse pointer, which the
+  original's `ui.Hide UI` leaves shown (S 00491660 does not draw it).
   Steps 1 and 2 (the audit tool `Sadk.Headless audit` and the friendly foundation) are in sadk-remake 31ae102.
   **Round 1** [implemented, sadk-remake 5778b7d] covers transport and streets, military, navy, sacrifices and the map, each
   idea a test mod in `tests/TestMods` that builds without Harmony on the `[ModApi]` surface, faithful mode byte-identical
@@ -1315,7 +1329,8 @@ definition, an implementation registered by name, the base game's code moved as 
   areas: the remaining fixed decisions (the supplier search S 00557da0, the stack and swap tests, the catapults, the fight
   cell search, the coast and expedition queries), setters of packages, flags, fights and ships, and the systems' own
   cross-system calls turned into events. Round 2: the village, the settlers and the simulation core, the AI, map
-  scripts, statistics and victory; round 3: the client (ideas 4, 10, 11 and the ideas' client parts).
+  scripts, statistics and victory. Round 3, the client (ideas 4, 10, 11 and the ideas' client parts), is implemented
+  [sadk-remake 7305fa7, b25d6fe].
 - **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
   `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The

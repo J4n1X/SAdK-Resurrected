@@ -1822,7 +1822,9 @@ sphere does not count; else `w = 1 − (√dsq − inner) ÷ (outer − inner)`,
 1 the map default is added with weight `1 − sum`; with no counting sphere the default is used alone. The point is
 `Camera_GetGroundFocusPoint` S 0068ce50 (from `Scene::Update` S 006805e0): `(60 × hit + d × camera) ÷ (60 + d)` in
 x and z, where `hit` is the screen-centre ray (`Camera_BuildScreenCenterRay` S 0068cdc0) cut with the plane
-y = 0 and lifted to the nearest vertex's height (`Terrain_RayHitGroundApprox` S 0068a610), or the point 1000 along
+y = 0 and lifted to the nearest vertex's height (`Terrain_RayHitGroundApprox` S 0068a610; −1 only for `0 < dir.y`, so a
+level ray gives an infinite hit, NaN in a component whose direction is 0 [known]; the original's camera never looks
+level, the remake takes a non-finite hit as a miss), or the point 1000 along
 the ray when `t < 0` or `t > 1000` (S 007d3e58), and `d` the horizontal camera-to-hit distance (60.0 at S 007dc9c8).
 `ApplyToDevice` S 006ae3a0 applies the result.
 Source: the map's `.bin` sidecar (`docs/map-format.md` §4.17): u32 skydome index, light heading, light elevation,
