@@ -954,8 +954,12 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   engine type), implemented through the base class `WorkBehaviour` and registered by name with `[WorkBehaviour("name")]`.
   The mechanism is the engine's: a class with a `[Named]` attribute (the contract's own attribute derives from it) that
   implements one `[NamedContract("registry")]` interface is collected, as rules and systems are, into a `NamedRegistry`
-  per contract owned by the simulation catalog (`SimulationCatalog.Named`), owner by owner in load order, so a later mod's
-  class under a name replaces the earlier one (replacing a base behaviour makes the match remake-only, §9.4). One object
+  per contract owned by the simulation catalog (`SimulationCatalog.Named`), owner by owner in load order. A later mod's
+  class under a name stands to the earlier one as a rule's implementation does: a public constructor taking the contract
+  wraps it (the class gets that object), one without parameters replaces it [implemented, sadk-remake b792f00]; core.game's
+  overridable base classes derive from the engine's `StackedPiece<TSelf, TContract>`, whose steps run the piece below
+  unless overridden and whose base-game code calls its steps on the uppermost piece, so the steps several mods override
+  all take part, as hooks that call the next (replacing or wrapping a base behaviour makes the match remake-only, §9.4). One object
   of each class serves every match of the mod set: a behaviour keeps no match state. `BuildingDef.Production.Behaviour`
   names one with the parameters it reads (a `SlotUse`, as a placement rule: `<Behaviour use="mymod.saltWork"
   workTicks="3500"/>`; left out of the registry checksum while empty); when a definition names none, the original's working mode
@@ -1019,9 +1023,9 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   the section is `[OmitWhenEmpty]`, so the base records' canonical form and the registry checksum stay the original data's).
   A rule is the engine contract `IPlacementRule` (`Sadk.Engine.Simulation`, beside the world and map views it reads), a
   named contract (`[NamedContract("placement")]`) registered with `[PlacementRule("name")]` in a simulation assembly on
-  the named implementations of the work behaviours (`SimulationCatalog.Named`; a later mod's registration of a name
-  replaces the earlier one, the registry goes with the catalog when the set unloads, and a match records a mod's rules
-  with the other named implementations). `GameQuery.CanPlaceBuildingTypeAt` runs a type's rules after the
+  the named implementations of the work behaviours (`SimulationCatalog.Named`; a later mod's registration of a name wraps
+  or replaces the earlier one, the registry goes with the catalog when the set unloads, and a match records a mod's rules
+  with the other named implementations, each name's stack bottom first). `GameQuery.CanPlaceBuildingTypeAt` runs a type's rules after the
   original's tests, so the place command and an upgrade see them; build mode asks them through the placement view
   (`IBuildingPlacementQueries.PlacementRulesAllow`) for the cursor's mark and the build menu opened at a cell, and the
   computer player's site test (`SearchConstructionPlace.FitsCellFlags` S 0052eab0, its candidate scan and its re-check
