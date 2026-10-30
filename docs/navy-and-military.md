@@ -419,32 +419,8 @@ The expedition (`NNavy::Expedition`, `Ship+0x30`):
 `mods/navalcombatfix/` (`combat.cpp`, `retreat.cpp`; a server mod: every player of a match needs it). These are rules the maintainer
 decided, not a restoration of lost behaviour. Every case the game already handles runs the game's code unchanged.
 
-**Across the water.** The mod's test is the game's own foot test, not the landmass: a building is across the water
-from a target when `Military_IsTargetReachable`'s first half fails (§3.3: the walk between the two entrance cells,
-`MilitaryAttack_GetCachedPathLength` `00575b70`, is not shorter than twice the hex distance; 0x7fffffff without a
-path). Two landmasses always fail it, so the A* runs only within one. Inside a dispatch the mod reads the game's saved
-cache, where the game's count has just put the same walk; elsewhere the volatile cache, as the attack menu does. A
-harbour is on a building's side of the water when the walk from the building's entrance to the harbour cell (the
-harbour's flag stands there) takes fewer than twice their hex distance in steps, at least 12 steps next to the
-building, which twice a small hex distance does not leave for a way round the building [inferred: the bound is the
-mod's]. That walk is the mod's own test and runs no A*: breadth first over the cells the game's A* may step on
-(`NMap::AStar::GetStepCost` `00676840` refuses a cell `Map_IsCellWalkable` `0052df20` rejects, except the search's goal).
-
-A walk that fails goes round the strait, and its A* (`NMap::AStar::FindPath` `00676900`, from the second cell towards
-the first, step cost 3 to 9) searches much of the map [live 2026-10-30: stutters on Gold Henge while the mod walked
-every pair the game's count had rejected]. The mod therefore walks last: hex distances, the route and its ship first,
-then the harbour sides, then the walk between building and target, once, and none where the game's own test has just
-failed. Outside a dispatch that walk is first bounded from below by the same breadth-first count (the A*'s path of
-least cost has at least as many steps); when even that is not short enough, no A* runs. The breadth-first count reads
-only the map as it is, so every peer gets the same answer in the same tick. A map whose parts are joined only far
-away needs this: Gold Henge is four quadrants around a cross of channels, joined by a land bridge in the middle, one
-landmass [save of 2026-10-29: all 16 harbours and 275 territory buildings on continent 1]. A defender across a strait
-there failed the game's test (whose sea branch needs an enemy, §3.3) and sent nobody, and a test by landmass never
-applied.
-
-**Own sea link.** For a building of player P across the water from the target, the mod considers every pair of P's
-own harbours: H1 on the target's side, H2 on the building's side, and the route from H2's exit to H1. The hex sum
-below is checked before the two harbour walks.
+**Own sea link.** For a building of player P on another landmass than the target, the mod considers every pair of
+P's own harbours: H1 on the target's landmass, H2 on the building's landmass, and the route from H2's exit to H1.
 A pair counts only if **its own route has a ship for these soldiers**, by the checks `SendSoldiersBySea` makes
 (§5.2). The ship is one of these:
 - P's ship already on that route, carrying the fight being dispatched;
@@ -490,14 +466,14 @@ ship), and `g_bSeaAttackDispatch`, for the mod's own cases.
 
 | Hooked | Change |
 |---|---|
-| `Military_GetAttackReachFactor` | When the game returns 0: `falloff(d(target, H1) + d(H2, building))` of the own sea link. The crossing counts as zero length, and the ground rule of §3.2 applies to the remaining walk. For attackers and defenders alike. On the target's landmass the game's own value (the falloff of the straight distance, which the game's own sea attacks there use too) stays |
+| `Military_GetAttackReachFactor` | When the game returns 0: `falloff(d(target, H1) + d(H2, building))` of the own sea link. The crossing counts as zero length, and the ground rule of §3.2 applies to the remaining walk. For attackers and defenders alike |
 | `Military_IsTargetReachable` | Also true (with `allowSea`) when an own sea link exists |
-| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's side of the water closer than the target's range + 1 + `LandingReach`, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's (or a neutral landing's) harbour attackable |
+| `Military_IsEnemyTerritoryInRange` | Also true when a harbour of the attacker lies on the target's landmass closer than the target's range + 1 + `LandingReach`, with a route to an attacker's harbour across the water and a ship for it: the game's harbour test of §2 without its owner condition. This makes targets around a colony's (or a neutral landing's) harbour attackable |
 | `Military_IsHarborWithinBuildingRange` | The game's landing test for an enemy-owned harbour (§2): `LandingReach` cells beyond the target's range + 1. The attack button, the reach factor and the reachability test all use it |
 | `NMilitary::Attack::DispatchAttackers` | Unchanged; only records the fight being dispatched |
-| `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building across the water from the target sends through slot 1 (by sea) instead of slot 0; its foot test reads the persistent cache, where `GetAvailableAttackers` has just put the same walk |
-| `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code where the game's own sea rule counted the building: through the reach factor's sea branch (another landmass, or no overland falloff), or, on the target's landmass, for an attacker the game's reachability test passes (an enemy landing harbour, §3.3). Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
-| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's side of the water. State 5 (`ShipLostOnDefeat`): see below |
+| `NMilitary::Attack::DispatchDefenders` | Reimplemented with the game's counts (and records the fight). A building on another landmass than the target sends through slot 1 (by sea) instead of slot 0 |
+| `NMilitary::AttackConnector::SendSoldiersBySea` | The game's code when the game's own reach factor counted the building. Otherwise the own sea link it was counted with, using the ships of the **building's owner** (the game would use the attacker's, which is wrong for defenders) |
+| `NNavy::Military::Update` | States 0 and 3, when both route ends belong to the ship's player: load at the end on the building side and land at the end on the target's landmass. State 5 (`ShipLostOnDefeat`): see below |
 
 **Retreat pickup.** `NMovie::MoveToHome::Start` is hooked. Where it finds no home for a healthy soldier in state 3
 (the moment the game would let it stray, see §4), a ship picks the soldier up instead, when there is:
@@ -620,10 +596,21 @@ so they fight on without a ship. Not those still on their way to board (states `
 `RemoveShip` takes them out of the fight, and state `0x37` sends them home. Kept in the fight without a ship, such a
 soldier waited at the harbour for good, and its fight, which a listed soldier keeps active (`Fight::IsActive`
 `00571090`), never ended [save of 2026-10-30, Gold Henge: three defenders of player 2 in state `0x37` at their harbours
-(31,85) and (15,53), no ship, their fights ending with no target and no ship, the attacked buildings taken and the ships
-gone on expeditions]. For saves that hold such soldiers the mod hooks `Soldier::Update`: a soldier in state `0x37` with a
-fight, no ship and not aboard is taken out of the fight (`MilitaryLink_UnlinkSoldierFromFight` `0053cfe0`, what
-`RemoveShip` does), and the game's `0x37` sends it home. The game itself never leaves a soldier so `[inferred]`.
+(31,85) and (15,53), no ship, their fights ending with no target and no ship]. For saves that hold such soldiers the mod
+hooks `Soldier::Update`: a soldier in state `0x37` with a fight, no ship and not aboard is taken out of the fight
+(`MilitaryLink_UnlinkSoldierFromFight` `0053cfe0`, what `RemoveShip` does), and the game's `0x37` sends it home. The
+game itself never leaves a soldier so `[inferred]`.
+
+**Garrison entries for soldiers that no longer exist** [known (static); save of 2026-10-30]: a building's soldier lists
+(`NVillage::Military` garrison `+8`, attackers `+0x30`, defenders `+0x44`) hold references; the garrison's are read
+without a test (`NVillage::Soldiers::AllSoldiersOfKind` `005664a0`, from `NVillage::Military::Update` `005609b0`). A
+soldier deleted without being taken off its garrison leaves the freed pointer there in play; after loading, the
+reference resolves to nothing and the first `Military::Update` crashes at `005664da`. The Gold Henge save of 2026-10-30
+holds seven such entries of player 2 (towers (32,76) and (38,76), guard house (43,80)), all defenders that a mod build
+sending defenders across a strait on one landmass (b1fc32a, withdrawn) had shipped; which path deleted them is `[TODO]`.
+The mod drops such entries before each `Military::Update` the way the game drops a soldier from those lists
+(`AiReferences_RemoveByUniqueId` `005a7520`, matched by the reference's own id; `VillageLink_UnlinkSoldier` `0053c4f0`
+uses it on the garrison); an entry whose soldier exists is never touched.
 
 **Soldiers aboard keep their in-fight mark** [known (static); live 2026-10-10]: a soldier sent to a fight by sea is in
 the fight before it boards (`Soldier::Update` `006594a0` state 7 calls `SoldierFightState::EnterFight` `0065b840`,

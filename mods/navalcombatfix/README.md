@@ -11,9 +11,7 @@ What it does:
   count and sail when you own both harbours of the route, from a colony, or through a neutral harbour where no colony
   fits (`landing.cpp`). The soldier count is the game's ground rule on the land distances, the crossing free.
   The ship is the route's own, else an idle one, else the nearest ship of another of your sea routes (a harbour
-  with two routes and one ship); it returns to its route afterwards. "Across the water" is the game's own test for
-  reaching a target on foot (the walk is shorter than twice the straight distance), not a different landmass: a
-  strait whose two shores are joined only far away counts too (maps like Gold Henge are one landmass).
+  with two routes and one ship); it returns to its route afterwards.
 - **Defence across the water**, the same way, with the defender's own ships.
 - **Retreat** (`retreat.cpp`): soldiers left with nowhere to go (the game lets them wander until they die) are
   picked up by a ship from a harbour on their landmass, as soon as the game finds no home for them. Which harbours
