@@ -26,6 +26,8 @@
 // rule (soldiers left with nowhere to go) is in retreat.cpp.
 #include "navy.hpp"
 
+#include <vector>
+
 namespace navalcombatfix {
 
 Settings g_settings;
@@ -73,6 +75,50 @@ struct DispatchScope {
 // strait failed the game's test and sent nobody, and the mod, which asked for another landmass, never stepped in. "Across
 // the water" is therefore this test, not the landmass. Two landmasses always fail it (no walk joins them), so the A* is
 // run only within one.
+//
+// A walk that fails the test goes round the strait, and its A* searches much of the map [live 2026-10-30: stutters on
+// Gold Henge while the walks ran for every pair the game's own count had rejected]. So every walk of the mod is asked
+// last, after the hex distances, the route and the ship, and first bounded from below (steps_below): when even that
+// bound is not short enough, the game's walk is not either, and no A* runs.
+
+// The fewest steps from `to` to `from` over cells the game's A* can step on, breadth first: NMap::AStar::FindPath
+// S 00676900 searches from `to` towards `from`, and its step cost (NMap::AStar::GetStepCost S 00676840, 3 to 9 per step)
+// refuses a cell that Map_IsCellWalkable S 0052df20 rejects unless it is `from`. The A* keeps the path of least cost,
+// which has at least as many steps as this. True when `from` is reached in fewer than `limit` steps; the search stops at
+// `limit`, so a failing walk costs no more than the cells within that radius. It reads only the map as it is now, so
+// every peer gets the same answer in the same tick (no cache).
+bool steps_below(const std::int32_t *from, const std::int32_t *to, std::int32_t limit)
+{
+    std::int32_t width = *var::g_MapWidth, height = *var::g_MapHeight;
+    static std::vector<std::uint32_t> seen;   // a cell is seen in this search when it holds `mark`
+    static std::vector<std::int32_t> queue;
+    static std::uint32_t mark;
+    std::size_t cells = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+    if (seen.size() != cells || ++mark == 0) {
+        seen.assign(cells, 0);
+        mark = 1;
+    }
+    if (from[0] == to[0] && from[1] == to[1]) return limit > 0;
+    queue.clear();
+    queue.push_back(to[1] * width + to[0]);
+    seen[queue.back()] = mark;
+    std::size_t head = 0;
+    for (std::int32_t steps = 1; steps < limit && head < queue.size(); ++steps) {
+        for (std::size_t end = queue.size(); head < end; ++head) {
+            for (std::int32_t dir = 0; dir < 6; ++dir) {
+                game::ai::map::MapPos n{queue[head] % width, queue[head] / width};
+                fn::ai::map::MapPos::StepDirection(&n, dir, 1);
+                if (n.x < 0 || n.y < 0 || n.x >= width || n.y >= height) continue;
+                if (n.x == from[0] && n.y == from[1]) return true;
+                std::int32_t i = n.y * width + n.x;
+                if (seen[i] == mark) continue;
+                seen[i] = mark;
+                if (fn::Map_IsCellWalkable(&n.x)) queue.push_back(i);
+            }
+        }
+    }
+    return false;
+}
 
 game::ai::map::MapPos entrance(Building *b)
 {
@@ -81,21 +127,24 @@ game::ai::map::MapPos entrance(Building *b)
     return e;
 }
 
-// The game's own foot test between a building and a target, with the game's argument order (target entrance first), so
-// that with persistentCache the dispatch reads the length the game's count has just cached.
+// The game's own foot test between a building and a target, with the game's argument order (target entrance first).
+// With persistentCache (inside a dispatch) it reads the game's saved cache exactly as the game's count does, which has
+// just put the same walk there (NMilitary::Attack::GetAvailableAttackers S 00575dc0), so both decide alike. Otherwise
+// the volatile cache, as the attack menu's counts use it, after the bound from below.
 bool on_foot(Building *building, Building *target, bool persistentCache)
 {
     if (region(building) != region(target)) return false;
     game::ai::map::MapPos from = entrance(target), to = entrance(building);
-    std::int32_t d = distance(&building->posX, &target->posX);
-    return fn::MilitaryAttack_GetCachedPathLength(&from.x, &to.x, persistentCache) < 2 * d;
+    std::int32_t limit = 2 * distance(&building->posX, &target->posX);
+    if (!persistentCache && !steps_below(&from.x, &to.x, limit)) return false;
+    return fn::MilitaryAttack_GetCachedPathLength(&from.x, &to.x, persistentCache) < limit;
 }
 
-// A harbour is on a building's side of the water when the same test holds for the walk from the building's entrance to
-// the harbour cell (the harbour's flag stands there; NMap::AStar takes any two cells, its precondition slot S 0041eca0
-// returns true). The volatile cache, as the attack menu's counts use it. Next to a building, twice the hex distance is too
-// tight for a walk round the building's footprint, so the walk may always be up to 2 * kNearHarbour steps [inferred: the
-// bound is the mod's].
+// A harbour is on a building's side of the water when the walk from the building's entrance to the harbour cell (the
+// harbour's flag stands there) takes fewer than twice their hex distance in steps over walkable cells (steps_below; no
+// A*: the mod's own test, it never reaches the game's count). Next to a building, twice the hex distance is too tight for
+// a walk round the building's footprint, so the walk may always be up to 2 * kNearHarbour steps [inferred: the bound is
+// the mod's].
 constexpr std::int32_t kNearHarbour = 6;
 
 bool harbor_on_foot(Harbor *harbor, Building *b)
@@ -103,7 +152,7 @@ bool harbor_on_foot(Harbor *harbor, Building *b)
     if (region(harbor) != region(b)) return false;
     game::ai::map::MapPos from = entrance(b);
     std::int32_t d = std::max(distance(harbor, b), kNearHarbour);
-    return fn::MilitaryAttack_GetCachedPathLength(&from.x, &harbor->posX, false) < 2 * d;
+    return steps_below(&from.x, &harbor->posX, 2 * d);
 }
 
 // ---- Own sea links -----------------------------------------------------------------------------------------------
@@ -318,29 +367,41 @@ bool route_ship(Harbor *home, Harbor *landing, std::int32_t player, Fight *fight
     return true;
 }
 
+// What the caller knows of the walk between the building and the target (on_foot).
+enum class Walk {
+    failed,     // the game's foot test has just failed (Military_IsTargetReachable S 00575cb0 returned false)
+    dispatch,   // inside a dispatch: the game's saved cache, as its count reads it
+    estimate,   // anything else (the attack menu, the computer players' estimates): bounded, then the volatile cache
+};
+
 // The best usable pair of the building owner's own harbours for carrying the building's soldiers to the target:
 // H1 of the player on the target's side of the water, H2 of the player on the building's side (harbor_on_foot), a
 // ship for the route between them (route_ship), and the smallest d(target, H1) + d(H2, building) within the attack
 // range. Only for a building across the water from the target (on_foot fails): the game's overland rules stay
 // untouched. Counting and sending both use this, so the soldiers counted for a building are the ones its ship can
-// take, and a blocked route falls back to the next pair. The hex distances are checked before the walks, which only
-// the pairs within the attack range need.
-bool own_sea_link(Building *building, Building *target, Fight *fight, SeaLink *best)
+// take, and a blocked route falls back to the next pair. The cheap tests come first (hex distances, the route and its
+// ship), then the harbour sides, and the walk between building and target last, once, for a pair that passed all else.
+bool own_sea_link(Building *building, Building *target, Fight *fight, SeaLink *best, Walk walk)
 {
     std::int32_t player = owner(building);
     bool defending = player == owner(target);
     if (defending ? !g_settings.defendersBySea : !g_settings.attackersBySea) return false;
-    if (on_foot(building, target, false)) return false;
+    int across = walk == Walk::failed ? 1 : -1;   // -1: not walked yet
     bool found = false;
     for (Harbor *landing : harbors()) {
         if (!is_landing(landing, player)) continue;
+        int landingSide = -1;   // -1: not walked yet
         for (Harbor *home : harbors()) {
             if (home->playerIdx != player || home == landing) continue;
             std::int32_t d = distance(landing, target) + g_settings.crossingDistance + distance(home, building);
             if (d >= kAttackRange || (found && d >= best->distance)) continue;
-            if (!harbor_on_foot(landing, target) || !harbor_on_foot(home, building)) continue;
             SeaLink link;
             if (!route_ship(home, landing, player, fight, !defending, &link)) continue;
+            if (landingSide < 0) landingSide = harbor_on_foot(landing, target);
+            if (!landingSide) break;   // not on the target's side: no home harbour helps
+            if (!harbor_on_foot(home, building)) continue;
+            if (across < 0) across = !on_foot(building, target, walk == Walk::dispatch);
+            if (!across) return false;
             link.landing = landing;
             link.home = home;
             link.distance = d;
@@ -359,15 +420,18 @@ float SADK_CDECL reach_factor(Building *building, Building *target)
     float f = ReachFactor::original(building, target);
     if (f != 0.0f) return f;
     SeaLink link;
-    return own_sea_link(building, target, g_dispatchFight, &link) ? falloff(link.distance) : 0.0f;
+    return own_sea_link(building, target, g_dispatchFight, &link, g_dispatchFight ? Walk::dispatch : Walk::estimate)
+               ? falloff(link.distance)
+               : 0.0f;
 }
 
-// Military_IsTargetReachable S 00575cb0: also reachable over an own sea link.
+// Military_IsTargetReachable S 00575cb0: also reachable over an own sea link. Where the game's test fails, its walk has
+// failed (the sea branch after it needs an enemy-owned landing).
 bool SADK_CDECL target_reachable(Building *target, Building *building, bool persistentCache, bool allowSea)
 {
     if (TargetReachable::original(target, building, persistentCache, allowSea)) return true;
     SeaLink link;
-    return allowSea && own_sea_link(building, target, g_dispatchFight, &link);
+    return allowSea && own_sea_link(building, target, g_dispatchFight, &link, Walk::failed);
 }
 
 // A harbour of `player` on the target's side of the water within the target's territory range + 1 + LandingReach,
@@ -473,7 +537,7 @@ void SADK_THISCALL send_by_sea(AttackConnector *connector, Building *building, s
         return;
     }
     SeaLink link;
-    if (!own_sea_link(building, target, connector->fight, &link)) return;
+    if (!own_sea_link(building, target, connector->fight, &link, Walk::dispatch)) return;
     if (link.streetShip) {   // no ship on the route and none idle: one from another sea street (take_street_ship)
         take_street_ship(link.ship, link.route, link.home, connector->fight);
     } else if (!link.onRoute) {   // the first building of this fight on the route brings the ship in
@@ -683,6 +747,11 @@ void deselect(Ship *ship)
 // 005711cb, the attacker's home harbour taken mid-attack]. The unmodded game has the same path; sea fights make it
 // common. Soldiers of the mission who are ashore and still in its fight are unlinked from the ship first, as
 // Soldier::Update does when they leave the ship (NavyLink_UnlinkMilitarySoldier): they fight on without a ship.
+// Not those still on their way to board (Soldier::Update states 0x28 walk to the ship's harbour, 0x34 walking, 0x37
+// waiting there): they are left to the game, whose RemoveShip takes them out of the fight, and state 0x37 then sends
+// them home (0x2d). Kept in the fight without a ship, they waited at the harbour for good, and their fight, which a
+// listed soldier keeps alive, never ended [save of 2026-10-30, Gold Henge: three defenders of player 2 at their harbours
+// (31,85) and (15,53), the attacked buildings long taken and the ships gone on expeditions]. See also release_boarder.
 //
 // Soldiers of the mission who are aboard on the way to the fight are in it already: Soldier::Update S 006594a0 calls
 // SoldierFightState::EnterFight (inFight = 1) in state 7, before they board (states 0x34/0x37/0x33). RemoveShip takes
@@ -695,6 +764,16 @@ void deselect(Ship *ship)
 // fight groups, inFight = 0). Whichever of RemoveShip and Finish runs first (Fight::dtor S 00571790 calls RemoveShip
 // before Finish), the soldiers are still in the mission's list when Finish starts.
 constexpr int kMaxAboard = 64;   // more soldiers than a ship carries [inferred]
+constexpr std::int32_t kSoldierToShip = 0x28;     // NSettlers::Soldier states (Soldier::Update S 006594a0): entering a
+constexpr std::int32_t kSoldierToHarbor = 0x34;   // fight with a ship, walking to its harbour, waiting there to board
+constexpr std::int32_t kSoldierBoarding = 0x37;
+
+bool on_way_to_board(game::NSettlers::Soldier *soldier)
+{
+    std::int32_t state = soldier->base.state;
+    return state == kSoldierToShip || state == kSoldierToHarbor || state == kSoldierBoarding;
+}
+
 using MilitaryFinish = sadk::Hook<fn::NNavy::Military::Finish>;
 void SADK_THISCALL finish_mission(NavyMission *m)
 {
@@ -708,7 +787,8 @@ void SADK_THISCALL finish_mission(NavyMission *m)
             if (!soldier) continue;
             game::NLogic::Unique &id = soldier->fightState.fightRef.unique;
             bool inFight = id.idLo == fight->unique.idLo && id.idHi == fight->unique.idHi;
-            if (inFight && !fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->base.movement))
+            if (inFight && !on_way_to_board(soldier) &&
+                !fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->base.movement))
                 fn::NavyLink_UnlinkMilitarySoldier(&soldier->base, ship);
         }
     }
@@ -743,6 +823,28 @@ void SADK_CDECL unlink_soldier_from_fight(void *soldier, void *fight)
     }
     sadk::log("a soldier left a fight that is gone: nothing to leave");
     fn::NLogicReference_ClearIds(&static_cast<game::NSettlers::Soldier *>(soldier)->fightState.fightRef);
+}
+
+// Soldier::Update S 006594a0, state 0x37: a soldier waits at the harbour until it is aboard, or until its fight is gone
+// or left (then it leaves the ship's mission and the fight, 0x2d). A soldier waiting there with a fight but without a
+// ship (Settler+0xf8) can never board: only the mission's list is boarded (NNavy::Military::BoardSettlersAtHarbor). The
+// game never leaves one so; finish_mission did, before it spared those on their way to board, and saves keep them
+// [save of 2026-10-30]. Such a soldier is taken out of its fight as the game's RemoveShip would have done
+// (MilitaryLink_UnlinkSoldierFromFight S 0053cfe0), and the game's state 0x37 sends it home.
+using SoldierUpdate = sadk::Hook<fn::NSettlers::Soldier::Update>;
+void release_boarder(game::NSettlers::Soldier *soldier)
+{
+    if (soldier->base.ship.unique.idHi >= 0 || soldier->fightState.fightRef.unique.idHi < 0 ||
+        fn::ai::settlers::SettlerMovement::IsAboardShip(soldier->base.movement))
+        return;
+    fn::MilitaryLink_UnlinkSoldierFromFight(soldier, fn::NLogic::ReferenceFight::Get(&soldier->fightState.fightRef));
+    sadk::log("a soldier waiting to board without a ship leaves its fight");
+}
+
+void SADK_THISCALL soldier_update(game::NSettlers::Soldier *soldier)
+{
+    if (soldier->base.state == kSoldierBoarding) release_boarder(soldier);
+    SoldierUpdate::original(soldier);
 }
 
 // NNavy::Ship::Update S 005bb500: defending ships sink after a lost defence (above); lent route ships go back on
@@ -786,7 +888,7 @@ bool combat_start()
               DispatchDefenders::install(dispatch_defenders) && SendBySea::install(send_by_sea) &&
               NavyMilitaryUpdate::install(navy_military_update) && ShipUpdate::install(ship_update) &&
               MilitaryFinish::install(finish_mission) && ShipDtor::install(ship_dtor) &&
-              UnlinkSoldierFromFight::install(unlink_soldier_from_fight);
+              UnlinkSoldierFromFight::install(unlink_soldier_from_fight) && SoldierUpdate::install(soldier_update);
     sadk::log("%s", ok ? "combat by sea: soldiers cross through their own harbours" : "combat by sea NOT active");
     return ok;
 }

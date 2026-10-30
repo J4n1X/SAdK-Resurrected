@@ -195,7 +195,8 @@ three cells: centre at half the distance, near/far at ± half the smallest bow r
 | State | Meaning |
 |---|---|
 | `0x28` | Entering the fight; with a ship link, walk to the ship's target harbour (ship movement `+0x60`) → `0x34` |
-| `0x34` | Walking to the harbour; aboard → `0x37` / `0x33` |
+| `0x34` | Walking to the harbour (`moveToPosition`); arrived, aboard, `leftFight` set or the fight reference gone → `0x37` [known] |
+| `0x37` | Waiting at the harbour to board. `leftFight` set or the fight reference gone, and not aboard: unlink from the ship (`NavyLink_UnlinkMilitarySoldier`, when it has one) → `0x2d`. Aboard → `0x33`. Nothing else ends the wait: only the ship's mission boards it (`NNavy::Military::BoardSettlersAtHarbor`, the mission's soldier list) [known] |
 | `0x33` | Aboard; unloaded → `0x29` (pick a target cell, fight) |
 | `0x2d` → `0x21` | Leaving the fight. With a ship link: walk to the ship's target harbour (`0x31`), board (`0x32`), unlink when unloaded; then home (`0xe`), or stop when the soldier has no home |
 
@@ -421,11 +422,21 @@ decided, not a restoration of lost behaviour. Every case the game already handle
 **Across the water.** The mod's test is the game's own foot test, not the landmass: a building is across the water
 from a target when `Military_IsTargetReachable`'s first half fails (§3.3: the walk between the two entrance cells,
 `MilitaryAttack_GetCachedPathLength` `00575b70`, is not shorter than twice the hex distance; 0x7fffffff without a
-path). Two landmasses always fail it, so the A* runs only within one. A harbour is on a building's side of the water
-when the same test holds for the walk from the building's entrance to the harbour cell (the harbour's flag stands
-there; `NMap::AStar`'s precondition slot `0041eca0` takes any two cells), with the walk allowed at least 12 steps next
-to the building, which twice a small hex distance does not leave for a way round the building [inferred: the bound is
-the mod's]. The harbour walks use the volatile cache, as the attack menu does. A map whose parts are joined only far
+path). Two landmasses always fail it, so the A* runs only within one. Inside a dispatch the mod reads the game's saved
+cache, where the game's count has just put the same walk; elsewhere the volatile cache, as the attack menu does. A
+harbour is on a building's side of the water when the walk from the building's entrance to the harbour cell (the
+harbour's flag stands there) takes fewer than twice their hex distance in steps, at least 12 steps next to the
+building, which twice a small hex distance does not leave for a way round the building [inferred: the bound is the
+mod's]. That walk is the mod's own test and runs no A*: breadth first over the cells the game's A* may step on
+(`NMap::AStar::GetStepCost` `00676840` refuses a cell `Map_IsCellWalkable` `0052df20` rejects, except the search's goal).
+
+A walk that fails goes round the strait, and its A* (`NMap::AStar::FindPath` `00676900`, from the second cell towards
+the first, step cost 3 to 9) searches much of the map [live 2026-10-30: stutters on Gold Henge while the mod walked
+every pair the game's count had rejected]. The mod therefore walks last: hex distances, the route and its ship first,
+then the harbour sides, then the walk between building and target, once, and none where the game's own test has just
+failed. Outside a dispatch that walk is first bounded from below by the same breadth-first count (the A*'s path of
+least cost has at least as many steps); when even that is not short enough, no A* runs. The breadth-first count reads
+only the map as it is, so every peer gets the same answer in the same tick. A map whose parts are joined only far
 away needs this: Gold Henge is four quadrants around a cross of channels, joined by a land bridge in the middle, one
 landmass [save of 2026-10-29: all 16 harbours and 275 territory buildings on continent 1]. A defender across a strait
 there failed the game's test (whose sea branch needs an enemy, §3.3) and sent nobody, and a test by landmass never
@@ -605,7 +616,14 @@ be deleted, and a soldier finishing its strike reads a null fight (`NMovie::Figh
 `Fight::ComputeSoldierStrikeValue`, crash at `005721b1`; or `Fight::OpposingSideHasEngageableSoldierFor`, crash at `005711cb`). The
 unmodded game has the same path (an attacker's home harbour taken mid-attack). The mod hooks `Military::Finish`: the
 mission's soldiers ashore and still in its fight are unlinked from the ship first (`NavyLink_UnlinkMilitarySoldier`),
-so they fight on without a ship.
+so they fight on without a ship. Not those still on their way to board (states `0x28`, `0x34`, `0x37`): the game's
+`RemoveShip` takes them out of the fight, and state `0x37` sends them home. Kept in the fight without a ship, such a
+soldier waited at the harbour for good, and its fight, which a listed soldier keeps active (`Fight::IsActive`
+`00571090`), never ended [save of 2026-10-30, Gold Henge: three defenders of player 2 in state `0x37` at their harbours
+(31,85) and (15,53), no ship, their fights ending with no target and no ship, the attacked buildings taken and the ships
+gone on expeditions]. For saves that hold such soldiers the mod hooks `Soldier::Update`: a soldier in state `0x37` with a
+fight, no ship and not aboard is taken out of the fight (`MilitaryLink_UnlinkSoldierFromFight` `0053cfe0`, what
+`RemoveShip` does), and the game's `0x37` sends it home. The game itself never leaves a soldier so `[inferred]`.
 
 **Soldiers aboard keep their in-fight mark** [known (static); live 2026-10-10]: a soldier sent to a fight by sea is in
 the fight before it boards (`Soldier::Update` `006594a0` state 7 calls `SoldierFightState::EnterFight` `0065b840`,

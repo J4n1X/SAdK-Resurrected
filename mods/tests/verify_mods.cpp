@@ -61,8 +61,8 @@ int main(int argc, char **argv)
     debugwindow_start();
     sadk::verify_with(sadk::Module::sadk, nullptr);
     auto n = sadk::verify_counts();
-    const int expected = 6 + 1 + 1 + 23 + 1 + 3 + 2 + 13 + 3 + 1 + 5;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
-                                                        // navalcombatfix 23 hooks, cheatstart 1 hook, oscursor 3
+    const int expected = 6 + 1 + 1 + 24 + 1 + 3 + 2 + 13 + 3 + 1 + 5;   // borderless 6 hooks, npcmodels 1, nomeshcache 1 hook,
+                                                        // navalcombatfix 24 hooks, cheatstart 1 hook, oscursor 3
                                                         // hooks, nopreview 2 hooks, mpsave 10 hooks and 3 redirected
                                                         // calls (events are not verified), distantlands 3 hooks,
                                                         // nilfloodfix 1 hook, debugwindow 5 hooks
