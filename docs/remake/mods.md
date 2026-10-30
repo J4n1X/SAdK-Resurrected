@@ -1226,24 +1226,36 @@ The in-match selection's closed sets become open registries, before the panel se
 The closed dispatch and seams still left after §14.1–§14.3, each on the same pattern (a name with parameters on the
 definition, an implementation registered by name, the base game's code moved as it is and proven byte-identical):
 
-- **Settler classes**: the settler factory is a closed `switch` (`SettlerSystem`); classes by name, so a mod adds a
-  profession with its own state machine (the carriers of §14.2 are the first).
+- **Settler classes** [implemented, sadk-remake 6f69bbb]: a good names its class (`GoodDef.SettlerClass`, else the base
+  class of its `SettlerType`); `ISettlerClass`/`[SettlerClass]`, core.game's six as `settler.*` (the creators of
+  S 00656500, the leave rule of S 005ae160, the class destructors S 0065afb0, S 0065a4e0, S 0065e600); a save reads a
+  settler back by its profession's class; `NamedSettler` is a mod's base (its own states from 0x100, `[Saved]` state,
+  `WalkTo`/`Act`/`GoHome`). Test mod `HeraldMod`.
 - **Sacrifice effects** [implemented, sadk-remake 5778b7d]: effects by name (`ISacrificeEffect`, `[SacrificeEffect]`,
   `NamedSacrificeEffect` with `Fire`, `Modify`, `Started`, `Ended`); core.game registers the original's effect types under
   names (`sacrifice.soldierDamage`, … `SacrificeEffectNames`, S 00660960, S 00660500, S 00663560, S 006630b0,
   S 006631e0), a definition names more in `NamedEffects`; a modifier table holds named values a mod's effect sets and its
   rules read; a tribe's `OfferedSacrifices` offer a mod's sacrifice at its temples.
-- **Victory conditions**: `switch (mode) case 1/2/3` in `VictorySystem` (`MapTypes`/`WinConditions` named already);
-  conditions by name.
-- **Soldier kinds as data**: behaviour keyed by kind index 0 (sword) / 1 (bow) in combat, garrisons and the AI's
-  strength (`SoldierTable.Kinds = 2`); melee or ranged from a flag on the soldier section, the index kept only for the
-  original's save and checksum layouts.
+- **Victory conditions** [implemented, sadk-remake 6f69bbb]: `IVictoryCondition` (`[VictoryCondition]`, a stacked piece:
+  `Begin`, `IsEliminated`, `UpdateProgress`, `IsReached`, `Progress`, `ShowsProgress`, `UpdateLocalQuest`; S 00535d70 and its
+  callees, the scenario's S 0052da20, S 0052da60, S 00535fd0); the original's modes are `victory.endless`,
+  `victory.destroyAllEnemies`, `victory.conquer`, `victory.coin`, `victory.scenario`, and the rule `victory.condition` names
+  a match's condition from its win condition number. Test mod `HillMod` (hold the hill). Open: naming a mod's condition in
+  `MatchSetup` and the lobby (a mod's condition is chosen today by its startup setting through the rule).
+- **Soldier kinds as data** [implemented, sadk-remake 6f69bbb]: `SoldierSection.Reach` (`OfKind`, the default, `Melee`,
+  `Ranged`); `IsRanged` keys the soldier's own fighting (S 007798d0, S 00779980, S 005721a0, S 005735b0, S 00576b80,
+  S 00570c90, S 00572060); the kind's index stays for the MilitaryConfig table, a building's garrison kind and its toggle,
+  the fight's per-kind counts and groups, where two kinds remain fixed.
 - **Replaceable systems and command handlers**: `[SimSystem(Replaces = "…")]` takes a system's slot; a command-handler
   registry keyed by command id with the rules' wrap/replace layering (the command record stays data).
 - **Combat and AI formulas as rules**: strike value, hit chance, reach, the attack decision and the strength estimate
   as named game rules (`MilitarySystem.Combat`, `AiPlayer` scoring), like `production.productAmount`. The sword group's
   superiority is one [implemented, sadk-remake 5778b7d]: `military.groupSuperiority` (S 005735b0), its query carrying
-  the striker's owner and the sacrifices' view.
+  the striker's owner and the sacrifices' view. The computer players' are [implemented, sadk-remake 6f69bbb]: `ai.attack`
+  (S 005a0dd0; the mode's draw stays with the attack execution), `ai.strength` (S 0059e6c0, S 0059f0b0), `ai.goodPriority`
+  (S 00554bc0), `ai.producer` (S 005936e0, S 00592c40); a mod's building is built through `ai.Want(good)` (S 0058d370) and
+  those rules. Open: the AI's role finders and its scoring by working mode (a building-role section like `AiGoodRolesDef`
+  when a mod needs one), the build order's stages; strike value, hit chance and reach as rules.
 - **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
   concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
 - **Declarative panel bindings**: `<ProgressBar value="{Component.Value}"/>` in layouts (architecture §6), so a panel
@@ -1332,8 +1344,29 @@ definition, an implementation registered by name, the base game's code moved as 
   implementation alone (`MatchIdentity.Compare`), so files from before a new rule load without a warning. Left in these
   areas: the remaining fixed decisions (the supplier search S 00557da0, the stack and swap tests, the catapults, the fight
   cell search, the coast and expedition queries), setters of packages, flags, fights and ships, and the systems' own
-  cross-system calls turned into events. Round 2: the village, the settlers and the simulation core, the AI, map
-  scripts, statistics and victory. Round 3, the client (ideas 4, 10, 11 and the ideas' client parts), is implemented
+  cross-system calls turned into events.
+  **Round 2** [implemented, sadk-remake 6f69bbb] covers the village, the settlers and the simulation core, the computer
+  players, map scripts, statistics and victory, each area with its test mod, faithful mode byte-identical (the capture's
+  checksums, state hashes and save sections; a reloaded save's whole bytes differ by the rules its remake part lists):
+  - a mod's state: `[Saved]` members of its system or a `SavedComponentState` are saved by name in the save's extension
+    part, loaded (an older or newer version of the state still loads) and in the checksum and state hash (`SavedFields`);
+  - the village: the production cycle as the stacked named piece `village.production` (`ProductionCycle`: `CanStart`
+    S 00565bd0, `Start` S 005657c0, `Duration` S 00565ed0, `Finish` S 00565f80 with `Products` S 00565990, `RequestInputs`
+    S 00565a70, `RebalanceInputs` S 00565f00; the context's recipe lets a mod run the base rules over an alternative input)
+    and the settler orders as `village.orders` (`SettlerOrderService`: `FindSupplier` S 00562280, `CanSupply` S 00562440,
+    `Select` S 00569430 / S 00569290, `Spawn` S 005624f0, `Deliver` S 00561e20; the loop S 005626c0 stays the village's);
+    the events `ProductsDelivered`, `SettlerOrderCreated`, `SettlerOrderServed`, `SettlerOrderRemoved`; the operations other
+    systems called privately opened (construction, territory, damage and healing, stock in and out, orders, settler spawns,
+    messages) with friendly forms on the building. Test mod `GuildMod`. Left: the step list's fixed vocabulary
+    (`JobStepKind`), the store's settler acceptance, occupancy, the stock-keeping and decay ticks;
+  - the settlers and core: settler classes and soldier kinds (above); the settlers' friendly forms (`SpawnSettler`,
+    `SendHome`, `Remove`, `Npc.MoveTo`, `SpawnAnimal`, `Kill`), `OnSettlerSpawned`/`OnSettlerRemoved`,
+    `PlayerTable.ChangeTeam` (S 00527b30) and `Rename` (the map scripts call them), the job operations of work behaviours.
+    Left: a settler's profession changed in place (the original exchanges through an order), more than two soldier kinds;
+  - the computer players, map scripts, statistics and victory: victory conditions and the AI's rules (above); a mod's
+    map-script functions in core.game's tables (`ModContext.ExtendLuaTable`); statistics categories (`StatisticCategory`,
+    sampled on the S 00537ba0 schedule).
+  Round 3, the client (ideas 4, 10, 11 and the ideas' client parts), is implemented
   [sadk-remake 7305fa7, b25d6fe].
 - **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
