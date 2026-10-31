@@ -1262,8 +1262,10 @@ definition, an implementation registered by name, the base game's code moved as 
   (`IStrikeRule`: `HitThreshold` S 007798d0, the query carrying the opponent's blocking chance as well as the striker's;
   `StrikeValue` S 005721a0; `Damage` S 00659260, a projectile's too); a mod's own shot asks it
   (`StrikeRules.HitThresholdOf`, `DamageOf`). Open: the reach (where a soldier may fight from).
-- **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
-  concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
+- **The presentation's remaining concrete reads** [implemented, sadk-remake e952365]: the interface reads map objects,
+  characters, ships, buildings and the build overlay through services (`IObjectPlaces`, `ICharacterPlaces`,
+  `IBuildingPlaces`, `IBuildOverlay`; renderer.md §2.2), and the particle service hands out `IEffectHandle` and
+  `IMovieHandle`. Open: shader time per renderer (the time globals are the process's, shared by a gallery's renderer).
 - **Declarative panel bindings** [implemented, sadk-remake 809dc12]: a component's panel section as data,
   `<ComponentSection key="brewery.yeast" Title="!YEAST"><Rows><Bar label="…" value="{Yeast}" max="{limit}"/>…`, the rows
   (`Text`, `Bar`, `Good`, `Button`, each with `if`/`unless`) bound to the state's public properties and the use's

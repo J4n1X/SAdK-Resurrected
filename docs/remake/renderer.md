@@ -159,17 +159,19 @@ core.game's map layers offer:
 |---|---|---|
 | `IFogOfWar` (viewer, active, explored cell, shown cell, revealed block) | fog of war | buildings, characters, streets (door paths) |
 | `IGroundOcclusion` (occluders by `OccluderKey`) | ground occlusion | map objects, buildings |
-| `IParticles` (start, one-shot, follow, stop, movies) | particles | buildings (fires, dust, clip events), characters (clip events), the scene's effects |
-| `IBuildingPlaces` (node, world box, bone transform) | buildings | the scene's effects; the selection ring, picks, previews and the catapult box |
-| `ICharacterPlaces` (bones, link bone, attachment, drawn, explored, position) | characters | goods, the scene's effects |
+| `IParticles` (start, one-shot, follow, stop, movies; handles `IEffectHandle`, `IMovieHandle`) | particles | buildings (fires, dust, clip events), characters (clip events, wakes), the scene's effects |
+| `IBuildingPlaces` (node, world box, pick box, ray test, bone transform, turned box, hit distance, containment) | buildings | the scene's effects; the selection ring, picks, previews and the catapult box |
+| `ICharacterPlaces` (bones, link bone, attachment, drawn, explored, position, top, records) | characters | goods, the scene's effects; the ship and settler picks, the selection ring, the ship box's picture, the soldier overlays |
+| `IObjectPlaces` (records, world box, near fade, hold all) | map objects | the selection picture, the buoy picks, the minimap's overview, a mod's camera |
+| `IBuildOverlay` (flags, alpha, excluded cell, map changes) | build overlay | the build placement (the info map) |
 | `IWorkplaceAnimations`, `IBuildingEntrances` | buildings | the settler feed and the entrance passes (wired by the match) |
 | `IAttachedItems` | goods | the settler feed (wired by the match) |
 
-The code that makes a renderer and drives its layers (the match, the galleries, the map view's statistics) still holds
-the concrete layers it feeds (`Layer<T>()`): the feeds, sources and clocks it sets on them are its composition, not a
-layer's business. The interface's own reads of map objects, characters and ships (the selection, the minimap, the build
-mode's picks) still look the object and character layers up by type [TODO]; the buildings' boxes it reads through
-`IBuildingPlaces`.
+The code that makes a renderer and drives its layers (the match, the galleries, the map view's statistics) holds the
+concrete layers it feeds (`Layer<T>()`): the feeds, sources and clocks it sets on them are its composition, not a layer's
+business. The interface (the selection, the hover tooltip, the build mode, the minimap) reads the drawn world through the
+services only, so a mod's layer that serves one replaces core.game's for the interface too; the layers hold the effects
+they start as the particle service's handles. Tests keep both rules (`RenderServicesTests`).
 
 ## 3. Structure [draft]
 
