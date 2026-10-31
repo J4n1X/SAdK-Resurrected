@@ -1240,8 +1240,10 @@ definition, an implementation registered by name, the base game's code moved as 
   `Begin`, `IsEliminated`, `UpdateProgress`, `IsReached`, `Progress`, `ShowsProgress`, `UpdateLocalQuest`; S 00535d70 and its
   callees, the scenario's S 0052da20, S 0052da60, S 00535fd0); the original's modes are `victory.endless`,
   `victory.destroyAllEnemies`, `victory.conquer`, `victory.coin`, `victory.scenario`, and the rule `victory.condition` names
-  a match's condition from its win condition number. Test mod `HillMod` (hold the hill). Open: naming a mod's condition in
-  `MatchSetup` and the lobby (a mod's condition is chosen today by its startup setting through the rule).
+  a match's condition from its win condition number. Test mod `HillMod` (hold the hill). The lobby offers the conditions a
+  mod set adds after the original's four (`[VictoryCondition(name, Title = …)]`) and names the choice in the set-up
+  (`MatchSetup.Victory`, `VictoryConditionQuery.Chosen`; the base rule runs it unless a map script sets the scenario mode)
+  [implemented, sadk-remake e284c54].
 - **Soldier kinds as data** [implemented, sadk-remake 6f69bbb]: `SoldierSection.Reach` (`OfKind`, the default, `Melee`,
   `Ranged`); `IsRanged` keys the soldier's own fighting (S 007798d0, S 00779980, S 005721a0, S 005735b0, S 00576b80,
   S 00570c90, S 00572060); the kind's index stays for the MilitaryConfig table, a building's garrison kind and its toggle,
