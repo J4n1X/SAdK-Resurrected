@@ -1368,7 +1368,8 @@ definition, an implementation registered by name, the base game's code moved as 
     sampled on the S 00537ba0 schedule).
   Round 3, the client (ideas 4, 10, 11 and the ideas' client parts), is implemented
   [sadk-remake 7305fa7, b25d6fe].
-- **Step-list fallbacks** (the maintainer, 2026-10-28): several `<Otherwise/>` branches tried in order (a failed step
+- **Step-list fallbacks** (the maintainer, 2026-10-28) [implemented, sadk-remake 941fef4: `Job.Branches`, `JobState.Branch`
+  saved in the place of the old flag; the `Take` step and the landlocked Salt Works came before]: several `<Otherwise/>` branches tried in order (a failed step
   goes to the next branch, the last one's failure ends the job; the branch index in the saved job state), and a step
   `<Take good="key"/>` that takes a unit from the building's input stock and cannot be done when it holds none. The
   carriers bring the good because the input stock asks for it (the recipe and the stock limit), never the step. First
