@@ -1264,8 +1264,12 @@ definition, an implementation registered by name, the base game's code moved as 
   (`StrikeRules.HitThresholdOf`, `DamageOf`). Open: the reach (where a soldier may fight from).
 - **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
   concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
-- **Declarative panel bindings**: `<ProgressBar value="{Component.Value}"/>` in layouts (architecture §6), so a panel
-  section can be XML only, as `work.steps` made simple jobs.
+- **Declarative panel bindings** [implemented, sadk-remake 809dc12]: a component's panel section as data,
+  `<ComponentSection key="brewery.yeast" Title="!YEAST"><Rows><Bar label="…" value="{Yeast}" max="{limit}"/>…`, the rows
+  (`Text`, `Bar`, `Good`, `Button`, each with `if`/`unless`) bound to the state's public properties and the use's
+  parameters; it takes the place of the rows `IInspectable` describes, so a section is XML only and another mod changes it
+  with an `Update`. The kind is presentation (out of the registry checksum). Open: bindings in the original's layouts
+  themselves (the building boxes' own members), which need the presentation's reads as views first (the item above).
 - **The maintainer's transport mod**: congestion-aware routing and the overflow slot over the §14.2 seams
   (`transport.nextHop`, `transport.flagAdmission`, `carrier.street`). The seams it needs exist [implemented, sadk-remake
   5778b7d]: `NextHopContext.Purpose` (a route or a probe), `IFlagAdmission.CanDrop`, the rule `transport.flagOverflow`
