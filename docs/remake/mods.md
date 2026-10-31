@@ -1371,8 +1371,10 @@ definition, an implementation registered by name, the base game's code moved as 
     `Select` S 00569430 / S 00569290, `Spawn` S 005624f0, `Deliver` S 00561e20; the loop S 005626c0 stays the village's);
     the events `ProductsDelivered`, `SettlerOrderCreated`, `SettlerOrderServed`, `SettlerOrderRemoved`; the operations other
     systems called privately opened (construction, territory, damage and healing, stock in and out, orders, settler spawns,
-    messages) with friendly forms on the building. Test mod `GuildMod`. Left: the step list's fixed vocabulary
-    (`JobStepKind`), the store's settler acceptance, occupancy, the stock-keeping and decay ticks;
+    messages) with friendly forms on the building. Test mod `GuildMod`. The step list's vocabulary is open: a mod's
+    `[JobStepKind]` (`IJobStepKind`: `Begin`, `Continue`, `Cost`, its parameter check) is a step by its name in a list and
+    `Job.Do` in code, its progress in the job's saved phase, timer and cost [implemented, sadk-remake 89fdab3]. Left: the
+    store's settler acceptance, occupancy, the stock-keeping and decay ticks;
   - the settlers and core: settler classes and soldier kinds (above); the settlers' friendly forms (`SpawnSettler`,
     `SendHome`, `Remove`, `Npc.MoveTo`, `SpawnAnimal`, `Kill`), `OnSettlerSpawned`/`OnSettlerRemoved`,
     `PlayerTable.ChangeTeam` (S 00527b30) and `Rename` (the map scripts call them), the job operations of work behaviours.
