@@ -1246,8 +1246,11 @@ definition, an implementation registered by name, the base game's code moved as 
   `Ranged`); `IsRanged` keys the soldier's own fighting (S 007798d0, S 00779980, S 005721a0, S 005735b0, S 00576b80,
   S 00570c90, S 00572060); the kind's index stays for the MilitaryConfig table, a building's garrison kind and its toggle,
   the fight's per-kind counts and groups, where two kinds remain fixed.
-- **Replaceable systems and command handlers**: `[SimSystem(Replaces = "…")]` takes a system's slot; a command-handler
-  registry keyed by command id with the rules' wrap/replace layering (the command record stays data).
+- **Replaceable systems and command handlers** [implemented, sadk-remake cfd8337, 6bcb4f4]: `[SimSystem(Replaces = "…")]`
+  takes a system's slot in the tick (the replaced system keeps its state, operations, save section and checksum; one
+  replacement per system, a later mod replaces the replacement); command handlers by command id (`ICommandHandler`,
+  `[CommandHandler("<command id>")]`, a named implementation over the record's own `Validate`/`Execute`, stacked as every
+  named piece; `CommandHandler<T>` for one command type; the command record stays data).
 - **Combat and AI formulas as rules**: strike value, hit chance, reach, the attack decision and the strength estimate
   as named game rules (`MilitarySystem.Combat`, `AiPlayer` scoring), like `production.productAmount`. The sword group's
   superiority is one [implemented, sadk-remake 5778b7d]: `military.groupSuperiority` (S 005735b0), its query carrying
