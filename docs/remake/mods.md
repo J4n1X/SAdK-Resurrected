@@ -1255,7 +1255,10 @@ definition, an implementation registered by name, the base game's code moved as 
   (S 005a0dd0; the mode's draw stays with the attack execution), `ai.strength` (S 0059e6c0, S 0059f0b0), `ai.goodPriority`
   (S 00554bc0), `ai.producer` (S 005936e0, S 00592c40); a mod's building is built through `ai.Want(good)` (S 0058d370) and
   those rules. Open: the AI's role finders and its scoring by working mode (a building-role section like `AiGoodRolesDef`
-  when a mod needs one), the build order's stages; strike value, hit chance and reach as rules.
+  when a mod needs one), the build order's stages. The strike is [implemented, sadk-remake 5e5ea68]: `military.strike`
+  (`IStrikeRule`: `HitThreshold` S 007798d0, the query carrying the opponent's blocking chance as well as the striker's;
+  `StrikeValue` S 005721a0; `Damage` S 00659260, a projectile's too); a mod's own shot asks it
+  (`StrikeRules.HitThresholdOf`, `DamageOf`). Open: the reach (where a soldier may fight from).
 - **The presentation's remaining concrete reads**: the UI's reads of object, character and ship records through the
   concrete layers (renderer.md §2.2 [TODO]), the particle handles as interfaces, shader time per renderer.
 - **Declarative panel bindings**: `<ProgressBar value="{Component.Value}"/>` in layouts (architecture §6), so a panel
