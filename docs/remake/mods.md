@@ -1259,8 +1259,13 @@ definition, an implementation registered by name, the base game's code moved as 
   the striker's owner and the sacrifices' view. The computer players' are [implemented, sadk-remake 6f69bbb]: `ai.attack`
   (S 005a0dd0; the mode's draw stays with the attack execution), `ai.strength` (S 0059e6c0, S 0059f0b0), `ai.goodPriority`
   (S 00554bc0), `ai.producer` (S 005936e0, S 00592c40); a mod's building is built through `ai.Want(good)` (S 0058d370) and
-  those rules. Open: the AI's role finders and its scoring by working mode (a building-role section like `AiGoodRolesDef`
-  when a mod needs one), the build order's stages. The strike is [implemented, sadk-remake 5e5ea68]: `military.strike`
+  those rules. A computer player's AI tick is a list of named tasks [implemented, sadk-remake 71bf1b7]: `IAiTask`
+  (`[AiTask]`), the ten steps of `Player::Update` S 00582af0 as core.game's base tasks in their order (`AiTaskNames`), each
+  wrappable or replaceable by its name; a mod's task runs for the profiles that name it in `AiProfileDef.Tasks` (a use with
+  its parameters as the profile's preferences), after the base task its attribute names, inside the tick on the world's
+  random stream; `AiPlayer.TryUpgrade` is the original's per-building upgrade test. The original's `MilitaryUpgrade`
+  (S 005982a0, with `AiMilitary_ChooseSoldierKind` S 0059f370) is ported with it. Open: the AI's role finders and its
+  scoring by working mode (a building-role section like `AiGoodRolesDef` when a mod needs one), the build order's stages. The strike is [implemented, sadk-remake 5e5ea68]: `military.strike`
   (`IStrikeRule`: `HitThreshold` S 007798d0, the query carrying the opponent's blocking chance as well as the striker's;
   `StrikeValue` S 005721a0; `Damage` S 00659260, a projectile's too); a mod's own shot asks it
   (`StrikeRules.HitThresholdOf`, `DamageOf`). Open: the reach (where a soldier may fight from).
