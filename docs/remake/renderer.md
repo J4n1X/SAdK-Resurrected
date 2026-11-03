@@ -1144,7 +1144,10 @@ and two cross products for the baked normal. Faithful: no blend, no texture read
   every type its tribes can build (`BuildingLayer.Prepare`, sadk-remake 6a80842), as the original loads every
   `<Building>` of `buildings.xml` under "Loading building configs" (`Scene_LoadBuildingsXml` S 006821b0 →
   `RegisterBuildingType` S 006a2860 → `BuildingDesc::LoadFromXml` S 006d3880). The simulation's tick of a placement costs
-  2–4 ms ([sim-boundary.md](sim-boundary.md) §4.3).
+  2–4 ms ([sim-boundary.md](sim-boundary.md) §4.3), off the frame since the simulation thread. The characters had the
+  same hitch (a settler type's skeleton baked with all its clips when the first one appeared, half a second on a slow
+  machine): the load now prepares every settler, pack ox and ship type of the match's tribes and every animal type
+  (`CharacterLayer.Prepare`, sadk-remake d6b6cb3) under "Loading characters".
 - **Garbage**: while orbiting at Low the rebuilds allocate about 257 MB/s (3 MB/s with a still camera), about 46
   collections a second with the longest pause per window around 5.5 ms (p50) and up to 25 ms; the remaining terrain
   spikes coincide with them. Exact-size arrays passed as spans halve the allocation but made the worst frame about
