@@ -178,7 +178,7 @@ public sealed class TickRecord             // immutable once published
 4. `Alpha`, interpolation, animation with `SimDelta`, particles with simulation time, audio with `RealDelta`.
 5. Render; picking for the next frame's input.
 
-### 4.3 Threading [the maintainer's decision 2026-10-18; draft]
+### 4.3 Threading [the maintainer's decisions 2026-10-18 and 2026-11-03; implemented, sadk-remake 3cc8402]
 
 **The simulation runs on a thread of its own, in faithful mode too.** The original runs it on the main thread
 between UI and render, so every tick is paid for inside a frame. Determinism does not depend on that: it rests on
@@ -187,32 +187,52 @@ floats, commands at fixed ticks and gaps), and one simulation thread keeps that 
 falls into is presentation. The simulation thread is the only thread that runs ticks; inside a tick it stays
 sequential.
 
-What changes against §4.1 and §4.2:
-- **Driver.** The simulation thread owns `SimHost`: it advances the accumulator (the original's semantics, 5 s
-  clamp, catch-up without cap), runs the due ticks, pumps the transport and publishes each `TickRecord` into a queue.
-  `SimDriver` on the main thread only feeds it the scaled time and the real time, and takes the records in step 3.
-- **Commands.** `Submit` enqueues; the simulation thread executes offline commands in the next gap between two
-  ticks, with the previous tick's counter, the place the original's UI call gives them. The command log records tick,
-  gap and order as before, so a replay is the same with or without the thread.
-- **Views.** `IWorldView` is no longer "valid between Advance calls": the presentation reads a snapshot published at
-  a tick boundary, or takes a tick-boundary lock for rare queries (picking, info boxes). It never reads live state.
-  Game rules are pure functions of their query ([mods.md](mods.md) §14 item 7), so the presentation evaluates one
-  (the farm's product buff) without the lock.
+**The handoff** (decided 2026-11-03 over snapshots of the views). The world belongs to one thread at a time and changes
+hands only between two ticks:
+- The **main thread** holds it from the end of one frame's drawing (`RenderingServer.FramePostDraw`) to the start of
+  the next one's (`FramePreDraw`): input, the interface's signals, every node's process and physics step, the deferred
+  calls and the tick records' consumers read the world's views live, as they did when the ticks ran in the frame.
+- The **simulation thread** holds it while Godot draws: at `FramePreDraw` the host adds the frame's time on the main
+  thread (the accumulator, the 5 s clamp, the gap's commands) and lets the thread run the due ticks (catch-up without a
+  cap, the lockstep gate). At `FramePostDraw` the main thread waits until they are done, so a frame is never slower than
+  one that runs its ticks itself. A frame that is not drawn (a minimised window) runs that time in the next frame's
+  advance.
+- **Shown one frame later.** A frame's ticks are handed over (`TickRecord`s) with the next frame's advance, together
+  with the `SimClock` taken then, before that frame's time is added, so the shown tick and `Alpha` stay a pair.
+- **Commands** submitted while the main thread holds the world run at once in the gap, as before; a save is written then
+  too. The command log records tick, gap and order as before: a threaded session replays on the synchronous driver to the
+  same checksums, and fed the same frames both drivers run the same ticks (sadk-remake `SimThreadTests`, a free game with
+  its computer player and C01 with its map script among them).
+- **The thread guard** (§10): with the fences on (debug builds, tests; `core.game.match?guard=true` in a release build)
+  the world's entry points (systems, views, entities, queries, commands, ticks, events, the save) throw on any thread but
+  the one that holds the world; the host refuses calls from a third thread.
 - **Godot state.** `Engine.TimeScale` and `SceneTree.Paused` are set on the main thread from published records; the
-  simulation thread touches no Godot API (godot-capabilities §6).
-- **Clock.** `SimClock` is published with each record, so `Alpha` (and faithful mode's stall saw-tooth) is computed
-  from published values on the main thread.
-- **Frame-time hazards of §1.** The cinematic screen's switches, UI calls into map-script callbacks, frame-aged
-  player messages and "local player" branches must reach the simulation as commands or tick-time work, not as calls
-  from the main thread. [TODO] list each one and its route; the map script's Lua threads that the original wakes by
-  wall time each frame (offline only, `../sim/lua-runtime.md`) need a decision on which thread they run.
+  simulation thread touches no Godot API. The simulation's in-tick handlers (`World.On`, mods.md §14) run on the
+  simulation thread and must not touch Godot objects; the presentation's twin is the match's events
+  (`MatchContext.Events`: every event of the published records on the main thread after the ticks, after the base
+  game's consumers). A mod that reacts in the tick and shows something emits an event of its own and handles it there.
+- **Headless runs, replays and tests** run the ticks in the caller's frame (`SimHost.Step`, `Advance` without the
+  thread); `core.game.match?thread=false` does so in the game.
+
+Why not snapshots: the presentation reads the world live in about 350 places (views, entities, map grids) at input,
+in node updates and while applying records; snapshots would rewrite every view and add a copy per tick, for no gain the
+handoff does not give. Rare reads need no lock either, since the main thread holds the world for its whole update.
+
+**The frame-time hazards of §1** (audited 2026-11-03): the cinematic screen's switches come from the map script and end
+through a command (`core.game.cinematicfinished`); the interface's map-script callbacks are commands; `pl_getUser` reads
+the match setup and `getSpeed` the session's speed, both simulation state; player messages are aged and removed by the
+presentation's message store, fed by events; the "local player" branches use the setup's local slot (a multiplayer
+question, not a threading one); the simulation reads no wall clock; `Default.Wait` (woken by wall time in the original)
+is called by no shipped script and is not built (lua-runtime.md). Nothing of the presentation runs inside a tick; the
+terrain's workers read their own copy of the heights.
 
 CPU-heavy presentation work (terrain region rebuilds, decal clipping, particle simulation) runs on worker threads
 and is applied on the main thread. Measured at a god-mode building placement: the terrain costs 2 to 5 ms of main
 thread per height change; the simulation's tick 2 to 4 ms (Release, its systems, the command and the events timed one by
 one on MP_2P_steinfjord, sadk-remake 1cb6bec), against 1.4 to 1.8 ms for an ordinary tick. The frames of 35 to 74 ms
 seen at a placement were the building type's visuals being read and built on first use, which the load now prepares
-([renderer.md](renderer.md) §10.5). The thread still takes the tick's few milliseconds off the frame.
+([renderer.md](renderer.md) §10.5). The thread takes the tick's few milliseconds off the frame; `stats=true` logs a frame
+that waited for them as `drawwait`.
 
 **Refined mode** [TODO, later]: parallel work *inside* a tick (path searches, AI evaluation, territory and
 visibility maps computed against a read-only view, applied in a fixed order; deadline jobs started at tick N and
@@ -879,7 +899,9 @@ Run-time guards, on in debug builds and in the test harness [draft]:
 - **id fence**: the same for the unique id counter;
 - **state fence** (test harness): hash the whole save stream at the end of tick *k* and at the start of tick *k + 1*
   with a presentation attached;
-- **headless equality**: a replay run headless and with the presentation gives the same per-tick checksums.
+- **headless equality**: a replay run headless and with the presentation gives the same per-tick checksums;
+- **thread guard** [implemented, sadk-remake 3cc8402]: the world's entry points throw on any thread but the one that holds
+  it at the handoff of §4.3 (`World.GuardThread`), with the random and id fences (`SimHostOptions.Fences`).
 
 These matter more in the remake than in the original, because Harmony patches can bypass assembly boundaries.
 

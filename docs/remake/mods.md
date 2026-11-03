@@ -1075,7 +1075,11 @@ in the engine, core.game's behaviours wrapped coarse and faithful; splitting the
   the tick) and acts through core.game's `[ModApi]` operations. The first one: `VillageSystem.ChangeType(building,
   type)`, `Building::SetType` S 0055c110 with the hit-point rescale as an upgrade finishes (a type without hit points,
   health 0 as the original's non-military types, takes the new type's health: the original's rescale would divide by
-  0 and remove it). The SDK guide's section "Reacting to the game".
+  0 and remove it). The SDK guide's section "Reacting to the game". Those handlers run on the simulation thread
+  (sim-boundary.md §4.3) and touch no Godot object; the main thread's twin [implemented, sadk-remake 3cc8402] is the match's
+  events, `MatchContext.Events.On<T>` (`MatchEvents`): every event of the published tick records after the ticks, in order,
+  after the base game's consumers, where a match part reads the views and changes nodes. A mod shows what it did in the
+  tick by emitting an event of its own there and handling it here.
 - **Per-building recipes and `Take`** [implemented, sadk-remake 1cb6bec]: `ProductionSection.Recipe` (`<Recipe><Item
   Good="water" Amount="1"/></Recipe>`) in place of the product's costs, resolved by `ProductionSection.Inputs()` for
   every reader (`RecipeOf`, the goods arrangement, production on/off, the computer players' needs, the info box's input
