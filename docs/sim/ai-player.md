@@ -1333,49 +1333,66 @@ when an enemy is in range and the stock is not below that margin.
 
 ### 3.15 Sacrifices
 
-Every 647 ticks with `sacrificesEnabled` (S 0058a4a0) [inferred]: refresh state, order by score, order by
-random, start ready ones.
+Row 14 of `Player::Update` S 00582af0 [known]: every 647 player ticks, only while the player has cells and
+`sacrificesEnabled` is set, the sacrifice manager's update (S 0058a4a0): refresh the state, order by score, order by
+random, start the ready ones.
 
 - **State** [known] S 0059cf60: rebuilt from scratch on every update by walking the village's list of
   working-mode-9 buildings (`NVillage::System` +0x9c) and taking the own, finished ones: ids of sacrifices in
-  progress (building sacrifice component +0x10 != -1), the first building whose sacrifice component is idle,
-  and four facts: enemy spotted, own ship ready, enemy ship ready, involved in a fight; plus a copy of the
-  map's sacrifice list for the player's tribe (empty when the map has none). The manager and its state object
-  (0x30 bytes, ctor S 0059cef0) hold nothing that outlives an update, which is why they are not saved (§7).
-- **Usable** S 0059ce50: not in progress, and by the sacrifice's category: 0 needs an enemy if it is
-  targeted; 1 and 3 need a spotted enemy; 2 needs a ready own/enemy ship by target; 4 is never usable here.
+  progress (building sacrifice component +0x10 != -1: ordered, running, or spent while its output stock empties), the
+  first building whose sacrifice component is idle (state 2, S 00560c20), and four facts: enemy spotted (S 0059e780),
+  own ship ready, enemy ship ready (S 0059cd20: a finished ship with a route reference, the same test as S 0059cb70),
+  involved in a fight (`FightList::IsPlayerInvolved` S 00573ad0); plus a copy of the map's sacrifice list for the
+  player's tribe (`MapInfo::HasMapSacrifices` S 00529760; empty when the map has none). The manager and its state
+  object (0x30 bytes, ctor S 0059cef0) hold nothing that outlives an update, which is why they are not saved (§7).
+- **Usable** [known] S 0059ce50: not in progress, and by the sacrifice's category: 0 needs an enemy
+  (`PlayerTable::HasEnemyOf` S 005bdf30) if it is targeted; 1 and 3 need a spotted enemy; 2 needs a ready own/enemy
+  ship by target; 4 is never usable here; any other category is.
 - **OrderBestScoredSacrifice** [known] S 0058a360, S 0059cbc0, S 00589fb0: only when an idle sacrifice
   building exists. Among the map's sacrifices that are not campaign-only and have category 4 (the
-  good-exchange sacrifices [inferred]; no "usable" test here): score = `(5 - stock of the good of its
-  give-goods effect) + min over cost entries of stock / amount` (float; the minimum starts at 100); the first
-  highest score > 0 (strict comparison) is ordered, none when no score is positive.
-- **OrderRandomSacrifice** [known] S 0058a250, S 00589c80: only when an idle sacrifice building exists. Pick a
-  random usable id from the profile's favourite list (`w` = its favourite weight, 0 when the list has no usable
-  id); one roll: if `w < rand % 100`, replace it by a random usable id from the map's list. Order it (nothing
-  when the id is -1). A pick from a list draws one logic random number (`rand % count`) only when the filtered
-  list is not empty; the roll is always drawn.
+  good-exchange sacrifices; no "usable" test here): score = `(5 - stock of the good of its give-goods effect) + min
+  over cost entries of stock / amount` (float; the minimum starts at 100); the first highest score > 0 (strict
+  comparison) is ordered, none when no score is positive. The give-goods good (S 005565e0) is `arg1` of the first
+  effect of type 1001; without one the function returns what its register holds: the number of effect rows (read as a
+  good id), or, with no effect rows at all, a stale value.
+- **OrderRandomSacrifice** [known] S 0058a250, S 00589c80, S 00589dd0: only when an idle sacrifice building
+  exists. The profile's favourite list filtered (S 00589dd0 with the map restriction): a campaign-only sacrifice stays,
+  any other only when the map's list holds it, and every survivor must be usable; a random pick of it (`w` = its
+  favourite weight, S 00555d60, 0 when nothing survived); one roll: if `w < rand % 100`, replace it by a random pick
+  of the map's list filtered without the restriction (campaign-only sacrifices dropped, the rest usable). Order it
+  (nothing when the id is -1). A pick from a list draws one logic random number (`rand % count`) only when the
+  filtered list is not empty; the roll is always drawn. Both orders aim at the building the state found idle: after
+  the first order is placed there, the second finds it busy (`CheckCanOrder` 1) and only adds needs or starts a
+  research.
 - **Ordering** [known] S 0058a0d0, S 0059ccc0: if the sacrifice has a `researchDuration` > 0
   (`SacrificeProperty` +0x98) and is not yet in the player's set of researched sacrifices: start its research
   through the building when the research state is 0 (`VillageSacrifice::CanStartResearch` S 00561130,
-  `StartResearch` S 00561150), and do nothing else. Otherwise add a need, attached to the sacrifice building,
-  for every cost good for which the player has no need yet, and when the stock holds **twice** the cost (the
-  cost list is added to itself for the test) and the building accepts (`CanOrder` S 00561380), place the order.
-- **Start** S 00589cd0: every own finished sacrifice building with a chosen, startable sacrifice whose
-  category condition holds is started; a targeted sacrifice gets a **random** entry of a candidate list
-  (`rand % count`): category 0 every active enemy, 1 every discovered enemy, 3 every enemy in a fight with the
-  AI (either side attacking), each once; category 2 one entry **per ready enemy ship** (its owner), so an enemy
-  with more ready ships is more likely [known] S 0059d120.
+  `StartResearch` S 00561150), and do nothing else. Otherwise add a need, attached to the AI's mirror of the
+  sacrifice building (`Player::FindBuilding` S 00583490, `NAI_LinkBuildingNeed` S 00597860, which faults on a
+  building without a mirror), for every cost good for which the player has no need yet, and when the stock holds
+  **twice** the cost (the cost list is added to itself, `GoodAmountList_AddList` S 00552bb0, for the test
+  `Stock::HasAll` S 00539a90) and the building accepts (`CanOrder` S 00561380), place the order. A research running at
+  the building blocks the order there (`CheckCanOrder` 5).
+- **Start** [known] S 00589cd0: every own finished sacrifice building with a chosen, startable sacrifice
+  (`CheckCanStart` 0) whose category condition holds (S 0059cb10: 1 a spotted enemy, 2 a ready own/enemy ship by
+  target, 3 a fight the AI is in, any other true) is started; a targeted sacrifice gets a **random** entry of a
+  candidate list (`rand % count`, S 0059d120): category 0 every active enemy (`NAI::Player::IsEnemy`), 1 every
+  spotted enemy, 3 every enemy in a fight with the AI (either side attacking, `FightList::IsPlayerAttackingPlayer`
+  S 005738c0), each once; category 2 one entry **per ready enemy ship** (its owner), so an enemy with more ready ships
+  is more likely. An empty list divides by zero (the game faults): category 0 when every enemy is excluded by the
+  script, 3 when the fight is with an excluded player, and any targeted sacrifice of category 4 or above.
 - **Sacrifice building** S 005a1e30 (every 389 ticks) [known]: the planner works on a **good**, the slot-0
   product `T` of the tribe's first working-mode-9 building (-1 when the tribe has none;
   `AiTribe_GetGoodOfWorkingMode9Building` S 0059f670, S 005a1d10: the slot-0 good id as stored, with no amount
-  test). With `T` set **or**
-  `sacrificesEnabled` (so the switch does not stop the planner of a tribe that has a sacrifice building), need
-  stage 4, tool stock
-  >= 10 and game time > `profile.sacrificesStartTime` (default FLT_MAX = never; 0 for Strong and the campaign
-  profiles; Weak and Normal do not set it): if the number of needs for `T` equals the number of own productions
-  of `T`, is below `profile.sacrificesLimit`, and no own sacrifice building is idle, add a need for `T`, attached
-  to the first depot of the first AI cell. The building itself is then ordered by NeedsConstruction (§3.5).
-  [inferred] Weak and Normal therefore never build a sacrifice building themselves.
+  test). With `T` set **or** `sacrificesEnabled` (so the switch does not stop the planner of a tribe that has a
+  sacrifice building), need stage 4, tool stock >= 10 (S 00582f00) and game time > `profile.sacrificesStartTime`
+  (default FLT_MAX = never; 0 for Strong and the campaign profiles; Weak and Normal do not set it): if the number of
+  needs for `T` equals the number of own productions of `T` (S 00582d90), is below `profile.sacrificesLimit`, and no
+  own sacrifice building is occupied and idle (S 005a1da0: `Building::IsOccupied` S 0055c400 and state 2, not the
+  finished test of the manager), add a need for `T`, attached to the first depot of the first AI cell. The building
+  itself is then ordered by NeedsConstruction (§3.5). With `T` = -1 and the switch on, `Player::AddNeed` S 005841e0
+  reads the good property of -1 and faults; every shipped tribe has a sacrifice building. [inferred] Weak and Normal
+  therefore never build a sacrifice building themselves and sacrifice only at one the map gives them.
 
 ### 3.16 Cheats and bonuses
 

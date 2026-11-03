@@ -1260,7 +1260,8 @@ definition, an implementation registered by name, the base game's code moved as 
   (S 005a0dd0; the mode's draw stays with the attack execution), `ai.strength` (S 0059e6c0, S 0059f0b0), `ai.goodPriority`
   (S 00554bc0), `ai.producer` (S 005936e0, S 00592c40); a mod's building is built through `ai.Want(good)` (S 0058d370) and
   those rules. A computer player's AI tick is a list of named tasks [implemented, sadk-remake 71bf1b7]: `IAiTask`
-  (`[AiTask]`), the ten steps of `Player::Update` S 00582af0 as core.game's base tasks in their order (`AiTaskNames`), each
+  (`[AiTask]`), the steps of `Player::Update` S 00582af0 as core.game's eleven base tasks in their order (`AiTaskNames`;
+  the last, `ai.sacrifices`, the sacrifice manager S 0058a4a0 with the temple planner S 005a1e30, sadk-remake 4ab5478), each
   wrappable or replaceable by its name; a mod's task runs for the profiles that name it in `AiProfileDef.Tasks` (a use with
   its parameters as the profile's preferences), after the base task its attribute names, inside the tick on the world's
   random stream; `AiPlayer.TryUpgrade` is the original's per-building upgrade test. The original's `MilitaryUpgrade`
