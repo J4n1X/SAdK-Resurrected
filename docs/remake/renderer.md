@@ -2043,9 +2043,31 @@ picture, by effect per cost, all as refined-look switches beside the faithful lo
 2. **Texture on steep slopes**: the original projects every pattern from above, so cliffs and steep slopes show
    stretched streaks; triplanar (or slope-aligned) mapping only where the slope is steep.
 3. **Displacement per pattern** (§10.2): the detail the fine terrain levels need to pay off. Not painted by hand
-   (maintainer: "insanely annoying to make by hand"): derived from data, e.g. by integrating the original's pattern
-   normal maps into heights in the conversion, or generated from the pattern textures by a tool (CHORD, tested
-   2026-10-15 and set aside: no height output, weak terrain normals).
+   (maintainer: "insanely annoying to make by hand"): derived from data, by integrating the original's pattern normal
+   maps into heights in the conversion (CHORD, tested 2026-10-15, was set aside: no height output, weak terrain normals).
+   Trial of 2026-10-26, prototypes in sadk-remake `tools/terrain-normals/` (not built into the game):
+   - **Why grass looks flat**: every pattern that is not an alias has a normal map (the 26 aliases use their source's),
+     but most meadows share `z_meadow_00_n.dds`, A4R4G4B4 (4 bits per channel), tiled coarser than the diffuse
+     (`nrmScale` 0.03–0.04 against `texScale` 0.065–0.13). The maps are weak, not missing; the terrain shader's port is
+     correct (its BC5 conversion matches the original per pixel, correlation 0.999).
+   - **The maps hold real heights**: each integrates back to a height field (Frankot-Chellappa, periodic, green +1);
+     normals derived from it again correlate 0.84–0.998 with the map (`z_meadow_00_n` 0.959). So the integrated height is
+     the pattern's heightmap, from the player's own data.
+   - **Rebuilt normals** (integrated, upsampled ×4 to at most 1024 by FFT with a light low-pass against the 4-bit steps,
+     derived again at strength ×2), all 30 maps of the types 0, 1 and 3 as a data-only mod, Forward+ on the game PC
+     (`MP_4P_luscious_green`): the quantisation ripples are gone, rock ridges are clearly deeper, meadows only moderately
+     (broad shading, no blade detail: the meadow map is low-frequency). Detail taken from the albedo (a high-pass at
+     strength 1.5) was grainy and darkened the ground: at most a weak separate layer.
+   - **Parallax occlusion mapping** (16 steps; the height high-passed below 1/16 of the tile and spread over its 2nd to
+     98th percentile, in the blue of A8R8G8B8 maps, which Godot's `NORMAL_MAP` does not read): a depth of 0.5 units is
+     subtle in stills; 1.5 makes rock convincing layered plates with occluding edges (texels stretch on steep walls) and
+     smears meadows into streaks. The depth must therefore be per pattern (rock yes, grass about 0): the pattern's
+     `parallaxHeight` (+0x7c), which the original reads and leaves 0.0 in every pattern that carries it, is the data hook.
+     Cost: 16 more texture reads per terrain pixel and pass, so a setting with Off.
+   - **To build**: a conversion job that integrates and rebuilds the maps (BC5 normals, the height as BC4 or in a spare
+     channel, as the converter's own encoders write them: [assets.md](assets.md) §6.2), the depth per pattern as data, the parallax behind a refined-look switch (default
+     Off, the original's look). Per-pixel normals from a bicubic height field (§10.2) are the cheaper sibling for the
+     geometry's facets.
 4. **Less visible tiling**: variation of the patterns over large areas (macro variation, randomised tiles).
 5. **A PBR path** (roughness and normals per material, Godot's lighting) for new assets; CHORD gives usable
    roughness and building normals (2026-10-15), set aside for now.
