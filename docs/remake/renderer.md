@@ -923,9 +923,9 @@ show the 1.5-unit facets.
   - `TerrainSurface.HeightAt(x, z, mode)` in C#, float32, the same formula as the shader: object placement, settler
     and animal height snapping, picking;
   - ground decals are clipped against the original's triangles, cut along the finest level's lattice and laid on it, and
-    the terrain keeps that level under them (§10.3 "Kept ground", §13.1); streets, crossings and selection markers are
+    the terrain keeps that level under them (§10.3 "Kept ground", §13.1); streets and crossings are
     laid on the surface at their own vertices (streets keep a reduced form of the original's depth bias, §15) [the streets
-    and markers do not keep the levels];
+    do not keep the levels]; the selection markers are drawn by the ground's own shaders (§15.3);
   - the water's shore fade reads the smooth height; the border skirt keeps the original's one map-wide edge height
     (§11), which does not depend on the surface.
 - **The simulation is untouched**: it keeps the fine height grid and its rules; the smooth surface never reaches it.
@@ -1507,8 +1507,20 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
 - The construction icons per cell of the local player (RE §3.14), camera-facing quads per visible block, rebuilt on
   `MapChanged(ConstructionFlags, rect, localPlayer)` (the original recomputes them every frame); shown in info-map
   mode with its fade.
-- Selection markers: decals laid on the terrain triangles like the ground decals (Godot's `Decal` is not available on
-  the Compatibility renderer), additive, spinning, from the UI's selection.
+- Selection markers: drawn by the shaders that draw the ground, not laid as meshes (decided 2026-11-06). The original projects each marker (up to four) as a decal mesh onto its coarse terrain every frame
+  (`SelectionMarker::UpdateDecal` S 006b0d00 → `CLandscape::ProjectDecal` S 0068aad0) and draws it after the terrain, the
+  streets and the building decals, unlit and additive (`decal_shader.fx` `RenderDecal`); laying it on the remake's
+  refined terrain cost up to 330 ms a frame for a moving ship. Now `SelectionRing` (`src/Sadk.Client/Selection/`) sets
+  core.game's globals `sadk_marker_0..3` (x, z of the centre, size, style + 1), `sadk_marker_angle` (the turn,
+  simulation seconds × 2π / 250) and `sadk_marker_textures` (the textures of `settings/decals.xml` as the layers of one
+  array), and the terrain passes, the streets and the ground decals add each marker's light to their pixel
+  (`shaders/overlay/markers.gdshaderinc`: the original's projection frame and side-plane clip as texture coordinates
+  over the pixel's x, z), so nothing is laid when a marker moves and it lies exactly on every terrain detail. A blended
+  layer adds it so that the whole marker shows over the ground's (the decals' premultiplied Forward+ path weights it by
+  its own alpha). The ground under the water carries it and the water drawn over it dims it by its alpha, as the
+  original's water covers the marker it lifts to the sea level (here at the point under the pixel). A view without the
+  overlay layer in its cull mask draws none (the HUD hidden, the mirror). Godot's `Decal` is not used: the Compatibility
+  renderer has none.
 
 **As built** [implemented, sadk-remake d2d47ee]:
 
