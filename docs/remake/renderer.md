@@ -1461,7 +1461,9 @@ deliberate omission, not a `[TODO]`; a mod that wants the ribbon draws its own.
 - **Layer**: `StreetLayer` (map layer order 450) keeps one `MeshInstance3D` per street and one per crossing, named by
   street id or crossing cell; texture sets 0 and 1; draw order through render priority. A street is rebuilt on its
   add, remove and upgrade and on `MapChanged(Heights)` under it, and all streets, crossings and door paths are
-  rebuilt when the terrain detail switches between the flat and the smooth surface. `street.gdshader` applies a depth
+  rebuilt when the terrain detail switches between the flat and the smooth surface. The rebuilds a frame's ticks ask
+  for are gathered (each street, crossing and door path once) and laid as one batch on the workers; the main thread
+  swaps the finished meshes in, so a change shows a frame or a few later. `street.gdshader` applies a depth
   offset of 0.1 world units and the normal map; the parameters come from `graphics.xml` `<Street>`.
 - **The near-plane pull** (§8.2) is not reproduced as a depth shift: Godot draws opaque objects before transparent
   ones, so a pull of several units would draw streets over settlers' feet, goods and buildings. A small offset alone
@@ -2032,8 +2034,13 @@ picture, by effect per cost, all as refined-look switches beside the faithful lo
      flags, buoys and water plants receive nothing (their light maps and their own light stay the original's).
    - **Updates**: the layer `core.game.occlusion` gathers changes on the main thread and runs one job at a time on a worker
      that owns the bake's arrays; its image is uploaded whole. A height change samples its texels at once (where the surface
-     is current) and recomputes the terrain within 24 units plus the smoothing; an object that comes, goes or moves
-     composes only its reach. A window equals a whole bake (tested).
+     is current) and recomputes the terrain within 24 units plus the smoothing. The objects are baked in with the load: the
+     occluders the shown map reports first are composed as they come, and once a job has composed them with none arriving
+     meanwhile, an object that comes, goes, grows or moves only gathers its reach; the gathered reaches are composed
+     together at most once a minute (`RefreshSeconds`), and so are the height changes after the load. The bake is the ground's lasting light; what moves or grows
+     has its real-time shadow (the maintainer's rule, 2026-11-06). An occluder counts as changed past 0.05 units of way or
+     8 % of its radius or height, the changed areas stay separate rectangles (overlapping ones merged), and only a slow
+     update is logged. A window equals a whole bake (tested).
    - **Cost** (Steinfjord, 6 cores, Release build, processor time; wall time on a loaded machine in brackets): the whole
      bake 0.95 s (200–550 ms): heights 0.2 s, terrain walk 0.65 s, 3000 occluders 0.06 s; in the game (Debug build) the
      first bake with its mipmaps 0.46–0.9 s on workers and 1.5 ms upload. A building plot's height change: 0.4 ms of
