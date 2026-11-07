@@ -627,8 +627,8 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
 - **Catapult** (MI §3.10): the target search, the attack movie (rotation, shot, rotation back), `Fire` (the
   ammunition is the first cost of the product slot's good, the tribe's stone, taken out and requested again unless
   a cinematic runs; the stamp is `GameSystem+0x78`; flight `trunc(distance × 5)`), the worker's mode 5 and states
-  0x1d / 0x1e, the projectiles of a removed building, the `CatapultAttack` step written at its place in
-  `WriteMovies`.
+  0x1d / 0x1e, the projectiles of a removed building, the `CatapultAttack` record at its place in the worker's
+  record, which the checksum hashes untagged.
 - **Measured** (`MP_2P_steinfjord`): player 0's catapult destroys player 1's guard house in 9 shots; per shot
   a rotation of 15 ticks, a flight of 55 ticks over 11 cells, the shot 25 and a rest of exactly 55 in state 0x1e;
   the first hit takes 10 hit points. Player 1's catapult with production switched off never selects a target; its
