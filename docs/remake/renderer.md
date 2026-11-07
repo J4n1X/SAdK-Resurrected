@@ -1473,7 +1473,11 @@ deliberate omission, not a `[TODO]`; a mod that wants the ribbon draws its own.
   vertices, and only the points below the drawn surface are raised onto it; with one piece the mesh is the
   original's fan. A harbour flag reached only by sea routes has no crossing, as in the original (`AttachFlagNodes`
   S 0069eeb0 runs on "street added", which a sea route never raises); the stone circle at a harbour flag is not a
-  crossing but the harbour place's ground plot (§13.1).
+  crossing but the harbour place's ground plot (§13.1). A crossing is drawn with set 1 (kind 1) once one of its
+  streets is upgraded while it exists (`PromoteStreetToKind1` S 0067f1a0); one made by an upgraded street stays plain,
+  as in the original (`AttachFlagNodes` registers the node before attaching the street, `RegisterCrossing`
+  S 006c3160), so a loaded match shows plain crossings between paved streets. The look setting `<Streets crossings>`
+  (`Paved`; default `Original`, principle 7) draws such a crossing with set 1 at once.
 - **Differences from the original**: the strip is a grid sampled from the heights, not the strip clipped against
   the terrain triangles; every flag node gets a crossing; the other streets at a node are rebuilt when its street
   count changes [inferred]; water streets are not drawn yet, sea routes by decision (above); the normal map's
