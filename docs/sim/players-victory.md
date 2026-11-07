@@ -734,15 +734,17 @@ A computer player never stays at a tool stock of 0: its `LockSmith` adds a free 
 
 | c | Ids | Written by (Lua, `docs/lua-surface.md`) | Read by |
 |---|---|---|---|
-| 0 | building types | `menu.lockBuilding` / `unlockBuilding` | building placement check, build menu |
+| 0 | building types | `menu.lockBuilding` / `unlockBuilding` | the build menu (a locked type's button disabled); the developer tool's placement check |
 | 1 | sacrifices (locked) | `menu.lockSacrifice` / `unlockSacrifice` | sacrifice start / order checks |
 | 2 | sacrifices made available | `menu.addSacrifice` | none through `IsLocked`; the sacrifice selection panel walks the keys |
 | 3 | job types (queried with soldier types) | `menu.lockJob` / `unlockJob` | soldier training and upgrade |
 
-`IsLocked` has seven callers `[known]`: category 0 from `Village_CheckBuildingPlacement` S 005576e0 and the
-build menu S 00634db0; category 1 from `VillageSacrifice::CheckCanStart` S 00560f20 and `CheckCanOrder`
-S 00561240; category 3 from `SoldierUpgrade::FindUpgradableSoldier` S 005698a0,
-`VillageSoldierTrainingSlot_CanStart` S 00569cb0 and the casern info box S 0063b590. None passes category 2, so
+`IsLocked` has seven callers `[known]`: category 0 from `Village_CheckBuildingPlacement` S 005576e0 (whose only
+caller is the developer tool, `Debug::HandleToolClick` S 00604dd0; the place command's execution does not test the
+lock) and the build menu S 00634db0 (`RebuildBuildingButtons`, for the local player); category 1 from
+`VillageSacrifice::CheckCanStart` S 00560f20 and `CheckCanOrder` S 00561240; category 3 from
+`SoldierUpgrade::FindUpgradableSoldier` S 005698a0, `VillageSoldierTrainingSlot_CanStart` S 00569cb0 (both for the
+building's owner, `building +8`) and the casern info box S 0063b590, which discards the answer. None passes category 2, so
 the byte that `menu.addSacrifice` (S 005dac60) sets is written and never tested by this predicate; the binding's
 visible effects are a refresh of the info-box tab with key 8 when that is the open one, and, only when its
 third argument is true, the `!New Sacrifice available` message (type 4, arg = the sacrifice's name) `[known]`.

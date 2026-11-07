@@ -650,7 +650,5 @@ public sealed class LogicPlayers : LuaLibrary
 6. Generator draws inside `pl_changePlayer`, `menu.createBuildingWithSettler`, `menu.createStreet`,
    `map_killDeposits`, `map_createDoodad` and `ai_enable` (each subsystem document lists its draws).
 7. `map_getTerritoryPlayerId` for an unowned cell.
-8. Parts of the map-script host not built yet (§4.7): the readers of the lock maps (map 0:
-   `Village_CheckBuildingPlacement` S 005576e0 and the build menu S 00634db0; map 3: `SoldierTraining.IsJobLocked`),
-   `map_createChest`, the continent rebuild after a blocking doodad, the NPC functions `se_*`, waits (§2.8), the
+8. Parts of the map-script host not built yet (§4.7): `map_createChest`, the continent rebuild after a blocking doodad, the NPC functions `se_*`, waits (§2.8), the
    cinematic camera paths, the book and tutorial screens, the minimap quest symbols.

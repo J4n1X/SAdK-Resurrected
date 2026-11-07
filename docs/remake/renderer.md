@@ -1556,8 +1556,7 @@ Per player the border points (land: `limes`, water: `buoy`), instanced; rebuilt 
   "choose a type, then click cells" mode (ingame-ui §3.8.10), as the remake's own addition.
 - **Cell marker**: a translucent hexagon; the original lays a decal (`SelectionMarker::UpdateDecal` S 006b0d00) of
   style 1, `buildingselect.dds` [inferred], 4 units wide and turning (RE §3.14). The info box has its fade-in only.
-- **Open**: the construction lock (`Player::IsLocked`, `menu.lockBuilding`) is not exposed to the menu yet; the
-  create-flag box and `0x20004`; the help text keys come from ingame-ui §3.8.10, which is [inferred].
+- **Open**: the create-flag box and `0x20004`; the help text keys come from ingame-ui §3.8.10, which is [inferred].
 
 **Selection and street placement as built** [implemented, sadk-remake 0df0a07]:
 

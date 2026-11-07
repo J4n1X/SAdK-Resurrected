@@ -343,6 +343,18 @@ What the **difficulty** changes is exclusively the profile (§6.1). The code rea
 2. If a cell exists, holds no building and no harbour (`Cell::IsEmpty`) and the corner test of step 1 fails
    (the player owns none of the corners any more): remove the cell.
 
+**Removing a cell** (`CellSystem::RemoveCell` S 0058af60 [known]; from the validator and from `CellSystem::Deactivate`
+S 0058b040, which removes every cell in the order of the Unique map): the cell leaves the Unique map and the vector,
+`TerritoryMap::OnCellRemoved` clears its low-res entries, then `Cell::Shutdown` S 005959a0 and the cell is deleted.
+`Shutdown`, in order: the depots unassigned (`NAI_Cell_UnassignBuilding` S 00597930, front first); each need's
+resource claim released when it holds a resource position (`NAI_UnlinkNeedResourceCell` S 00597ac0) and the need
+unlinked; the productions unlinked (`NAI_UnlinkProductionCell` S 00597a60, which also breaks a production's need
+pairing); the default and military buildings unassigned; the no-depot trigger stopped; `CellFull::Shutdown`
+S 005a65e0 (marks emptied); the demolition trigger stopped when armed; **one** consumer building unassigned, the last
+(no loop: the code falls through after the call at S 00595b72, so any other consumer keeps a reference to the deleted
+cell); the hunters' buildings from the last; the threat trigger stopped when armed; the barracks; the harbours
+unlinked (`NAI_UnlinkHarborCell` S 00597b90); the working-mode-9 buildings; the cell's initialised byte cleared.
+
 Edge cases of the validator [known]:
 - The perimeter search clamps the block's end to `size - 1` of the map, so the map's **last row and last
   column are never tested** S 0059d950.

@@ -517,7 +517,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   the text in the local language and keeps the result as the message's key with an empty argument, so a save holds
   the composed string as the original's does.
 - **Victory mode 5 and the quest-0 slot** are built with the map-script host (§6.18).
-- **Open**: the lock maps (PV §3.10); `FinishGame` and the profile write. `Player::Update` is in §6.15.
+- **Open**: `FinishGame` and the profile write. `Player::Update` is in §6.15.
 
 ### 6.11 Sacrifices as built [implemented, sadk-remake 322de69]
 
@@ -735,8 +735,7 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   (18) at the start, the cinematic at tick 0, Start and "1intro" at tick 1, C01_Q01 (slot 8, the temple at 76/65),
   ReachIce (15), EgyptReachPlace (2) and the tutorial chain at tick 2; `onStarted` places the Olympic temple for
   player 3, halves its stock seven times and destroys its castle.
-- **Open**: the readers of the lock maps (map 0: `Village_CheckBuildingPlacement` S 005576e0 and the build menu
-  S 00634db0; map 3: `SoldierTraining.IsJobLocked`); `map_createChest`; the continent rebuild after blocking doodads;
+- **Open**: `map_createChest`; the continent rebuild after blocking doodads;
   the NPC functions `se_*`; the waits ([lua.md](lua.md) §2.8); the cinematic camera paths; the book and tutorial
   screens; the minimap's quest symbols.
 
