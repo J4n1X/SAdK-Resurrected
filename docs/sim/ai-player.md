@@ -1939,6 +1939,41 @@ through the owner pointer from another module is not excluded].
 - The profile is data: keep `ai.lua` semantics (keys of §6.1) so that the shipped file and mods load
   unchanged.
 
+### 9.1 Reference values: a computer player's economy in the original
+
+What a computer player produces is in its statistics record (`LogicPlayerStatistics`, one cumulative history element
+per good and 600-tick period, `players-victory.md` §3.11), so a save of the original gives the economy of every
+player over the whole match. Read from saves of the original (free games; the records found by their section tags,
+the buildings by `VillageBuilding`, a building's stocks by the two `Stock` records after it) `[known]`: the values;
+`[inferred]`: that the players of the Ship Ahoi save are computer players (the Gold Henge save's map part says so
+for its slots 1 to 3: controller 1, level 2).
+
+Goods produced until period 75 (tick 45,000, 75 minutes at speed 1):
+
+| Save, player | tool | iron | iron ore | coal | fish | meat | bread | planks | wood | stone |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Ship Ahoi (6 players), Bavarians | 12 | 23 | 32 | 31 | 44 | 22 | 0 | 229 | 264 | 90 |
+| Ship Ahoi, Scots | 12 | 24 | 32 | 38 | 80 | 31 | 8 | 244 | 248 | 88 |
+| Ship Ahoi, Egyptians (two players) | 20, 39 | 49, 72 | 41, 63 | 14, 13 | 32, 59 | 14, 40 | 10, 20 | none | 39, 117 | 66, 162 |
+| Gold Henge, Scots (level 2) | 16 | 21 | 33 | 26 | 60 | 3 | 4 | 120 | 133 | 216 |
+| Gold Henge, Egyptians (level 2) | 28 | 50 | 42 | 0 | 25 | 6 | 12 | none | 73 | 239 |
+
+So a Bavarian or Scottish computer player makes a tool about every 3,000 to 3,750 ticks in its first 75 minutes: its mines
+stand still for want of food most of the time (one food per mined good), the smeltery for want of coal, the tool
+smithy for want of iron. With every new worker taking a tool, the tool stock stays below the 10 that the sacrifice
+site (§3.15), the casern (§3.10) and the catapults (§3.14) ask for through most of that time:
+
+- Ship Ahoi at period 89 (tick 53,400): the Bavarian computer player holds 4 tools and the Scottish one 1, and
+  neither has a sacrifice site; the Egyptian ones hold 32 and 9 and have one site each.
+- Gold Henge at period 320 (tick 192,000): the three computer players hold 23 tools each and have three sacrifice
+  sites each; by period 300 they have made 140, 171 and 118 tools.
+
+The remake's computer players give the same picture (its `core.game` simulation, 2026-11-09, headless, to tick
+45,000): Bavarians on Ship Ahoi (two players) tool 23 and 15, iron 27 and 26, iron ore 28 and 28, coal 26 and 35,
+fish 38 and 31, meat 20 and 29, planks 232 and 194, wood 268 and 238, stone 136 and 102, a tool stock of 1 and 4
+and one sacrifice site each; Scots on Steinfjord tool 13, iron 17, iron ore 30, coal 25, fish 54, meat 26, bread 10,
+planks 186, wood 191, stone 129, a tool stock between 0 and 10 and no sacrifice site.
+
 ## 10. Open questions
 
 | # | Question | What would settle it |
