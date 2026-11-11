@@ -221,8 +221,11 @@ On disk [known], `docs/asset-formats.md` §1:
 - The key of a `.aav` or `.s2m` file is the shared base key; every other extension, **`.sav` included**, mixes the
   lower-case file name into the key, so such a file only decrypts under its own name [known] S 006eeac0
   (`docs/asset-formats.md`). A `.aav` save can be renamed freely.
-- The plaintext size written is the memory stream's **capacity**, so a game-written payload is padded with zero
-  bytes to the next 0x80 step; the reader never reaches the padding [known], `docs/map-format.md` §3.2.
+- The plaintext size written is the memory stream's **capacity**, so a game-written payload is padded to the next
+  0x80 step; the reader never reaches the padding [known], `docs/map-format.md` §3.2. The padding is the stream's unused
+  capacity, not cleared: zero bytes in 23 of 24 saves of the maintainer's, the dword `0xBAADF00D` repeated in one (a
+  save of 2026-06-06) [known: the saves]; that value is the Windows heap's fill of a fresh allocation under a debugger
+  [inferred]. A reader takes less than 0x80 bytes after the last section as padding, whatever they hold.
 - The reader checks, in this order, the magic `"sadk"`, the key CRC, the unpacked size and the data CRC; on
   each mismatch it logs a line and then writes to address 0, a deliberate crash. It does **not** compare the
   container version at 0x00 [known] S 006e6660 (`NBase::gDecryptData`; it never calls the version getter

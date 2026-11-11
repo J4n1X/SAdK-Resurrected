@@ -626,6 +626,16 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
   not shift anything. Each component state writes a version number with its `Save` and reads older versions in
   `Load`.
 - A component state of a mod that is absent is not dropped silently: the load is refused, naming the mod.
+  [implemented 2026-11-11, coarsely] A save whose records do not read without its mods fails with a message naming the
+  mods of its match set that are not loaded; a save that does read names them in the message list, and the match runs
+  on without them (`World.MissingMods`).
+- **File names** [decided by the maintainer 2026-11-11; implemented]: a save is `.aav` when no mod of the match changes the
+  simulation (the base game alone, or mods of the presentation only: the match set holds no mod but the built-in ones),
+  and the remake's extended `.aavx` when one does (`SimulationCatalog.ExtendedBy`). Both are the original's container keyed
+  as a `.aav` (renaming keeps them readable); a save name stands for one file, so saving under a name removes the same
+  name under the other extension; the load panel lists both. That a `.aav` of the remake also loads in the original is
+  the faithful save layout's work (the remake's own fields still sit in the original's records; sadk-remake
+  `docs/known-bugs.md`).
 - Saves of the original (compatibility mode, `../sim/save-format.md`) store original ids; `core.game` maps them to keys
   through the original ids it keeps.
 
