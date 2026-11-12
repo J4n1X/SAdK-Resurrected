@@ -788,6 +788,9 @@ the collected call-stack text at level 1, closes the instance mutex and returns 
 on this path, so `settings.cfg` and `data.cfg` are not written after a crash [known: control flow S 00407f3a].
 The scope covers the main thread only [inferred].
 
+With the sadkmod shim installed, its crash report takes the filter's place and covers the other paths too
+(`sadkmod/shim/README.md`, "Crash report").
+
 `data\game\language\crashmsg.ini` (plain text, section `[msg]`, keys `caption` and `text`, the text holding the
 placeholder `[DIR]` and asking the user to mail the folder's content) is not named anywhere in the image
 [known: string search]; [inferred] another program of the install shows it. [TODO] not established: which one.
