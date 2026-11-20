@@ -221,8 +221,8 @@ On disk [known], `docs/asset-formats.md` §1:
 - The key of a `.aav` or `.s2m` file is the shared base key; every other extension, **`.sav` included**, mixes the
   lower-case file name into the key, so such a file only decrypts under its own name [known] S 006eeac0
   (`docs/asset-formats.md`). A `.aav` save can be renamed freely.
-- The plaintext size written is the memory stream's **capacity**, so a game-written payload is padded to the next
-  0x80 step; the reader never reaches the padding [known], `docs/map-format.md` §3.2. The padding is the stream's unused
+- The plaintext size written is the memory stream's **capacity** (`FileStreamCrypt::Close` S 00412270; the stream starts
+  at 0x400 bytes and grows by 0x80), so a game-written payload is padded to the next 0x80 step; the reader never reaches the padding [known], `docs/map-format.md` §3.2. The padding is the stream's unused
   capacity, not cleared: zero bytes in 23 of 24 saves of the maintainer's, the dword `0xBAADF00D` repeated in one (a
   save of 2026-06-06) [known: the saves]; that value is the Windows heap's fill of a fresh allocation under a debugger
   [inferred]. A reader takes less than 0x80 bytes after the last section as padding, whatever they hold.
@@ -980,7 +980,11 @@ S 00668050 reads them verbatim in current versions).
 - The reader must implement the current versions only to read saves written by the last patch; the old-version
   gates of §3.5 matter only for saves from earlier patch levels.
 - Tag CRC and name length are ignored by the game but should be written correctly.
-- Trailing zero padding is optional.
+- Trailing zero padding is optional. The original's reader stops after the logic part's last section (the chests,
+  `LogicChestSystem::Save` S 0052d200 is `GameFile_SaveLogic` S 005a9ec0's last call), so data after it is never read:
+  the remake puts its own part there (`Remake Save` v5: the match identity, the setup, the session, the extensions and
+  the records' tails with the remake's own fields, then the `SADKSAVE` footer), so its `.aav` stays the original's save
+  up to that point [implemented, sadk-remake 66392f2].
 - Property ids must match the original data.
 - The AI sections are the largest undocumented block (some 70 section types, Appendix A). A reader that does not
   model the AI cannot skip them, because sections have no length: **reading an original save requires parsing
