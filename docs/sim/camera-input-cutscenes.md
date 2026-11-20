@@ -175,7 +175,7 @@ Offsets from the object start. Four interface faces: +0x00 `nMenu::Overlapped`, 
 | +0xc3c | u32 | page count |
 | +0xc40 | vector<string> | cutscene name per page ("" = keep the running path) |
 | +0xc50 | vector<i32[2]> | anchor cell per page (−1, −1 = none) |
-| +0xc60 | `nMenu::PanelCinematic` | bars, text, two speaker slots (+0x25ac, +0x25b0 from the screen start) |
+| +0xc60 | `nMenu::PanelCinematic` | bars, text, two speaker slots (+0x25ac, +0x25b0 from the screen start); `Create` S 0062dbc0 hangs `textHeadline` and `textDescription` under `barBottom`, `textMissionBlock` and the minimap under `barTop` [known] |
 | +0x24d8 | `nUi::Text` | subtitle text |
 | +0x25b8 | widget | `blackDesktop` of the layout |
 | +0x2840 | u8 | info-map overlay state saved at `OnShow` |
@@ -585,6 +585,10 @@ while `+0x635` is set (S 00780d20).
 | 4 ending | — | overlay state restored; fog-of-war overlay on; voice stopped; cutscene camera stopped (`ResetToStandardMode` if it was playing); `EndCinematic`; `timer = 0.5`; → 2 |
 | 2 restore HUD | — | HUD faded in and black desktop faded out over 1.0 s; music stopped; ducking off; `timer = 1.0`; → 3 |
 | 3 restore speed | local game speed = `saved − (saved − 1) × timer` | all dialogs closed, which runs `OnHide` |
+
+Phase 0's end falls straight through into the first page step in the same frame. The local game speed the phases
+0 and 3 ramp is `UserProfile +0x24`, the same float the lockstep speed command (0x20023) sets, so `logic.getSpeed` reads
+1.0 while a cinematic plays [known; read for sadk-remake 6198e42].
 
 **Page step** (phase 1, `timer < 0`) [known]: speaker portraits are preloaded once. If a voice-over is still
 playing, wait. If pages remain:

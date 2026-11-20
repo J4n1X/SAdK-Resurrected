@@ -215,7 +215,11 @@ the constant at S 00884a68, 5.0 (the same 5.0 is a literal of `Render`). Object 
   timer (f32 at +0x7a18). Background texture `uiMediumDialog`. 0x7a20 bytes.
 - `Book` [known] S 005fc400, S 005fcd50: `Overlapped` without a layout file (background texture `uiBriefing`);
   a text block, next and previous icons, a close button, a page counter label, three pictures, the story / quest
-  toggle button, the picture texture name, **an array of 20 std::string pages**, `pageCount`, `currentPage`.
+  toggle button, the picture texture name, **an array of 20 std::string pages**, `pageCount`, `currentPage`. The
+  constructor creates only the frame, the title and the picture at (201, 30): the text block, the arrows, the counter,
+  the close button and the toggle are members that no code creates, so a book opened by a script shows no page text,
+  and a use of those members is the fault at S 004b7d75 [known; read for sadk-remake 6198e42, which places them itself
+  as a fix of that interface bug]. The shipped scripts never open the book.
 - `Info` [known] S 005f6110, S 005f6310: frame dialog, text block, `mode`, `index`, `id`, `autoCloseTimer` (f32).
 
 ---
