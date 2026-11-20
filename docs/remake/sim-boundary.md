@@ -928,7 +928,13 @@ These matter more in the remake than in the original, because Harmony patches ca
      free-game maps have none); user maps whose stored ids collide with the counter behave as the original (a
      duplicate within a class replaces the earlier object) with a warning; no start-position shuffle.
    - **The match from a map**: the per-net-tick checksum keeps the original's coverage (map, resources, doodads and
-     spawns stay out) and the whole state goes into a separate state hash; a unit type the registry lacks leaves the
+     spawns stay out) and the whole state goes into a separate state hash. **The transmitted checksum is pluggable**
+     [decided by the maintainer 2026-11-20]: core.game contributes the original's nine records in the order of
+     `ComputeChecksum` S 00784080 (each system's record in its checksum form, sadk-remake 4b2d0a3), and every simulation
+     mod registers its own state as a contributor after them; without a simulation mod the checksum equals the
+     original's byte for byte. The remake's own head (tick, session speed, net tick length) and core.game's remake-only
+     state (the village's remake state, the street planner, the god flags) go to the state hash only [TODO: sadk-remake
+     still writes them into the checksum]; a unit type the registry lacks leaves the
      object out with a warning (the original inserts default properties); the whole-map exploration notice goes to
      every player (the original sends it for its local player); a map reference's hash covers the world part's bytes
      including mod overlays.
