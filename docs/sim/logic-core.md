@@ -763,7 +763,8 @@ order:
 1. `LogicRandom_Checksum`: 8 raw bytes (`state`, `seed`);
 2. `ai::player::PlayerTable::StoreChecksum` S 005bde70: for each of the 8 slots, int −1 if inactive, else the slot
    index followed by `Player::StoreChecksum` S 005be6e0: index, colour index, tribe id, good priorities, good
-   arrangement, military settings, the goods stock (only if active), team, 8 × (spotted byte, reached byte), state.
+   arrangement, military settings, the goods stock (only if active; through `Stock::Store` with its flag byte, not
+   `StoreContents`), team, 8 × (spotted byte, reached byte), state.
    The name, the player kind (differs per peer), messages and ship names are left out [known/inferred];
 3. the village system (`NVillage::System::StoreChecksum` S 00557d10, which reaches
    `NVillage::Building::StoreForChecksum` S 0055c690);
@@ -805,6 +806,19 @@ field order of their save writers but do not hash the same fields:
   `moveToShip` and, from the movement (S 006579e0 against S 006576d0), the whole `ai::movement::Movement`
   S 00773010 (cell, fine position, interpolator, movers), `streetMode`, the route cells and `routeEndRequested`.
   No settler position is hashed.
+
+**Checksum writers against save writers (military, navy, street net, the unique id)** [known: read for sadk-remake
+4b2d0a3, which hashes every system's record in its checksum form]:
+
+- military (S 00570120): a fight (S 00570fb0), a fight group (S 00573320) and a projectile (S 00572f40) hash the
+  global unique id counter where the save writes their own id, as a building does; the fight's soldier lists are
+  S 00576870;
+- navy (S 005b36a0): the system and each route leave out their `initialized` / `bLoaded` bytes and the route's path; a
+  ship (S 005bb1a0) hashes its movement (S 005b9500) without its path (the path's vtable slot 4, its checksum writer, is
+  a no-op); a harbour (S 005b52b0) hashes the global unique id counter, not its own id; its exits are S 005bc3b0;
+- street net: `StoreForChecksum` S 00664550 is `Store` S 006640d0 without its tag, its records interleaved as the save
+  writes them;
+- `Unique::Store` is S 005386e0.
 
 **`NCore::CRCStream`** (vtable S 007e9ccc) implements the save-stream interface by hashing instead of writing
 [known, vtable read]:
