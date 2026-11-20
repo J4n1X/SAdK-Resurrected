@@ -83,12 +83,12 @@ Out of scope: the `Exit` screen and the run-mode table (`app-shell.md` §3.7), t
 | +0x22c | `OptionsPanel*` | created on first use | NULL |
 | +0x230 | `FreeGamePanel*` | created on first use | NULL |
 | +0x234 | `LoadSavePanel*` | load dialog, created on first use | NULL |
-| +0x238 | f32 | `zoomInTime` | root attribute; non-zero starts a scale-in animation of the banner picture | 0.0 |
+| +0x238 | f32 | `zoomInTime` | root attribute; non-zero starts a scale-in animation of the banner picture (`nUi_AttachScaleInAnimation` S 004c39b0: scale 0 → 1 over `zoomInTime` seconds) [known] | 0.0 |
 | +0x240 | `nUi::TextScroller` | credits scroller, element `creditsText` | |
 | +0x468 | label | `CampaignDesc` | mission description box | NULL |
 | +0x46c | widget | `DiffContainer` | | NULL |
 | +0x470 | 4 × ptr | `DiffButton0` .. `DiffButton3` | | NULL |
-| +0x480 | label | `legalLines` | | NULL |
+| +0x480 | label | `legalLines` | no code sets its text: it is the layout's `!SplashText1` [known] | NULL |
 | +0x484 | f32 | time (`Timer_GetTotalSeconds`) at which the layout was loaded | |
 | +0x488, +0x48c | label | `ButtonDesc`, `ButtonHeadline` | hover help | NULL |
 | +0x490 | `nUi::Picture` | title logo, created in code | |
@@ -293,7 +293,8 @@ clears the quit flag (`Main +0x9a0`).
 **Layout load** (`OnInitLoadXml` S 005e0bb0) [known unless tagged]:
 
 1. Root attributes: `zoomInTime` (f32), `campaignName`. The install has `zoomInTime="0"`,
-   `campaignName="Main"`, `BG_3D="true"`.
+   `campaignName="Main"`, `BG_3D="true"`. `BG_3D` is read by the screen base, `nMenu::Object::LoadFromXml` S 0060cb80,
+   which passes it to `System::SetWorldActive` S 005d98f0 (the 3D world behind the menu) [known].
 2. Panels `PanelMain`, `PanelSinglePlayer`, `PanelCampaign`, and their buttons, each registered under a key:
 
    | Panel | Key → widget name |
@@ -339,7 +340,13 @@ panel 0.
 
 The layout gives the buttons these hotkeys [known: `menumain.xml`]: `s`, `l`, `o`, `c`, `q` on panel 0
 (`BtMultiplayer`, hotkey `m`, exists with `visible="false"` and is not registered by the code); `c`, `f`, `l`,
-Esc on panel 1 (`BtContinue` has none); `1`..`9` for missions 1..9 and Esc for `CampaignBack0`.
+Esc on panel 1 (`BtContinue` has none); `1`..`9` for missions 1..9 and Esc for `CampaignBack0`. They are `WM_CHAR`
+codes (`S 004a76c0`, `Object::HandleHotkey` S 0049ffc0; [ingame-ui.md](ingame-ui.md) §3.3.1) [known].
+
+The panels' buttons are `MainMenuButton`s (S 00630d20, S 00630e80, S 00630fc0, S 006310b0): each cross-fades between
+its normal and its hover look. The mission list's `CampaignScroller` pans with the cursor only (S 004c9f00,
+S 004ca0a0; smoothing 0.02 by default). The menu's only sound is a button's click, `uiClick0` (S 004b12d0; an
+`OverlayButton`'s S 004b24b0) [known: read for the remake's port, sadk-remake 3b11cb1].
 
 **Panel switch** (`SwitchPanel` S 005df8b0) [known]:
 
