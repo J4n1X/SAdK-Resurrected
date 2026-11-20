@@ -754,6 +754,11 @@ position (first minimum in vector order); the candidate with the **largest** suc
 on a tie (strict `>` against a best value that starts at 0, so if every distance is 0 the first candidate is
 taken). Chests already placed do not enter the distance, so later picks are not pushed away from earlier ones.
 
+**Presentation and load** [known: read for sadk-remake bda170a]: a chest is drawn at its cell's sample vertex
+without rotation; its opening is only a model swap to the open-chest doodad (render slot +0xd0, S 00680c80), with
+no sound and no effect. The system's `Load` calls `Reset` S 0052d360 (a chest-removed notification per chest, last
+first) only when the system is initialised.
+
 ### 3.6 Desync checksum
 
 **Computation: `nGame::System::ComputeChecksum`** S 00784080 (game listener slot +0xc) [known]. A
