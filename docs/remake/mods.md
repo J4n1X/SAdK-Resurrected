@@ -1404,7 +1404,12 @@ definition, an implementation registered by name, the base game's code moved as 
   - the settlers and core: settler classes and soldier kinds (above); the settlers' friendly forms (`SpawnSettler`,
     `SendHome`, `Remove`, `Npc.MoveTo`, `SpawnAnimal`, `Kill`), `OnSettlerSpawned`/`OnSettlerRemoved`,
     `PlayerTable.ChangeTeam` (S 00527b30) and `Rename` (the map scripts call them), the job operations of work behaviours.
-    Left: a settler's profession changed in place (the original exchanges through an order), more than two soldier kinds;
+    A settler's profession changed in place [implemented, sadk-remake 86096bb]: `SettlerSystem.ChangeProfession` (the same
+    id, a settler of the new good's class), `VillageSystem.TakeAsWorker`, the rule `construction.builderFinished` (the end
+    of a builder's work, S 0065e1d0) and the event `SettlerProfessionChanged`, proven by the mod `builderprofession`. The
+    original never changes a settler in place: an order always makes a new settler at a depot (S 005624f0 → S 00564e00),
+    and a settler that returns gives back its cost goods (S 00564eb0). Left: more than two soldier kinds (decided
+    2026-11-03: not now);
   - the computer players, map scripts, statistics and victory: victory conditions and the AI's rules (above); a mod's
     map-script functions in core.game's tables (`ModContext.ExtendLuaTable`); statistics categories (`StatisticCategory`,
     sampled on the S 00537ba0 schedule).
