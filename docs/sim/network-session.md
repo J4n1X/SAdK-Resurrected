@@ -597,7 +597,7 @@ every peer, at the logic tick that closes net tick N (the S-th accepted logic ti
     client:  send the outgoing package (tick N) to the host as message 1001
     host:    append the outgoing package to the collected package of tick N
     net tick = N+1; start a new outgoing package: header N+1, then 0x30009
-    drop packages and checksum history older than tick N+1-5; compare checksums
+    drop packages and checksum history older than tick N+1-5 (only when N+1-5 > 0); compare checksums (at every boundary)
 host, on message 1001 from net id X:
     if X owns no slot: log "Trying to add packages from user not in game", drop
     if the data is no package: drop
@@ -609,7 +609,11 @@ any peer, on message 1002:
 Gate, in the same terms: a peer may close net tick `N` only when its to-execute package of tick `N-2` exists and
 holds at least one block (from `N ≥ base + 2`); the host in addition only when its collected package of tick `N-1`
 holds a block of **every** slot whose playerId is not `0xEFFFFFEE` (from `N ≥ base + 1`). While the gate refuses,
-no logic tick runs on that peer.
+no logic tick runs on that peer. `CanAdvanceTick` is evaluated at every logic tick but refuses only on the sub-tick that
+closes a net tick, only in state 4 and with the reconnect state 0 or 1; with reconnect state 1 the host's
+collected-package condition is skipped and the `N-2` condition still applies. Of the comparison's outcomes, `!RESYNC
+DETECTED` needs the absolute net tick to be above 4, and `!NO SYNC START` fires when net tick − base is exactly 5 and the
+peer is not in sync, whether or not the state changed [known: read for sadk-remake 22af521].
 
 Points a reimplementation must keep [known unless noted]:
 
@@ -776,7 +780,8 @@ set, then leaves (which ends in `Shutdown`). `Process_MainLoop` counts the timeo
 `+0x3ae` when it reaches 0.
 
 **0x3000a on the host** [known]: player index = the sender slot's playerIndex (`NComm_Event_GetSenderPlayerIndex`
-S 00412490), or, if that is -1, the index found by GUID.
+S 00412490), or, if that is -1, the index found by GUID. The function guards only −1: another negative slot index
+reads before the slot array.
 
 - Match running (`IsInGame`): build **EventUserLeft** (0x3000b: sender = host net id and slot; payload playerIndex,
   the leaver's net id, the leaver's GUID) and append it to the outgoing tick package (lockstep).
@@ -787,7 +792,9 @@ S 00412490), or, if that is -1, the index found by GUID.
 
 1. Not the host: `HandlePlayerLeft(guid, netId, playerIndex, false)` (below).
 2. If the GUID is the local one and leave requested is set: leave completed = 1.
-3. Host in role 2 or 4: queue command **0x2002B GE_PlayerLeftGame(playerIndex)** in the outgoing package.
+3. Host in role 2 or 4 (`IsRole1to4` and host, so role 0 is excluded): queue command **0x2002B
+   GE_PlayerLeftGame(playerIndex)** in the outgoing package. A host never calls `HandlePlayerLeft` for a 0x3000b it
+   executes from a package.
 
 `HandlePlayerLeft` S 00410720 [known]: needs a valid GUID that owns a connected slot (playerId not
 `0xEFFFFFEE`). In a running match (joined and state 4): if the GUID is not
