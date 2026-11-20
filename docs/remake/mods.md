@@ -172,22 +172,20 @@ Each mod declares its settings in C# (`ISettingsStage`) or in `data/settings.lua
 | Scope | Meaning | In multiplayer |
 |---|---|---|
 | `startup` | read during the data stage; changes the registry | part of the mod set's identity; the host's values win; changing one needs the data stage again |
-| `match` | read by simulation code at run time | stored in the match, its saves and its command log; set by the host (in a match by a command at a tick) |
+| `match` | read by simulation code at run time | stored in the match, its saves and its command log; set by the host before the match, fixed for the match |
 | `user` | presentation and input only | local; never read by simulation code |
 
 `user` settings may change while the game runs and announce the change; their values are kept in the profile as
 `<Setting name value>` and handed to the mod at load [implemented 2026-10-15]. The options show them in the mod's
 sections (below), labelled by the text key `!<mod id>.<name>`. Startup settings are shown in the same section after
 the user settings, under the note `!engine.options.mods.startup`; a change is kept in the profile and applies when the
-mods load again (Apply on the mods screen, or a restart). Match settings are listed in the same section: outside a
-match a change is kept in the profile and is the value the next match starts with; in a match the control shows the
-match's value and a change is the command `engine.matchsetting` (the host's; offline the local player's), taken at its
-tick and saved, logged and checksummed with the match (`World.MatchSettings`, `World.SetMatchSetting`, the event
-`MatchSettingChanged`). A network match's host seat is not modelled yet, so there a player's change is refused [TODO,
-milestone 4]; the pre-game room has no control for them yet. Game rules may be switched by a bool startup setting or a
-bool match setting (§14 item 7), a match setting switching the rule's layer at its tick (the object a system holds passes
-its calls to the layer below while off), and a rule's property marked `[MatchSetting]` follows a match setting's value.
-[implemented, sadk-remake cc7eb02; match settings 070fd2d]
+mods load again (Apply on the mods screen, or a restart). Match settings are listed in the same section, under the note
+that they apply to new matches: a change is kept in the profile and is the value the next match starts with; a match
+keeps its values to its end and saves, logs and checksums them (`World.MatchSettings`). Nothing changes them in a running
+match [decided by the maintainer 2026-11-20: the rules need no switch in a running match]. The pre-game room has no
+control for them yet. Game rules may be switched by a bool startup setting or a bool match setting (§14 item 7): a match
+with the switch off does not have the layer in its rule chain; a rule's property marked `[MatchSetting]` takes the
+match's value when its world is made. [implemented, sadk-remake cc7eb02; match settings e04a758]
 
 **Where a mod's settings show** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19]: a mod chooses where
 its settings go, a tab of its own or a section of its own inside an existing tab, named by the tab's id. Only the
@@ -615,7 +613,7 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 - **Refined mode** is `{core.game, refined}`. `refined` is a code mod shipped with the game, off by default and
   enabled on the mods screen. Its fixes are implementations of game rules (§14 item 7) that wrap core.game's, each
   switched by a match setting of its own (on by default, in refined's section on core.game's GAME tab of the options,
-  §6.2; switched in a match, effective from the command's tick [implemented, sadk-remake 070fd2d]):
+  §6.2; chosen for each new match and fixed for it [implemented, sadk-remake e04a758]):
   `refined.fieldBlessing` (the Blessing of the bountiful fields doubles every farm's grain, not only `corn`) and
   `refined.groupedGoods` (a need whose building type is no entry of the good's group is admitted, so olympic flames
   receive grouped goods). With every switch off
@@ -626,8 +624,8 @@ A different simulation set for a match (§9.2) is the same unload-and-load; the 
 ## 10. Saves and mods [draft]
 
 - A save records the match set (identities and order), the registry checksum, the `startup` and `match` settings and
-  the engine version [implemented, sadk-remake 070fd2d: remake part v4, `MatchIdentity` form 3; the mods' content hash
-  is open, with the multiplayer work].
+  the engine version [implemented, sadk-remake 070fd2d, e04a758: remake part v4, `MatchIdentity` form 3; the mods' content
+  hash is open, with the multiplayer work].
 - Loading needs the same simulation set; otherwise the game offers to restart into it (§9.3). A newer version of a
   mod loads a save if the save's version is at least the new version's `SaveCompatible`.
 - Saved state is keyed by registry keys and component type names, never by runtime indices, so an added entry does
