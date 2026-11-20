@@ -932,9 +932,10 @@ These matter more in the remake than in the original, because Harmony patches ca
      [decided by the maintainer 2026-11-20]: core.game contributes the original's nine records in the order of
      `ComputeChecksum` S 00784080 (each system's record in its checksum form, sadk-remake 4b2d0a3), and every simulation
      mod registers its own state as a contributor after them; without a simulation mod the checksum equals the
-     original's byte for byte. The remake's own head (tick, session speed, net tick length) and core.game's remake-only
-     state (the village's remake state, the street planner, the god flags) go to the state hash only [TODO: sadk-remake
-     still writes them into the checksum]; a unit type the registry lacks leaves the
+     original's byte for byte [implemented, sadk-remake 879c444: the random generator, the nine systems, the id counter,
+     then the mods' parts]. The remake's own head (tick, session speed, net tick length) and core.game's own bookkeeping
+     (the street planners) are in the state hash only; core.game's parts that exist only with a mod or a cheat (mods'
+     components and step jobs, the god flags) write nothing without them; a unit type the registry lacks leaves the
      object out with a warning (the original inserts default properties); the whole-map exploration notice goes to
      every player (the original sends it for its local player); a map reference's hash covers the world part's bytes
      including mod overlays.
