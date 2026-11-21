@@ -114,9 +114,10 @@ constructor calls, typed accesses to undefined struct bytes), `DumpHierarchy.jav
   into data, so EIP lands at 007f6a90. The second: Direct3D errors (`GraphicDevice.cpp` 1797, `IndexStream.cpp` 301),
   then a fault inside the Intel driver in the shadow-map pass. Open: what fills the address space (more drawn at fog distances
   ×N, the driver's mappings, a leak), whether that object was freed under the projectile or never allocated, and
-  whether the large-address-aware bit is the remedy (4 GB on 64-bit Windows). Windows reads that bit from the exe
-  file when it creates the process, so no DLL can set it: it takes a one-bit patch of `SADK.exe` on disk, which the
-  shim's MD5 check would have to accept, and a test whether the game, PhysX 2.7 and fmod cope with addresses above 2 GB.
+  whether the large-address-aware bit is the remedy. The memory did not grow over the session (1483 MB after 34
+  minutes, 1522 MB five minutes after loading the same match): the late match needs it. Windows reads the bit from
+  the file, so it is a one-bit patch of `SADK.exe`; the shim accepts the patched file (`docs/BINARY_PATCHES.md`, large
+  address aware). [TODO, live] a match above 2 GB, then the switch in SAdK-ServerConfig.
 - The second of those reports has no dump: `MiniDumpWriteDump` failed for every dump type (0x8007001F) with about
   56 MB of address space left. Since sadkmod's crash helper (`sadkmod/shim/README.md`) a second `SADK.exe` writes
   the dump from outside and packs the report after the game has ended. [TODO, Windows] its first real crash.

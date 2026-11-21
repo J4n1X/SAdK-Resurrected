@@ -1,7 +1,7 @@
 # SADK.exe — binary patches and in-memory changes
 
 What the project changes in `SADK.exe`, on disk or in memory: the SecuROM boot fix for the retail exe, the
-optional developer (CVar) patch, and the in-memory changes each mod makes. The last section records third-party
+optional large-address-aware bit, the optional developer (CVar) patch, and the in-memory changes each mod makes. The last section records third-party
 patches found in players' installs, which are not the project's.
 
 ## SecuROM boot fix (retail exe only)
@@ -26,6 +26,24 @@ Together P1 + P2 are *why* the Win10/11 SecuROM crash happened and *how* it is h
 The project's base is the publisher's DRM-free **2014 magazine `SADK.exe`** (MD5
 `d4832bc5103c14f5445471af29b8d778`): it runs on Windows 10/11 as is, and the shim, the mods and the Ghidra map
 (`sadk_noav.exe`) all target it. The fix above is only needed for the protected retail build.
+
+## Large address aware (optional, on disk)
+
+`SADK.exe` is not large address aware: on 64-bit Windows the process gets 2 GB of address space. Setting
+`IMAGE_FILE_LARGE_ADDRESS_AWARE` (0x20) in the PE header's `FileHeader.Characteristics` (file offset 0x136 of the
+DRM-free build: `e_lfanew` 0x120 + 22) gives it 4 GB. Windows reads the bit from the file when it creates the
+process, so neither the shim nor a mod can set it at run time; it is a one-bit patch of the file. The header's
+`CheckSum` (0x00512460, valid for the original file) then no longer matches; Windows does not check it for a
+program, and the tools that set the bit either correct it or leave it.
+
+The shim accepts the patched file as the supported build: `sadk::build_md5` hashes the file with that bit cleared and
+the checksum computed again, which gives the original MD5 for every variant (`tests/test_sadkmod.cpp`). Under Wine
+the game then starts with 4095 MB of address space and the mods load (2026-11-22). Why it matters: one player's
+late match needed about 1.5 GB of private memory plus the Intel iGPU driver's allocations. Their game crashed twice
+with 1951 and 1991 of 2047 MB used, and the memory did not grow over the session (1483 MB after 34 minutes,
+1522 MB five minutes after loading the same match), so it is the match's size, not a leak. [TODO, live] whether the
+game, PhysX 2.7 and fmod work with addresses above 2 GB (a match with the free space below 2 GB reserved, so that
+every new allocation lands above it), and then a switch in SAdK-ServerConfig that sets the bit with a backup.
 
 ## Server-side (NOT a binary patch)
 - `LobbySettings.ini` → `Host` = the revival server's address (SAdK-ServerConfig writes it). Config, not code.
