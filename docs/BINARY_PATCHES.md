@@ -1,7 +1,8 @@
 # SADK.exe — binary patches and in-memory changes
 
 What the project changes in `SADK.exe`, on disk or in memory: the SecuROM boot fix for the retail exe, the
-optional developer (CVar) patch, and the in-memory changes each mod makes.
+optional developer (CVar) patch, and the in-memory changes each mod makes. The last section records third-party
+patches found in players' installs, which are not the project's.
 
 ## SecuROM boot fix (retail exe only)
 
@@ -241,3 +242,37 @@ and the slot's hotspot, and sets it with `SetCursor` where the game shows its Di
 
 Direct3D's `ShowCursor` is never called, so its cursor stays hidden. With `hardwareCursor = 0` (no `+0x4b0`), or for
 a texture that is not A8R8G8B8 or X8R8G8B8, the game's own code runs.
+
+## Third-party patches in players' installs (not the project's)
+
+Players run other patches next to the shim. They load as proxy DLLs from `bin\` and change the game in memory past
+the mod loader's registry. The shim's crash report lists such code changes as `other` and marks the proxy DLLs
+(`sadkmod/shim/README.md`, crash report). Two of them, from the full-memory crash dumps of two players
+(2026-11-12, 2026-11-21; the code in memory compared with the DRM-free `SADK.exe`, every difference not made by
+the registry listed here):
+
+**SAdKCustomPatch** (`bin\winmm.dll`, a proxy of the Windows `winmm.dll`; its version resource names it). It reads
+`.\custompatch.ini` with the switches `NoUrl2TexIEWindow` and `NoIntro` [known: the DLL's strings]. Its changes:
+
+| Address | Function | Bytes | Switch |
+|---|---|---|---|
+| S 005c8760 | `url2tex::CSDKIEWindow::CreateHostWindow` | `83` → `C3` (`RET`) | `NoUrl2TexIEWindow` |
+| S 005c8800 | `url2tex::CSDKIEWindow::Navigate` | `6A FF 68` → `C2 04 00` (`RET 4`) | `NoUrl2TexIEWindow` |
+| S 0060c4ef, S 0060c54e | `Splash::OnShow` S 0060bbd0 | two `CALL`s → `ADD ESP,1C` / `ADD ESP,10` and `NOP NOP` | `NoIntro` [inferred] |
+| S 0060c5d8, S 0060c60c | `Splash::Update` S 0060c5a0 | `JNZ` → `JMP`; `LEA EAX,[ESI-24]; TEST EAX,EAX` → `JMP +0xdc` | `NoIntro` [inferred] |
+
+`NoUrl2TexIEWindow` makes the game crash at every exit after the lobby has made a web texture (the three ad
+screens, the Hall of Fame). `CURL2Tex::RequestURL` still makes and keeps an entry and its `CSDKIEWindow`, but the
+window never gets a browser, and `CSDKIEWindow::dtor` calls `IWebBrowser2::Quit` through the null pointer when
+`CApplicationEx::Shutdown` destroys the `CURL2Tex` (`docs/sim/lobby-extras.md` §3.9). [PROVEN: the same fault at
+S 005c83ec in all four exit reports of both players.] Before the shim, the game's own handler caught it and wrote
+`crashdump.dmp` and `crashlog.txt` without anyone noticing. Turning the switch off ends the crash. A patch that
+wants no browser can return from `RequestURL` S 005c8050 instead (`RET 8`): its callers accept a texture without an
+entry (same section). The billboards mod keeps the ad screens away from the browser, but the Hall of Fame still
+makes a web texture.
+
+**ZoomPatch & LobbyPatch for S2 AdK** (`bin\d3d9.dll`, a proxy of `d3d9.dll`, settings `bin\d3d9.ini`; it can load
+DXVK as `bin\d3d9vk.dll`; the game copy the Wine tests use carries it too). It covers the cursor fix, an FPS limit,
+forced vsync, MSAA and anisotropy, the camera's zoom step, a wide view, banner URLs, and the lobby host and patch level
+it writes into `engine.ini` and `network.ini` [inferred: its strings and `d3d9.ini`]. It changed nothing in the code
+section in the players' dumps.

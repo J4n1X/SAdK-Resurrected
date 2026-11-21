@@ -105,6 +105,19 @@ constructor calls, typed accesses to undefined struct bytes), `DumpHierarchy.jav
   only knows `RegisterGame`, `GiveUpGame`, `FinishGame`), sides of unequal size, free-for-all with three or
   more players, and which id is ordered (player index or avatar id).
 
+### Players' crashes (the shim's crash reports of 2026-11-12 and 2026-11-21)
+- The exit crash of both players is settled: the third-party SAdKCustomPatch, switch `NoUrl2TexIEWindow`
+  (`docs/BINARY_PATCHES.md`, third-party patches). The crash report now names such changes itself.
+- Two crashes on one laptop (Intel HD 530, a late match loaded from a save, `distantlands` on) came with the address
+  space almost used up (1951 and 1991 of 2047 MB; `SADK.exe` is not large address aware). The first:
+  `S2CG::Projectile::Update` calls slot 0 of the object at `this+4` (S 006a35ee), and that object's vtable points
+  into data, so EIP lands at 007f6a90. The second: Direct3D errors (`GraphicDevice.cpp` 1797, `IndexStream.cpp` 301),
+  then a fault inside the Intel driver in the shadow-map pass. Open: what fills the address space (more drawn at fog distances
+  ×N, the driver's mappings, a leak), whether that object was freed under the projectile or never allocated, and
+  whether the large-address-aware bit is the remedy (4 GB on 64-bit Windows; it changes the MD5 the shim checks).
+- The second of those reports has no dump: `MiniDumpWriteDump` failed for every dump type (0x8007001F) with about
+  56 MB of address space left. A helper process writing the dump from outside would not depend on it; not decided.
+
 ### Needs a live session (the maintainer at the game PC, Frida MCP)
 - A wagered match and a refused match registration (referee result 9 / 15); shop sell prices; the checks in
   `docs/live-session-queue.md`. Mail, buddies, whispers, the shops and per-match server mods work in live play

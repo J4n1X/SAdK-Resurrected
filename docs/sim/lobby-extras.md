@@ -550,6 +550,24 @@ the entry and its browser stay alive (and may keep loading) until the `CURL2Tex`
 advise is never undone. A `WM_CLOSE` to a host window removes the property, destroys the window and deletes
 its `CSDKIEWindow` (S 005c83a0, S 005c8360); the entry keeps its pointer. [known]
 
+The destructor tests none of the interfaces: `Quit` and `Release` through +0x10, `Release` through +0x14, +0x18,
++0x1c, +0x20 and +0x2c as they stand, then the three helper objects (+0x08, +0x0c, +0x04) are deleted where not
+null. A window without its browser faults at the first read (S 005c83ec, `MOV ECX,[EAX]` with +0x10 = 0). The
+unmodified game cannot make one: a failed `CoCreateInstance` faults in `EmbedWebBrowser` already, inside
+`CreateHostWindow`, before `RequestURL` inserts the entry. The `CURL2Tex` goes at shutdown:
+`CApplicationEx::Shutdown` S 00401cb0 → S 005c7730 (`delete g_pURL2Tex`) → `CURL2Tex::dtor` S 005c7fb0 →
+`Clear` S 005c7ae0 → `CURL2TexEntry::dtor` S 005c7920 → the window's scalar deleting destructor S 005c8520.
+[PROVEN: full-memory dumps of two players whose third-party patch returns from `CreateHostWindow` at once
+(`../BINARY_PATCHES.md`, third-party patches), 2026-11-12 and 2026-11-21: every window held only what the
+constructor S 005c8300 writes, the game faulted at S 005c83ec on every exit after the lobby had made a web
+texture, and the shutdown stopped there.]
+
+**Switching web textures off.** `RequestURL` is the only function that makes entries. `GetContentSize`
+S 005c79a0 and `UpdateTexture` S 005c7f10 return false for a texture without one, `SetEntryDisabled` S 005c7a30
+does nothing. Returning from `RequestURL` at once (`RET 8`) therefore switches the web textures off without a
+window to destroy; each texture keeps whatever `D3DXCreateTexture` left in it. [known] Presentation only: no
+simulation state depends on web textures (§8).
+
 ### 3.10 Web textures: the two users
 
 **Advertising screens** [known] S 00504650: `Lobby::CGfxTextureMgr::GetTexture` creates a texture on first use
