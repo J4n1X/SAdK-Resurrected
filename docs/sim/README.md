@@ -87,6 +87,7 @@ these documents, 85 of them doable by one player).
 | [`ui-toolkit.md`](ui-toolkit.md): UI toolkit: widget classes and their behaviour | 786 | 90 / 10 / 4 | sampled, see the set's total |
 | [`world-objects-rendering.md`](world-objects-rendering.md): World presentation objects: goods, streets, decals, sky and the render engine layer | 1216 | 149 / 22 / 7 | sampled, see the set's total |
 | [`lobby-world-client.md`](lobby-world-client.md): The 3D lobby village on the client | 1159 | 190 / 17 / 10 | sampled, see the set's total |
+| [`lobby-rendering.md`](lobby-rendering.md): The lobby world's render path: materials, effects, passes, sky, water, shadows, the fly-by camera | 571 | 76 / 19 / 3 | written 2026-11-21, not checked yet |
 | [`lobby-screens.md`](lobby-screens.md): Lobby screens and dialogs | 1590 | 241 / 27 / 3 | sampled, see the set's total |
 | [`lobby-client-state.md`](lobby-client-state.md): Lobby client state: managers, proxies and observers behind the wire | 1807 | 300 / 66 / 5 | sampled, see the set's total |
 | [`minigames-client.md`](minigames-client.md): Tavern minigames on the client: Dice, Poker and Pawn Chess | 1183 | 273 / 26 / 10 | sampled, see the set's total |

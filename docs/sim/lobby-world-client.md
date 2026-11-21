@@ -33,7 +33,8 @@ music of the village, `CLobbyClient` as the bridge to the village connection, an
 
 Out of scope: the wire formats (protocol documents above), the lobby dialogs and screens, the three minigame
 boards (`CGfxObjMiniGame*_Board`, `CMiniGameController*`, `CLobbyClient_MiniGame*`; only their hooks into the
-scene and the camera are listed), the lobby's shader and material system beyond the file inventory.
+scene and the camera are listed). The render path (materials, effects, passes, sky, water, shadows, the fly-by
+camera's projection, when the world is drawn) is specified in [`lobby-rendering.md`](lobby-rendering.md).
 
 Coordinates: right-handed use is not established; **y is up**, units are metres-like world units (an avatar's
 text anchor is 2.4 above its feet). Angles in files are degrees, in code radians. Times are 64-bit milliseconds
@@ -186,7 +187,7 @@ f32[4], `running` u8, `jump` u8), `headIndex` (+0x168), last output position (+0
 | +0x20 | 6 orbit interpolators | per slot: orientation quaternion and distance | [known] S 004ff220 |
 | +0x200 | 6 target interpolators | per slot: look-at point | [known] S 004ff280 |
 | +0x3e0 | `interpState[6]` | per slot: the **zone** given with the last target key; reset to 0xf | [known] S 004ff280, S 004fee40 |
-| +0x3f8 / +0x404 | water clip plane normal (0,1,0), `waterHeight` **−0.1** | reflection pass | [known] S 004fef10 |
+| +0x3f8 / +0x404 | water clip plane: normal (0,1,0) and `waterHeight` **−0.1** as its `d`, i.e. the plane y = +0.1 | reflection pass ([`lobby-rendering.md`](lobby-rendering.md) §3.6) | [known] S 004fef10; the plane reading [inferred] |
 | +0x448 | `presetIndex` 0..2 | mode 5 preset | [known] |
 | +0x44c | `fovScale` | 1.0; set by the table camera | [known] S 004fef00 |
 
@@ -690,10 +691,15 @@ watch is removed.
 
 ### 3.11 Rendering rules that affect what is seen
 
+The full render path is in [`lobby-rendering.md`](lobby-rendering.md); this section keeps the rules the world model
+itself applies.
+
+
 - Per frame the zone's settings give fog range, background (= fog) colour, ambient, one directional light and
   the light-map projection. [known] S 004f9960
 - Passes: shadow map (only if the shadow option ≠ 0), water reflection into a 256-pixel view with the clip plane
-  at y = −0.1 and reversed culling (only if the mirror option = 1), main pass. [known] S 004f9960
+  (0, 1, 0, −0.1), a mirror about y = +0.1, and reversed culling (only if the mirror option = 1), main pass.
+  [known] S 004f9960, S 004ff880 ([`lobby-rendering.md`](lobby-rendering.md) §3.6)
 - `CGfxObjStd`: beyond `fadeout_end` nothing is drawn; between `fadeout_start` and `fadeout_end` the opacity
   falls linearly from 1 to 0. A pickable object also queues its selection decal. [known] S 00518b70
 - An object is drawn only if its render-mask bit is in `CLobby.renderMask`. [known] S 00504b20
