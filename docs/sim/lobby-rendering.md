@@ -145,7 +145,8 @@ In order [known] S 004f9960 unless tagged:
    light-map coordinate from its position inside the light-map object's box, ignoring height. Zone 0: object
    `Terrain` at the origin without rotation, `light_map="terrain_light01.dds"`. [known for the construction; the
    assignment of the decompile's aliased temporaries to `T`, `R`, `S` is inferred]
-3. Textures: the zone's light map and `skyWaterReflection.dds` (`CLobby +0x68`).
+3. Textures: the zone's light map and `skyWaterReflection.dds` (`CLobby +0x68`; the name at S 007e5878, next to
+   `lightmap_white.tga` at S 007e5890).
 4. Device state: fog range = `fog_start`, `fog_end`; background (clear and fog colour) = `fog_color`; ambient =
    `ambient`; directional light = (`light_dir` normalised, `diffuse`); `UpdateTransformations`.
 5. Shadow pass (§3.7) when the shadow option ≠ 0.
@@ -265,15 +266,23 @@ point and clamped (stage 4 linear in `lobby_water.fx`); stage 6 wrapped, linear 
 - `Default`, `Default_plm`, `Lightmap*`, `Hardalpha_anim`: opaque, z-write, alpha test > 127.
   `Default_Opacity`: a depth-only pass (colour writes off, no alpha test), then a blended pass with `ZFunc Equal`.
   `HardAlpha_Opacity(_anim)`: blended, no z-write, no alpha test. [known] 338..471, 590..720
-- **Wind** (`_anim`): in object space before W, `s = saturate(|pos|² · 0.001) · W._22`,
-  `φ = frac(0.05 · π · TIMER.y) · 2π`, `pos.x += s · sin(W._41 + φ)`, `pos.z += s · cos(W._43 + φ)`; normals
-  unchanged; π = 3.1415297 as written in `shared.inc`. Period 1 / (0.05 π) ≈ 6.37 s. [known] 95..104
+- **Wind** (`_anim`): in object space before W, `s = saturate(dot(float4(pos, 1), float4(pos, 1)) · 0.001) · W._22`
+  (so `(|pos|² + 1) · 0.001`: the homogeneous 1 is in the dot product), `φ = frac(0.05 · π · TIMER.y) · 2π`,
+  `pos.x += s · sin(W._41 + φ)`, `pos.z += s · cos(W._43 + φ)`; normals unchanged; π = 3.1415297 as written in
+  `shared.inc`. Period 1 / (0.05 π) ≈ 6.37 s. W is `WORLD` even in an instanced technique (no zone-0 technique is both).
+  [known] 95..104
 - `Shadow` / `Shadow_TextureMask(_instanced)`: output `z / w` of the light-space position as grey;
   the mask variants discard where `tex0.a < 0.5`. [known] 189..247, 557..579
 
 **`lobby_parallax_shader.fx`** (trees' bark, `parallax_lm`, the bridge):
 
-- View-space tangent frame (T, B = N × T, N); `uv` offset parallax: `h = tex1.a · 0.06 − 0.03`,
+- View-space tangent frame (T, B = N × T, N), T the vertex's `TANGENT`: no lobby model has a tangent stream, and
+  the object declaration (S 007e6e80: position, normal, colour, blend indices, two uv sets, tangent) has a tangent
+  element, so `CMesh::ComputeTangents` S 0076c320 gives every mesh per-vertex tangents at load (per triangle the
+  direction of increasing u, `(dv2 · e1 − dv1 · e2) / (du1 · dv2 − du2 · dv1)`, summed per vertex, made orthogonal to
+  the normal and normalised) [known]. In the mirror pass the view matrix holds the reflection, so B = N × T computed in
+  that view space is the reflection of the true binormal turned around: the normal map's y acts reversed in the
+  reflection [inferred from the code]. `uv` offset parallax: `h = tex1.a · 0.06 − 0.03`,
   `uv −= h · (T·v, B·v)` (v = normalised view-space position). Normal `n = normalize(n.x T − n.y B + n.z N)` from
   `tex1.rgb − 0.5`. `diff = saturate(L · n)`; the specular term is multiplied by the constant `specular` = 0. [known]
   56..190
@@ -344,8 +353,12 @@ AMBIENT)`, alpha test > 127 on the texture's alpha, no light map.
   camera. Its draw callback switches fog off around the draw, so dome and both planes are unfogged. [known]
   S 005186a0, S 005185f0, S 00518580
 - Converted mesh extents (`sky01.glb`): dome about ±324 in x and z, y −113..335; `plane_low` at height 73.9
-  (±305), `plane_high` at 137.4 (±362). [known: converted data; the converter's axes]
-- `SkyDome`: `rgb, a = tex0(uv0)`, no light. `SkyPlane`: `uv = uv0 · 3 + (frac(TIMER.y / 100), frac(TIMER.y / 200))`,
+  (±305), `plane_high` at 137.4 (±362). [known: converted data] The converted models are in Godot's axes (the engine's
+  z negated): the terrain's colour-map uv (`Terrain.glb`: uv0 = (−z/250 + 0.5, x/250 + 0.5)) agrees with the planar
+  light-map projection of §3.2 built from them, the light map being the colour map transposed [inferred].
+- `SkyDome`: `rgb, a = tex0(uv0)`, no light. The dome is unranked and unsorted, so it is drawn among the opaque items,
+  and nothing lies behind it but the cleared background: its blend comes out as `lerp(fog_color, tex0.rgb, tex0.a)`
+  [inferred]. `SkyPlane`: `uv = uv0 · 3 + (frac(TIMER.y / 100), frac(TIMER.y / 200))`,
   `rgb = tex0(uv)`, `a = tex0(uv).a · tex1(uv0).r` (the fade mask `cloudlayer_transition.dds`). Both blended
   **with** z-write. [known] `lobby_sky_shader.fx` 25..103 The high plane uses `cloudlayer2.dds`, the low one
   `cloudlayer.dds`. [known: data]
@@ -377,11 +390,12 @@ AMBIENT)`, alpha test > 127 on the texture's alpha, no light map.
   distortion is a whole texture unit: the static reflection is strongly smeared. [known for the formula and both
   matrices; the visual consequence inferred]
 - `rgb = lerp(refl, (0.25, 0.65, 0.9999), 0.15) · (saturate(L · N) · LIGHT_COLOR + AMBIENT)`
-  `+ (L · N > 0 ? pow(saturate(R · −v), 16) : 0) · (0.5, 0.6, 0.7)`, R = reflect of L about N.
+  `+ (L · N > 0 ? pow(saturate(R · −v), 16) : 0) · (0.5, 0.6, 0.7)`, `R = normalize(2 · saturate(L · N) · N − L)` (not
+  a true reflection: N is not normalised and the dot product is clamped), `L = −normalize(MAIN_LIGHT)`.
 - `alpha = 0.65 − 0.5 · saturate(dot((0, −1, 0), v))`, v = normalised eye→point (0.65 at grazing angles, 0.15
   looking straight down); blended **with** z-write; the pixel shader writes depth
   `(clip.z + (N.y − 0.75) · 0.01) / clip.w`. Drawn after all opaque items and the clouds (rank 0x01000002).
-- Converted plane (`WaterPlane.glb`): y = 0, x −98.7..68.9, z −67.5..61.1. [known: converted data]
+- Converted plane (`WaterPlane.glb`, Godot's axes as §3.5): y = 0, x −98.7..68.9, z −67.5..61.1. [known: converted data]
 
 ### 3.7 Shadow map pass (shadow option 1..3)
 
@@ -543,7 +557,6 @@ Free:
 | 5 | Whether the effect system saves and restores render states around a technique (D3DX `Begin` flags), which decides whether `SoftAlpha`'s cull mode leaks into later draws | static: `CShaderProgram` slot +0x40 (`Begin`) |
 | 6 | Whether the ad boards are occluded from presets 0 and 1 by buildings or trees (§3.10) | a render of the remake's port from both presets, or a screenshot of the original's menu |
 | 7 | The `lightmap_white.tga` texture (`CLobby +0x64`): which draw binds it (a zone without a light map leaves stage 6 unbound in `RenderFrame`) | static: readers of `CLobby +0x64` |
-| 8 | Whether the converter's axes match the engine's for the mesh extents quoted in §3.5, §3.6 | compare one KEX with its `.glb` in the remake's converter |
 
 ## 11. Function reference
 
