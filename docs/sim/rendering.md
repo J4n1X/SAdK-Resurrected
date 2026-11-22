@@ -1808,8 +1808,10 @@ same sum per pixel with its normal map (§3.4). All of it is in gamma space.
 
 **Fog** [known] S 004d8f99, S 004d3ae0, S 004d3a80: `CGraphicDevice::SetDefaultStates` sets `D3DRS_FOGENABLE` 1,
 `FOGTABLEMODE` = `D3DFOG_LINEAR`, `FOGVERTEXMODE` = `D3DFOG_NONE` and the fog colour = the background colour; so it
-is per-pixel linear fog on view depth between the environment's fog start and end (`SetFogRange`), the shaders
-write no fog themselves. `RenderSkydome` and the reflection view enable it too (the Scene's fog flag +0x720), so a
+is per-pixel linear fog between the environment's fog start and end (`SetFogRange`), the shaders
+write no fog themselves. Whether a driver runs it on the view depth (w-based fog, which the w-friendly projection asks
+for) or on the depth buffer's z decides whether world-sized ranges fog at all: the lobby on native Direct3D 9 (NVIDIA)
+shows z, so no fog ([`lobby-rendering.md`](lobby-rendering.md) §3.2); the match's look is not compared yet [TODO]. `RenderSkydome` and the reflection view enable it too (the Scene's fog flag +0x720), so a
 reflected object is fogged over the mirrored path's length, which includes twice the camera height, and the water
 in front of it is fogged again [inferred from the states; presentation only].
 

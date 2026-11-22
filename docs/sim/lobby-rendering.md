@@ -181,7 +181,12 @@ the shadow matrix (stage 5) and the reflection matrix (stage 4). [known: `shared
 | `FOG_SETTINGS`, `MATERIAL` | set, but read by no lobby effect | [known: text of the effects] |
 
 **Fog** is the device's per-pixel linear table fog between `fog_start` and `fog_end` in the fog colour; no lobby
-effect computes fog ([`rendering.md`](rendering.md) §3.13). The sky objects switch it off around their draw
+effect computes fog ([`rendering.md`](rendering.md) §3.13). It runs on the depth buffer's z of the camera's projection
+(`z = far / (far − near) · (1 − near / depth)`, near 0.1, far 500), which stays below 1, so the zones' ranges (40 to 160,
+10 to 50) never begin and the lobby is unfogged: the original on native Direct3D 9 (an NVIDIA RTX 4080 SUPER, 2026-11-22)
+shows the village's rocks and buildings 50 to 130 units out without haze, where fog on the view distance would cover
+them by a third to two thirds. [inferred] from that look; the projection is w-friendly (S 006e97e0), so a driver that
+honours w-based fog would show the fog. The sky objects switch it off around their draw
 (§3.5). The shadow pass switches it off and clears to white. [known] S 004d3ae0, S 004d75b0, S 00518580, S 004f9960
 
 ### 3.3 Zone 0: objects, materials and techniques
@@ -434,9 +439,11 @@ AMBIENT)`, alpha test > 127 on the texture's alpha, no light map.
   looks down) [inferred from `FromAxisAngle` about the y and x unit axes; axis vectors S 008828xx not re-read], and
   the yaw sways by ±1/6 rad (±9.5°) with a period of 2π · 28 s ≈ 176 s.
 - Projection: `fov = 72 · (π / 180)` (the scale S 0088a69c = π / 180, written by S 007c3210) times `fovScale` 1.0,
-  used as the **vertical** field of view of `PerspectiveFovLH` with aspect = viewport width / height, near 0.1
-  (plus the device's near offset), far 500; view = `LookAtLH` (left-handed, y up, up vector chosen automatically by
-  `LookAtLH_AutoUp`). [known] S 004d9300, S 004fede0
+  used as the **horizontal** field of view: the engine's `Matrix44::PerspectiveFovLH` (S 006e97e0) is not D3DX's, its x
+  scale is `1 / tan(fov · 0.5)` and its y scale that times the aspect (viewport width / height), so the vertical angle
+  follows the window's shape; near 0.1 (plus the device's near offset), far 500; view = `LookAtLH` (left-handed, y up,
+  up vector chosen automatically by `LookAtLH_AutoUp`). `fovScale` is 1 in mode 5 (`SetMode` S 004fee80 resets it;
+  only the minigame camera S 005269e0 sets another). [known] S 004d9300, S 004fede0, S 006e97e0
 - Zone: target key value 0 → `interpState[5]` = 0 → zone 0 settings and scene. [known] S 004ff280
 
 ### 3.9 When the world is drawn
@@ -475,8 +482,8 @@ AMBIENT)`, alpha test > 127 on the texture's alpha, no light map.
   other page, the content is not established [TODO].
 - Visibility [inferred from the preset geometry, occlusion not checked]: from preset 0 (eye (−24.7, 2.35, −55.9),
   heading 11.9° from +z) `ad0` lies 8.3° left of the view axis at about 59 units; from preset 1 (eye (−7.3, 4.6,
-  −45.8), heading −24.0°) 8.4° right of it at about 51 units. Both inside the 72° vertical frustum on any aspect, in
-  fog (start 40, end 160), unless a building or tree is in between.
+  −45.8), heading −24.0°) 8.4° right of it at about 51 units. Both inside the 72° horizontal frustum on any aspect, unfogged
+  (§3.2), unless a building or tree is in between.
 
 ## 4. Update order
 
@@ -527,10 +534,11 @@ Must be exact for the faithful look:
 - The planar light map projection from the zone's `light_map_object` box (§3.2), sampled at world xz.
 - Draw order: opaque, high clouds, low clouds, water, sorted transparents far to near; grass without depth writes;
   sky and water with depth writes while blended.
-- Fog: linear per-pixel depth fog in the zone colour, cleared to the same colour, sky unfogged.
+- Fog: linear per-pixel table fog on the depth buffer's z in the zone colour (so none with the zones' ranges), cleared
+  to the same colour, sky unfogged.
 - Wind, banner wave, cloud scroll and water scroll formulas with `TIMER.y` = seconds of the application clock;
   π = 3.1415297 where the effects use it.
-- The camera: vertical 72°, left-handed look-at with the presets of [`lobby-world-client.md`](lobby-world-client.md)
+- The camera: horizontal 72°, left-handed look-at with the presets of [`lobby-world-client.md`](lobby-world-client.md)
   §3.7, the slow yaw sway, cuts between presets.
 - The distance fade bands and the object-details render mask (grass gone at "Low").
 
@@ -576,7 +584,7 @@ Free:
 | 00508e70 / 00508f20 / 00508e30 / 00508fa0 | `CGfxView::ctor` / `Render` / `SetActive` / `BindProjectedTexture` | views, reflection target |
 | 004ff420 / 004ff220 / 004ff280 / 004ff940 / 004fede0 / 004feeb0 / 004ff880 | `CLobbyCamera::UpdatePresetModeKeys` / `AddOrbitKey` / `AddTargetKey` / `GetEyePosition` / `GetScaledFov` / `SetWaterClipPlane` / `ApplyWaterReflection` | camera |
 | 00510b70 / 00510c80 | `TransformInterpolator::AddSample` / `Evaluate` | two-key interpolation |
-| 004d9300 / 004d9ce0 | `CGraphicDevice::UpdateCameraMatrices` / `UpdateTransformations` | look-at, vertical fov, aspect |
+| 004d9300 / 004d9ce0 | `CGraphicDevice::UpdateCameraMatrices` / `UpdateTransformations` | look-at, horizontal fov, aspect |
 | 004d3ae0 / 004d3a80 / 004d75b0 / 004f5120 | `SetFogRange` / `EnableFog` / `SetBackgroundColor` / `SetInverseClampedFloat_15c` | fog, shadow intensity |
 | 0076a3d0 / 00769230 | `ShadowManager::UpdateMatrices` / `BindTexture` | shadow map |
 | 004e9810 | `CShaderProgram::ApplySharedParameters` | shared constants |
