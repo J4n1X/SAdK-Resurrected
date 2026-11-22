@@ -37,7 +37,10 @@ All fields little-endian; strings are NComm strings (u16 length + bytes).
 - The joiner's map download: on every GameInformation (0x30003) while the map is missing and the host allows
   downloads, `NComm_Manager::HandleEvent` 0040e560 calls `NComm_Manager::RequestFileFromHost` 004084d0 (a
   wrapper: the network handler's vtable `+0xa4`) twice, for `SAdK\maps\<map>.s2m` and `.bmp`, into the same
-  path below `<My Documents>`; the request dedupe makes the repeats harmless.
+  path below `<My Documents>`; the request dedupe makes the repeats harmless. "Missing" means that no map file of
+  any type carries the session's map GUID (`GameFile_FindMapByGuidAnyType` S 005ac2f0 → `GameFile_FindMapNameByGuid`
+  S 005ab3d0, which reads every map's header and compares the UUID), never the file name: a received file whose
+  header holds another GUID leaves the map missing, and the requests go on with every GameInformation.
 - Progress would go to a listener at NComm manager `+0x3d0` (vtable `+0x4` progress, `+0xc` started, `+0x10`
   completed), but the manager's constructor sets it to 0 and nothing else writes the field: the callbacks never
   run [inferred: every write to `+0x3d0` in the binary].
