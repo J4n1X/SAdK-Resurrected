@@ -558,8 +558,7 @@ and only the first of them keeps the cutscene name [known: data].
 
 **`OnShow`** (S 005fbd30) [known]: title = map name; `timer = 1.0`; the local game speed is saved (+0xc14);
 `nGame::System::BeginCinematic` (below); page index, page count and the four page vectors cleared; the screen's
-layout file is reloaded (`menucinematic.xml` [inferred: the name is a string member, the file exists in
-`ui/layout`]); if the simulation clock (`NLogic::System.nextTickTime`) is at least 2.0 the HUD is faded out
+layout file is reloaded (`menucinematic.xml`); if the simulation clock (`NLogic::System.nextTickTime`) is at least 2.0 the HUD is faded out
 and the black desktop (+0x25b8) faded in over 1.0 s and `timer = 1.5`; otherwise the HUD is hidden at once
 and `timer = 0`. `phase = 0`. The speaker
 panel gets the map name and `<map name>_sub`; the info-map overlay state is saved; `Cursor.bActive = 0`.
@@ -622,6 +621,21 @@ the map script's `quest_cinematicDone()` is called (`GameScript_CallQuestCinemat
 game speed is set back to the saved value.
 
 The pause key does nothing while the cinematic screen is open (`nMenu::System::TogglePause` S 005da400) [known].
+
+**Panel layout and speakers** [known: read for sadk-remake 512325f]:
+- Every element of `menucinematic.xml` is placed by its deployment in fractions of the screen; `anchor="top"` /
+  `"bottom"` keep only the size's height, and an element's own `pos` (pixels) overrides the deployment's.
+  `PanelCinematic::Create` S 0062dbc0 hangs `textMissionBlock` and `miniMap` under `barTop`, `textHeadline` and
+  `textDescription` under `barBottom`; `miniMapFrame` hangs under `miniMap` (S 0062dd10).
+- The mission block's text (`Update` S 0062df00) is `"<vcenter>" + L(name) + "  <_sub>" + L(<map>_sub)`, the tag `_sub`
+  registered by `LoadFromXml`; `<vcenter>` halves the smaller font's baseline offset, and the text starts at the block's
+  top.
+- A speaker name of a page's tag is the file `game/npc/<Name>.npc` (`"%s.npc"`; no table, no settler type), loaded by
+  `InGameAvatarData::LoadFromFile` S 0068b850 and drawn by `RenderAvatarAt` S 0068c490 in the slot
+  (`CinematicSpeakerSlot::SetSpeaker` S 0062d7b0, a 0.5 s slide in and out, S 0062d810): a 50° vertical lens, near 0.1,
+  far 200, aimed at the centre of the avatar's bounds, its turn the layout's `heading` [the sign is inferred]. The tag's
+  digit `N = 1` keeps the render state (the speaker is lit); `N = 0` draws in black fog from 0.25 to 1.5 times the camera
+  distance (the silent speaker darkened). There is one looping idle clip and no talk animation.
 
 ### 3.9 From window message to handler
 
