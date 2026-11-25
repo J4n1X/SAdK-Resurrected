@@ -631,11 +631,16 @@ The pause key does nothing while the cinematic screen is open (`nMenu::System::T
   registered by `LoadFromXml`; `<vcenter>` halves the smaller font's baseline offset, and the text starts at the block's
   top.
 - A speaker name of a page's tag is the file `game/npc/<Name>.npc` (`"%s.npc"`; no table, no settler type), loaded by
-  `InGameAvatarData::LoadFromFile` S 0068b850 and drawn by `RenderAvatarAt` S 0068c490 in the slot
-  (`CinematicSpeakerSlot::SetSpeaker` S 0062d7b0, a 0.5 s slide in and out, S 0062d810): a 50° vertical lens, near 0.1,
-  far 200, aimed at the centre of the avatar's bounds, its turn the layout's `heading` [the sign is inferred]. The tag's
-  digit `N = 1` keeps the render state (the speaker is lit); `N = 0` draws in black fog from 0.25 to 1.5 times the camera
-  distance (the silent speaker darkened). There is one looping idle clip and no talk animation.
+  `InGameAvatarData::LoadFromFile` S 0068b850 at the character scale of `settler_config.xml` (`<Characters scale>`, 1.2;
+  S 00695130, applied by `CAnimatedObject::Load` S 0076b4a0 through `ApplyImportTransform` S 0072a9a0) and drawn by
+  `RenderAvatarAt` S 0068c490 in the slot (`CinematicSpeakerSlot::SetSpeaker` S 0062d7b0, a 0.5 s slide in and out,
+  S 0062d810). The camera: eye = target + (0, 0, dist) · `RotationYawPitchRoll(−heading, −elevation, 0)` (S 006e90c0),
+  the target the centre of the box around the bones' positions in the current pose (`KModel::GetBounds` S 0072c1a0);
+  the lens `Matrix44::PerspectiveFovLH` S 006e97e0, the game's own and not D3DX's, spans its 50° across the **width**
+  (x scale 1/tan 25°, y scale aspect/tan 25°), near 0.1, far 200. In the idle pose the model faces the camera at heading
+  0, so the layout's ±50° turn each speaker toward the screen's centre. The tag's digit `N` sets black fog for `N = 0`,
+  which has no visible effect (`ingame_avatar.fx` computes no fog; the original shows the silent speaker as bright as the
+  other). There is one looping idle clip and no talk animation [known: read for sadk-remake 512325f, e8ef2ad].
 
 ### 3.9 From window message to handler
 
