@@ -447,8 +447,10 @@ change or add files without touching it (§5.6).
 
 - Original maps are packaged at conversion: each `.s2m` (decrypted) with its `.bin` (as `world/environment.xml`,
   the field names of `local_enviroment.xml`, floats in round-trip form), `.bmp` (as `preview.png`), `.lua` and
-  cutscene scripts (`<name>_<k><label>.lua` beside the map, converted, the original beside as `.orig`), under the
-  map's internal name (MapInfo `+0x24`). The map's own text keys go into `locale/<lang>/map.txt`: for campaign map
+  cutscene scripts (`<name>_<k><label>.lua`, converted, the original beside as `.orig`), under the map's internal
+  name (MapInfo `+0x24`). The companions are found as the original finds them (MF §1.3): the preview by the file
+  name, the others by the internal name through the bare-name rule (§5.4), the `.bin` asked for without a folder,
+  so a map saved under another file name keeps its environment. The map's own text keys go into `locale/<lang>/map.txt`: for campaign map
   `C<nn>` the briefing pages `B<n>_*` (n without the leading zero, `C01` → `B1_`) and `C<nn>`, `C<nn>_*` (title,
   subtitle, description, quests) of `briefings.txt`; for a free map its title, the key of its name in `ui.txt`
   (free maps have no description keys). `map.xml` [implemented] carries `id` (the MapInfo UUID, Microsoft byte
