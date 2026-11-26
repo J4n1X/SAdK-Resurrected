@@ -711,7 +711,7 @@ above the installation, below every other mod), and dependencies on them by id. 
 | Mod | Side | Holds |
 |---|---|---|
 | `core.game` | simulation + client | the game's content (it fills the engine's registry from the original's property scripts) and the logic that uses it, systems, `logic.*`, rendering and HUD, and the match networking: it behaves like a server already (lockstep, joining, the referee). `refined` requires it. Its assemblies are the engine's `Sadk.Simulation` (no Godot, namespace `Core.Game` with one sub-namespace per folder, `Core.Game.Village`, …) and `Sadk.Client` (Godot, `Core.Game.Rendering`), so another mod (a map editor) can require core.game and use its renderer. [implemented: the data stage (the original's property scripts, 892 records) and the renderer's entry point; the rest planned] |
-| `core.mainmenu` | client | the main menu [implemented as a stub: a column of buttons in the original's Chapter Garamond on a plain colour; the original's menu runs over the lobby map rendered live (`menumain.xml`: `BG_3D`, `campaignName="Main"`), which comes when maps render]; other mods add entries with `core.mainmenu.addmenuitem`. Its assembly: `Sadk.MainMenu` (an assembly of its own: the loader reads a mod's entry points, intents and registrations from its assemblies, one mod id per assembly) |
+| `core.mainmenu` | client | the main menu of `menumain.xml` over the 3D lobby village, made entirely of the panels and entries the mods declare through intents, its own included (§11a.4) [implemented]. Its assembly: `Sadk.MainMenu` (an assembly of its own: the loader reads a mod's entry points, intents and registrations from its assemblies, one mod id per assembly) |
 | `core.lobby` | client + network | the lobby world only: the traffic while the player is in the lobby (village, chat, rooms); it starts matches through `core.game`'s intents [planned] |
 
 The engine holds the vocabulary every mod builds on [the maintainer's decision
@@ -726,7 +726,8 @@ Its simulation needs no Godot, so the headless runner loads it (tests, replays, 
 host) with its client code left out, as every mod's is there.
 
 The development tools are mods in `mods/`, on by default. `tools.assetbrowser` (requires the built-in `core.mainmenu`)
-adds "Asset browser" (a mode) and "Check all assets" (an overlay) to the main menu [implemented]. `tools.mapviewer`
+adds "Asset browser" (a mode) and "Check all assets" (an overlay) to the main menu's "Mods & tools" panel
+(`core.mainmenu.extras`, §11a.4) [implemented]. `tools.mapviewer`
 (requires `core.game` and `core.mainmenu`) adds "Map viewer" (the mode `tools.mapviewer.open {map?, overlay?, ontop?,
 back?, x?, z?, yaw?, pitch?, distance?}`): every map package drawn by core.game's renderer outside a match, with
 switchable overlays of what the map stores (grid bits, resources, deposits, blocking doodads, animals and roam ranges,
@@ -734,8 +735,9 @@ spawn points, ship routes, harbours with exits and docks, start and chest positi
 patterns; optionally through the hills), their legend and an inspector of the cell under the mouse [implemented,
 sadk-remake 7cb8012]. It builds against core.game's Godot assembly (`Sadk.Client`).
 
-`core.game` adds "Free game" (`!FREE GAME`) to the main menu the same way: a listener in its `intents.xml` on
-`engine.start` emits `core.mainmenu.addmenuitem`. Its `mod.xml` names `core.mainmenu` as an `Optional`
+`core.game` adds "Free game" and "Load game" to the main menu's single-player panel the same way (listeners in its
+`intents.xml` on `engine.start` emit `core.mainmenu.addmenuitem`), and starts a campaign map on the menu's event
+`core.mainmenu.campaignmap` (§11a.4). Its `mod.xml` names `core.mainmenu` as an `Optional`
 dependency, which orders the two built-in mods; the load order is `core.mainmenu` → `core.game` → every other mod
 (`tools.assetbrowser`, `tools.mapviewer`, …) [implemented, sadk-remake 636da4c; the screens in [sim-boundary.md](sim-boundary.md) §6.16].
 
@@ -768,18 +770,19 @@ same document, so both merge, patch and validate the same way; the same id twice
 // core.mainmenu
 [assembly: On("engine.start", Id = "core.mainmenu.boot", Emit = "core.mainmenu.main")]
 
-public sealed class MainMenuMod : IClientMod                // the entry point keeps the menu's entries
+public sealed class MainMenuMod : IClientMod                // the entry point keeps the menu's panels and entries
 {
     [Handler("core.mainmenu.addmenuitem")]
     void AddMenuItem(MenuItem item) { … }
 }
-public sealed record MenuItem(string Id, string Text, string Emit, string? Params = null, int Order = 100);
+public sealed record MenuItem(string Id, string? Text = null, string? Emit = null, string? Params = null, int Order = 900,
+    string? Panel = null, string? Button = null, string? Tip = null, string? Hotkey = null, string? Enabled = null);
 
 [Mode("core.mainmenu.main")]
-public sealed class MainMenuMode : Mode                     // a new object per entry; the constructor asks for
+public sealed class MainMenuMode : Mode<MainMenuParams>     // a new object per entry; the constructor asks for
 {                                                           // the entry point and the mod's context
     public MainMenuMode(MainMenuMod mod, ModContext ctx) { … }
-    public override object? Enter(Intent intent) => new MainMenuView { … };   // a node type of the mod's own
+    protected override object? Enter(MainMenuParams p) => new MainMenuView(…);   // a node type of the mod's own
 }
 
 // tools.assetbrowser
@@ -794,6 +797,7 @@ public sealed record CheckParams(bool Quit = false);       // the record's const
   <Listeners>
     <On id="tools.assetbrowser.menu.check" event="engine.start" emit="core.mainmenu.addmenuitem">
       <Set name="id" value="tools.assetbrowser.check"/>
+      <Set name="panel" value="core.mainmenu.extras"/>
       <Set name="text" value="Check all assets"/>
       <Set name="emit" value="tools.assetbrowser.check"/>
       <Set name="order" value="110"/>
@@ -860,6 +864,45 @@ the mod's `ModContext`, `IntentEmitter`, `VirtualFileSystem`, `AssetCache`, entr
 - **The game's options** for unattended runs: `--emit=<key>[?name=value&…][;…]` once the start has settled,
   `--press=<button text>[;…]` presses buttons as the player would, `--trace-intents` logs every intent and where it
   went, `--shot=<png>` once the intents have settled.
+
+### 11a.4 The main menu as data [the maintainer's decision 2026-11-26; implemented in sadk-remake]
+
+The main menu is made entirely of what the mods declare through intents; core.mainmenu's own panels and buttons are
+declared the same way, by listeners in its `intents.xml` (free game and load game in core.game's), so the original's menu
+is one set of entries any mod extends, replaces or takes away, and nothing of it is a branch in code. The layout
+(`menumain.xml`; frontend-screens.md §3.2–§3.8) gives the looks and the places; the original's per-button actions
+(`HandleButtonClicks` S 005e27c0) are intents the entries emit. Rules:
+
+- **Panels** (`core.mainmenu.addmenupanel { id, back?, preset?, limit?, rows? }`): the layout's element of that name below
+  `Banner` (`PanelMain`, `PanelSinglePlayer`, `PanelCampaign`), or a panel made as `PanelSinglePlayer` is for any other
+  id. A layout panel no declaration names is not built. `back` is where `core.mainmenu.back` goes from it
+  (`GoBackPanel` S 005dfc00; default `PanelMain`), `preset` the lobby camera preset showing it cuts to (`SwitchPanel`
+  S 005df8b0; −1 none). core.mainmenu declares the original's three (preset 0, 1, none; the campaign panel back to the
+  single-player panel) and its own `core.mainmenu.extras` ("Mods & tools": the mods screen and the tools' entries).
+- **Entries** (`core.mainmenu.addmenuitem { id, text?, emit?, params?, order?, panel?, button?, tip?, hotkey?, enabled? }`):
+  a button on `panel` (default `PanelMain`) that emits `emit` with `params`. `button` names a button of the layout whose
+  element (look, caption, hover help, hotkey) the entry takes; `text`, `tip`, `hotkey` replace the layout's when given.
+  An entry of the same id replaces the earlier; of the entries on one panel naming the same layout button the one added
+  last stands (a mod takes a button over); one is taken away by removing the listener that adds it, or with
+  `core.mainmenu.removemenuitem { id }`. An entry without `emit` is shown disabled (the lobby button until the lobby
+  exists); `enabled` names a condition code registers (`MainMenuConditions.Register`, disposed on unload;
+  core.mainmenu's `core.mainmenu.lastsave` keeps "Continue" disabled without a last save, S 005e1dfd).
+- **Places.** A rows panel stacks its entries by `order` (then as added) in the layout's rows: the panel's own buttons'
+  first row and spacing (`PanelMain`'s for a panel the layout lacks), so the original's set stands in the original's
+  rows. The original's buttons have orders 100, 200, …, a panel's last ("Exit", "Back") 1000, and an entry without one
+  900 (above the last). Rows run down to where the panel's `limit` element (`LogoSettlers`) starts to draw (its
+  picture's first row that is not fully transparent); entries that do not fit scroll above the last one, which stays
+  in the lowest row [the remake's own: the original's panels have a fixed set]. On a panel declared `rows=false` (the
+  campaign panel) an entry stands where its layout button stands; one without a layout button is not shown.
+- **The menu's actions** are handlers any entry may emit: `core.mainmenu.panel { id }` (`SwitchPanel`; without an open
+  menu the menu opens on that panel), `core.mainmenu.back`, `core.mainmenu.credits`, `core.mainmenu.continue`
+  (`ContinueLastSavegame` S 005dfef0), `core.mainmenu.exit`. The mode `core.mainmenu.main { panel? }` takes a panel id
+  (or the original's numbers 0..2).
+- **The campaign.** The mission tiles are the campaign's maps (`campaigns.xml`), not entries; a tile's click
+  (`StartCampaignMap` S 005df2c0) is the event `core.mainmenu.campaignmap { map, resources, campaign, index }`, and
+  core.game's listener `core.game.campaignmap` turns it into `core.game.match` (map and resources pass through, the
+  loading screen, the menu as the way back). A mod replaces that listener by its id or adds a conditional one for its
+  own campaign.
 
 ## 12. Examples
 
