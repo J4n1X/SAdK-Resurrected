@@ -1474,8 +1474,12 @@ definition, an implementation registered by name, the base game's code moved as 
     id, a settler of the new good's class), `VillageSystem.TakeAsWorker`, the rule `construction.builderFinished` (the end
     of a builder's work, S 0065e1d0) and the event `SettlerProfessionChanged`, proven by the mod `builderprofession`. The
     original never changes a settler in place: an order always makes a new settler at a depot (S 005624f0 → S 00564e00),
-    and a settler that returns gives back its cost goods (S 00564eb0). Left: more than two soldier kinds (decided
-    2026-11-03: not now);
+    and a settler that returns gives back its cost goods (S 00564eb0). A settler drawn as another profession while it
+    keeps its own [implemented, sadk-remake 021c9cf]: `Settler.Look`, `SettlerSystem.SetLook`, the event
+    `SettlerLookChanged` and `EntityRemoved.Look`, saved and in the state hash, not in the original's checksum;
+    `builderprofession` decides at dispatch as the original's order system does: the worker's missing tool is paid at the
+    depot the builder leaves (S 00564360), he walks out in the worker's look, which is the whole promise, and gives the
+    tool back if he enters a depot instead (S 00564eb0). Left: more than two soldier kinds (decided 2026-11-03: not now);
   - the computer players, map scripts, statistics and victory: victory conditions and the AI's rules (above); a mod's
     map-script functions in core.game's tables (`ModContext.ExtendLuaTable`); statistics categories (`StatisticCategory`,
     sampled on the S 00537ba0 schedule).
