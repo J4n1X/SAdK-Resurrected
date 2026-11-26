@@ -719,8 +719,9 @@ stored.
 ### 5.6 Continent partition algorithm `[known]`
 
 `RecomputeAll` 00679120 + `FloodFillContinent` 00678d70 + `RecountLandCells` 00678010. Reproduced
-byte-exact, neighbour lists included, on 20/22 samples (`contfull.py`; the other two have 6 and 10
-stale cells, §8).
+byte-exact, neighbour lists included, on every shipped map, the 20 free-game and 11 campaign maps (sadk-remake
+`ContinentRebuildTests`) [known]; of the 22 samples of `contfull.py`, two (Spiral, Pentagon) carry 6 and 10 stale cells
+(§8).
 
 1. Scan cells row-major (y outer, x inner). An unassigned cell seeds continent `id = next++` if:
    no 0x400; kind = (bit 0x4 set ? water : land); for land also: pattern not blocked and no 0x40.

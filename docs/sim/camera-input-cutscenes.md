@@ -587,7 +587,12 @@ while `+0x635` is set (S 00780d20).
 
 Phase 0's end falls straight through into the first page step in the same frame. The local game speed the phases
 0 and 3 ramp is `UserProfile +0x24`, the same float the lockstep speed command (0x20023) sets, so `logic.getSpeed` reads
-1.0 while a cinematic plays [known; read for sadk-remake 6198e42].
+1.0 while the pages play [known; read for sadk-remake 6198e42]. `OnShow` S 005fbd30 keeps the float (`saved`); a late
+cinematic (simulation clock ≥ 2.0) starts phase 0 with `timer = 1.5`, so the ramp starts at `1.5 × saved − 0.5`; nothing
+writes the float during the pages, the ending and the HUD's restore, so a speed the player sets there holds until
+phase 3; `OnHide` S 005faee0 writes `saved` back after `GameScript_CallQuestCinematicDone`, stored as float bits
+(FLD/FSTP at 005faf32). The cinematic writes the float directly and leaves the network manager's ticks per net tick
+(S 0040e560) alone [known].
 
 **Page step** (phase 1, `timer < 0`) [known]: speaker portraits are preloaded once. If a voice-over is still
 playing, wait. If pages remain:

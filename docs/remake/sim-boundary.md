@@ -710,8 +710,9 @@ views [known, sources as cited]: the deposit display position (`Deposit::ctor_At
   original does (S 005625c0, [village-buildings.md](../sim/village-buildings.md) §7) [inferred as the only cause].
 - **Open**: the military half (AP §3.10 to §3.16): its records are written in their activated state and dropped on
   load ([TODO] S 00585280 / S 00585d60), and CatapultConstruction and Casern are not registered as order owners
-  after a load ([TODO] S 00582e10); the expedition; `AddHarbor` / `RemoveHarbor` when a navy object links to a flag;
-  `RefreshPlayersAndResourceMap` S 00581960.
+  after a load ([TODO] S 00582e10); the expedition; `AddHarbor` / `RemoveHarbor` when a navy object links to a flag.
+  `RefreshPlayersAndResourceMap` S 00581960 is [implemented, sadk-remake `ComputerPlayerSystem.RefreshPlayersAndResourceMap`]
+  with the continent rebuild S 00679430 (`MapSystem.RebuildContinents`), both called by the map scripts' blocking doodads.
 
 ### 6.18 The map-script host as built [implemented, sadk-remake fcee142]
 

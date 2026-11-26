@@ -190,7 +190,7 @@ S 00532180, S 005321c0:
 | +0x08 | `doodadDirty` | cell rect, -1 = empty |
 | +0x18 | `constructionDirty` | cell rect, -1 = empty |
 | +0x28 | `recomputeAll` | byte: recompute the whole construction map |
-| +0x29 | `rebuildContinents` | byte; set by S 00532120 while a batch is open (with no batch open that function rebuilds at once through `NMap::Continents::Rebuild` S 00679430); its only callers are in `nMenu::Debug`, so play never requests a rebuild [known for the cached call graph] |
+| +0x29 | `rebuildContinents` | byte; set by S 00532120 while a batch is open (with no batch open that function rebuilds at once through `NMap::Continents::Rebuild` S 00679430); the batch request S 00532120 and its close S 005321c0 are reached from `nMenu::Debug` only; in play `MapModifier::RebuildContinents` S 00672d80 (→ S 00679430) is called directly, outside the batch, by the Lua bindings `map_createDoodad` S 005ad880 and `map_removeDoodads` S 005af910 [known] |
 | +0x2c | `counter` | 0 at construction; `Begin` decrements, `End` increments; rest value 1 after `SetUp` |
 
 ### 2.5 Property records (static data, filled by the Lua property scripts)

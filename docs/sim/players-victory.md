@@ -889,7 +889,11 @@ Lua readers: `logic.pl_getMilitaryStrength` (latest of series 4), `logic.pl_getR
 `ai::player::PlayerTable::FindLocalPlayer` S 005bdda0 returns the first active slot with `kind == 2`; if there is none it
 returns slot 0 `[known]`. Because `kind` differs per machine, anything derived from it (the notices in §3.6.1,
 the quest flags in §3.6 step 5, the profile write in §3.7) is local presentation and must stay out of the
-synchronised state.
+synchronised state. The original does write it into the game state: outside mode 5 quest 0's text and flags (S 0053a9d0,
+S 0053a730, S 0053a750), in mode 5 the conditions' won, state and stateTime through `DeclareWinner(local)` S 00535990,
+state 3, and the quests' changed flags (S 00535fd0). `ComputeChecksum` S 00784080 covers neither the quest table nor the
+victory conditions, the save keeps the quests, and `VictoryCond_Update` reads the conditions every tick, so the peers of a
+network match differ there [known]. The remake's state hash leaves these out (`VictorySystem.LocalOutcome`).
 
 ---
 
@@ -1055,8 +1059,10 @@ the stored index, not by the loop position. The neutral player is rebuilt afterw
 On load `pTribeProperty` is re-resolved from `tribeId` (only when the loaded `bActive` is set). Both stocks
 (`pStock` `+0x34`, `pMobileStock` `+0xa0`) follow one rule in `Player::Load` S 005be500 `[known]`: a stock whose
 initialised byte (`+0x04`) is already set is emptied first (`NLogic::Stock::Reset`); then, only for an active
-player, the byte is set to 1 and the stock's own `Load` runs. A loaded active player's stocks are therefore always
-marked initialised, whatever the saving game had. **Not saved**: `buildingCounts` (refilled at phase 1,
+player, the byte is set to 1 and the stock's own `Load` runs, which replaces the byte with the stored one
+(`Stock::Load` S 00539fa0, [logic-core.md](logic-core.md) §7). The 1 in the original's saves comes from `Player::Init`
+S 005bea90, which sets the byte of both stocks; `Player::Reset` S 005bea50 clears it (`Stock::Reset` S 00539a50), and the
+player's recount (`Stock::Clear` S 00539a10) keeps it. **Not saved**: `buildingCounts` (refilled at phase 1,
 up to 22 ticks later), `lockMaps` (re-established by the map script's `onLoaded`, §3.10), the neutral player.
 
 The section versions are the constants of the static initialisers of the section tags `[known]`:

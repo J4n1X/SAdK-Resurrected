@@ -1515,7 +1515,11 @@ calls on the registered order owners inside `ConstructionSystem::Tick` [known] S
   `logic.ai_setAllowedAttackCount(player, 3)` and schedules the next time [known] file content.
 - `map_createDoodad` / `map_removeDoodads` trigger `System::RefreshPlayersAndResourceMap`: for every active
   AI player re-read the start continent, rebuild the conquered continents and refresh the continent id of
-  every cell (`Player::Refresh` S 005830d0), then rebuild the whole resource map [known] S 00581960.
+  every cell (`Player::Refresh` S 005830d0), then rebuild the whole resource map [known] S 00581960. `Player::Refresh`
+  rebuilds `ConqueredContinents` (S 0058b5c0 clear and deactivate, set active, S 0058b600) *before* every cell's
+  `RefreshContinentId` (S 005951b0), so the set holds the cells' old continent ids until its next periodic rebuild
+  (every 1323 AI ticks) [known]; the refresh rebuilds only the resource map (`ResourceMap::RebuildAll` S 00588330),
+  not the low-resolution map.
 - World state read: village buildings and their properties, player stock and statistics, map ownership,
   continents, walk regions, visibility grid, harbours, ship routes, ships, the fight list, the sacrifice state.
 

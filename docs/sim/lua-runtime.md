@@ -378,9 +378,11 @@ There is no delete; keys live until the next world build clears the store (§4.2
 **Settlers / NPCs** (`se_`): `se_createSettler(p, good, x, y)`, `se_activateNPC`, `se_deactivateNPC`,
 `se_moveNPCTo(p, good, x, y, tx, ty)`, `se_moveNPCToFine`, `se_NPCLookAt`, `se_isSettlerOnPosition` take
 `(player, settler property id, cell[, target])` and act on the NPC of that property at the cell owned by the
-player; `se_createSettler` has guards P and C, the others test only `player < 8` and C; `se_isSettlerOnPosition`
-→ bool [known: S 005ae160..S 005ae660]. Every call in the shipped scripts is commented out [known: data]; a
-remake can provide them as stubs.
+player; `se_createSettler` has guards P and C (an active player), the others test only `(unsigned) player < 8` and C;
+the NPC is found by `FindNpcAtCellWithProperty` S 00654390; `se_isSettlerOnPosition` → bool asks only the first settler
+at the cell (`FindNearestSettlerWithinRadius(cell, 0)` S 00654720 over the six lists in type order, S 00654550)
+[known: S 005ae160..S 005ae660]. Every call in the shipped scripts is commented out [known: data]; the remake ports
+them for mods' map scripts (sadk-remake `LogicLibrary.Settlers.cs`).
 
 #### 3.6.1 Hex spiral order
 

@@ -111,7 +111,7 @@ Fields this subsystem owns. The tick fields `+0x24..+0x4d` and the config block 
 | +0x3b0 | f32 | leave timeout countdown (s) | 0 |
 | +0x3b4 | list&lt;NetGUID&gt; | GUIDs of players who left the running match | empty |
 | +0x3c0 | ptr | chat sink (the game screen) | 0 |
-| +0x3c4 | ptr | message sink: vtable `+0` join / leave notices (S 0040e3d0), `+8` the kick notice (S 0040e370) | 0 |
+| +0x3c4 | ptr | message sink: vtable `+0` join / leave notices (S 0040e3d0), `+4` the sync status (S 0040e3a0: only the translated `!DESYNC DETECTED` / `!RESYNC DETECTED` / `!NO SYNC START`), `+8` the kick notice (S 0040e370). In a match the sink is `nMenu::Game` (face Game+0x1c4, registered by `OnEnter` S 005eed00 before `BuildWorld`): all three slots are `ShowCommMessageAsLetter` S 005eb120, a type-8 letter to the local player entry (Game+0xfff4) through `PlayerMessages_SendLetterToPlayer` S 005c05b0. In the room it is the lobby's `WorldScreen` (vftable 007d6e98: slots 0 and 1 a chat line S 00431ba0, slot 2 an error S 004330c0) [known] | 0 |
 | +0x3c8 | i32 | **role** 0..4 (§3.3) | 0 |
 | +0x3cc | bool | StartLoading received (polled by the room screen) | 0 |
 | +0x3d0 | ptr | file transfer progress listener; never set (`docs/s2tftp.md`) | 0 (constructor only) |
@@ -565,8 +565,11 @@ session through its local handling of the broadcast. 0x30012 and 0x30005 carry t
    owner GUID with the event's; changed from valid to invalid → notice `<old name> <!Player left game>`; from
    invalid to valid → `<new name> <!Player joined game>`.
 2. The stored session takes the event's data (`AssignGameData`). The host stops here.
-3. Client: look the map up by GUID in the local map folders (`GameFile_FindMapByGuidAnyType`); found → mapName =
-   the local path. Not found: if `fetchMapFromHost` is set and `mapFileType` = 3, request
+3. Client: look the map up by GUID in the local map folders (`GameFile_FindMapByGuidAnyType` S 005ac2f0); found →
+   mapName = the found map's file name without its extension (`GameFile_FindMapNameByGuid` S 005ab3d0 lists the files
+   of the map types 0, 1, 0x65, 2, 3, 100, 0x65, 0x66, 0x67 in this order and compares each `MapInfo` UUID; a hit in
+   0x67 reports type 3) [known]. 0x30012 and 0x30005 take the host's description again (`AssignGameData`), map name
+   included; the load's map comes from `SetupSession` S 004562d0's own GUID lookup, whose miss is only logged. Not found: if `fetchMapFromHost` is set and `mapFileType` = 3, request
    `SAdK\maps\<mapName>.s2m` and `.bmp` (relative to `My Documents` on both sides, `docs/s2tftp.md`) from the
    host (§3.11) and set mapName to the still empty lookup result;
    otherwise dispatch a local EventKickUser with `!MAP NOT EXISTING`. No caller sets `fetchMapFromHost` in this

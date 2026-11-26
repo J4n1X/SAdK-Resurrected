@@ -379,7 +379,7 @@ function without calls is implemented with the same guards and results, but test
 | Function | Class | Remake | Calls |
 |---|---|---|---|
 | `getTick()` → int | Q | the tick counter; −1 before tick 0 | 4 |
-| `getSpeed()` → number | LOCAL | offline: the game speed as the original (0 paused, 1..3, cinematic blend); multiplayer: the speed set by the speed command | 1 |
+| `getSpeed()` → number | LOCAL | the session's speed, set by the speed command; 1.0 while the simulation's cinematic runs (the original's frame-dependent blend over the fades is not simulation state) | 1 |
 | `getRandom(max)` → int | RNG | §2.6 | 1 (inert) |
 | `pl_getUser()` → int | LOCAL | offline: the local human's slot (first active slot with a human controller, else 0), as the original; multiplayer: the human player who raised the current UI callback, otherwise the lowest-index human slot, with a warning once per map | 37 |
 | `victory_setupQuests()` | SIM | victory mode 5 (the main quests decide the match); in multiplayer evaluated per player instead of for the local player only | 1 |
@@ -650,5 +650,5 @@ public sealed class LogicPlayers : LuaLibrary
 6. Generator draws inside `pl_changePlayer`, `menu.createBuildingWithSettler`, `menu.createStreet`,
    `map_killDeposits`, `map_createDoodad` and `ai_enable` (each subsystem document lists its draws).
 7. `map_getTerritoryPlayerId` for an unowned cell.
-8. Parts of the map-script host not built yet (§4.7): `map_createChest`, the continent rebuild after a blocking doodad, the NPC functions `se_*`, waits (§2.8), the
-   cinematic camera paths, the book and tutorial screens, the minimap quest symbols.
+8. Parts of the map-script host not built yet (§4.7): waits (§2.8, `Default.Wait` S 005cde50, which no shipped script
+   calls).
