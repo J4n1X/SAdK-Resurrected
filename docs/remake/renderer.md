@@ -164,6 +164,7 @@ core.game's map layers offer:
 | `ICharacterPlaces` (bones, link bone, attachment, drawn, explored, position, top, records) | characters | goods, the scene's effects; the ship and settler picks, the selection ring, the ship box's picture, the soldier overlays |
 | `IObjectPlaces` (records, world box, near fade, hold all) | map objects | the selection picture, the buoy picks, the minimap's overview, a mod's camera |
 | `IBuildOverlay` (flags, alpha, excluded cell, map changes) | build overlay | the build placement (the info map) |
+| `IStreetBuoys` (buoy mesh, buoy pass material) | streets | the street placement's preview of a water street |
 | `IWorkplaceAnimations`, `IBuildingEntrances` | buildings | the settler feed and the entrance passes (wired by the match) |
 | `IAttachedItems` | goods | the settler feed (wired by the match) |
 

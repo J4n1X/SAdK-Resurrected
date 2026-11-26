@@ -825,7 +825,13 @@ planner (`PlanSegment`), result 1 → refused. On an accepted first click (one w
 `0x20006` and the cursor's `placementKind` becomes 0 for a path of kind 2 and 1 otherwise. A later click whose
 plan result is 4 is refused and switches the cursor's placement mode off. Every accepted click appends the
 cell to the waypoints, moves the anchor to it (or, when the first planner reports through its slot 5 that it
-is done, switches the cursor's placement mode off instead), refreshes the preview and sends `0x20008`. Per frame `nGame::System::Render` refreshes the preview for the cursor cell
+is done, switches the cursor's placement mode off instead), refreshes the preview and sends `0x20008`.
+`StreetBuildMode::Cancel` S 0078b1d0 and `Reset` S 0078b7b0 (run when the mode ends, `EndStreetBuildMode` S 00783430)
+switch the placement mode off too (`SetPlacementMode(false, 1)` S 00787c80); `Begin` S 0078b850 and the first accepted
+click are its only writers that switch it on, `Begin` and the accepted clicks the only writers of the anchor
+(`SetStreetAnchorCell` S 00787c60) [known: xrefs]. A waypoint taken back after a refused extension leaves the anchor on
+it. Per frame `nGame::System::Render` refreshes the preview for the cursor cell while the mode has waypoints and is
+not flagged cancelled, whatever the cursor's placement mode
 (`StreetBuildMode::UpdatePreview` S 0078bbe0: only when the cursor cell changed; the cell is appended
 temporarily to the waypoints, the path is re-planned on the mode's second planner; the shorter of the two
 paths is drawn as a preview street and the rest of the longer one as a second, alpha or red tinted, preview
@@ -837,9 +843,10 @@ planned street can already be completed (S 0078b180).
 `nGame::System::Render` S 007835d0) [known]: every frame, whether info-map mode is on or off, only with
 `bActive` and an active human player, and only when the cursor cell projects onto the screen. It is what fills
 the hovered cell, which the build-placement overlay leaves out ([rendering.md](rendering.md) §3.14).
-- Placement mode: a sprite of atlas `ui_ingame5`, rectangle `(u, 600, 82, 85)` with `u = 179` when a street
-  cannot pass the cell (`GameQuery::CanStreetPassCell`), `u = 92` when a flag can be placed there
-  (`GameQuery::CanPlaceFlagAt`), `u = 4` otherwise.
+- Placement mode: a sprite of atlas `ui_ingame5`, rectangle `(u, 600, 82, 85)` with `u = 179` (a street with a
+  forbidden sign) when a land street cannot pass the cell (`GameQuery::CanStreetPassCell(cell, local player, 0, no
+  street)`), `u = 92` (a street with a flag) when a flag can be placed there (`GameQuery::CanPlaceFlagAt(cell, local
+  player, false)`), `u = 4` (a plain street) otherwise. Unlike normal mode it does not test the object under the mouse.
 - Normal mode: nothing when the construction flags are 0 or a building is under the mouse. Icon index: base 0
   for bit 4, else 1 for bit 2, else 2 for bit 1, else 3 for bit 8, else 4 for bit 0x10 (16 with no further
   offset when none is set); then +5 when only 0x40 is set, +8 when 0x20 and 0x40 are set, +11 when neither is
@@ -854,10 +861,30 @@ the hovered cell, which the build-placement overlay leaves out ([rendering.md](r
   world axis (0, 1, 0) in a basis taken from the device matrix at `CGraphicDevice + 0x1f8`, projected to the
   screen and drawn as a UI sprite.
 
-**Street slope overlay** (`Cursor::DrawStreetSlopeMarkers` S 00788f90) [inferred from its summary, not re-read]:
-a marker on the anchor cell and, on each of its 6 neighbours, either "already on the path" or a slope-class
-sprite when the neighbour is a valid next step (`CanStreetPassCell` for kinds 1 and 2, `CanStreetStepTo` for
-kinds 2 and 0); sprites from `ui_ingame5`.
+**Street slope overlay** (`Cursor::DrawStreetSlopeMarkers(path)` S 00788f90) [known: decompiled]. `Cursor::Update`
+calls it before the cell marker when the cursor is in placement mode and `nGame::System::Render` passed a street path:
+the active street mode's path from S 0078b1a0, the first planner's points (`points0`, its slot 6 `GetPath`) while their
+construction is active (slot 2), else the mode's waypoints (`+0x20`). Every sprite is drawn at once through the cursor's
+one `cellMarker` widget (S 004aa310), whose rectangle and position are restored at the end; all come from `ui_ingame5`:
+
+1. the anchor cell (`+0xc`), when it lies in the map and projects onto the screen: rectangle `(362, 619, 87, 54)`, a cog;
+2. each neighbour `n` of the anchor, directions 0..5 (`MapPos::StepDirection` S 00675000):
+   - `n` on the path (S 005297b0): `(270, 619, 87, 54)`, a circular arrow, and nothing else for `n`;
+   - else, for placement kinds 1 and 2, when `CanStreetPassCell(n, local player, 0, no street)` S 0052fb10: the arrow
+     of the slope class from the anchor to `n` (`NMap::Elevations::GetSlopeClassBetween(anchor, n)` S 00676200,
+     [map-format.md](../map-format.md) §5.3), 94 × 73 at y 707: class 0 at x 2 (a green bar), 1 at 108 and −1 at 214
+     (green, up and down), 2 at 311 and −2 at 417 (orange), 3 at 524 and −3 at 629 (red); class 4 takes `(726, 710, 1,
+     1)`, a transparent pixel, so nothing shows; class −4 has no case, the widget keeps the picture it last had (the
+     anchor's or a previous neighbour's) and draws that again;
+   - then, for kinds 2 and 0, when `CanStreetStepTo(anchor, n, local player, path, no street)` S 0052f5c0: the green
+     bar `(2, 707, 94, 73)`, over the slope arrow when both show (kind 2).
+
+So before the first click (kind 2) both the land and the water rule are shown, after it only the chosen street's. Each
+sprite fills the box of `Cursor_FitWidgetToProjectedBox` S 00787fb0 (the cell marker's camera-facing 3.5 × 3.5 quad on
+the cell, projected), the atlas rectangle stretched to it, and is then moved so that the box is centred on the cell's
+projected point; a cell that does not project into the viewport is skipped (`ProjectToScreen` S 004d45b0: `0 < x ≤
+width`, `0 < y ≤ height`, `0 < z ≤ 1`). Nothing is drawn in a frame whose pick finds no cell in the map
+(`Cursor::Update` returns before both).
 
 **Hover tooltip** (`nMenu::Game::UpdateWorldHoverTooltip` S 005ef740) [inferred from its summary]: per frame,
 names the thing under the mouse (own building with productivity or construction state, flag, carrier, soldier,
@@ -1183,7 +1210,7 @@ Scroll and cursor options live in `settings.cfg`; screenshots are write-only.
 | 6 | The narrow phase of the terrain pick (triangle order, which hit wins, the cell of a hit point) | Static read of S 006bf520 and S 006bfca0 |
 | 7 | The anchor object of a render character (vectors at +0x00, +0x20, +0x30) used by the follow view | Static read of the character class's slot 2 |
 | 8 | What the flag of a speaker tag changes: it is stored in the speaker slot (`CinematicSpeakerSlot::SetSpeaker` S 0062d7b0) and passed as the last argument of `S2CG::InGameAvatar::RenderAvatar`; and which files a speaker name loads (`InGameAvatar::LoadAvatar` S 0068bf30; the name `none` is skipped by `PreloadSpeaker` S 0062d520) | Static read of S 0068c490 and S 0068bf30 |
-| 9 | The slope classes and sprite rectangles of the street overlay | Re-read of S 00788f90 against `ui_ingame5` |
+| 9 | Answered (§3.10, street slope overlay): S 00788f90 read, its rectangles checked against `ui_ingame5` | — |
 | 10 | Answered (§3.7): the first indexed directory whose last component occurs in the lower-cased request wins (S 006ef8a0, S 006ef680); no match or no directory in the request → empty path, the read fails | — |
 
 ---
@@ -1222,6 +1249,7 @@ Scroll and cursor options live in `settings.cfg`; screenshots are write-only.
 | 00782b60 / 00782bb0 | `nGame::System::BeginCinematic` / `EndCinematic` | simulation switches |
 | 00780d20 | `nGame::System::Update` | per-frame order |
 | 0078a2b0 / 007885e0 / 00788f90 | `nGame::Cursor::Update` / `UpdateCellMarker` / `DrawStreetSlopeMarkers` | map cursor |
+| 00787c80 / 00787c60 / 00787fb0 / 0078b1a0 | `nGame::Cursor::SetPlacementMode` / `SetStreetAnchorCell` / `Cursor_FitWidgetToProjectedBox` / the street mode's cursor path | street placement cursor |
 | 00788370 / 00787cc0 / 00787f40 / 00787a30 / 00787b00 / 00787bf0 | `Cursor::SelectAtCursor` and its picks | click selection |
 | 00787df0 | `Cursor::GetBuildFlagsAtCell` | construction flags of the cursor cell |
 | 00617910 / 00617bc0 / 006163f0 | `MenuSelection::HandleClick` / `HandleRightClick` / `Update` | placement modes |
