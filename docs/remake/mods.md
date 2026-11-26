@@ -999,6 +999,29 @@ Work, in this order:
      (S 00651330, factor 10); `DefaultBuildingType` S 00533b20; the literal-id good rules in `GoodRulesDef`
      (TimedWhileWorked, FreeDepositNeedsNoTimer, StreetCarrier, GroundResourceOnWater, FoundOnBuildableGround).
 
+8. **UI definitions as moddable assets** [the maintainer, 2026-10-19]. The original's layouts
+   (`game/ui/layout/*.xml`) reach core.game as presentation documents, and a mod can patch them (§6.6). But each panel
+   has its own reader (`PausePanelLayout.Read`, `BuildMenuLayout`, `SelectionLayout`, `OptionsLayout`, …) that picks
+   out the elements it knows and builds everything else in code. A mod can move an element, change its picture or its
+   text. It cannot add, remove or replace one, or bring a panel of its own, without C#. The options tabs
+   (`OptionsLayout`), the HUD's widget set (`HudFrame`) and the minimap (built directly in `MatchMode`) are fixed in
+   code. Wanted:
+   - **One layout interpreter** in `Sadk.Presentation` that builds a node tree from any layout document. It covers the
+     original's element types (frames, sprites, buttons, bars, combo boxes, sliders, tabs, lists, texts), each with its
+     attributes read as the original reads them (per-element sources from Ghidra). Element types it does not know come
+     from a registry of widget types that mods extend. It places elements as the original does, whole-pixel truncation
+     included, so the faithful look is unchanged.
+   - **Behaviour bound by name.** An element's actions and data are named intents, handlers and data bindings that
+     mods register; no panel class wires up fields. core.game registers the original's (`OnItemClicked` and the rest).
+   - **HUD elements and panels as registry entries** (id, layout, controller), so a mod can replace the minimap or add
+     a panel by its id.
+   - **The remake's own screens** (options tabs, mods screen, the free-game setup's additions) become layout documents
+     in core.game's `assets/`, so they are modded the same way. The original's layouts stay the files read from the
+     installation.
+
+   Acceptance: a mod without C# moves the minimap, adds a button that sends an intent and replaces a panel's layout. A
+   mod with C# replaces the minimap's view by its id.
+
 Constraint: in compatibility mode the registered original behaviours run in exactly the original's order with the
 original's random draws, so the checksum against the original holds; a mod that adds a behaviour makes the match
 remake-only (§9.4).
