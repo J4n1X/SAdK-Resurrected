@@ -190,22 +190,24 @@ match's value when its world is made. [implemented, sadk-remake cc7eb02; match s
 **Where a mod's settings show** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19]: a mod chooses where
 its settings go, a tab of its own or a section of its own inside an existing tab, named by the tab's id. Only the
 placement changes: who owns a setting, where it is stored and its scope stay as above.
-- The tabs are an entirely open registry (`OptionsRegistry`, `EngineOptions.Build`): the engine's tabs (`graphics`,
-  `shadows`, `quality`, `audio`, `keys`, `interface`) and every tab a mod adds are equal, and any mod may put a section
-  into any of them. Tabs stand in the order they are added: the engine's, then the mods' in load order (all mods' tabs
-  before any mod's sections, so a mod may name the tab of a mod loaded after it).
-- Sections stand in insertion order (the engine's, then the mods' in load order); no other ordering. A section lists
-  its settings in declaration order, the mod's user settings first, its startup settings under the startup note.
+- The tabs are an entirely open registry (`OptionsRegistry`, `EngineOptions.Build`): the engine's tabs (`display`,
+  `graphics`, `audio`, `keys`, `game`; [renderer.md](renderer.md) §19) and every tab a mod adds are equal, and any mod
+  may put a section into any of them. Tabs stand in the order they are added: the engine's, then the mods' in load order
+  (all mods' tabs before any mod's sections, so a mod may name the tab of a mod loaded after it).
+- Sections stand in insertion order (the engine's, then the mods' in load order, then the engine's key bindings, so a
+  mod's settings on `keys` stand above the lists of keys); no other ordering. Every section is always shown: there is
+  no simple and advanced view (the maintainer, 2026-11-26). A section lists its settings in declaration order, the
+  mod's user settings first, its startup settings under the startup note.
 - There is no Mods tab. A mod that names no place, or names a tab no loaded mod adds, gets a tab of its own under its
   title [the remake's own default].
-- The API, in the settings stage: `ModSettings.Tab(id, title)` adds a tab; `Section(id, title?, tab?, advanced?)`
-  opens a section that the settings declared after it (to the end of the stage) stand in; `Unlisted()` keeps the
-  settings after it out of the options (stored and read as any). A section id taken already becomes
-  `<mod id>.<id>`; a tab added twice is reported and its sections go to the first. `advanced: true` shows a section
-  only with the advanced graphics ([renderer.md](renderer.md) §19).
+- The API, in the settings stage: `ModSettings.Tab(id, title)` adds a tab; `Section(id, title?, tab?)` opens a
+  section that the settings declared after it (to the end of the stage) stand in; `Unlisted()` keeps the settings
+  after it out of the options (stored and read as any). A section id taken already becomes `<mod id>.<id>`; a tab
+  added twice is reported and its sections go to the first.
 - The base game: core.game's camera and cursor settings form the section `input` (the original's INPUT group) in the
-  engine's `keys` tab (titled Controls); its pause band and autosave the section `game` (GAME) on its own tab `game`;
-  the six lobby options are unlisted. refined puts its section `refined` on the `game` tab.
+  engine's `keys` tab (titled Controls), above the key bindings; its pause band and autosave the section `game` (GAME)
+  on the engine's `game` tab, after the interface; its network games' settings its own tab `multiplayer`; the lobby
+  options are unlisted. core.mainmenu puts its menu background on the `game` tab, refined its section `refined`.
 - Both options screens are made from the registry: core.game's panel in the original's look (a section named like one
   of the original's groups takes that group's bar and title; tab buttons beyond the template's eight go on along its
   row, 90 apart [the remake's own]) and the engine's own screen without core.game (which has no key bindings).

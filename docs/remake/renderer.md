@@ -1840,15 +1840,18 @@ match load.
 panel or the map view's quick switches, which are a form over the same object. Every change applies at once,
 including the region size and blended foliage, which rebuild the shown world.
 
-**The options panel** [implemented, sadk-remake 726a5b1, tabs from the registry 2026-10-25]: core.game's
-`core.game.options`, built from the original's `menuoptions.xml` frame and `menuIngameSettings.xml`'s tab control
-(`engine.options` is routed to it), opened from the main menu, the match's `cbMenu`, `btOptions` and O. Its tabs and
-groups come from the options registry ([mods.md](mods.md) §6.2): the engine's tabs GRAPHICS (display, the graphics
-preset and, with the advanced graphics, the original's VIDEO group with the world settings), SHADOWS and QUALITY
-(advanced only), SOUND (the original's AUDIO group), CONTROLS (`keys`: the key bindings, then core.game's INPUT group),
-INTERFACE (language, font, the advanced graphics switch), then the mods' places (core.game's GAME tab with its GAME
-group, refined's switches after it). The original's groups keep their controls, titles and look where a section has
-their name; every change applies at once, with no apply or cancel. Which settings are the engine's and which a mod's:
+**The options panel** [implemented, sadk-remake 726a5b1, tabs from the registry 2026-10-25, streamlined 2026-11-26]:
+core.game's `core.game.options`, built from the original's `menuoptions.xml` frame and `menuIngameSettings.xml`'s tab
+control (`engine.options` is routed to it), opened from the main menu, the match's `cbMenu`, `btOptions` and O. Its tabs
+and groups come from the options registry ([mods.md](mods.md) §6.2), after the original's groups VIDEO, AUDIO, INPUT,
+GAME, NETWORK, with related settings together and every setting always shown (the maintainer, 2026-11-26: no simple and
+advanced view, fewer tabs): the engine's tabs DISPLAY (`display`: the original's VIDEO group as the original fills it,
+the window first, then the quality: the preset, render scale, upscaler, anti-aliasing, texture filtering; effects: SSAO,
+depth of field; performance: terrain cache, batching), GRAPHICS (`graphics`: landscape, objects, shadows, water and reflections), SOUND
+(the original's AUDIO group), CONTROLS (`keys`: core.game's INPUT group, then the key bindings), GAME (`game`: language,
+font, cursor, then the mods' game sections: core.game's GAME group, refined's switches), then the mods' own tabs
+(core.game's MULTIPLAYER). The original's groups keep their controls, titles and look where a section has their name;
+every change applies at once, with no apply or cancel. Which settings are the engine's and which a mod's:
 [mods.md](mods.md) §6.2. The original's eight graphics values live in the engine's `RenderSettings` with the
 original's mappings (`ApplyOptionValue` S 005e5bd0, `LoadOptionValue` S 005e55b0):
 
@@ -1879,11 +1882,10 @@ SSAO, depth of field, TAA, SMAA, FSR and shadow softness have no effect on the C
 as a default (the integrated graphics target, principle 6). The cutouts' alpha to coverage (§12) only has an effect
 once MSAA is switched on; FXAA is the cheap setting that also smooths their edges.
 
-**Simple and advanced graphics** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19]: by default the
-options show the graphics as five presets; the switch *Advanced graphics* in INTERFACE (`<Interface
-advancedGraphics>`, off by default) shows every graphics control listed above (the VIDEO group on the graphics tab,
-the SHADOWS and QUALITY tabs, and mod sections marked advanced). The simple view keeps the display group (resolution,
-display mode, screen, V-Sync, frame limit) and the preset; everything else of the options is the same in both views.
+**Graphics presets** [implemented, sadk-remake 2026-10-25; the maintainer, 2026-10-19; one control among the others
+since 2026-11-26]: the preset stands in the display tab's VIDEO group after the window, a combo box of five presets
+that sets every value it covers on the display and graphics tabs at once; every setting it sets keeps its own control
+beside it. There is no view of presets only.
 
 The presets (`GraphicsPresets`) are the original's quality presets 0..4 (`Settings::ApplyQualityPreset` S 00695860,
 `../sim/app-shell.md` §3.10) through the original's conversions, extended to the remake's settings that cost. A preset
@@ -1933,8 +1935,8 @@ adapter); a virtual GPU or the CPU → 0 Lowest. The first start is the settings
 logged once (`graphics: first start, adapter <name> (<kind>): preset <n>`) and saved at once, so later starts keep the
 player's choice. A new `RenderSettings` (the settings' defaults, and Defaults in the options) stays the highest preset.
 
-**Custom.** Nothing is stored for the preset: the simple view shows the preset whose values the settings hold, or
-*Custom* (an extra last entry, only while no preset matches) after a change in the advanced view; choosing a preset
+**Custom.** Nothing is stored for the preset: the box shows the preset whose values the settings hold, or *Custom* (an
+extra last entry, only while no preset matches) after a setting it covers was changed on its own; choosing a preset
 sets its values. Choosing *Custom* changes nothing.
 
 ## 20. Performance [draft]
